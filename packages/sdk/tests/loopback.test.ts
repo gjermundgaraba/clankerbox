@@ -10,10 +10,10 @@ import { afterEach, describe, expect } from "vite-plus/test";
 import { Client, retryable } from "../src/index.ts";
 import type { MachineSpec } from "../src/index.ts";
 import * as NodeClient from "../src/node.ts";
-import { stubHost } from "./stub-host.ts";
-import type { StubHost } from "./stub-host.ts";
+import { stubServer } from "./stub-server.ts";
+import type { StubServer } from "./stub-server.ts";
 
-const stubs: StubHost[] = [];
+const stubs: StubServer[] = [];
 
 const answering = (reply: (response: ServerResponse) => void) =>
   Effect.gen(function* () {
@@ -50,18 +50,18 @@ const cutOff = (response: ServerResponse) => {
     "content-type": "application/json",
     "content-length": "1000",
   });
-  response.write('{"id":"linux_dev",');
+  response.write('{"id":"dev",');
   setTimeout(() => {
     response.socket?.destroy();
   }, 20);
 };
 
-const onLinux = <A, E>(
+const calling = <A, E>(
   url: string,
   use: (client: Client.Interface) => Effect.Effect<A, E>
 ) =>
   Effect.flatMap(Client.Client, use).pipe(
-    Effect.provide(NodeClient.layer([{ id: "linux", url }]))
+    Effect.provide(NodeClient.layer(url))
   );
 
 const spec: MachineSpec = {
@@ -71,7 +71,7 @@ const spec: MachineSpec = {
   diskGib: 10,
 };
 
-const serve = (stub: StubHost) =>
+const serve = (stub: StubServer) =>
   Effect.gen(function* () {
     const context = yield* Layer.build(
       HttpRouter.serve(stub.routes, { disableLogger: true }).pipe(
@@ -95,26 +95,20 @@ describe("loopback", () => {
     );
   });
 
-  it.effect("the client's Node transport calls a real loopback host", () =>
+  it.effect("the client's Node transport calls a real loopback server", () =>
     Effect.gen(function* () {
-      const linux = stubHost({ id: "linux", bases: ["ubuntu"] });
+      const stub = stubServer();
 
-      stubs.push(linux);
+      stubs.push(stub);
 
       const made = yield* Effect.gen(function* () {
-        const url = yield* serve(linux);
+        const url = yield* serve(stub);
 
-        return yield* Effect.provide(
-          Effect.flatMap(Client.Client, (client) => client.create("dev", spec)),
-          NodeClient.layer([
-            { id: "mac", url: "http://127.0.0.1:1" },
-            { id: "linux", url },
-          ])
-        );
+        return yield* calling(url, (client) => client.create("dev", spec));
       }).pipe(Effect.scoped);
 
-      expect(made.id).toBe("linux_dev");
-      expect(linux.creates).toHaveLength(1);
+      expect(made).toMatchObject({ id: "dev", phase: "settled" });
+      expect(stub.creates).toHaveLength(1);
     })
   );
 
@@ -122,12 +116,8 @@ describe("loopback", () => {
     "a refused connection is Unavailable through the Node transport",
     () =>
       Effect.gen(function* () {
-        const error = yield* Effect.flatMap(Client.Client, (client) =>
-          Effect.flip(client.startMachine({ id: "linux_dev" }))
-        ).pipe(
-          Effect.provide(
-            NodeClient.layer([{ id: "linux", url: "http://127.0.0.1:1" }])
-          )
+        const error = yield* calling("http://127.0.0.1:1", (client) =>
+          Effect.flip(client.startMachine({ id: "dev" }))
         );
 
         expect(error._tag).toBe("Unavailable");
@@ -142,13 +132,13 @@ describe("loopback", () => {
       Effect.gen(function* () {
         const url = yield* answering(cutOff);
 
-        const error = yield* onLinux(url, (client) =>
-          Effect.flip(client.startMachine({ id: "linux_dev" }))
+        const error = yield* calling(url, (client) =>
+          Effect.flip(client.startMachine({ id: "dev" }))
         );
 
         expect(error._tag).toBe("Unavailable");
         expect(retryable(error)).toBe(false);
-        expect(error.message).toContain("may have run: read linux_dev");
+        expect(error.message).toContain("may have run: read dev");
       })
   );
 
@@ -158,8 +148,8 @@ describe("loopback", () => {
       Effect.gen(function* () {
         const url = yield* answering(cutOff);
 
-        const error = yield* onLinux(url, (client) =>
-          Effect.flip(client.getMachine({ id: "linux_dev" }))
+        const error = yield* calling(url, (client) =>
+          Effect.flip(client.getMachine({ id: "dev" }))
         );
 
         expect(error._tag).toBe("Unavailable");
@@ -173,15 +163,17 @@ describe("loopback", () => {
       Effect.gen(function* () {
         const url = yield* answering((response) => {
           response.writeHead(200, { "content-type": "application/json" });
-          response.end('{"id":"linux_dev"}');
+          response.end('{"id":"dev"}');
         });
 
-        const error = yield* onLinux(url, (client) =>
-          Effect.flip(client.startMachine({ id: "linux_dev" }))
+        const error = yield* calling(url, (client) =>
+          Effect.flip(client.startMachine({ id: "dev" }))
         );
 
         expect(error._tag).toBe("Internal");
-        expect(error.message).toContain("host linux's reply didn't decode");
+        expect(error.message).toContain(
+          "the control plane's reply didn't decode"
+        );
       })
   );
 
@@ -189,11 +181,11 @@ describe("loopback", () => {
     Effect.gen(function* () {
       const url = yield* answering((response) => {
         response.writeHead(200, { "content-type": "application/json" });
-        response.end('{"id":"linux_dev",');
+        response.end('{"id":"dev",');
       });
 
-      const error = yield* onLinux(url, (client) =>
-        Effect.flip(client.startMachine({ id: "linux_dev" }))
+      const error = yield* calling(url, (client) =>
+        Effect.flip(client.startMachine({ id: "dev" }))
       );
 
       expect(error._tag).toBe("Internal");

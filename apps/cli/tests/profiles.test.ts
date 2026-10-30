@@ -10,31 +10,22 @@ import { cli, decodeJsonError, writeConfig, writeProfiles } from "./support.ts";
 
 layer(NodeServices.layer)((it) => {
   it.effect(
-    "profiles lists the profiles directory's profiles by name, without asking a host",
+    "profiles lists the profiles directory's profiles by name, without asking the control plane",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
 
         yield* writeProfiles(dir);
 
-        const config = yield* writeConfig(dir, ["linux"], "profiles");
+        const config = yield* writeConfig(dir, "profiles");
         const { code, stdout } = yield* cli(["profiles", "--config", config]);
         const rows = stdout.split("\n").map((line) => line.split(/\s+/u));
 
         expect(code).toBe(0);
         expect(rows).toStrictEqual([
-          ["NAME", "BASE", "CPU", "RAM", "DISK", "SETUP", "TIMEOUT", "HOST"],
-          [
-            "dev",
-            "ubuntu-dev",
-            "2",
-            "4G",
-            "20G",
-            "dev-recipe",
-            "15m",
-            "hetzner",
-          ],
-          ["small", "ubuntu", "1", "1G", "10G", "-", "-", "-"],
+          ["NAME", "BASE", "CPU", "RAM", "DISK", "SETUP", "TIMEOUT"],
+          ["dev", "ubuntu-dev", "2", "4G", "20G", "dev-recipe", "15m"],
+          ["small", "ubuntu", "1", "1G", "10G", "-", "-"],
         ]);
       })
   );
@@ -45,7 +36,7 @@ layer(NodeServices.layer)((it) => {
       Effect.gen(function* () {
         const dir = yield* scratch;
         const profiles = yield* writeProfiles(dir);
-        const config = yield* writeConfig(dir, ["linux"], "profiles");
+        const config = yield* writeConfig(dir, "profiles");
 
         const { code, stdout } = yield* cli([
           "profiles",
@@ -67,7 +58,6 @@ layer(NodeServices.layer)((it) => {
                 path: path.join(profiles, "dev-recipe"),
                 timeoutSeconds: 900,
               },
-              host: "hetzner",
             },
             {
               name: "small",
@@ -82,11 +72,11 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "profiles fails without a profiles directory, or on a profile that doesn't decode",
+    "profiles fails without a profiles directory, or on a profile that doesn't decode, one that still names a host among them",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
-        const bare = yield* writeConfig(dir, ["linux"]);
+        const bare = yield* writeConfig(dir);
 
         const unset = yield* cli(["profiles", "--json", "--config", bare]);
 
@@ -101,7 +91,7 @@ layer(NodeServices.layer)((it) => {
           "profiles",
           "--json",
           "--config",
-          yield* writeConfig(dir, ["linux"], "absent"),
+          yield* writeConfig(dir, "absent"),
         ]);
 
         expect(missing.code).toBe(1);
@@ -118,13 +108,36 @@ layer(NodeServices.layer)((it) => {
           "profiles",
           "--json",
           "--config",
-          yield* writeConfig(dir, ["linux"], "profiles"),
+          yield* writeConfig(dir, "profiles"),
         ]);
 
         expect(broken.code).toBe(1);
         expect(decodeJsonError(broken.stdout).error.tag).toBe("Invalid");
         expect(decodeJsonError(broken.stdout).error.message).toBe(
           `profile ${path.join(profiles, "broken.json")}: cpu: missing; ramMib: missing; diskGib: missing`
+        );
+
+        yield* write(
+          path.join(profiles, "broken.json"),
+          JSON.stringify({
+            base: "ubuntu",
+            cpu: 1,
+            ramMib: 1024,
+            diskGib: 10,
+            host: "hetzner",
+          })
+        );
+
+        const hosted = yield* cli([
+          "profiles",
+          "--json",
+          "--config",
+          yield* writeConfig(dir, "profiles"),
+        ]);
+
+        expect(hosted.code).toBe(1);
+        expect(decodeJsonError(hosted.stdout).error.message).toBe(
+          `profile ${path.join(profiles, "broken.json")}: host: not a known field`
         );
       })
   );

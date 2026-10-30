@@ -2,7 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { formatMib } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import type { StubHost } from "@gjermundgaraba/clankerbox-sdk/testing/stub-host";
+import type { StubServer } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import { Arbitrary, Effect, Schema } from "effect";
 import { afterEach, expect } from "vite-plus/test";
 
@@ -12,11 +12,11 @@ import {
   parseMib,
   parseSeconds,
 } from "../src/units.ts";
-import { cleanup, cli, hostIn, writeConfig } from "./support.ts";
+import { cleanup, cli, serverIn, writeConfig } from "./support.ts";
 
-const stubs: StubHost[] = [];
+const stubs: StubServer[] = [];
 
-const host = hostIn(stubs);
+const server = serverIn(stubs);
 
 const upTo = (maximum: number) =>
   Schema.Int.check(Schema.isBetween({ minimum: 1, maximum }));
@@ -39,8 +39,8 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
-        const config = yield* writeConfig(dir, ["linux"]);
-        const linux = host({ id: "linux", bases: ["ubuntu"] });
+        const config = yield* writeConfig(dir);
+        const stub = server();
 
         for (const [duration, why] of [
           [
@@ -55,8 +55,8 @@ layer(NodeServices.layer)((it) => {
           ["99999999999999999999s", "is out of range: write at least 1s"],
         ] as const) {
           const { code, stderr } = yield* cli(
-            ["start", "linux_dev", "--timeout", duration, "--config", config],
-            { endpoints: [["linux", linux]] }
+            ["start", "dev", "--timeout", duration, "--config", config],
+            { server: stub }
           );
 
           expect(code, duration).toBe(1);
@@ -65,7 +65,7 @@ layer(NodeServices.layer)((it) => {
           );
         }
 
-        expect(linux.calls).toStrictEqual([]);
+        expect(stub.calls).toStrictEqual([]);
       })
   );
 
@@ -74,8 +74,8 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
-        const config = yield* writeConfig(dir, ["linux"]);
-        const linux = host({ id: "linux", bases: ["ubuntu"] });
+        const config = yield* writeConfig(dir);
+        const stub = server();
 
         const create = (name: string, ram: string, disk: string) =>
           cli(
@@ -93,7 +93,7 @@ layer(NodeServices.layer)((it) => {
               "--config",
               config,
             ],
-            { endpoints: [["linux", linux]] }
+            { server: stub }
           );
 
         const made = [
@@ -113,7 +113,7 @@ layer(NodeServices.layer)((it) => {
 
         expect(made.map(({ code }) => code)).toStrictEqual([0, 0, 0, 0]);
         expect(
-          linux.creates.map(({ ramMib, diskGib }) => [ramMib, diskGib])
+          stub.creates.map(({ ramMib, diskGib }) => [ramMib, diskGib])
         ).toStrictEqual([
           [512, 10],
           [1536, 2],

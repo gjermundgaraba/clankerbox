@@ -1,166 +1,73 @@
-import path from "node:path";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { Client } from "@gjermundgaraba/clankerbox-sdk";
-import * as NodeClient from "@gjermundgaraba/clankerbox-sdk/node";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { DateTime, Effect, Layer, Logger } from "effect";
-import { HttpServer } from "effect/http";
+import { Effect, Layer, Logger } from "effect";
 import { expect } from "vite-plus/test";
 
 import { hostLayer } from "../../src/composition/host.ts";
-import { open } from "../../src/platform/sqlite.ts";
 import type { HostSettings } from "../../src/settings.ts";
 import { fakeRuntime } from "../fake-runtime.ts";
-import type { FakeRuntime } from "../fake-runtime.ts";
-import { hostConfig, loopbackServer, noHttp } from "../support.ts";
+import { hostConfig, hostOn, loopbackServer, noHttp } from "../support.ts";
 
-const config = (dir: string, fields?: Partial<HostSettings>): HostSettings => ({
-  ...hostConfig(path.join(dir, "state")),
-  ...fields,
-});
+const started = hostOn({ first: 21_140, last: 21_149 });
 
-const hostOn = (host: HostSettings, fake: FakeRuntime) =>
-  hostLayer(host, fake.layer, loopbackServer(host.listen.port)).pipe(
-    Layer.provide(noHttp)
-  );
-
-const whileServing = <A, E, R>(
-  host: HostSettings,
-  dir: string,
-  use: (url: string) => Effect.Effect<A, E, R>
-) =>
-  Effect.flatMap(Effect.service(HttpServer.HttpServer), (server) =>
-    use(HttpServer.formatAddress(server.address))
-  ).pipe(
-    Effect.provide(
-      hostOn(host, fakeRuntime({ dir })).pipe(
-        Layer.provideMerge(Logger.layer([]))
-      )
+const refused = (settings: HostSettings, dir: string) =>
+  Effect.flip(
+    Layer.build(
+      hostLayer(
+        settings,
+        fakeRuntime({ dir }).layer,
+        loopbackServer(settings.listen.port)
+      ).pipe(Layer.provide(noHttp))
     )
-  );
+  ).pipe(Effect.scoped, Effect.provide(Logger.layer([])));
 
-const refused = (host: HostSettings, fake: FakeRuntime) =>
-  Effect.flip(Layer.build(hostOn(host, fake))).pipe(
-    Effect.scoped,
-    Effect.provide(Logger.layer([]))
-  );
+layer(NodeServices.layer, { excludeTestServices: true })((it) => {
+  it.effect("a host clears what its runtime left before it serves", () =>
+    Effect.gen(function* () {
+      const { fake } = yield* started();
 
-const withClient = <A, E>(
-  url: string,
-  use: (client: Client.Interface) => Effect.Effect<A, E>
-) =>
-  Effect.flatMap(Client.Client, use).pipe(
-    Effect.provide(NodeClient.layer([{ id: "linux", url }]))
-  );
-
-layer(NodeServices.layer)((it) => {
-  it.effect(
-    "a machine the last host process left mid-create is deleted once the host serves, never made again",
-    () =>
-      Effect.gen(function* () {
-        const dir = yield* scratch;
-        const host = config(dir);
-        const fake = fakeRuntime({ dir });
-
-        yield* Effect.flatMap(open(host), (store) =>
-          store.insertMachine({
-            name: "dev",
-            instance: "0123456789abcdef0123456789abcdef",
-            createdAt: DateTime.makeUnsafe("2026-10-04T12:00:00Z"),
-            base: "ubuntu",
-            profile: undefined,
-            cpu: 1,
-            ramMib: 1024,
-            diskGib: 10,
-            port: 10_000,
-            desired: "running",
-            generation: 1,
-            ephemeral: false,
-            made: false,
-            hostKey: undefined,
-            pin: undefined,
-          })
-        ).pipe(Effect.scoped);
-
-        const listed = yield* Effect.flatMap(
-          Effect.service(HttpServer.HttpServer),
-          (server) =>
-            withClient(HttpServer.formatAddress(server.address), (client) =>
-              Effect.repeat(client.machines, {
-                until: (machines) => machines.answers.length === 0,
-                times: 200,
-              })
-            )
-        ).pipe(
-          Effect.provide(
-            hostOn(host, fake).pipe(Layer.provideMerge(Logger.layer([])))
-          )
-        );
-
-        expect(listed.answers).toStrictEqual([]);
-        expect(fake.calls).toStrictEqual(["startup", "delete linux_dev"]);
-      })
+      expect(fake.calls).toStrictEqual(["startup"]);
+    })
   );
 
   it.effect(
-    "a second host on the same state dir refuses to start, before it builds its runtime",
+    "a host that restarts answers another boot, and holds no operation of the last",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
-        const secondFake = fakeRuntime({ dir: yield* scratch });
+        const first = yield* started({ dir });
 
-        const error = yield* whileServing(config(dir), dir, () =>
-          refused(config(dir), secondFake)
-        );
+        yield* first.operations.run({
+          id: "op-1",
+          scope: "machine dev",
+          sequence: 1,
+          step: {
+            _tag: "remove",
+            machine: { name: "dev", instance: "1".repeat(32) },
+          },
+        });
+        yield* first.dispose;
 
-        expect(error._tag).toBe("CannotStart");
-        expect(error.message).toContain("another host process holds state dir");
-        expect(secondFake.stubs()).toBeUndefined();
-      })
-  );
+        const second = yield* started({ dir });
+        const report = yield* second.operations.wait("op-1");
 
-  it.effect(
-    "a host renamed, or moved to another kind, refuses its state dir before it builds its runtime",
-    () =>
-      Effect.gen(function* () {
-        const dir = yield* scratch;
-
-        const fake = fakeRuntime({ dir: yield* scratch });
-
-        yield* whileServing(config(dir), dir, () => Effect.void);
-
-        const renamed = yield* refused(config(dir, { id: "mac" }), fake);
-        const moved = yield* refused(config(dir, { kind: "mac" }), fake);
-
-        expect(renamed._tag).toBe("CannotStart");
-        expect(renamed.message).toContain(
-          "holds linux host linux, and this config names linux host mac"
-        );
-        expect(moved.message).toContain("this config names mac host linux");
-        expect(fake.stubs()).toBeUndefined();
+        expect(report.status).toBe("absent");
+        expect(report.boot).toBe(second.operations.boot);
+        expect(report.boot).not.toBe(first.operations.boot);
       })
   );
 
   it.effect("a host whose address is taken says where it couldn't listen", () =>
     Effect.gen(function* () {
       const dir = yield* scratch;
+      const { url } = yield* started({ dir });
+      const port = Number(new URL(url).port);
 
-      const other = yield* scratch;
-
-      const [port, failure] = yield* whileServing(config(dir), dir, (url) => {
-        const listening = Number(new URL(url).port);
-
-        const taken = config(other, {
-          listen: { address: "127.0.0.1", port: listening },
-        });
-
-        return Effect.map(
-          refused(taken, fakeRuntime({ dir: other })),
-          (error) => [listening, error] as const
-        );
-      });
+      const failure = yield* refused(
+        { ...hostConfig(dir), listen: { address: "127.0.0.1", port } },
+        dir
+      );
 
       expect(failure._tag).toBe("Internal");
       expect(failure.message).toContain(`couldn't listen on 127.0.0.1:${port}`);

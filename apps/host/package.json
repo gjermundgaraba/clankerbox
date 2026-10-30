@@ -1,7 +1,19 @@
 {
-  "name": "@clankerbox/host",
-  "version": "0.0.0",
-  "private": true,
+  "name": "@gjermundgaraba/clankerbox-host",
+  "version": "0.30.1",
+  "description": "A clankerbox host: runs the control plane's operations on a runtime",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gjermundgaraba/clankerbox.git",
+    "directory": "apps/host"
+  },
+  "bin": {
+    "clankerbox-host": "./dist/clankerbox-host.mjs"
+  },
+  "files": [
+    "dist"
+  ],
   "type": "module",
   "exports": {
     ".": "./src/composition/host.ts",
@@ -9,23 +21,33 @@
     "./runtimes": "./src/composition/runtimes.ts",
     "./testing": "./tests/support.ts"
   },
+  "publishConfig": {
+    "exports": {
+      "./package.json": "./package.json"
+    },
+    "access": "public"
+  },
   "scripts": {
+    "build": "vp pack",
     "test": "vp test"
   },
   "dependencies": {
     "@effect/platform-node": "catalog:",
-    "@gjermundgaraba/clankerbox-sdk": "workspace:*",
+    "@effect/platform-node-shared": "catalog:",
     "@gjermundgaraba/effect-actions": "catalog:",
-    "@xstate/effect": "catalog:",
-    "effect": "catalog:",
-    "xstate": "catalog:"
+    "effect": "catalog:"
   },
   "devDependencies": {
+    "@clankerbox/host-contract": "workspace:*",
     "@effect/vitest": "catalog:",
+    "@gjermundgaraba/clankerbox-sdk": "workspace:*",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vite-plus": "catalog:",
     "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=26.12.0"
   }
 }

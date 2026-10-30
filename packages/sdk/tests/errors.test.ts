@@ -16,10 +16,10 @@ import {
   Unavailable,
 } from "../src/index.ts";
 import type { ClankerboxError, Desired } from "../src/index.ts";
-import { machine } from "./stub-host.ts";
+import { machine } from "./stub-server.ts";
 
 const failed = (error: ClankerboxError) => ({
-  ...machine("linux_dev"),
+  ...machine("dev"),
   phase: "failed",
   error,
 });
@@ -59,13 +59,32 @@ describe("errors", () => {
     );
   });
 
-  it("a machine's last error is a host error, never Unavailable", () => {
+  it("a machine's last error can be any error a step ends with, Unavailable included", () => {
     const isMachine = Schema.is(Machine);
 
     expect(isMachine(failed(new Capacity({ message: "" })))).toBe(true);
     expect(
       isMachine(failed(new Unavailable({ message: "", readOnly: false })))
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it("located keeps what an error already names and adds what it doesn't", () => {
+    const error = new NotFound({ message: "m", id: "dev" });
+
+    expect(
+      error.located({ action: "getMachine", id: "other", made: "new" })
+    ).toMatchObject({ action: "getMachine", id: "dev", made: "new" });
+  });
+
+  it("located keeps an error's own fields", () => {
+    const error = new Unavailable({ message: "m", readOnly: true });
+
+    expect(error.located({ action: "getMachine" })).toMatchObject({
+      message: "m",
+      readOnly: true,
+      action: "getMachine",
+    });
+    expect(error.located({})).not.toHaveProperty("id");
   });
 
   it.effect.prop(

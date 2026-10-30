@@ -9,7 +9,6 @@ import {
   getCheckpoint,
   listCheckpoints,
 } from "./checkpoints.ts";
-import { host } from "./host.ts";
 import { capacity, hosts } from "./hosts.ts";
 import {
   create,
@@ -43,14 +42,13 @@ export const actionCommands = {
   captureCheckpoint: capture,
   deleteCheckpoint,
   prebuildCheckpoint: prebuild,
-  getHost: hosts,
+  getPrebuild: prebuild,
+  listHosts: hosts,
   getCapacity: capacity,
 } satisfies Record<keyof typeof actionsByName, Command.Command.Any>;
 
 export const clankerbox = Command.make("clankerbox").pipe(
-  Command.withDescription(
-    "Run machines on clankerbox hosts. `clankerbox host` runs a host."
-  ),
+  Command.withDescription("Run machines for coding agents."),
   Command.withSubcommands([
     hosts,
     capacity,
@@ -70,7 +68,6 @@ export const clankerbox = Command.make("clankerbox").pipe(
     ssh,
     sshProxy,
     sshKnownHosts,
-    host,
   ])
 );
 

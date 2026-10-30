@@ -7,7 +7,7 @@ import {
   write,
   scratch,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import type { StubHost } from "@gjermundgaraba/clankerbox-sdk/testing/stub-host";
+import type { StubServer } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import { Effect } from "effect";
 import { afterEach, expect } from "vite-plus/test";
 
@@ -15,15 +15,15 @@ import {
   cleanup,
   cli,
   decodeJsonError,
-  hostIn,
+  serverIn,
+  serverUrl,
   sizes,
-  url,
   writeConfig,
 } from "./support.ts";
 
-const stubs: StubHost[] = [];
+const stubs: StubServer[] = [];
 
-const host = hostIn(stubs);
+const server = serverIn(stubs);
 
 const hostsStderr = (config: string) =>
   Effect.map(cli(["hosts", "--config", config]), ({ stderr }) => stderr);
@@ -40,10 +40,10 @@ layer(NodeServices.layer)((it) => {
         const dir = yield* scratch;
 
         yield* mkdir(path.join(dir, "clankerbox"));
-        yield* writeConfig(path.join(dir, "clankerbox"), ["linux"]);
+        yield* writeConfig(path.join(dir, "clankerbox"));
 
         const { code, stdout } = yield* cli(["hosts"], {
-          endpoints: [["linux", host({ id: "linux", bases: ["ubuntu"] })]],
+          server: server(),
           env: { XDG_CONFIG_HOME: dir },
         });
 
@@ -59,10 +59,10 @@ layer(NodeServices.layer)((it) => {
         const dir = yield* scratch;
 
         yield* mkdir(path.join(dir, ".config", "clankerbox"));
-        yield* writeConfig(path.join(dir, ".config", "clankerbox"), ["linux"]);
+        yield* writeConfig(path.join(dir, ".config", "clankerbox"));
 
         const { code } = yield* cli(["hosts"], {
-          endpoints: [["linux", host({ id: "linux", bases: ["ubuntu"] })]],
+          server: server(),
           env: { HOME: dir },
         });
 
@@ -71,41 +71,31 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a config with an unknown key, or listing a host twice, is Invalid naming the file",
+    "a config with an unknown key, or a server that isn't a URL, is Invalid naming the file",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
         const typo = path.join(dir, "typo.json");
-        const twice = path.join(dir, "twice.json");
+        const unparsable = path.join(dir, "unparsable.json");
 
         yield* write(
           typo,
-          JSON.stringify({
-            hosts: [{ id: "linux", url: "http://linux.test" }],
-            host: [],
-          })
+          JSON.stringify({ server: serverUrl, profile: "profiles" })
         );
-        yield* write(
-          twice,
-          JSON.stringify({
-            hosts: [
-              { id: "linux", url: "http://linux.test" },
-              { id: "linux", url: "http://other.test" },
-            ],
-          })
-        );
+        yield* write(unparsable, JSON.stringify({ server: "not a url" }));
 
         const typoed = yield* cli(["hosts", "--json", "--config", typo]);
-        const listedTwice = yield* cli(["hosts", "--json", "--config", twice]);
 
-        expect([typoed.code, listedTwice.code]).toStrictEqual([1, 1]);
+        const notUrl = yield* cli(["hosts", "--json", "--config", unparsable]);
+
+        expect([typoed.code, notUrl.code]).toStrictEqual([1, 1]);
         expect(decodeJsonError(typoed.stdout).error).toMatchObject({
           tag: "Invalid",
           file: typo,
         });
-        expect(decodeJsonError(listedTwice.stdout).error).toMatchObject({
+        expect(decodeJsonError(notUrl.stdout).error).toMatchObject({
           tag: "Invalid",
-          file: twice,
+          file: unparsable,
         });
       })
   );
@@ -125,16 +115,14 @@ layer(NodeServices.layer)((it) => {
         yield* write(
           config,
           JSON.stringify({
-            hosts: [{ id: "linux", url: url("linux") }],
+            server: serverUrl,
             profiles: "~/profiles",
             authorizedKeys: "~/.ssh/id_ed25519.pub",
           })
         );
 
         const run = (args: readonly string[]) =>
-          cli([...args, "--config", config], {
-            endpoints: [["linux", host({ id: "linux", bases: ["ubuntu"] })]],
-          });
+          cli([...args, "--config", config], { server: server() });
 
         const hosts = yield* run(["hosts"]);
         const profiles = yield* run(["profiles"]);
@@ -154,7 +142,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a config's mistakes are all named, each by its JSON path, and an empty host list by what it lacks",
+    "a config's mistakes are all named, each by its JSON path, the old list of hosts among them",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
@@ -163,15 +151,18 @@ layer(NodeServices.layer)((it) => {
 
         yield* write(
           wrong,
-          JSON.stringify({ hosts: [{ id: "Linux" }], host: [] })
+          JSON.stringify({
+            hosts: [{ id: "linux", url: serverUrl }],
+            profiles: 7,
+          })
         );
-        yield* write(empty, JSON.stringify({ hosts: [] }));
+        yield* write(empty, JSON.stringify({}));
 
         expect(yield* hostsStderr(wrong)).toBe(
-          `clankerbox: Invalid: client config ${wrong}: host: not a known field; hosts[0].id: a host ID is 1 to 32 lowercase letters, digits and '-', starting with a letter; hosts[0].url: missing`
+          `clankerbox: Invalid: client config ${wrong}: hosts: not a known field; server: missing; profiles: Expected string`
         );
         expect(yield* hostsStderr(empty)).toBe(
-          "clankerbox: Invalid: the host list is empty: a client needs a host"
+          `clankerbox: Invalid: client config ${empty}: server: missing`
         );
         expect(yield* hostsStderr(path.join(dir, "absent.json"))).toBe(
           `clankerbox: Invalid: couldn't read client config ${path.join(dir, "absent.json")}: no such file or directory`

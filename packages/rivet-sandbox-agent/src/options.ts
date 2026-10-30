@@ -1,4 +1,4 @@
-import type { Client, Machine, Sizing } from "@gjermundgaraba/clankerbox-sdk";
+import type { Machine, Sizing } from "@gjermundgaraba/clankerbox-sdk";
 import type { SandboxProvider } from "sandbox-agent";
 
 /**
@@ -14,15 +14,15 @@ export type Source =
   | ({ readonly machine: string } & Sizing);
 
 export interface Options {
-  /** In placement order, as in the client config. */
-  readonly hosts: readonly Client.HostEntry[];
+  /** The control plane's URL, as in the client config. */
+  readonly server: string;
   readonly from: Source;
-  /** Runs a profile's setup even when the host has its prebuild, from `clankerbox prebuild`. */
+  /** Runs a profile's setup even when a host has its prebuild, from `clankerbox prebuild`. */
   readonly fresh?: boolean | undefined;
   /** `sandbox` by default. */
   readonly namePrefix?: string | undefined;
   /**
-   * The path of a public-key file, such as your `id_ed25519.pub`, whose keys the host installs for
+   * The path of a public-key file, such as your `id_ed25519.pub`, whose keys are installed for
    * the login user after a profile's setup, as the client config's `authorizedKeys` does: the key
    * the tunnel's ssh logs in with. A profile with a setup needs it.
    */
@@ -44,7 +44,7 @@ export interface Options {
 export interface ClankerboxProvider extends SandboxProvider {
   /**
    * `resizeMachine` on the sandbox's machine, taking turns with the sandbox's other calls, and the
-   * sizes the host then holds. A machine that is gone is `SandboxDestroyedError`, and the host's
+   * sizes it then holds. A machine that is gone is `SandboxDestroyedError`, and the control plane's
    * refusals are the SDK's errors. For what a running machine can't take, `pause` it, resize it,
    * then `ensureServer`.
    */

@@ -5,11 +5,6 @@ set -u
 use_run "$@"
 shift
 
-if ! host_pid >/dev/null; then
-  echo "cb: no host serves $run: launch a new run" >&2
-  exit 3
-fi
-
 if [ "$(sources)" != "$(cat "$evidence/sources")" ]; then
   echo "cb: the sources changed after this run built them: launch a new run" >&2
   exit 3

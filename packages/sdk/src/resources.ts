@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 
 import { Desired, HostError } from "./errors.ts";
-import { HostId, Id } from "./ids.ts";
+import { HostId, Name } from "./ids.ts";
 
 /** What a host's machines are: `linux` guests on smolvm, or `mac` guests on Tart. */
 export const Kind = Schema.Literals(["linux", "mac"]);
@@ -19,12 +19,13 @@ export const loginUser = "admin";
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
 
 /**
- * What the host is doing about a machine. A request waits for a rest: `settled`, at rest with what
- * was asked; `failed`, after a step failed, until the next request; `lost`, one the runtime no
- * longer has, which can only be deleted; and `waiting`, one the runtime can't read, which fails the
- * request and is read again at the host's next recheck. `creating` copies the machine and runs its
- * setup, and a machine whose create or setup fails is deleted. `starting` starts the machine, also
- * when it runs already, resumes a paused one, and prepares it.
+ * What the control plane is doing about a machine. A client waits for a rest at its generation:
+ * `settled`, at rest with what was asked; `failed`, after a step failed, until the next request;
+ * `lost`, one the runtime no longer has, which can only be deleted; and `waiting`, one the control
+ * plane can't read, where the request stays saved and acts when it can. `creating` copies the
+ * machine and runs its setup, and a machine whose create or setup fails is deleted, its row kept
+ * `failed` to say why. `starting` starts the machine, also when it runs already, resumes a paused
+ * one, and prepares it.
  */
 export const Phase = Schema.Literals([
   "observing",
@@ -33,6 +34,7 @@ export const Phase = Schema.Literals([
   "starting",
   "stopping",
   "pausing",
+  "resizing",
   "deleting",
   "settled",
   "failed",
@@ -40,6 +42,13 @@ export const Phase = Schema.Literals([
 ]);
 
 export type Phase = typeof Phase.Type;
+
+/** Where a client's wait ends. */
+export const isResting = (phase: Phase): boolean =>
+  phase === "settled" ||
+  phase === "failed" ||
+  phase === "lost" ||
+  phase === "waiting";
 
 export const SshEndpoint = Schema.Struct({
   host: Schema.String,
@@ -76,18 +85,20 @@ export type TailnetStatus = typeof TailnetStatus.Type;
 /**
  * `state` is what the runtime reports: `paused` while it holds the machine's saved execution,
  * `missing` when it doesn't have the machine, and `unknown` when it couldn't be read. `desired` is
- * what the last request asked for, `phase` what the host is doing about it, and `error` why the
- * last step failed, until the next request. `ssh` is only on a running machine whose runtime gives
+ * what the last request asked for, `phase` what the control plane is doing about it, and `error`
+ * why the last step failed, until the next request. A request takes the row out of rest in the
+ * write that records it, so a resting `phase` read after a request has seen it. `prebuild` names the checkpoint a create restored instead of running its setup. `ssh` is only on a running machine whose runtime gives
  * it an endpoint, and `hostKey`, `<type> <base64>`, once preparation has recorded it. `tailnet` is
  * on a running machine of a host that joins its machines to a tailnet, once the host has checked
  * it.
  */
 export const Machine = Schema.Struct({
-  id: Id,
+  id: Name,
   kind: Kind,
   createdAt: Schema.DateTimeUtcFromString,
   base: Schema.String,
   profile: Schema.optionalKey(Schema.String),
+  prebuild: Schema.optionalKey(Name),
   cpu: Size,
   ramMib: Size,
   diskGib: Size,
@@ -124,14 +135,16 @@ export const stateLabel = ({ state, desired, phase }: Machine): string => {
 
 /**
  * `kind` follows its host's: `ram` (RAM and disks) on linux, captured from a running machine, and
- * `disk` on mac, from a stopped one. A checkpoint exists only once its capture is done, and never
- * changes after.
+ * `disk` on mac, from a stopped one. A client waits on `phase`: a checkpoint is usable only `ready`,
+ * and never changes after. A capture that failed stays `failed` to say why, holding no copy.
  */
 export const Checkpoint = Schema.Struct({
-  id: Id,
+  id: Name,
   createdAt: Schema.DateTimeUtcFromString,
-  machine: Id,
+  machine: Name,
   kind: CheckpointKind,
+  phase: Schema.Literals(["capturing", "ready", "deleting", "failed"]),
+  error: Schema.optionalKey(HostError),
   base: Schema.String,
   profile: Schema.optionalKey(Schema.String),
   cpu: Size,
@@ -141,13 +154,33 @@ export const Checkpoint = Schema.Struct({
 
 export type Checkpoint = typeof Checkpoint.Type;
 
-/** `runtimeVersion` is the version of smolvm on linux, and of Tart on mac. */
+export const checkpointKinds = {
+  linux: "ram",
+  mac: "disk",
+} as const satisfies Record<Kind, Checkpoint["kind"]>;
+
+/** A prebuild under way, until the control plane's process ends. */
+export const Build = Schema.Struct({
+  id: Name,
+  phase: Schema.Literals(["building", "built", "failed"]),
+  error: Schema.optionalKey(HostError),
+}).annotate({ identifier: "Build" });
+
+export type Build = typeof Build.Type;
+
+/**
+ * An operator's view of a host: `up` with what it reported, `draining` when placement passes it
+ * over, or `unreachable` with why. `runtimeVersion` is the version of smolvm on linux, and of Tart
+ * on mac.
+ */
 export const Host = Schema.Struct({
   id: HostId,
-  kind: Kind,
-  version: Schema.String,
-  runtimeVersion: Schema.String,
+  state: Schema.Literals(["up", "draining", "unreachable"]),
+  kind: Schema.optionalKey(Kind),
+  version: Schema.optionalKey(Schema.String),
+  runtimeVersion: Schema.optionalKey(Schema.String),
   bases: Schema.Array(Schema.String),
+  problem: Schema.optionalKey(Schema.String),
 }).annotate({ identifier: "Host" });
 
 export type Host = typeof Host.Type;
@@ -169,15 +202,28 @@ const usageFields = {
  */
 export const Usage = Schema.Union([
   Schema.Struct({ ...usageFields, used: Schema.Int }),
-  Schema.Struct({ ...usageFields, unread: Schema.Array(Id) }),
+  Schema.Struct({ ...usageFields, unread: Schema.Array(Name) }),
 ]).annotate({ identifier: "Usage" });
 
 export type Usage = typeof Usage.Type;
 
-type WithoutHost<Row> = Row extends unknown ? Omit<Row, "host"> : never;
+/** Each host's `Usage`, and the hosts that gave none. */
+export const CapacityReport = Schema.Struct({
+  usage: Schema.Array(Usage),
+  unreachable: Schema.Array(HostId),
+}).annotate({ identifier: "CapacityReport" });
 
-/** A `Usage` row as a runtime reads it, before the host names itself on it. */
-export type Reading = WithoutHost<Usage>;
+export type CapacityReport = typeof CapacityReport.Type;
+
+const { host: _host, ...readingFields } = usageFields;
+
+/** A `Usage` row as a runtime reads it, before the control plane names its host on it. */
+export const Reading = Schema.Union([
+  Schema.Struct({ ...readingFields, used: Schema.Int }),
+  Schema.Struct({ ...readingFields, unread: Schema.Array(Name) }),
+]);
+
+export type Reading = typeof Reading.Type;
 
 const publicKeyLine =
   /^(?:ssh|ecdsa|sk)-[a-z0-9@.-]+ [A-Za-z0-9+/]+={0,3}(?: .*)?$/u;
@@ -221,13 +267,17 @@ const specFields = {
   profile: Schema.optionalKey(Schema.String),
 };
 
-/** A profile file fills these in; the host sees only the `profile` label. */
+/** A profile file fills these in; the server sees only the `profile` label. */
 export const MachineSpec = Schema.Struct(specFields);
 
 export type MachineSpec = typeof MachineSpec.Type;
 
-/** The host checks that `id` names it, so a create never lands under another host's ID. */
-export const CreateRequest = Schema.Struct({ id: Id, ...specFields });
+/** `fresh` runs the setup even when a host holds a prebuild of the spec. */
+export const CreateRequest = Schema.Struct({
+  id: Name,
+  ...specFields,
+  fresh: Schema.optionalKey(Schema.Boolean),
+});
 
 export type CreateRequest = typeof CreateRequest.Type;
 
@@ -241,7 +291,10 @@ export const Sizing = Schema.Struct({
 export type Sizing = typeof Sizing.Type;
 
 /** The sizes to give machine `id`, at least one. */
-export const ResizeRequest = Schema.Struct({ id: Id, ...Sizing.fields }).check(
+export const ResizeRequest = Schema.Struct({
+  id: Name,
+  ...Sizing.fields,
+}).check(
   Schema.makeFilter(
     ({ cpu, ramMib, diskGib }) =>
       cpu !== undefined ||
@@ -277,11 +330,7 @@ export const offered = ({
     ...(kind === "linux" ? ["and any image reference"] : []),
   ].join(", ");
 
-/** A prebuild is the checkpoint `id` of a machine made from the spec, setup and all. */
-export const PrebuildRequest = Schema.Struct({
-  id: Id,
-  ...specFields,
-  setup: Setup,
-});
+/** A prebuild is a checkpoint of a machine made from the spec, setup and all. */
+export const PrebuildRequest = Schema.Struct({ ...specFields, setup: Setup });
 
 export type PrebuildRequest = typeof PrebuildRequest.Type;

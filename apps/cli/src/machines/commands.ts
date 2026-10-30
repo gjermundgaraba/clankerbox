@@ -2,10 +2,9 @@ import {
   actionsByName,
   formatGib,
   formatMib,
-  Prebuild,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Machine } from "@gjermundgaraba/clankerbox-sdk";
-import { Console, DateTime, Effect } from "effect";
+import { Console, Effect } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 
 import {
@@ -21,7 +20,6 @@ import {
   table,
   withClient,
 } from "../command.ts";
-import { age } from "../units.ts";
 import {
   flagSizes,
   flagsRequest,
@@ -32,7 +30,7 @@ import { encodeMachine, machineFields, machineRows } from "./view.ts";
 
 export const machines = listCommand({
   name: "machines",
-  description: "List every host's machines, with each machine's age.",
+  description: "List every machine, with its age.",
   key: "machines",
   read: (client) => client.machines,
   encode: encodeMachine,
@@ -56,12 +54,14 @@ export const getMachine = Command.make(
 
 const createArguments = {
   name: Argument.String("name").pipe(
-    Argument.withDescription("The new machine's name. Its ID is <host>_<name>.")
+    Argument.withDescription(
+      "The new machine's name, unique across every host."
+    )
   ),
   ...specArguments,
   fresh: Flag.Boolean("fresh").pipe(
     Flag.withDescription(
-      "Run the setup even when its host has a prebuild of it."
+      "Run the setup even when a host has a prebuild of it."
     ),
     Flag.withDefault(false)
   ),
@@ -74,21 +74,15 @@ export const create = Command.make(
     printResource(flags, {
       call: (client, config) =>
         Effect.gen(function* () {
-          const { spec, host } = yield* flagsRequest("create", flags, config);
+          const { spec } = yield* flagsRequest("create", flags, config);
 
-          const { machine, prebuild } = yield* Prebuild.create(
-            client,
-            flags.name,
-            spec,
-            {
-              host,
-              fresh: flags.fresh,
-            }
-          );
+          const machine = yield* client.create(flags.name, spec, {
+            fresh: flags.fresh,
+          });
 
-          if (prebuild !== undefined && !flags.json) {
+          if (machine.prebuild !== undefined && !flags.json) {
             yield* Console.error(
-              `clankerbox: restored from the prebuild ${prebuild.id}, made ${age(prebuild.createdAt, yield* DateTime.now)} ago`
+              `clankerbox: restored from the prebuild ${machine.prebuild}`
             );
           }
 
@@ -99,7 +93,7 @@ export const create = Command.make(
     })
 ).pipe(
   Command.withDescription(
-    "Create a machine from a profile, from a base with sizes and an optional setup, or from both: each flag overrides the profile's field. With a setup, the machine is restored from the setup's prebuild when its host has one (see prebuild). A create whose copy or setup fails deletes its machine and fails with why. Prints the new ID."
+    "Create a machine from a profile, from a base with sizes and an optional setup, or from both: each flag overrides the profile's field. With a setup, the machine is restored from the setup's prebuild when a host has one (see prebuild). A create waits until its machine runs, unless --no-wait. One whose copy or setup fails deletes its machine, keeps its row to say why, and fails. Prints the new ID."
   )
 );
 

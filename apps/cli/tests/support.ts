@@ -5,13 +5,14 @@ import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import { mkdir, write } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import {
-  stubHost,
+  stubServer,
   transport,
-} from "@gjermundgaraba/clankerbox-sdk/testing/stub-host";
+} from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import type {
   Endpoint,
-  StubHost,
-} from "@gjermundgaraba/clankerbox-sdk/testing/stub-host";
+  StubServer,
+  StubServerOptions,
+} from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import {
   ConfigProvider,
   Effect,
@@ -31,7 +32,7 @@ import { dispatch } from "../src/clankerbox.ts";
 import { ErrorDocument } from "../src/command.ts";
 import { Dial } from "../src/ssh.ts";
 
-export const url = (id: string) => `http://${id}.test`;
+export const serverUrl = "http://cbx.test";
 
 export const fakeSpawner = <A, E>(
   code: number,
@@ -70,7 +71,7 @@ export const fakeSpawner = <A, E>(
   return { spawned, layer };
 };
 
-export const cleanup = async (stubs: StubHost[]) => {
+export const cleanup = async (stubs: StubServer[]) => {
   await Promise.all(
     stubs.splice(0).map(async (stub) => {
       await stub.dispose();
@@ -78,11 +79,7 @@ export const cleanup = async (stubs: StubHost[]) => {
   );
 };
 
-export const writeConfig = (
-  dir: string,
-  hosts: readonly string[],
-  profiles?: string
-) =>
+export const writeConfig = (dir: string, profiles?: string) =>
   Effect.gen(function* () {
     const file = path.join(dir, "config.json");
 
@@ -90,7 +87,7 @@ export const writeConfig = (
     yield* write(
       file,
       JSON.stringify({
-        hosts: hosts.map((id) => ({ id, url: url(id) })),
+        server: serverUrl,
         profiles,
         authorizedKeys: "id.pub",
       })
@@ -106,7 +103,7 @@ export interface CliRun {
 }
 
 export interface CliOptions {
-  readonly endpoints?: ReadonlyArray<readonly [string, Endpoint]>;
+  readonly server?: Endpoint;
   readonly spawner?: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner>;
   readonly env?: Readonly<Record<string, string>>;
   readonly http?: Layer.Layer<HttpClient.HttpClient>;
@@ -121,12 +118,9 @@ export const cli = (
   args: readonly string[],
   options?: CliOptions
 ): Effect.Effect<CliRun> => {
-  const network = new Map(
-    (options?.endpoints ?? []).map(([id, endpoint]) => [
-      new URL(url(id)).origin,
-      endpoint,
-    ])
-  );
+  const network = new Map([
+    [new URL(serverUrl).origin, options?.server ?? "down"],
+  ]);
 
   const program = Effect.gen(function* () {
     const exit = yield* Effect.exit(dispatch(args));
@@ -165,9 +159,9 @@ export const cli = (
   );
 };
 
-export const hostIn =
-  (stubs: StubHost[]) => (options: Parameters<typeof stubHost>[0]) => {
-    const stub = stubHost(options);
+export const serverIn =
+  (stubs: StubServer[]) => (options?: StubServerOptions) => {
+    const stub = stubServer(options);
 
     stubs.push(stub);
 
@@ -215,7 +209,6 @@ export const writeProfiles = (dir: string) =>
         ramMib: 4096,
         diskGib: 20,
         setup: { path: "dev-recipe", timeoutSeconds: 900 },
-        host: "hetzner",
       })
     );
     yield* write(path.join(profiles, "notes.txt"), "not a profile\n");

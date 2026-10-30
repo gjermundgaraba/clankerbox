@@ -81,8 +81,8 @@ export const profileRows = (
   profiles: readonly LoadedProfile[],
   setupPath: (path: string) => string
 ) => [
-  ["NAME", "BASE", "CPU", "RAM", "DISK", "SETUP", "TIMEOUT", "HOST"],
-  ...profiles.map(({ label, base, cpu, ramMib, diskGib, setup, host }) => [
+  ["NAME", "BASE", "CPU", "RAM", "DISK", "SETUP", "TIMEOUT"],
+  ...profiles.map(({ label, base, cpu, ramMib, diskGib, setup }) => [
     label,
     base ?? "-",
     String(cpu),
@@ -92,7 +92,6 @@ export const profileRows = (
     setup?.timeoutSeconds === undefined
       ? "-"
       : formatSeconds(setup.timeoutSeconds),
-    host ?? "-",
   ]),
 ];
 
@@ -123,6 +122,6 @@ export const profiles = Command.make("profiles", clientFlags, (flags) =>
   }).pipe(Effect.catch(fail(flags.json)))
 ).pipe(
   Command.withDescription(
-    "List the profiles in the config's profiles directory, with each one's base, sizes, setup and host."
+    "List the profiles in the config's profiles directory, with each one's base, sizes and setup."
   )
 );

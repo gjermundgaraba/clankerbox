@@ -84,7 +84,6 @@ const accepts = (port: number) =>
   });
 
 const machineOn = (name: string): MachineRef => ({
-  id: `mac_${name}`,
   name,
   instance: `${name.length.toString(16).padStart(2, "0")}23456789abcdef0123456789abcdef`,
   cpu: 4,
@@ -382,7 +381,7 @@ const runtimeOn = (options?: { readonly settings?: Partial<Settings> }) =>
       ...options?.settings,
     }).pipe(Effect.provide(mac.spawner.layer));
 
-    yield* runtime.startup([]);
+    yield* runtime.startup;
 
     return { mac, runtime };
   });
@@ -516,7 +515,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
         expect(yield* accepts(machine.port)).toBe(true);
         expect(yield* runtime.observe([machine])).toStrictEqual(
-          new Map([[machine.id, "running"]])
+          new Map([[machine.name, "running"]])
         );
       })
   );
@@ -638,7 +637,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(failure(error)).toStrictEqual([
           "Missing",
-          "machine mac_dev is missing from the mac runtime; delete it",
+          "machine dev is missing from the mac runtime; delete it",
         ]);
         expect(calls(mac)).toStrictEqual([]);
         expect([
@@ -695,7 +694,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(error._tag).toBe("Capacity");
         expect(error.message).toBe(
-          "Apple's limit of 2 running macOS VMs per Mac refused mac_third: The number of VMs exceeds the system limit (other running VMs: a1, a2)"
+          "Apple's limit of 2 running macOS VMs per Mac refused third: The number of VMs exceeds the system limit (other running VMs: a1, a2)"
         );
       })
   );
@@ -721,7 +720,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(error._tag).toBe("Internal");
         expect(error.message).toBe(
-          "tart run for mac_dev exited 1: Softnet failed: softnet not found in PATH"
+          "tart run for dev exited 1: Softnet failed: softnet not found in PATH"
         );
       })
   );
@@ -761,7 +760,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const error = yield* creating.pipe(Effect.provide(TestClock.layer()));
 
         expect(error.message).toBe(
-          "mac_dev's guest agent didn't answer tart exec within 3m of its start"
+          "dev's guest agent didn't answer tart exec within 3m of its start"
         );
         expect(
           calls(mac).filter((line) => line.includes("stop"))
@@ -779,7 +778,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const [source, machine] = [machineOn("src"), machineOn("dev")];
 
         const checkpoint = {
-          id: "mac_snap",
           name: "snap",
           instance: "fedcba9876543210fedcba9876543210",
           port: source.port,
@@ -840,7 +838,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect([error._tag, error.message]).toStrictEqual([
           "Unsizable",
-          "machine mac_small's disk of 20G is below the disk Tart holds for it, and Tart only grows a disk: new disk size of 22 GB should be larger than the current disk size of 50 GB",
+          "machine small's disk of 20G is below the disk Tart holds for it, and Tart only grows a disk: new disk size of 22 GB should be larger than the current disk size of 50 GB",
         ]);
         expect(calls(mac)).toStrictEqual([
           `tart clone base ${vm}`,
@@ -974,7 +972,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(refused._tag).toBe("Capacity");
         expect(refused.message).toBe(
-          `startMachine mac_b would run 3 macOS VMs on this Mac, and Apple allows 2: ${[vmOf(a), vmOf(b), "operators-own"].toSorted().join(", ")}`
+          `startMachine b would run 3 macOS VMs on this Mac, and Apple allows 2: ${[vmOf(a), vmOf(b), "operators-own"].toSorted().join(", ")}`
         );
 
         mac.vms.delete("operators-own");
@@ -1085,7 +1083,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const [source, copy] = [machineOn("src"), machineOn("copy")];
 
         const checkpoint = {
-          id: "mac_snap",
           name: "snap",
           instance: "fedcba9876543210fedcba9876543210",
           port: source.port,
@@ -1110,20 +1107,17 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect([fork, capture, paused, missing].map(failure)).toStrictEqual([
           [
             "WrongState",
-            "a Tart fork copies a stopped machine's disk, and mac_src is running: stop it first",
+            "a Tart fork copies a stopped machine's disk, and src is running: stop it first",
           ],
           [
             "WrongState",
-            "a Tart checkpoint copies a stopped machine's disk, and mac_src is running: stop it first",
+            "a Tart checkpoint copies a stopped machine's disk, and src is running: stop it first",
           ],
           [
             "WrongState",
-            "a Tart fork copies a stopped machine's disk, and mac_src is paused: stop it first",
+            "a Tart fork copies a stopped machine's disk, and src is paused: stop it first",
           ],
-          [
-            "Missing",
-            "machine mac_src is missing from the mac runtime; delete it",
-          ],
+          ["Missing", "machine src is missing from the mac runtime; delete it"],
         ]);
         expect(calls(mac)).toStrictEqual([]);
         expect(
@@ -1168,7 +1162,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         ]);
         expect(failure(least)).toStrictEqual([
           "Unsizable",
-          "machine mac_dev's 1 vCPUs and 8G are below what its guest takes: Error: VM should have 2 CPU cores at minimum (requested 1)",
+          "machine dev's 1 vCPUs and 8G are below what its guest takes: Error: VM should have 2 CPU cores at minimum (requested 1)",
         ]);
       })
   );
@@ -1209,11 +1203,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(refused.map(failure)).toStrictEqual([
           [
             "Unsizable",
-            "tart set takes at most 65535 vCPUs and 65535 GB of disk, and mac_dev would have 65536 vCPUs and 65 GB",
+            "tart set takes at most 65535 vCPUs and 65535 GB of disk, and dev would have 65536 vCPUs and 65 GB",
           ],
           [
             "Unsizable",
-            "tart set takes at most 65535 vCPUs and 65535 GB of disk, and mac_dev would have 4 vCPUs and 65536 GB",
+            "tart set takes at most 65535 vCPUs and 65535 GB of disk, and dev would have 4 vCPUs and 65536 GB",
           ],
         ]);
         expect(calls(mac)).toStrictEqual([]);
@@ -1297,7 +1291,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         ];
 
         const checkpoint = {
-          id: "mac_snap",
           name: "snap",
           instance: "fedcba9876543210fedcba9876543210",
           port: source.port,
@@ -1349,7 +1342,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const restored = { ...machineOn("restored"), cpu: 2, ramMib: 4096 };
 
         const checkpoint = {
-          id: "mac_snap",
           name: "snap",
           instance: "fedcba9876543210fedcba9876543210",
           port: source.port,
@@ -1645,7 +1637,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "startup makes the jobs dir and listens again for every machine, running or not",
+    "startup makes the jobs dir, and adopt listens again for every machine, running or not",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -1653,9 +1645,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         mac.vms.set(vmOf(up), "running");
         mac.vms.set(vmOf(down), "stopped");
-        yield* runtime.startup([up, down]);
+        yield* runtime.startup;
 
         expect(existsSync(jobsDir(mac.settings.stateDir))).toBe(true);
+
+        yield* runtime.adopt([up, down]);
+
         expect([
           yield* accepts(up.port),
           yield* accepts(down.port),
@@ -1664,7 +1659,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a port startup can't listen on is logged and the rest served, and start listens again before it boots",
+    "a port adopt can't listen on is logged and the rest served, and start listens again before it boots",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -1679,7 +1674,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             yield* holding(blocked.port);
 
             yield* runtime
-              .startup([blocked, other])
+              .adopt([blocked, other])
               .pipe(
                 Effect.provide(
                   Logger.layer([
@@ -1692,7 +1687,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
               [
                 expect.stringMatching(
                   new RegExp(
-                    `^startup: no forwarder for mac_dev: ${listenError}`,
+                    `^adopt: no forwarder for dev: ${listenError}`,
                     "u"
                   )
                 ),
@@ -1719,7 +1714,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "delete works for a machine whose port startup couldn't listen on",
+    "delete works for a machine whose port adopt couldn't listen on",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -1732,7 +1727,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             yield* holding(machine.port);
 
             yield* runtime
-              .startup([machine])
+              .adopt([machine])
               .pipe(Effect.provide(Logger.layer([])));
             yield* runtime.delete(machine);
 
@@ -1743,6 +1738,27 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             expect(mac.vms.has(vm)).toBe(false);
           })
         );
+      })
+  );
+
+  it.effect(
+    "a delete after adopt closes the forwarder, knowing the machine only by name",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const machine = machineOn("dev");
+
+        mac.vms.set(vmOf(machine), "stopped");
+        yield* runtime.adopt([machine]);
+
+        expect(yield* accepts(machine.port)).toBe(true);
+
+        yield* runtime.delete({
+          name: machine.name,
+          instance: machine.instance,
+        });
+
+        expect(yield* accepts(machine.port)).toBe(false);
       })
   );
 
@@ -1764,9 +1780,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       expect(observed).toStrictEqual(
         new Map([
-          [up.id, "running"],
-          [paused.id, "paused"],
-          [gone.id, "missing"],
+          [up.name, "running"],
+          [paused.name, "paused"],
+          [gone.name, "missing"],
         ])
       );
       expect(
@@ -1794,7 +1810,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           `tart suspend ${vm}`,
         ]);
         expect(yield* runtime.observe([machine])).toStrictEqual(
-          new Map([[machine.id, "paused"]])
+          new Map([[machine.name, "paused"]])
         );
       })
   );
@@ -1825,7 +1841,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           `tart exec ${vm} sudo -n /sbin/shutdown -h now`,
         ]);
         expect(yield* runtime.observe([machine])).toStrictEqual(
-          new Map([[machine.id, "stopped"]])
+          new Map([[machine.name, "stopped"]])
         );
       })
   );
@@ -1874,14 +1890,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(failure(error)).toStrictEqual([
           "Internal",
-          "Tart couldn't save mac_dev's state and powered its VM off, as it does when the first save on a Mac runs while its session is locked: creating a snapshot...\nFailed to suspend the VM: The virtual machine failed to save with error “permission denied”.",
+          "Tart couldn't save dev's state and powered its VM off, as it does when the first save on a Mac runs while its session is locked: creating a snapshot...\nFailed to suspend the VM: The virtual machine failed to save with error “permission denied”.",
         ]);
         expect(calls(mac).slice(-2)).toStrictEqual([
           `tart suspend ${vm}`,
           `tart stop ${vm}`,
         ]);
         expect(yield* runtime.observe([machine])).toStrictEqual(
-          new Map([[machine.id, "stopped"]])
+          new Map([[machine.name, "stopped"]])
         );
       })
   );
@@ -1906,7 +1922,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(failure(error)[1]).toContain(`couldn't read ${mac.logOf(vm)}`);
         expect(calls(mac).slice(-1)).toStrictEqual([`tart suspend ${vm}`]);
         expect(yield* runtime.observe([machine])).toStrictEqual(
-          new Map([[machine.id, "paused"]])
+          new Map([[machine.name, "paused"]])
         );
       })
   );
@@ -1936,11 +1952,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(errors.map(failure)).toStrictEqual([
           [
             "WrongState",
-            "Tart reads mac_stopped stopped, and suspends only a running machine",
+            "Tart reads stopped stopped, and suspends only a running machine",
           ],
           [
             "Missing",
-            "machine mac_gone is missing from the mac runtime; delete it",
+            "machine gone is missing from the mac runtime; delete it",
           ],
         ]);
         expect(calls(mac)).toStrictEqual([]);
@@ -1966,7 +1982,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         `tart exec ${vm} true`,
       ]);
       expect(yield* runtime.observe([machine])).toStrictEqual(
-        new Map([[machine.id, "running"]])
+        new Map([[machine.name, "running"]])
       );
     })
   );
@@ -1992,10 +2008,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(failure(error)[0]).toBe("Internal");
         expect(failure(error)[1]).toContain(
-          "macOS resumes a saved state only while the Mac's session is unlocked, so if it is locked, unlock it and start mac_dev again: a restore that fails keeps the saved state, and a stop discards it"
+          "macOS resumes a saved state only while the Mac's session is unlocked, so if it is locked, unlock it and start dev again: a restore that fails keeps the saved state, and a stop discards it"
         );
         expect(yield* runtime.observe([machine])).toStrictEqual(
-          new Map([[machine.id, "paused"]])
+          new Map([[machine.name, "paused"]])
         );
       })
   );
@@ -2017,7 +2033,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(calls(mac).slice(before)).toStrictEqual([`tart stop ${vm}`]);
         expect(yield* runtime.observe([machine])).toStrictEqual(
-          new Map([[machine.id, "stopped"]])
+          new Map([[machine.name, "stopped"]])
         );
       })
   );

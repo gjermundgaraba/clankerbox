@@ -13,7 +13,6 @@ const Machine = Schema.Struct({
 });
 
 const ref = (index: number, ramMib: number): MachineRef => ({
-  id: `linux_m${index}`,
   name: `m${index}`,
   instance: index.toString(16).padStart(32, "0"),
   cpu: 1,
@@ -48,8 +47,8 @@ const admits = (
 
         return new Map(
           refs.map((asking) => [
-            asking.id,
-            machines.find((held) => held.machine.id === asking.id)?.state ??
+            asking.name,
+            machines.find((held) => held.machine.name === asking.name)?.state ??
               "missing",
           ])
         );
@@ -74,9 +73,7 @@ const admits = (
     const error = yield* Effect.flip(checked);
 
     expect(error._tag).toBe("Capacity");
-    expect(error.message).toMatch(
-      /^startMachine linux_m0 needs \S+ of RAM, and /u
-    );
+    expect(error.message).toMatch(/^startMachine m0 needs \S+ of RAM, and /u);
 
     return false;
   });

@@ -6,14 +6,13 @@ import {
   isImageReference,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Kind } from "@gjermundgaraba/clankerbox-sdk";
+import { Address } from "@gjermundgaraba/clankerbox-sdk/node";
 import { Effect, FileSystem, Path, Schema } from "effect";
 
 import { defaultMachinePorts, reservedPorts } from "../machine-ports.ts";
-import { Address } from "../platform/address.ts";
 import { SmolvmSettings } from "../platform/smolvm.ts";
 import { TailnetSettings } from "../platform/tailscale.ts";
 import { TartSettings } from "../platform/tart/tart.ts";
-import { defaultRecheck } from "../settings.ts";
 import type { HostSettings } from "../settings.ts";
 
 const Port = Schema.Int.check(
@@ -98,7 +97,6 @@ const resolveConfig = (
       stateDir: path.resolve(directory, decoded.stateDir),
       bases: new Map(Object.entries(decoded.bases)),
       machinePorts,
-      recheck: defaultRecheck,
     };
   });
 

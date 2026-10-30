@@ -31,13 +31,20 @@ jobs:
       - run: vp run ready
       - name: Check that the build left the tree clean
         run: git diff --exit-code
-      - name: Pack, install and run the CLI
+      - name: Pack, install and run each program
         run: |
-          vp exec pnpm --filter @gjermundgaraba/clankerbox pack --pack-destination "$RUNNER_TEMP/cli"
-          tar -tzf "$RUNNER_TEMP/cli/"*.tgz | grep -qx package/LICENSE
-          npm install --global --prefix "$RUNNER_TEMP/cli-prefix" --ignore-scripts "$RUNNER_TEMP/cli/"*.tgz
-          bin="$RUNNER_TEMP/cli-prefix/bin/clankerbox"
-          test "$("$bin" --version)" = "clankerbox v$(jq -r .version apps/cli/package.json)"
-          "$bin" --help | grep -qF "clankerbox <subcommand> [flags]"
-          "$bin" host --help | grep -qF -- "--config"
-          if "$bin" host >/dev/null 2>&1; then exit 1; fi
+          for app in cli server host; do
+            package=$(jq -r .name "apps/$app/package.json")
+            program=$(jq -r '.bin | keys[0]' "apps/$app/package.json")
+            vp exec pnpm --filter "$package" pack --pack-destination "$RUNNER_TEMP/$app"
+            tar -tzf "$RUNNER_TEMP/$app/"*.tgz | grep -qx package/LICENSE
+            npm install --global --prefix "$RUNNER_TEMP/$app-prefix" --ignore-scripts "$RUNNER_TEMP/$app/"*.tgz
+            bin="$RUNNER_TEMP/$app-prefix/bin/$program"
+            test "$("$bin" --version)" = "$program v$(jq -r .version "apps/$app/package.json")"
+          done
+          "$RUNNER_TEMP/cli-prefix/bin/clankerbox" --help | grep -qF "clankerbox <subcommand> [flags]"
+          for program in server/clankerbox-server host/clankerbox-host; do
+            bin="$RUNNER_TEMP/${program%/*}-prefix/bin/${program#*/}"
+            "$bin" --help | grep -qF -- "--config"
+            if "$bin" >/dev/null 2>&1; then exit 1; fi
+          done

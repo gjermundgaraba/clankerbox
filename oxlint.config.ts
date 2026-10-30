@@ -1,14 +1,14 @@
 import { config } from "@clanker-stuff/oxlint-config";
 
 const adapterPackages = [
-  "^node:",
+  "^node:(?!sqlite)",
   "^effect(/(encoding|http|process))?$",
   "^@effect/platform-node/",
   "^@gjermundgaraba/clankerbox-sdk$",
 ];
 
 const adapterBecause =
-  "an adapter imports the domain files, platform's shared process.ts and address.ts, and its own subfolder; never composition/ or another adapter";
+  "an adapter imports the domain files, platform's shared process.ts, and its own subfolder; never composition/ or another adapter";
 
 export default config({
   jsPlugins: [{ name: "fence", specifier: "./tools/lint-fence/src/index.ts" }],
@@ -25,7 +25,10 @@ export default config({
     {
       files: [
         "apps/cli/src/main.ts",
+        "apps/host/src/main.ts",
         "apps/host/tests/serve.ts",
+        "apps/server/src/main.ts",
+        "apps/server/tests/serve.ts",
         "packages/rivet-sandbox-agent/src/provider.ts",
         "packages/rivet-sandbox-agent/tests/leave-tunnel.ts",
         "packages/rivet-sandbox-agent/tests/provider.test.ts",
@@ -33,7 +36,7 @@ export default config({
       rules: { "fence/no-manual-run": "off" },
     },
     {
-      excludeFiles: ["apps/host/src/lifecycle.ts"],
+      excludeFiles: ["apps/host/src/main.ts"],
       files: ["apps/host/src/*.ts"],
       rules: {
         "fence/allowed-imports": [
@@ -44,15 +47,95 @@ export default config({
               "^effect$",
               "^effect/encoding$",
               "^@gjermundgaraba/clankerbox-sdk$",
+              "^@clankerbox/host-contract$",
             ],
             because:
-              "a host domain file imports only other domain files, effect and the SDK; platform/, Node and effect/process are for composition/, and xstate for lifecycle.ts",
+              "a host domain file imports only other domain files, effect, the SDK and the host contract; platform/, Node and effect/process are for composition/",
           },
         ],
       },
     },
     {
-      files: ["apps/host/src/lifecycle.ts"],
+      excludeFiles: ["apps/server/src/hosts.ts", "apps/server/src/main.ts"],
+      files: ["apps/server/src/*.ts"],
+      rules: {
+        "fence/allowed-imports": [
+          "error",
+          {
+            allow: [
+              "^\\./[a-z-]+\\.ts$",
+              "^effect$",
+              "^effect/encoding$",
+              "^@gjermundgaraba/clankerbox-sdk$",
+              "^@clankerbox/host-contract$",
+            ],
+            because:
+              "a server domain file imports only other domain files, effect, the SDK and the host contract; a host is reached through hosts.ts, and platform/ and Node are for composition/",
+          },
+        ],
+      },
+    },
+    {
+      files: ["apps/server/src/hosts.ts"],
+      rules: {
+        "fence/allowed-imports": [
+          "error",
+          {
+            allow: [
+              "^effect$",
+              "^effect/http$",
+              "^@gjermundgaraba/clankerbox-sdk$",
+              "^@clankerbox/host-contract$",
+              "^@gjermundgaraba/effect-actions/",
+            ],
+            because:
+              "hosts.ts is the one file that calls a host, over the host contract",
+          },
+        ],
+      },
+    },
+    {
+      files: ["apps/server/src/platform/*.ts"],
+      rules: {
+        "fence/allowed-imports": [
+          "error",
+          {
+            allow: [
+              "^\\.\\./[a-z-]+\\.ts$",
+              "^node:sqlite$",
+              "^@clankerbox/host-contract$",
+              "^@gjermundgaraba/clankerbox-sdk$",
+              "^effect$",
+            ],
+            because:
+              "the server's adapter is its Store, which is the one place state lives",
+          },
+        ],
+      },
+    },
+    {
+      files: ["apps/server/src/composition/*.ts", "apps/server/src/main.ts"],
+      rules: {
+        "fence/allowed-imports": [
+          "error",
+          {
+            allow: [
+              "^\\.\\.?/[a-z-]+(/[a-z-]+)?\\.ts$",
+              "^node:http$",
+              "^@effect/platform-node/",
+              "^@gjermundgaraba/clankerbox-sdk(/node)?$",
+              "^@gjermundgaraba/effect-actions/",
+              "^effect$",
+              "^effect/(cli|http)$",
+            ],
+            because:
+              "the server reaches a host only over the network: it never loads the host package or a runtime",
+          },
+        ],
+      },
+    },
+    {
+      files: ["packages/host-contract/src/*.ts"],
       rules: {
         "fence/allowed-imports": [
           "error",
@@ -61,11 +144,10 @@ export default config({
               "^\\./[a-z-]+\\.ts$",
               "^effect$",
               "^@gjermundgaraba/clankerbox-sdk$",
-              "^xstate$",
-              "^@xstate/effect$",
+              "^@gjermundgaraba/effect-actions/",
             ],
             because:
-              "lifecycle.ts holds the machines' statechart, the one domain file on xstate, beside its siblings, effect and the SDK",
+              "the host contract is schemas and actions, shared by the server and the host alone",
           },
         ],
       },
@@ -77,7 +159,7 @@ export default config({
           "error",
           {
             allow: [
-              "^\\./(process|address)\\.ts$",
+              "^\\./process\\.ts$",
               "^\\.\\./[a-z-]+\\.ts$",
               ...adapterPackages,
             ],
@@ -94,7 +176,7 @@ export default config({
           {
             allow: [
               "^\\./[a-z-]+\\.ts$",
-              "^\\.\\./(process|address)\\.ts$",
+              "^\\.\\./process\\.ts$",
               "^\\.\\./\\.\\./[a-z-]+\\.ts$",
               ...adapterPackages,
             ],
@@ -104,7 +186,7 @@ export default config({
       },
     },
     {
-      excludeFiles: ["apps/cli/src/main.ts", "apps/cli/src/host.ts"],
+      excludeFiles: ["apps/cli/src/main.ts"],
       files: ["apps/cli/src/**/*.ts"],
       rules: {
         "fence/allowed-imports": [
@@ -117,7 +199,7 @@ export default config({
               "^@gjermundgaraba/clankerbox-sdk$",
             ],
             because:
-              "a command imports effect, the SDK and its siblings; Node, @effect/platform-node and the host package are for main.ts and host.ts",
+              "a command imports effect, the SDK and its siblings; a client knows the control plane's contract, never a host's, and Node and @effect/platform-node are for main.ts",
           },
         ],
       },

@@ -10,14 +10,14 @@ import {
   scratch,
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
-import { Console, Duration, Effect, FileSystem, Logger } from "effect";
+import { Console, Effect, FileSystem, Logger } from "effect";
 
-import { loginSetup, startHost } from "./support.ts";
+import { startHost } from "./support.ts";
 
-const usage = "usage: serve.ts <run-dir> [linux|mac] [ram-budget-mib]";
+const usage =
+  "usage: serve.ts <run-dir> <host-id> [linux|mac] [ram-budget-mib]";
 
-const [runArg, kindArg = "linux", budgetArg] = process.argv.slice(2);
+const [runArg, idArg, kindArg = "linux", budgetArg] = process.argv.slice(2);
 
 const isKind = (text: string): text is Kind =>
   text === "linux" || text === "mac";
@@ -27,13 +27,19 @@ const parsed = () => {
 
   if (
     runArg === undefined ||
+    idArg === undefined ||
     !isKind(kindArg) ||
     (budget !== undefined && !Number.isInteger(budget))
   ) {
     throw new Error(usage);
   }
 
-  return { run: path.resolve(runArg), kind: kindArg, ramBudgetMib: budget };
+  return {
+    run: path.resolve(runArg),
+    id: idArg,
+    kind: kindArg,
+    ramBudgetMib: budget,
+  };
 };
 
 const offered = {
@@ -41,31 +47,22 @@ const offered = {
   mac: ["macos", requirements.bases.mac.macos],
 } as const;
 
-const webRecipe = `#!/bin/sh
-set -eu
-${loginSetup}echo web-recipe >"$CLANKERBOX_ROOT/recipe-ran"
-`;
-
 const serve = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
-  const { run, kind, ramBudgetMib } = yield* Effect.try(parsed);
+  const { run, id, kind, ramBudgetMib } = yield* Effect.try(parsed);
   const [base, image] = offered[kind];
   const evidence = path.join(run, "evidence");
-  const dir = yield* scratch;
-  const home = path.join(dir, "home");
-  const client = path.join(home, ".config", "clankerbox");
+  const hosts = path.join(run, "hosts");
+  const url = path.join(hosts, `${id}.url`);
+  const pid = path.join(hosts, `${id}.pid`);
 
-  const served = ["ready", "home", "host.pid"].map((file) =>
-    path.join(run, file)
-  );
+  yield* Effect.forEach([evidence, hosts], mkdir);
 
-  yield* Effect.forEach([evidence, path.join(client, "profiles")], mkdir);
-
-  const host = yield* startHost(path.join(dir, "host"), {
+  const host = yield* startHost(path.join(yield* scratch, "host"), {
+    id,
     kind,
     bases: new Map([[base, image]]),
     logger: Logger.consolePretty({ colors: false }),
-    recheck: Duration.seconds(5),
     runtime: {
       ramBudgetMib,
       onCall: (call) => {
@@ -74,37 +71,15 @@ const serve = Effect.gen(function* () {
     },
   });
 
-  yield* write(path.join(client, "id.pub"), `${operatorKey}\n`);
-  yield* write(
-    path.join(client, "config.json"),
-    JSON.stringify({
-      hosts: [{ id: kind, url: host.url }],
-      authorizedKeys: "id.pub",
-      profiles: "profiles",
-    })
-  );
-  yield* write(
-    path.join(client, "profiles", "web.json"),
-    JSON.stringify({
-      base,
-      cpu: 1,
-      ramMib: 1024,
-      diskGib: 10,
-      setup: { path: "web-recipe.sh", timeoutSeconds: 60 },
-    })
-  );
-  yield* write(path.join(client, "profiles", "web-recipe.sh"), webRecipe);
-
   yield* Effect.addFinalizer(() =>
-    Effect.forEach(served, (file) => fs.remove(file, { force: true })).pipe(
+    Effect.forEach([url, pid], (file) => fs.remove(file, { force: true })).pipe(
       Effect.ignore
     )
   );
-  yield* write(path.join(run, "home"), `${home}\n`);
-  yield* write(path.join(run, "host.pid"), `${process.pid}\n`);
-  yield* Console.log(`ready ${kind} host at ${host.url}`);
-  yield* write(path.join(run, "ready.part"), `${host.url}\n`);
-  yield* fs.rename(path.join(run, "ready.part"), path.join(run, "ready"));
+  yield* write(pid, `${process.pid}\n`);
+  yield* Console.log(`ready ${kind} host ${id} at ${host.url}`);
+  yield* write(`${url}.part`, `${host.url}\n`);
+  yield* fs.rename(`${url}.part`, url);
 
   return yield* Effect.never;
 });

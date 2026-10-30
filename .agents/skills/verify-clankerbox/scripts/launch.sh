@@ -1,10 +1,14 @@
 #!/bin/sh
-# Usage: RUN=$(launch.sh [linux|mac] [ram-budget-mib])
+# Usage: RUN=$(launch.sh [linux|mac] [ram-budget-mib] [hosts])
 set -eu
 . "$(dirname "$0")/common.sh"
 run=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/verify-clankerbox.XXXXXX")" && pwd)
 evidence=$run/evidence
-mkdir "$evidence"
+kind=${1:-linux}
+budget=${2:-}
+count=${3:-1}
+mkdir "$evidence" "$run/hosts"
+echo "$kind" >"$run/kind"
 
 fail() {
   echo "launch: $1; its log:" >&2
@@ -16,14 +20,20 @@ fail() {
 sources >"$evidence/sources"
 cd "$repo"
 vp run -r build >"$evidence/build.log" 2>&1 || fail "the build failed" "$evidence/build.log"
-nohup vpx apps/host/tests/serve.ts "$run" "${1:-linux}" ${2:+"$2"} \
-  >"$evidence/host.log" 2>&1 </dev/null &
-launched=$!
 
-until [ -e "$run/ready" ]; do
-  kill -0 "$launched" 2>/dev/null || fail "the host exited before it served" "$evidence/host.log"
-  sleep 0.25
+number=0
+while [ "$number" -lt "$count" ]; do
+  number=$((number + 1))
+  id=$kind-$number
+  nohup vpx apps/host/tests/serve.ts "$run" "$id" "$kind" ${budget:+"$budget"} \
+    >"$evidence/host-$id.log" 2>&1 </dev/null &
+  launched=$!
+  until [ -e "$run/hosts/$id.url" ]; do
+    kill -0 "$launched" 2>/dev/null || fail "host $id exited before it served" "$evidence/host-$id.log"
+    sleep 0.25
+  done
 done
 
-echo "host at $(cat "$run/ready")" >&2
+start_server
+echo "control plane at $(cat "$run/server.ready")" >&2
 echo "$run"

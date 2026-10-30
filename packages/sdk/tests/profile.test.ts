@@ -28,7 +28,6 @@ describe("profile", () => {
         decode({
           ...sizes,
           setup: { path: "recipe", timeoutSeconds: 600 },
-          host: "linux",
         })._tag
       ).toBe("Success");
     });
@@ -42,10 +41,6 @@ describe("profile", () => {
       );
     });
 
-    it("a profile's host is a host ID", () => {
-      expect(decode({ ...sizes, host: "li_nux" })._tag).toBe("Failure");
-    });
-
     it.effect(
       "a profile file's name is the label, and its setup path is resolved against the file",
       () =>
@@ -57,7 +52,6 @@ describe("profile", () => {
             JSON.stringify({
               ...sizes,
               setup: { path: "scripts/dev.sh", timeoutSeconds: 300 },
-              host: "mac",
             })
           );
 
@@ -69,7 +63,6 @@ describe("profile", () => {
               path: path.join(dir, "scripts", "dev.sh"),
               timeoutSeconds: 300,
             },
-            host: "mac",
             label: "dev",
           });
         })
@@ -107,7 +100,6 @@ describe("profile", () => {
               base: "registry.example/orb:1",
               profile: "orb",
             },
-            host: undefined,
           });
           expect((yield* refusal("create", profile, {}, names)).message).toBe(
             "create: --base: missing"
@@ -153,7 +145,6 @@ describe("profile", () => {
             ...sizes,
             label: "dev",
             setup: { path: path.join(dir, "setup.sh"), timeoutSeconds: 600 },
-            host: "linux",
           };
 
           expect(
@@ -168,14 +159,12 @@ describe("profile", () => {
                 authorizedKeys: keys,
               },
             },
-            host: "linux",
           });
 
           expect(
             yield* specRequest("create", profile, {
               cpu: 4,
               setupTimeoutSeconds: 60,
-              host: "mac",
               authorizedKeys,
             })
           ).toStrictEqual({
@@ -189,7 +178,6 @@ describe("profile", () => {
                 authorizedKeys: keys,
               },
             },
-            host: "mac",
           });
         })
     );

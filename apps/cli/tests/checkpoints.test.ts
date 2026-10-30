@@ -1,11 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
+import { ScriptFailed } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import {
   checkpoint,
   machine,
-} from "@gjermundgaraba/clankerbox-sdk/testing/stub-host";
-import type { StubHost } from "@gjermundgaraba/clankerbox-sdk/testing/stub-host";
+} from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
+import type { StubServer } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import { Effect } from "effect";
 import { afterEach, expect } from "vite-plus/test";
 
@@ -13,16 +14,16 @@ import {
   cleanup,
   cli,
   decodeJsonError,
-  hostIn,
+  serverIn,
   writeConfig,
 } from "./support.ts";
 
-const stubs: StubHost[] = [];
+const stubs: StubServer[] = [];
 
-const host = hostIn(stubs);
+const server = serverIn(stubs);
 
-const other = checkpoint("linux_other", {
-  machine: "linux_dev",
+const other = checkpoint("other", {
+  machine: "dev",
   kind: "ram",
   profile: "dev",
 });
@@ -33,80 +34,128 @@ layer(NodeServices.layer)((it) => {
   });
 
   it.effect(
-    "checkpoint capture goes to the machine's host and prints the new ID",
+    "checkpoint capture waits for the checkpoint to be ready and prints its name",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
-        const config = yield* writeConfig(dir, ["mac", "linux"]);
-        const mac = host({ id: "mac", bases: ["macos"] });
-
-        const linux = host({
-          id: "linux",
-          bases: ["ubuntu"],
-          machines: [machine("linux_dev")],
-        });
+        const config = yield* writeConfig(dir);
+        const stub = server({ machines: [machine("dev")] });
 
         const captured = yield* cli(
-          ["checkpoint", "capture", "linux_dev", "snap", "--config", config],
-          {
-            endpoints: [
-              ["mac", mac],
-              ["linux", linux],
-            ],
-          }
+          ["checkpoint", "capture", "dev", "snap", "--config", config],
+          { server: stub }
         );
 
-        expect(captured).toMatchObject({ code: 0, stdout: "linux_snap" });
-        expect(linux.calls).toStrictEqual(["checkpoint.capture"]);
-        expect(mac.calls).toStrictEqual([]);
+        expect(captured).toMatchObject({ code: 0, stdout: "snap" });
+        expect(stub.calls).toStrictEqual([
+          "checkpoint.capture",
+          "checkpoint.get",
+        ]);
       })
   );
 
   it.effect(
-    "checkpoint list shows every host's checkpoints with their kind and machine",
+    "a capture that fails exits 1 with its error, and checkpoint get says why",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
-        const config = yield* writeConfig(dir, ["linux"]);
+        const config = yield* writeConfig(dir);
+        const stub = server({ machines: [machine("dev")] });
 
-        const linux = host({
-          id: "linux",
-          bases: ["ubuntu"],
+        stub.scriptCheckpoint("snap", [
+          {
+            phase: "failed",
+            error: new ScriptFailed({
+              message: "the copy ran out of disk",
+              script: "capture",
+            }),
+          },
+        ]);
+
+        const captured = yield* cli(
+          [
+            "checkpoint",
+            "capture",
+            "dev",
+            "snap",
+            "--json",
+            "--config",
+            config,
+          ],
+          { server: stub }
+        );
+
+        const read = yield* cli(
+          ["checkpoint", "get", "snap", "--config", config],
+          {
+            server: stub,
+          }
+        );
+
+        expect(captured.code).toBe(1);
+        expect(decodeJsonError(captured.stdout).error).toMatchObject({
+          tag: "ScriptFailed",
+          action: "captureCheckpoint",
+          id: "snap",
+          made: "snap",
+        });
+        expect(
+          read.stdout.split("\n").map((line) => line.split(/\s{2,}/u))
+        ).toStrictEqual(
+          expect.arrayContaining([
+            ["PHASE", "failed"],
+            ["ERROR", "ScriptFailed: the copy ran out of disk"],
+          ])
+        );
+      })
+  );
+
+  it.effect(
+    "checkpoint list shows every ready checkpoint with its kind and machine",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        const config = yield* writeConfig(dir);
+
+        const stub = server({
           checkpoints: [
-            checkpoint("linux_snap", { machine: "linux_dev" }),
+            checkpoint("snap", { machine: "dev" }),
             other,
+            checkpoint("broken", { phase: "failed" }),
           ],
         });
 
         const { code, stdout } = yield* cli(
           ["checkpoint", "list", "--config", config],
-          {
-            endpoints: [["linux", linux]],
-          }
+          { server: stub }
         );
 
         const rows = stdout.split("\n").map((line) => line.split(/\s+/u));
 
         expect(code).toBe(0);
+        expect(rows).toHaveLength(3);
         expect(rows[0]).toStrictEqual([
           "ID",
+          "PHASE",
           "KIND",
           "MACHINE",
           "BASE",
           "PROFILE",
           "AGE",
         ]);
-        expect(rows[1]?.slice(0, 5)).toStrictEqual([
-          "linux_snap",
+        expect(rows[1]?.slice(0, 6)).toStrictEqual([
+          "snap",
+          "ready",
           "disk",
-          "linux_dev",
+          "dev",
           "ubuntu",
           "-",
         ]);
-        expect(rows[2]?.slice(0, 5)).toStrictEqual([
-          "linux_other",
+        expect(rows[2]?.slice(0, 6)).toStrictEqual([
+          "other",
+          "ready",
           "ram",
-          "linux_dev",
+          "dev",
           "ubuntu",
           "dev",
         ]);
@@ -118,51 +167,41 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
-        const config = yield* writeConfig(dir, ["linux"]);
-
-        const endpoints = [
-          [
-            "linux",
-            host({ id: "linux", bases: ["ubuntu"], checkpoints: [other] }),
-          ],
-        ] as const;
+        const config = yield* writeConfig(dir);
+        const stub = server({ checkpoints: [other] });
 
         const text = yield* cli(
-          ["checkpoint", "get", "linux_other", "--config", config],
-          {
-            endpoints,
-          }
+          ["checkpoint", "get", "other", "--config", config],
+          { server: stub }
         );
 
         const json = yield* cli(
-          ["checkpoint", "get", "linux_other", "--json", "--config", config],
-          {
-            endpoints,
-          }
+          ["checkpoint", "get", "other", "--json", "--config", config],
+          { server: stub }
         );
 
         const gone = yield* cli(
-          ["checkpoint", "get", "linux_gone", "--json", "--config", config],
-          {
-            endpoints,
-          }
+          ["checkpoint", "get", "gone", "--json", "--config", config],
+          { server: stub }
         );
 
         expect(
           text.stdout.split("\n").map((line) => line.split(/\s{2,}/u))
         ).toStrictEqual(
           expect.arrayContaining([
-            ["ID", "linux_other"],
+            ["ID", "other"],
+            ["PHASE", "ready"],
             ["KIND", "ram"],
-            ["MACHINE", "linux_dev"],
+            ["MACHINE", "dev"],
             ["CPU", "1"],
             ["RAM", "1G"],
             ["DISK", "10G"],
+            ["ERROR", "-"],
           ])
         );
         expect(JSON.parse(json.stdout)).toMatchObject({
-          id: "linux_other",
-          machine: "linux_dev",
+          id: "other",
+          machine: "dev",
         });
         expect([
           gone.code,
@@ -172,48 +211,38 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "checkpoint delete prints the ID, and one that is already gone counts as done",
+    "checkpoint delete waits for it to go and prints its name, and one that is already gone counts as done",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
-        const config = yield* writeConfig(dir, ["linux"]);
-
-        const linux = host({
-          id: "linux",
-          bases: ["ubuntu"],
-          checkpoints: [other],
-        });
-
-        const endpoints = [["linux", linux]] as const;
+        const config = yield* writeConfig(dir);
+        const stub = server({ checkpoints: [other] });
 
         const removed = yield* cli(
-          ["checkpoint", "delete", "linux_other", "--config", config],
-          {
-            endpoints,
-          }
+          ["checkpoint", "delete", "other", "--config", config],
+          { server: stub }
         );
 
         const text = yield* cli(
-          ["checkpoint", "delete", "linux_other", "--config", config],
-          {
-            endpoints,
-          }
+          ["checkpoint", "delete", "other", "--config", config],
+          { server: stub }
         );
 
         const json = yield* cli(
-          ["checkpoint", "delete", "linux_other", "--json", "--config", config],
-          { endpoints }
+          ["checkpoint", "delete", "other", "--json", "--config", config],
+          { server: stub }
         );
 
-        expect(removed).toMatchObject({ code: 0, stdout: "linux_other" });
+        expect(removed).toMatchObject({ code: 0, stdout: "other" });
         expect(text).toMatchObject({ code: 0, stdout: "" });
-        expect(text.stderr).toContain("linux_other was already gone");
+        expect(text.stderr).toContain("other was already gone");
         expect(json).toMatchObject({
           code: 0,
-          stdout: JSON.stringify({ deleted: "linux_other" }),
+          stdout: JSON.stringify({ deleted: "other" }),
         });
-        expect(linux.calls).toStrictEqual([
+        expect(stub.calls).toStrictEqual([
           "checkpoint.delete",
+          "checkpoint.get",
           "checkpoint.delete",
           "checkpoint.delete",
         ]);

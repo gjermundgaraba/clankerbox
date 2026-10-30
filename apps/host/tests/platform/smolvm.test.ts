@@ -108,7 +108,6 @@ const startupError = (
   );
 
 const machine: MachineRef = {
-  id: "linux_dev",
   name: "dev",
   instance: "0123456789abcdef0123456789abcdef",
   cpu: 2,
@@ -355,15 +354,15 @@ layer(NodeServices.layer)((it) => {
 
       const observed = yield* runtime.observe([
         machine,
-        { ...machine, id: "linux_two", name: "two", port: 10_001 },
-        { ...machine, id: "linux_gone", name: "gone", port: 10_002 },
+        { ...machine, name: "two", port: 10_001 },
+        { ...machine, name: "gone", port: 10_002 },
       ]);
 
       expect(observed).toStrictEqual(
         new Map([
-          ["linux_dev", "running"],
-          ["linux_two", "stopped"],
-          ["linux_gone", "missing"],
+          ["dev", "running"],
+          ["two", "stopped"],
+          ["gone", "missing"],
         ])
       );
       expect(smolvmArgs(spawner.calls).map((args) => args[3])).toStrictEqual(
@@ -395,10 +394,7 @@ layer(NodeServices.layer)((it) => {
         const logged: unknown[] = [];
 
         const observed = yield* runtime
-          .observe([
-            machine,
-            { ...machine, id: "linux_two", name: "two", port: 10_001 },
-          ])
+          .observe([machine, { ...machine, name: "two", port: 10_001 }])
           .pipe(
             Effect.provide(
               Logger.layer([Logger.make(({ message }) => logged.push(message))])
@@ -407,13 +403,13 @@ layer(NodeServices.layer)((it) => {
 
         expect(observed).toStrictEqual(
           new Map([
-            ["linux_dev", "unknown"],
-            ["linux_two", "stopped"],
+            ["dev", "unknown"],
+            ["two", "stopped"],
           ])
         );
         expect(logged).toStrictEqual([
           [
-            "couldn't read linux_dev's state: smolvm machine status dev-01234567 exited 1: Error: database is locked",
+            "couldn't read dev's state: smolvm machine status dev-01234567 exited 1: Error: database is locked",
           ],
         ]);
       })
@@ -437,21 +433,20 @@ layer(NodeServices.layer)((it) => {
 
         const hanging = Array.from({ length: 9 }, (_, index) => ({
           ...machine,
-          id: `linux_h${index}`,
           name: `h${index}`,
         }));
 
         const { value, waited } = yield* timed(
           runtime
-            .observe([{ ...machine, id: "linux_two", name: "two" }, ...hanging])
+            .observe([{ ...machine, name: "two" }, ...hanging])
             .pipe(Effect.provide(Logger.layer([])))
         );
 
         expect(Duration.format(waited)).toBe("8s");
         expect(value).toStrictEqual(
           new Map([
-            ["linux_two", "stopped"],
-            ...hanging.map(({ id }) => [id, "unknown"] as const),
+            ["two", "stopped"],
+            ...hanging.map(({ name }) => [name, "unknown"] as const),
           ])
         );
       })
@@ -778,11 +773,11 @@ layer(NodeServices.layer)((it) => {
         expect(refusals.map(failure)).toStrictEqual([
           [
             "WrongState",
-            "smolvm reads machine linux_dev frozen, and doesn't start it from there",
+            "smolvm reads machine dev frozen, and doesn't start it from there",
           ],
           [
             "Missing",
-            "machine linux_dev is missing from the linux runtime; delete it",
+            "machine dev is missing from the linux runtime; delete it",
           ],
         ]);
         expect(
@@ -828,11 +823,11 @@ layer(NodeServices.layer)((it) => {
         expect(refusals.map(failure)).toStrictEqual([
           [
             "WrongState",
-            "smolvm reads machine linux_dev stopped, and pauses only a running machine",
+            "smolvm reads machine dev stopped, and pauses only a running machine",
           ],
           [
             "Missing",
-            "machine linux_dev is missing from the linux runtime; delete it",
+            "machine dev is missing from the linux runtime; delete it",
           ],
         ]);
         expect(
@@ -1378,7 +1373,6 @@ layer(NodeServices.layer)((it) => {
 
         const other = {
           ...machine,
-          id: "linux_other",
           name: "other",
           ramMib: 3072,
         };
@@ -1418,13 +1412,12 @@ layer(NodeServices.layer)((it) => {
         const held = [
           { machine, booting: false },
           {
-            machine: { ...machine, id: "linux_two", name: "two", ramMib: 1024 },
+            machine: { ...machine, name: "two", ramMib: 1024 },
             booting: false,
           },
           {
             machine: {
               ...machine,
-              id: "linux_boot",
               name: "boot",
               ramMib: 512,
             },
@@ -1433,7 +1426,7 @@ layer(NodeServices.layer)((it) => {
         ];
 
         const admitNext = (ramMib: number) => {
-          const target = { ...machine, id: "linux_next", name: "next", ramMib };
+          const target = { ...machine, name: "next", ramMib };
 
           return runtime.admit({
             action: "createMachine",
@@ -1463,14 +1456,13 @@ layer(NodeServices.layer)((it) => {
           "needs 1537M of RAM, and 1.5G of the host's 4G budget is free"
         );
         expect(unread).toStrictEqual([
-          { resource: "cpu", unread: ["linux_two"] },
-          { resource: "ramMib", limit: 4096, unread: ["linux_two"] },
+          { resource: "cpu", unread: ["two"] },
+          { resource: "ramMib", limit: 4096, unread: ["two"] },
         ]);
       })
   );
 
   const ramCheckpoint: CheckpointRef = {
-    id: "linux_snap",
     name: "snap",
     instance: "fedcba9876543210fedcba9876543210",
     port: 10_000,
@@ -1487,7 +1479,6 @@ layer(NodeServices.layer)((it) => {
 
   const copy: MachineRef = {
     ...machine,
-    id: "linux_copy",
     name: "copy",
     instance: "abcdefabcdefabcdefabcdefabcdefab",
     port: 10_001,
@@ -1519,7 +1510,7 @@ layer(NodeServices.layer)((it) => {
         yield* mkdir(
           path.join(paths.forks, "old-01234567", "old-01234567.checkpoint")
         );
-        yield* runtime.startup([machine]);
+        yield* runtime.startup;
 
         expect(yield* readDirectory(paths.forks)).toStrictEqual([]);
         expect(
@@ -1571,27 +1562,27 @@ layer(NodeServices.layer)((it) => {
         ).toStrictEqual([
           [
             "WrongState",
-            "a smolvm checkpoint holds a running machine's RAM, and linux_dev is stopped: start it first",
+            "a smolvm checkpoint holds a running machine's RAM, and dev is stopped: start it first",
           ],
           [
             "WrongState",
-            "a fork copies a running machine, RAM included, and linux_dev is stopped: start it first",
+            "a fork copies a running machine, RAM included, and dev is stopped: start it first",
           ],
           [
             "Missing",
-            "machine linux_dev is missing from the linux runtime; delete it",
+            "machine dev is missing from the linux runtime; delete it",
           ],
           [
             "WrongState",
-            "smolvm reads machine linux_dev unreachable: its VM runs, but its agent doesn't answer; start it to boot it again",
+            "smolvm reads machine dev unreachable: its VM runs, but its agent doesn't answer; start it to boot it again",
           ],
           [
             "WrongState",
-            "smolvm reads machine linux_dev frozen, and copies only a running machine",
+            "smolvm reads machine dev frozen, and copies only a running machine",
           ],
           [
             "WrongState",
-            "smolvm reads machine linux_dev paused, and copies only a running machine",
+            "smolvm reads machine dev paused, and copies only a running machine",
           ],
         ]);
         expect(smolvmArgs(spawner.calls).map((args) => args[1])).toStrictEqual([
@@ -1738,19 +1729,19 @@ layer(NodeServices.layer)((it) => {
         expect(refused.map(failure)).toStrictEqual([
           [
             "Unsizable",
-            "smolvm gives a machine at least 64M of RAM, and linux_dev would have 32M",
+            "smolvm gives a machine at least 64M of RAM, and dev would have 32M",
           ],
           [
             "Unsizable",
-            "smolvm's CLI takes at most 255 vCPUs, and linux_dev would have 256",
+            "smolvm's CLI takes at most 255 vCPUs, and dev would have 256",
           ],
           [
             "Unsizable",
-            "smolvm grows a running machine's RAM in 128M steps, and linux_dev's would grow from 2G to 2100M",
+            "smolvm grows a running machine's RAM in 128M steps, and dev's would grow from 2G to 2100M",
           ],
           [
             "Unsizable",
-            "smolvm grows a running machine's vCPUs only on x86_64, and this host is arm64: give linux_dev more vCPUs once it is stopped",
+            "smolvm grows a running machine's vCPUs only on x86_64, and this host is arm64: give dev more vCPUs once it is stopped",
           ],
         ]);
         expect(spawner.calls).toHaveLength(before);
@@ -1865,7 +1856,7 @@ layer(NodeServices.layer)((it) => {
         const runtime = yield* runtimeOf(settings, spawner);
         const store = path.join(settings.stateDir, "forks", "copy-abcdefab");
 
-        yield* runtime.startup([machine]);
+        yield* runtime.startup;
         yield* runtime.fork(machine, copy);
 
         expect(smolvmArgs(spawner.calls)).toStrictEqual([
@@ -1919,7 +1910,7 @@ layer(NodeServices.layer)((it) => {
         forking({ exitCode: 1, stderr: "Error: no space\n" })
       );
 
-      yield* runtime.startup([machine]);
+      yield* runtime.startup;
 
       const error = yield* Effect.flip(runtime.fork(machine, copy));
 
@@ -1960,7 +1951,7 @@ layer(NodeServices.layer)((it) => {
         const spawner = scripted(() => {});
         const runtime = yield* runtimeOf(settings, spawner);
 
-        yield* runtime.startup([machine]);
+        yield* runtime.startup;
         yield* runtime.deleteCheckpoint(ramCheckpoint);
 
         expect(smolvmArgs(spawner.calls)).toStrictEqual([]);
@@ -1969,7 +1960,6 @@ layer(NodeServices.layer)((it) => {
 });
 
 const observed = (name: string): MachineRef => ({
-  id: `linux_${name}`,
   name,
   instance: name.padStart(32, "0"),
   cpu: 1,
@@ -1978,13 +1968,15 @@ const observed = (name: string): MachineRef => ({
   port: 10_000,
 });
 
-const machines = ["a", "b", "c", "d"].map(observed);
+const names = ["a", "b", "c", "d"];
+
+const machines = names.map(observed);
 
 const logging = (logged: unknown[]) =>
   Logger.layer([Logger.make(({ message }) => logged.push(message))]);
 
 layer(NodeServices.layer)((it) => {
-  it.effect("each machine's state comes back under its ID", () =>
+  it.effect("each machine's state comes back under its name", () =>
     Effect.gen(function* () {
       const states: readonly MachineState[] = [
         "running",
@@ -1994,15 +1986,15 @@ layer(NodeServices.layer)((it) => {
       ];
 
       const read = yield* observeEach(machines, (ref) =>
-        Effect.succeed(states[machines.indexOf(ref)] ?? "unknown")
+        Effect.succeed(states[names.indexOf(ref.name)] ?? "unknown")
       );
 
       expect(read).toStrictEqual(
         new Map([
-          ["linux_a", "running"],
-          ["linux_b", "stopped"],
-          ["linux_c", "missing"],
-          ["linux_d", "running"],
+          ["a", "running"],
+          ["b", "stopped"],
+          ["c", "missing"],
+          ["d", "running"],
         ])
       );
     })
@@ -2024,14 +2016,14 @@ layer(NodeServices.layer)((it) => {
 
         expect(read).toStrictEqual(
           new Map([
-            ["linux_a", "running"],
-            ["linux_b", "unknown"],
-            ["linux_c", "running"],
-            ["linux_d", "running"],
+            ["a", "running"],
+            ["b", "unknown"],
+            ["c", "running"],
+            ["d", "running"],
           ])
         );
         expect(logged).toStrictEqual([
-          ["couldn't read linux_b's state: smolvm machine status exited 1"],
+          ["couldn't read b's state: smolvm machine status exited 1"],
         ]);
       })
   );
@@ -2056,15 +2048,15 @@ layer(NodeServices.layer)((it) => {
 
         expect(read).toStrictEqual(
           new Map([
-            ["linux_a", "stopped"],
-            ["linux_b", "stopped"],
-            ["linux_c", "unknown"],
-            ["linux_d", "stopped"],
+            ["a", "stopped"],
+            ["b", "stopped"],
+            ["c", "unknown"],
+            ["d", "stopped"],
           ])
         );
         expect(logged).toStrictEqual([
           [
-            `couldn't read linux_c's state: no answer within ${Duration.format(machineReadWait)}`,
+            `couldn't read c's state: no answer within ${Duration.format(machineReadWait)}`,
           ],
         ]);
       })

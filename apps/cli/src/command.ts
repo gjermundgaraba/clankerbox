@@ -3,7 +3,6 @@ import {
   hostErrors,
   Invalid,
   retryable,
-  Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { ClankerboxError } from "@gjermundgaraba/clankerbox-sdk";
 import type { FileSystem, Path } from "effect";
@@ -45,7 +44,7 @@ export class SpawnFailed extends Schema.TaggedError<
   program: Schema.String,
 }) {}
 
-const failures = [...hostErrors, Unavailable, SpawnFailed] as const;
+const failures = [...hostErrors, SpawnFailed] as const;
 
 const Failure = Schema.Union(failures);
 
@@ -58,11 +57,6 @@ export const ErrorDocument = Schema.Union(
     Schema.Struct({ ...fields, tag: _tag, retryable: Schema.Boolean })
   )
 );
-
-export const UnreachableDocument = Schema.Struct({
-  host: Schema.String,
-  error: ErrorDocument,
-});
 
 const errorDocument = (error: Failure) => {
   const { _tag, ...fields } = encodeFailure(error);
@@ -114,18 +108,6 @@ export const table = (rows: ReadonlyArray<readonly string[]>): string => {
     .join("\n");
 };
 
-export const unreachableDocument = (
-  unreachable: readonly Client.Unreachable[]
-) =>
-  unreachable.map(({ host, error }) => ({ host, error: errorDocument(error) }));
-
-export const warnUnreachable = (unreachable: readonly Client.Unreachable[]) =>
-  Effect.forEach(
-    unreachable,
-    ({ error }) => Console.error(`clankerbox: ${error._tag}: ${error.message}`),
-    { discard: true }
-  );
-
 export const clientFlags = {
   json: Flag.Boolean("json").pipe(
     Flag.withDescription(
@@ -146,14 +128,21 @@ export const mutationFlags = {
   timeout: Flag.String("timeout").pipe(
     Flag.withMetavar("DURATION"),
     Flag.withDescription(
-      "Stop waiting for the mutation's reply after this long, such as 90s or 10m; unbounded by default. A mutation under way still finishes on the host."
+      "Stop waiting for the machine or checkpoint to rest after this long, such as 90s or 10m; unbounded by default. The request stays saved and still acts."
     ),
     Flag.optional
+  ),
+  noWait: Flag.Boolean("no-wait").pipe(
+    Flag.withDescription(
+      "Answer once the control plane has recorded the request, without waiting for it to act."
+    ),
+    Flag.withDefault(false)
   ),
 };
 
 export type ClientFlags = Command.Command.Config.Infer<typeof clientFlags> & {
   readonly timeout?: Option.Option<string>;
+  readonly noWait?: boolean;
 };
 
 export const parsed = <A>(
@@ -184,8 +173,9 @@ export const withClient = <A, R>(
 
     const config = yield* loadConfig(flags.config);
 
-    const client = yield* Client.make(config.hosts, {
+    const client = yield* Client.make(config.server, {
       timeout: Option.getOrUndefined(Option.map(timeout, Duration.seconds)),
+      noWait: flags.noWait,
     }).pipe(
       Effect.mapError(
         ({ message }) => new Invalid({ message, file: config.file })
@@ -193,7 +183,7 @@ export const withClient = <A, R>(
     );
 
     if (Option.isNone(flags.config)) {
-      yield* syncSshConfig(config);
+      yield* syncSshConfig;
     }
 
     return yield* body(client, config);
@@ -206,15 +196,15 @@ export const print = (
 ) => (json ? Console.log(JSON.stringify(document())) : Console.log(text()));
 
 export const machineArgument = Argument.String("machine").pipe(
-  Argument.withDescription("The machine's ID, <host>_<name>.")
+  Argument.withDescription("The machine's name.")
 );
 
 export const checkpointArgument = Argument.String("checkpoint").pipe(
-  Argument.withDescription("The checkpoint's ID, <host>_<name>.")
+  Argument.withDescription("The checkpoint's name.")
 );
 
 export const nameArgument = Argument.String("name").pipe(
-  Argument.withDescription("The new resource's name, on the same host.")
+  Argument.withDescription("The new resource's name.")
 );
 
 export const listCommand = <A>(options: {
@@ -223,50 +213,29 @@ export const listCommand = <A>(options: {
   readonly key: string;
   readonly read: (
     client: Client.Interface
-  ) => Effect.Effect<Client.Gathered<A>>;
+  ) => Effect.Effect<readonly A[], ClankerboxError>;
   readonly encode: (answer: A) => object;
   readonly rows: (answers: readonly A[], now: DateTime.Utc) => string[][];
-  readonly notes?: (answers: readonly A[]) => readonly string[];
 }) =>
   Command.make(options.name, clientFlags, (flags) =>
-    Effect.gen(function* () {
-      const everyHostFailed = yield* withClient(flags, (client, config) =>
-        Effect.gen(function* () {
-          const { answers, unreachable } = yield* options.read(client);
-          const now = yield* DateTime.now;
-          const failed = unreachable.length === config.hosts.length;
+    withClient(flags, (client) =>
+      Effect.gen(function* () {
+        const answers = yield* options.read(client);
+        const now = yield* DateTime.now;
 
-          if (flags.json) {
-            yield* Console.log(
-              JSON.stringify({
-                [options.key]: answers.map((answer) => options.encode(answer)),
-                unreachable: unreachableDocument(unreachable),
-              })
-            );
-
-            return failed;
-          }
-
-          if (answers.length > 0) {
-            yield* Console.log(table(options.rows(answers, now)));
-          } else if (!failed) {
-            yield* Console.error(`clankerbox: no ${options.key} to list`);
-          }
-
-          for (const note of options.notes?.(answers) ?? []) {
-            yield* Console.error(`clankerbox: ${note}`);
-          }
-
-          yield* warnUnreachable(unreachable);
-
-          return failed;
-        })
-      );
-
-      if (everyHostFailed) {
-        return yield* new Exited({ code: 1 });
-      }
-    })
+        if (flags.json) {
+          yield* Console.log(
+            JSON.stringify({
+              [options.key]: answers.map((answer) => options.encode(answer)),
+            })
+          );
+        } else if (answers.length > 0) {
+          yield* Console.log(table(options.rows(answers, now)));
+        } else {
+          yield* Console.error(`clankerbox: no ${options.key} to list`);
+        }
+      })
+    )
   ).pipe(Command.withDescription(options.description));
 
 export const printResource = <A, R>(

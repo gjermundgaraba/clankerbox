@@ -19,11 +19,17 @@ import {
   SpawnFailed,
   withClient,
 } from "./command.ts";
+import { domain } from "./ssh-config.ts";
 
 export class Dial extends Context.Service<
   Dial,
   (host: string, port: number) => Effect.Effect<Socket.Socket>
 >()("@gjermundgaraba/clankerbox/Dial") {}
+
+const machineOf = (destination: string): string =>
+  destination.endsWith(domain)
+    ? destination.slice(0, -domain.length)
+    : destination;
 
 const destination = (
   machine: string
@@ -58,7 +64,7 @@ export const ssh = Command.make(
     ...clientFlags,
     machine: Argument.String("machine").pipe(
       Argument.withDescription(
-        "The machine's ID, <host>_<name>, or USER@ID to log in as another user than its login's."
+        "The machine, or USER@MACHINE to log in as another user than its login's."
       )
     ),
     args: Argument.String("ssh-args").pipe(
@@ -127,7 +133,7 @@ export const sshProxy = Command.make(
     withClient(flags, (client) =>
       Effect.gen(function* () {
         const target = yield* Effect.flatMap(
-          client.getMachine({ id: flags.machine }),
+          client.getMachine({ id: machineOf(flags.machine) }),
           sshTarget
         );
 
@@ -165,7 +171,7 @@ export const sshKnownHosts = Command.make(
     withClient(flags, (client) =>
       Effect.gen(function* () {
         const target = yield* Effect.flatMap(
-          client.getMachine({ id: flags.machine }),
+          client.getMachine({ id: machineOf(flags.machine) }),
           sshTarget
         );
 

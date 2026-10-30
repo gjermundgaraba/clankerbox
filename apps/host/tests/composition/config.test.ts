@@ -10,7 +10,6 @@ import type { Schema } from "effect";
 import { expect } from "vite-plus/test";
 
 import { loadConfig } from "../../src/composition/config.ts";
-import { defaultRecheck } from "../../src/settings.ts";
 
 const image = requirements.bases.linux.ubuntu;
 
@@ -34,7 +33,7 @@ const load = (contents: Schema.Json) =>
 
 layer(NodeServices.layer)((it) => {
   it.effect(
-    "a host config resolves its state dir against its own directory and defaults the machine ports and the recheck",
+    "a host config resolves its state dir against its own directory and defaults the machine ports",
     () =>
       Effect.gen(function* () {
         const { file, loaded } = yield* load(config);
@@ -47,7 +46,6 @@ layer(NodeServices.layer)((it) => {
           stateDir: path.join(file, "..", "state"),
           bases: new Map([["ubuntu", image]]),
           machinePorts: { first: 10_000, last: 19_999 },
-          recheck: defaultRecheck,
           linux: { prefix: "/opt/smolvm" },
         });
       })
@@ -86,7 +84,6 @@ layer(NodeServices.layer)((it) => {
         stateDir: path.join(file, "..", "state"),
         bases: new Map([["macos", requirements.bases.mac.macos]]),
         machinePorts: { first: 10_000, last: 19_999 },
-        recheck: defaultRecheck,
         mac: { binary: "/opt/tart/2.41.1/tart.app/Contents/MacOS/tart" },
       });
     })

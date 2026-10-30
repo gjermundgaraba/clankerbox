@@ -99,9 +99,7 @@ describe("signals", () => {
 
       await writeFile(
         config,
-        JSON.stringify({
-          hosts: [{ id: "linux", url: `http://127.0.0.1:${port}` }],
-        })
+        JSON.stringify({ server: `http://127.0.0.1:${port}` })
       );
 
       const { child, exited } = run(

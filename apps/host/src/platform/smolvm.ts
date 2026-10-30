@@ -22,6 +22,7 @@ import {
 import type { ChildProcessSpawner } from "effect/process";
 
 import {
+  CannotStart,
   changes,
   missing,
   Runtime,
@@ -33,12 +34,12 @@ import type {
   Interface,
   MachineRef,
   MachineState,
+  Native,
   Observed,
   Sizes,
   StateError,
 } from "../runtime.ts";
 import type { HostSettings } from "../settings.ts";
-import { CannotStart } from "../startup.ts";
 import { allotted, checkRamBudget, inUse } from "../usage.ts";
 import { cliIn, expect, failure, files } from "./process.ts";
 
@@ -125,8 +126,8 @@ export const machineReadWait = Duration.subtract(
 );
 
 export const observeEach = (
-  machines: readonly MachineRef[],
-  read: (machine: MachineRef) => Effect.Effect<MachineState, Internal>
+  machines: readonly Native[],
+  read: (machine: Native) => Effect.Effect<MachineState, Internal>
 ): Effect.Effect<Observed> =>
   Effect.flatMap(Semaphore.make(observeConcurrency), (turns) =>
     Effect.forEach(
@@ -145,12 +146,12 @@ export const observeEach = (
             Effect.catch((error): Effect.Effect<MachineState> =>
               Effect.as(
                 Effect.logWarning(
-                  `couldn't read ${machine.id}'s state: ${error.message}`
+                  `couldn't read ${machine.name}'s state: ${error.message}`
                 ),
                 "unknown"
               )
             ),
-            Effect.map((state) => [machine.id, state] as const)
+            Effect.map((state) => [machine.name, state] as const)
           ),
       { concurrency: "unbounded" }
     ).pipe(Effect.map((entries): Observed => new Map(entries)))
@@ -372,7 +373,7 @@ export const make = (
         )
       );
 
-    const observe = (machines: readonly MachineRef[]) =>
+    const observe = (machines: readonly Native[]) =>
       observeEach(machines, (machine) => state(nativeName(machine)));
 
     const boot = (native: string) =>
@@ -398,16 +399,16 @@ export const make = (
 
           const refusal =
             alive.has(recorded) || resumable.has(recorded)
-              ? `smolvm reads machine ${machine.id} ${recorded}, and copies only a running machine`
+              ? `smolvm reads machine ${machine.name} ${recorded}, and copies only a running machine`
               : stopped;
 
           const message =
             recorded === "unreachable"
-              ? `smolvm reads machine ${machine.id} unreachable: its VM runs, but its agent doesn't answer; start it to boot it again`
+              ? `smolvm reads machine ${machine.name} unreachable: its VM runs, but its agent doesn't answer; start it to boot it again`
               : refusal;
 
           return Effect.fail(
-            new WrongState({ message, machine: machine.id, state: recorded })
+            new WrongState({ message, machine: machine.name, state: recorded })
           );
         }
       );
@@ -435,7 +436,7 @@ export const make = (
       );
     };
 
-    const removeVm = (machine: MachineRef) =>
+    const removeVm = (machine: Native) =>
       Effect.gen(function* () {
         const native = nativeName(machine);
         const scope = scopeName(native);
@@ -451,7 +452,7 @@ export const make = (
             `machine stop ${native}`
           ).pipe(
             Effect.catch((error) =>
-              Effect.logWarning(`delete ${machine.id}: ${error.message}`)
+              Effect.logWarning(`delete ${machine.name}: ${error.message}`)
             )
           );
         }
@@ -538,7 +539,7 @@ export const make = (
 
     // https://github.com/smol-machines/smolvm/blob/v1.32.1/src/agent/live_resize.rs#L348
     const sizable = (
-      machine: Pick<MachineRef, "id">,
+      machine: Pick<MachineRef, "name">,
       from: Sizes,
       to: Sizes,
       live: boolean
@@ -546,7 +547,7 @@ export const make = (
       if (to.ramMib < minimumRamMib) {
         return Effect.fail(
           new Unsizable({
-            message: `smolvm gives a machine at least ${formatMib(minimumRamMib)} of RAM, and ${machine.id} would have ${formatMib(to.ramMib)}`,
+            message: `smolvm gives a machine at least ${formatMib(minimumRamMib)} of RAM, and ${machine.name} would have ${formatMib(to.ramMib)}`,
           })
         );
       }
@@ -554,7 +555,7 @@ export const make = (
       if (to.cpu > maximumCpu) {
         return Effect.fail(
           new Unsizable({
-            message: `smolvm's CLI takes at most ${maximumCpu} vCPUs, and ${machine.id} would have ${to.cpu}`,
+            message: `smolvm's CLI takes at most ${maximumCpu} vCPUs, and ${machine.name} would have ${to.cpu}`,
           })
         );
       }
@@ -562,7 +563,7 @@ export const make = (
       if (to.ramMib > maximumRamMib) {
         return Effect.fail(
           new Unsizable({
-            message: `smolvm's CLI takes at most ${formatMib(maximumRamMib)} of RAM, and ${machine.id} would have ${formatMib(to.ramMib)}`,
+            message: `smolvm's CLI takes at most ${formatMib(maximumRamMib)} of RAM, and ${machine.name} would have ${formatMib(to.ramMib)}`,
           })
         );
       }
@@ -574,7 +575,7 @@ export const make = (
       if ((to.ramMib - from.ramMib) % ramStepMib !== 0) {
         return Effect.fail(
           new Unsizable({
-            message: `smolvm grows a running machine's RAM in ${ramStepMib}M steps, and ${machine.id}'s would grow from ${formatMib(from.ramMib)} to ${formatMib(to.ramMib)}`,
+            message: `smolvm grows a running machine's RAM in ${ramStepMib}M steps, and ${machine.name}'s would grow from ${formatMib(from.ramMib)} to ${formatMib(to.ramMib)}`,
           })
         );
       }
@@ -582,7 +583,7 @@ export const make = (
       return to.cpu > from.cpu && settings.arch !== "x64"
         ? Effect.fail(
             new Unsizable({
-              message: `smolvm grows a running machine's vCPUs only on x86_64, and this host is ${settings.arch}: give ${machine.id} more vCPUs once it is stopped`,
+              message: `smolvm grows a running machine's vCPUs only on x86_64, and this host is ${settings.arch}: give ${machine.name} more vCPUs once it is stopped`,
             })
           )
         : Effect.void;
@@ -637,18 +638,17 @@ export const make = (
       pin,
       stopResumes: true,
       growsLive: true,
-      startup: Effect.fn("Smolvm.startup")(() =>
-        Effect.gen(function* () {
-          yield* removeAll(paths.forks);
+      startup: Effect.gen(function* () {
+        yield* removeAll(paths.forks);
 
-          for (const dir of [paths.store, paths.forks]) {
-            yield* files(
-              `couldn't create ${dir}`,
-              fs.makeDirectory(dir, { recursive: true, mode: 0o700 })
-            );
-          }
-        })
-      ),
+        for (const dir of [paths.store, paths.forks]) {
+          yield* files(
+            `couldn't create ${dir}`,
+            fs.makeDirectory(dir, { recursive: true, mode: 0o700 })
+          );
+        }
+      }),
+      adopt: () => Effect.void,
       observe: Effect.fn("Smolvm.observe")(observe),
       admit: Effect.fn("Smolvm.admit")((activation) =>
         checkRamBudget(settings.ramBudgetMib, activation, observe)
@@ -662,7 +662,7 @@ export const make = (
         Effect.andThen(
           copyable(
             machine,
-            `a smolvm checkpoint holds a running machine's RAM, and ${machine.id} is stopped: start it first`
+            `a smolvm checkpoint holds a running machine's RAM, and ${machine.name} is stopped: start it first`
           ),
           captureRam(machine, paths.store, checkpointDir(checkpoint))
         )
@@ -677,7 +677,7 @@ export const make = (
         return Effect.andThen(
           copyable(
             source,
-            `a fork copies a running machine, RAM included, and ${source.id} is stopped: start it first`
+            `a fork copies a running machine, RAM included, and ${source.name} is stopped: start it first`
           ),
           Effect.andThen(
             captureRam(source, store, output),
@@ -686,7 +686,7 @@ export const make = (
             Effect.ensuring(
               removeAll(store).pipe(
                 Effect.catch((error) =>
-                  Effect.logWarning(`fork ${machine.id}: ${error.message}`)
+                  Effect.logWarning(`fork ${machine.name}: ${error.message}`)
                 )
               )
             )
@@ -760,8 +760,8 @@ export const make = (
           // https://github.com/smol-machines/smolvm/blob/v1.32.1/src/cli/vm_common.rs#L1693
           if (recorded === "frozen") {
             return yield* new WrongState({
-              message: `smolvm reads machine ${machine.id} ${recorded}, and doesn't start it from there`,
-              machine: machine.id,
+              message: `smolvm reads machine ${machine.name} ${recorded}, and doesn't start it from there`,
+              machine: machine.name,
               state: recorded,
             });
           }
@@ -809,8 +809,8 @@ export const make = (
             yield* resume(native);
           } else if (recorded !== "running") {
             return yield* new WrongState({
-              message: `smolvm reads machine ${machine.id} ${recorded}, and pauses only a running machine`,
-              machine: machine.id,
+              message: `smolvm reads machine ${machine.name} ${recorded}, and pauses only a running machine`,
+              machine: machine.name,
               state: recorded,
             });
           }

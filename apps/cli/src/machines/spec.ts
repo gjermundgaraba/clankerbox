@@ -38,12 +38,6 @@ export const flagSizes = (flags: SizeFlags) =>
   });
 
 export const specArguments = {
-  host: Flag.String("host").pipe(
-    Flag.withDescription(
-      "The host to create on. Without it, the profile's host, or else the first host that offers the base."
-    ),
-    Flag.optional
-  ),
   profile: Flag.String("profile").pipe(
     Flag.withDescription(
       "A profile file's path, or a name in the config's profiles directory. The other flags override its fields."
@@ -111,7 +105,6 @@ export const flagsRequest = (
           Option.map(flags.setup, (given) => path.resolve(given))
         ),
         setupTimeoutSeconds: Option.getOrUndefined(timeout),
-        host: Option.getOrUndefined(flags.host),
         authorizedKeys:
           config.authorizedKeys === undefined
             ? undefined

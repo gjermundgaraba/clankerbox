@@ -45,12 +45,12 @@ export const inUse = (
 
 export const allotted = (
   running: ReadonlyArray<Pick<MachineRef, "cpu" | "ramMib">>,
-  unread: ReadonlyArray<Pick<MachineRef, "id">>,
+  unread: ReadonlyArray<Pick<MachineRef, "name">>,
   ramBudgetMib?: number
 ): readonly Reading[] => {
   const rows = (["cpu", "ramMib"] as const).map((resource): Reading =>
     unread.length > 0
-      ? { resource, unread: unread.map(({ id }) => id) }
+      ? { resource, unread: unread.map(({ name }) => name) }
       : {
           resource,
           used: running.reduce((sum, machine) => sum + machine[resource], 0),
@@ -78,11 +78,11 @@ export const checkRamBudget = (
     );
 
     if (total > budgetMib) {
-      const { id, ramMib } = activation.machine;
+      const { name, ramMib } = activation.machine;
       const free = Math.max(0, budgetMib - (total - ramMib));
 
       return yield* new Capacity({
-        message: `${activation.action} ${id} needs ${formatMib(ramMib)} of RAM, and ${free === 0 ? "none" : formatMib(free)} of the host's ${formatMib(budgetMib)} budget is free`,
+        message: `${activation.action} ${name} needs ${formatMib(ramMib)} of RAM, and ${free === 0 ? "none" : formatMib(free)} of the host's ${formatMib(budgetMib)} budget is free`,
       });
     }
   });

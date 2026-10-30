@@ -47,15 +47,11 @@ const prepare = (
   seed: Uint8Array = seedOf()
 ) =>
   Effect.map(
-    outputOf(
-      "/bin/sh",
-      ["-c", preparationScript, "prepare", instance, "linux_dev"],
-      {
-        env: { CLANKERBOX_ROOT: where.root, PATH: "/nowhere" },
-        extendEnv: true,
-        input: seed,
-      }
-    ),
+    outputOf("/bin/sh", ["-c", preparationScript, "prepare", instance, "dev"], {
+      env: { CLANKERBOX_ROOT: where.root, PATH: "/nowhere" },
+      extendEnv: true,
+      input: seed,
+    }),
     ({ code, stdout, stderr }) => ({ code, output: `${stdout}${stderr}` })
   );
 
@@ -218,12 +214,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           `perl ${where.root}/dev/urandom`,
         ]);
         expect(yield* read(where.root, "var/lib/clankerbox/machine-id")).toBe(
-          "linux_dev\n"
+          "dev\n"
         );
         expect(yield* read(where.root, "var/lib/clankerbox/instance")).toBe(
           "aaaa1111\n"
         );
-        expect(yield* read(where.root, "started")).toBe("linux_dev\n");
+        expect(yield* read(where.root, "started")).toBe("dev\n");
         expect(hostKeyIn(output)).toBeUndefined();
       })
   );
@@ -348,7 +344,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { code, output } = yield* prepare(where, "aaaa1111");
 
         expect(code).toBe(4);
-        expect(output).toContain("linux_dev");
+        expect(output).toContain("dev");
         expect(output).toContain("hook broke");
         expect(
           yield* isMissing(path.join(where.root, "var/lib/clankerbox/instance"))

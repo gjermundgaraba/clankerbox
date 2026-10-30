@@ -11,17 +11,12 @@ import type {
   HttpServerError,
 } from "effect/http";
 
-import * as Checkpoints from "../checkpoints.ts";
-import * as Leases from "../leases.ts";
-import * as Machines from "../machines.ts";
+import * as Operations from "../operations.ts";
 import * as BindProbe from "../platform/bind-probe.ts";
-import * as Sqlite from "../platform/sqlite.ts";
 import * as Tailscale from "../platform/tailscale.ts";
-import type { Runtime } from "../runtime.ts";
+import { Runtime } from "../runtime.ts";
+import type { CannotStart } from "../runtime.ts";
 import type { HostSettings } from "../settings.ts";
-import { startup } from "../startup.ts";
-import type { CannotStart } from "../startup.ts";
-import type * as Store from "../store.ts";
 import { routes } from "./routes.ts";
 
 export type ServerLayer = Layer.Layer<
@@ -33,34 +28,20 @@ export type ServerLayer = Layer.Layer<
   HttpServerError.ServeError
 >;
 
-export const servicesLayer = <E, R>(
-  config: HostSettings,
-  runtime: Layer.Layer<Runtime, E, R>
-): Layer.Layer<
-  Machines.Machines | Checkpoints.Checkpoints | Store.Store | Runtime,
-  HostError | CannotStart | E,
-  R | FileSystem.FileSystem
-> =>
-  Checkpoints.layer(config).pipe(
-    Layer.provideMerge(Machines.layer(config)),
-    Layer.provide(startup(config)),
-    Layer.provide(Layer.merge(BindProbe.layer, Leases.layer)),
-    Layer.provideMerge(runtime.pipe(Layer.provideMerge(Sqlite.layer(config))))
-  );
-
 export interface HostLayerConfig extends HostSettings {
   readonly tailnet?: Tailscale.TailnetSettings | undefined;
 }
+
+const cleared = Layer.effectDiscard(
+  Effect.flatMap(Runtime, ({ startup }) => startup)
+);
 
 export const hostLayer = <E, R>(
   config: HostLayerConfig,
   runtime: Layer.Layer<Runtime, E, R>,
   server: ServerLayer
 ): Layer.Layer<
-  | HttpServer.HttpServer
-  | Machines.Machines
-  | Checkpoints.Checkpoints
-  | Store.Store,
+  HttpServer.HttpServer | Operations.Operations | Runtime,
   HostError | CannotStart | E,
   R | FileSystem.FileSystem | HttpClient.HttpClient
 > =>
@@ -76,7 +57,9 @@ export const hostLayer = <E, R>(
         )
       )
     ),
-    Layer.provideMerge(servicesLayer(config, runtime)),
+    Layer.provideMerge(Operations.layer(config)),
+    Layer.provide(Layer.merge(BindProbe.layer, cleared)),
+    Layer.provideMerge(runtime),
     Layer.provide(
       config.tailnet === undefined
         ? Layer.empty

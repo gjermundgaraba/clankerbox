@@ -1,16 +1,36 @@
+import type {
+  CheckpointRef,
+  MachineRef,
+  MachineState,
+  Native,
+} from "@clankerbox/host-contract";
 import { Missing, readTimeout } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   Capacity,
   Internal,
   Kind,
-  Machine,
   Reading,
   Sizing,
   Unsizable,
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Context, Duration, Effect } from "effect";
+import { Context, Duration, Effect, Schema } from "effect";
 import type { Scope, Stream } from "effect";
+
+export type {
+  CheckpointRef,
+  MachineRef,
+  MachineState,
+  Native,
+} from "@clankerbox/host-contract";
+
+/** A host that can't serve at all, before it listens. */
+export class CannotStart extends Schema.TaggedError<
+  CannotStart,
+  { readonly brand: unique symbol }
+>()("CannotStart", {
+  message: Schema.String,
+}) {}
 
 export type RuntimeError = Internal;
 
@@ -18,24 +38,12 @@ export type RoomError = RuntimeError | Capacity;
 
 export type StateError = Missing | WrongState;
 
-export interface MachineRef {
-  readonly id: string;
-  readonly name: string;
-  readonly instance: string;
-  readonly cpu: number;
-  readonly ramMib: number;
-  readonly diskGib: number;
-  readonly port: number;
-}
-
-export type MachineState = Machine["state"];
-
 export type Observed = ReadonlyMap<string, MachineState>;
 
 export const stateIn = (
   observed: Observed,
-  machine: Pick<MachineRef, "id">
-): MachineState => observed.get(machine.id) ?? "unknown";
+  machine: Pick<MachineRef, "name">
+): MachineState => observed.get(machine.name) ?? "unknown";
 
 export type Sizes = Pick<MachineRef, "cpu" | "ramMib" | "diskGib">;
 
@@ -50,16 +58,6 @@ export const changes = (from: Sizes, to: Sizes): Sizing => ({
   ramMib: to.ramMib === from.ramMib ? undefined : to.ramMib,
   diskGib: to.diskGib === from.diskGib ? undefined : to.diskGib,
 });
-
-export interface CheckpointRef {
-  readonly id: string;
-  readonly name: string;
-  readonly instance: string;
-  readonly port: number;
-  readonly cpu: number;
-  readonly ramMib: number;
-  readonly diskGib: number;
-}
 
 export const stateReadWait = Duration.subtract(
   readTimeout,
@@ -104,10 +102,13 @@ export interface Execution {
   readonly exitCode: Effect.Effect<number, RuntimeError>;
 }
 
-export const missing = (kind: Kind, machine: Pick<MachineRef, "id">): Missing =>
+export const missing = (
+  kind: Kind,
+  machine: Pick<MachineRef, "name">
+): Missing =>
   new Missing({
-    message: `machine ${machine.id} is missing from the ${kind} runtime; delete it`,
-    machine: machine.id,
+    message: `machine ${machine.name} is missing from the ${kind} runtime; delete it`,
+    machine: machine.name,
   });
 
 export interface Interface {
@@ -117,16 +118,19 @@ export interface Interface {
   readonly stopResumes: boolean;
   readonly growsLive: boolean;
   readonly sizable: (
-    machine: Pick<MachineRef, "id">,
+    machine: Pick<MachineRef, "name">,
     from: Sizes,
     to: Sizes,
     live: boolean
   ) => Effect.Effect<void, Unsizable>;
-  readonly startup: (
+  /** What the host clears when it starts, knowing no machines yet. */
+  readonly startup: Effect.Effect<void, RuntimeError>;
+  /** What the runtime keeps beside each VM, once the control plane says which it holds. */
+  readonly adopt: (
     machines: readonly MachineRef[]
   ) => Effect.Effect<void, RuntimeError>;
   readonly observe: (
-    machines: readonly MachineRef[]
+    machines: readonly Native[]
   ) => Effect.Effect<Observed, RuntimeError>;
   readonly admit: (activation: Activation) => Effect.Effect<void, RoomError>;
   readonly capacity: (
@@ -143,7 +147,7 @@ export interface Interface {
   readonly pause: (
     machine: MachineRef
   ) => Effect.Effect<void, RuntimeError | StateError>;
-  readonly delete: (machine: MachineRef) => Effect.Effect<void, RuntimeError>;
+  readonly delete: (machine: Native) => Effect.Effect<void, RuntimeError>;
   readonly capture: (
     machine: MachineRef,
     checkpoint: CheckpointRef

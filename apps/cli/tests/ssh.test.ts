@@ -7,9 +7,9 @@ import { describe, layer } from "@effect/vitest";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import {
   machine,
-  stubHost,
-} from "@gjermundgaraba/clankerbox-sdk/testing/stub-host";
-import type { StubHost } from "@gjermundgaraba/clankerbox-sdk/testing/stub-host";
+  stubServer,
+} from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
+import type { StubServer } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import {
   Effect,
   Layer,
@@ -30,7 +30,7 @@ import {
   writeConfig,
 } from "./support.ts";
 
-const stubs: StubHost[] = [];
+const stubs: StubServer[] = [];
 
 interface Spawned {
   readonly command: string;
@@ -57,30 +57,27 @@ const fakeSsh = (code: number) =>
     })
   );
 
-const reachable = machine("linux_dev", {
+const reachable = machine("dev", {
   ssh: { user: "admin", host: "100.64.0.7", port: 10_022 },
-  hostKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample root@linux_dev",
+  hostKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample root@dev",
 });
 
 const setup = (held = reachable) =>
   Effect.gen(function* () {
     const dir = yield* scratch;
-    const config = yield* writeConfig(dir, ["linux"]);
+    const config = yield* writeConfig(dir);
 
-    const linux = stubHost({
-      id: "linux",
-      bases: ["ubuntu"],
-      machines: [held],
-    });
+    const server = stubServer({ machines: [held] });
 
-    stubs.push(linux);
+    stubs.push(server);
 
-    return { config, endpoints: [["linux", linux]] as const };
+    return { config, server };
   });
 
 const proxied = (
   serve: (socket: Socket) => void,
-  stdin: Stream.Stream<Uint8Array>
+  stdin: Stream.Stream<Uint8Array>,
+  destination = "dev"
 ) =>
   Effect.gen(function* () {
     const server = yield* Effect.acquireRelease(
@@ -105,20 +102,18 @@ const proxied = (
       address === null || Predicate.isString(address) ? 0 : address.port;
 
     const dir = yield* scratch;
-    const config = yield* writeConfig(dir, ["linux"]);
+    const config = yield* writeConfig(dir);
 
-    const linux = stubHost({
-      id: "linux",
-      bases: ["ubuntu"],
+    const stub = stubServer({
       machines: [
-        machine("linux_dev", {
+        machine("dev", {
           ssh: { user: "admin", host: "127.0.0.1", port },
           hostKey: "ssh-ed25519 AAAA",
         }),
       ],
     });
 
-    stubs.push(linux);
+    stubs.push(stub);
 
     const received: string[] = [];
 
@@ -132,8 +127,8 @@ const proxied = (
         ),
     });
 
-    const run = yield* cli(["ssh-proxy", "--config", config, "linux_dev"], {
-      endpoints: [["linux", linux]],
+    const run = yield* cli(["ssh-proxy", "--config", config, destination], {
+      server: stub,
       stdio,
     });
 
@@ -150,13 +145,13 @@ describe("ssh", () => {
       "ssh runs ssh pinned to the machine, as its user, with the caller's args, and removes the known-hosts file after",
       () =>
         Effect.gen(function* () {
-          const { config, endpoints } = yield* setup();
+          const { config, server } = yield* setup();
           const ssh = fakeSsh(0);
 
           const { code } = yield* cli(
             [
               "ssh",
-              "linux_dev",
+              "dev",
               "--config",
               config,
               "--",
@@ -164,7 +159,7 @@ describe("ssh", () => {
               "8080:localhost:80",
               "uptime",
             ],
-            { endpoints, spawner: ssh.layer }
+            { server, spawner: ssh.layer }
           );
 
           const [spawned] = ssh.spawned;
@@ -172,7 +167,7 @@ describe("ssh", () => {
           expect(code).toBe(0);
           expect(spawned?.command).toBe("ssh");
           expect(spawned?.knownHosts).toBe(
-            "linux_dev ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample\n"
+            "dev ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample\n"
           );
           expect(spawned?.args.slice(0, 2)).toStrictEqual(["-l", "admin"]);
           expect(spawned?.args.slice(-4)).toStrictEqual([
@@ -185,21 +180,18 @@ describe("ssh", () => {
         })
     );
 
-    it.effect("ssh USER@ID logs in to the machine as that user", () =>
+    it.effect("ssh USER@MACHINE logs in to the machine as that user", () =>
       Effect.gen(function* () {
-        const { config, endpoints } = yield* setup();
+        const { config, server } = yield* setup();
         const ssh = fakeSsh(0);
 
-        const { code } = yield* cli(
-          ["ssh", "dev@linux_dev", "--config", config],
-          {
-            endpoints,
-            spawner: ssh.layer,
-          }
-        );
+        const { code } = yield* cli(["ssh", "ops@dev", "--config", config], {
+          server,
+          spawner: ssh.layer,
+        });
 
         expect(code).toBe(0);
-        expect(ssh.spawned[0]?.args.slice(0, 2)).toStrictEqual(["-l", "dev"]);
+        expect(ssh.spawned[0]?.args.slice(0, 2)).toStrictEqual(["-l", "ops"]);
         expect(ssh.spawned[0]?.args.at(-1)).toBe("100.64.0.7");
       })
     );
@@ -208,15 +200,12 @@ describe("ssh", () => {
       "ssh exits with ssh's exit code, through Exited's errorExitCode and the default teardown",
       () =>
         Effect.gen(function* () {
-          const { config, endpoints } = yield* setup();
+          const { config, server } = yield* setup();
 
-          const { code } = yield* cli(
-            ["ssh", "linux_dev", "--config", config],
-            {
-              endpoints,
-              spawner: fakeSsh(255).layer,
-            }
-          );
+          const { code } = yield* cli(["ssh", "dev", "--config", config], {
+            server,
+            spawner: fakeSsh(255).layer,
+          });
 
           expect(code).toBe(255);
         })
@@ -226,23 +215,23 @@ describe("ssh", () => {
       "ssh into a machine that isn't a target fails with its reason and runs no ssh",
       () =>
         Effect.gen(function* () {
-          const { config, endpoints } = yield* setup(
-            machine("linux_dev", { state: "stopped" })
+          const { config, server } = yield* setup(
+            machine("dev", { state: "stopped" })
           );
 
           const ssh = fakeSsh(0);
 
           const { code, stderr } = yield* cli(
-            ["ssh", "linux_dev", "--config", config],
+            ["ssh", "dev", "--config", config],
             {
-              endpoints,
+              server,
               spawner: ssh.layer,
             }
           );
 
           expect(code).toBe(1);
           expect(stderr).toContain(
-            "clankerbox: WrongState: linux_dev has no SSH endpoint"
+            "clankerbox: WrongState: dev has no SSH endpoint"
           );
           expect(ssh.spawned).toStrictEqual([]);
         })
@@ -250,7 +239,7 @@ describe("ssh", () => {
 
     it.effect("ssh that can't be started is SpawnFailed, naming ssh", () =>
       Effect.gen(function* () {
-        const { config, endpoints } = yield* setup();
+        const { config, server } = yield* setup();
 
         const missing = Layer.succeed(
           ChildProcessSpawner.ChildProcessSpawner,
@@ -266,9 +255,9 @@ describe("ssh", () => {
         );
 
         const { code, stdout } = yield* cli(
-          ["ssh", "linux_dev", "--json", "--config", config],
+          ["ssh", "dev", "--json", "--config", config],
           {
-            endpoints,
+            server,
             spawner: missing,
           }
         );
@@ -286,17 +275,36 @@ describe("ssh", () => {
       "ssh-known-hosts prints the machine's host key under the name ssh asked for",
       () =>
         Effect.gen(function* () {
-          const { config, endpoints } = yield* setup();
+          const { config, server } = yield* setup();
 
           const { code, stdout } = yield* cli(
-            ["ssh-known-hosts", "--config", config, "linux_dev", "linux_dev"],
-            { endpoints }
+            ["ssh-known-hosts", "--config", config, "dev", "dev"],
+            { server }
           );
 
           expect(code).toBe(0);
           expect(stdout).toBe(
-            "linux_dev ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample"
+            "dev ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample"
           );
+        })
+    );
+
+    it.effect(
+      "ssh-known-hosts drops the .cbx ssh was given to find the machine, and keeps the name ssh asked for",
+      () =>
+        Effect.gen(function* () {
+          const { config, server } = yield* setup();
+
+          const { code, stdout } = yield* cli(
+            ["ssh-known-hosts", "--config", config, "dev.cbx", "dev.cbx"],
+            { server }
+          );
+
+          expect(code).toBe(0);
+          expect(stdout).toBe(
+            "dev.cbx ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample"
+          );
+          expect(server.calls).toStrictEqual(["machine.get"]);
         })
     );
 
@@ -304,20 +312,20 @@ describe("ssh", () => {
       "ssh-proxy to a machine that isn't a target fails with its reason",
       () =>
         Effect.gen(function* () {
-          const { config, endpoints } = yield* setup(
-            machine("linux_dev", { state: "stopped" })
+          const { config, server } = yield* setup(
+            machine("dev", { state: "stopped" })
           );
 
           const { code, stderr } = yield* cli(
-            ["ssh-proxy", "--config", config, "linux_dev"],
+            ["ssh-proxy", "--config", config, "dev"],
             {
-              endpoints,
+              server,
             }
           );
 
           expect(code).toBe(1);
           expect(stderr).toContain(
-            "clankerbox: WrongState: linux_dev has no SSH endpoint"
+            "clankerbox: WrongState: dev has no SSH endpoint"
           );
         })
     );
@@ -345,6 +353,21 @@ describe("ssh", () => {
           expect(code).toBe(0);
           expect(received).toBe("SSH-2.0-machine\r\necho SSH-2.0-client");
         })
+    );
+
+    it.effect("ssh-proxy reaches the machine a .cbx destination names", () =>
+      Effect.gen(function* () {
+        const { code, received } = yield* proxied(
+          (socket) => {
+            socket.end("hello");
+          },
+          Stream.empty,
+          "dev.cbx"
+        );
+
+        expect(code).toBe(0);
+        expect(received).toBe("hello");
+      })
     );
 
     it.effect(

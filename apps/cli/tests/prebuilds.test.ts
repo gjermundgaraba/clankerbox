@@ -2,26 +2,35 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { Capacity } from "@gjermundgaraba/clankerbox-sdk";
+import { NotOffered, ScriptFailed } from "@gjermundgaraba/clankerbox-sdk";
 import { write, scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
-import type { StubHost } from "@gjermundgaraba/clankerbox-sdk/testing/stub-host";
+import type {
+  MachineStep,
+  StubServer,
+} from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import { Effect } from "effect";
 import { afterEach, expect } from "vite-plus/test";
 
 import {
   cleanup,
   cli,
-  hostIn,
+  decodeJsonError,
+  serverIn,
   sizes,
   writeConfig,
   writeProfiles,
 } from "./support.ts";
-import type { CliOptions } from "./support.ts";
 
-const stubs: StubHost[] = [];
+const stubs: StubServer[] = [];
 
-const host = hostIn(stubs);
+const server = serverIn(stubs);
+
+const restored: MachineStep = {
+  phase: "settled",
+  state: "running",
+  prebuild: "prebuilt-0",
+};
 
 layer(NodeServices.layer)((it) => {
   afterEach(async () => {
@@ -29,14 +38,13 @@ layer(NodeServices.layer)((it) => {
   });
 
   it.effect(
-    "prebuild captures a profile's setup, a create of the profile restores it, and other sizes or --fresh run the setup",
+    "prebuild waits for the build and prints its ID, and the checkpoint it leaves lists under the profile",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
         const profiles = yield* writeProfiles(dir);
-        const config = yield* writeConfig(dir, ["linux"], "profiles");
-        const linux = host({ id: "linux", bases: ["ubuntu"] });
-        const endpoints: CliOptions["endpoints"] = [["linux", linux]];
+        const config = yield* writeConfig(dir, "profiles");
+        const stub = server();
 
         yield* write(
           path.join(profiles, "dev.json"),
@@ -51,174 +59,176 @@ layer(NodeServices.layer)((it) => {
 
         const built = yield* cli(
           ["prebuild", "--profile", "dev", "--config", config],
-          {
-            endpoints,
-          }
+          { server: stub }
         );
 
-        expect(built.code).toBe(0);
-        expect(built.stdout).toMatch(/^linux_prebuilt-[0-9a-f]{12}$/u);
-        expect(built.stderr).toBe("");
-
-        const again = yield* cli(
-          ["prebuild", "--profile", "dev", "--config", config],
-          {
-            endpoints,
-          }
-        );
-
-        expect(again.code).toBe(0);
-        expect(again.stdout).toBe(built.stdout);
-        expect(again.stderr).toBe("");
-        expect(linux.prebuilds.map(({ id }) => id)).toStrictEqual([
-          built.stdout,
-          built.stdout,
+        expect(built).toMatchObject({
+          code: 0,
+          stdout: "prebuilt-0",
+          stderr: "",
+        });
+        expect(stub.calls).toStrictEqual([
+          "checkpoint.prebuild",
+          "prebuild.get",
         ]);
-        expect(linux.creates).toStrictEqual([]);
+        expect(stub.creates).toStrictEqual([]);
 
         const listed = yield* cli(["checkpoint", "list", "--config", config], {
-          endpoints,
+          server: stub,
         });
 
         expect(listed.stdout).toMatch(/PROFILE/u);
         expect(listed.stdout).toMatch(
-          new RegExp(
-            `${built.stdout}\\s+disk\\s+linux_prebuilding-\\S+\\s+ubuntu\\s+dev\\s`,
-            "u"
-          )
+          /prebuilt-0\s+ready\s+disk\s+prebuilt-0\s+ubuntu\s+dev\s/u
         );
-
-        const restored = yield* cli(
-          ["create", "box", "--profile", "dev", "--config", config],
-          {
-            endpoints,
-          }
-        );
-
-        expect(restored.code).toBe(0);
-        expect(restored.stdout).toBe("linux_box");
-        expect(restored.stderr).toMatch(
-          new RegExp(
-            `^clankerbox: restored from the prebuild ${built.stdout}, made \\d+[smhd] ago$`,
-            "u"
-          )
-        );
-        expect(linux.creates).toStrictEqual([]);
-
-        for (const flags of [["--ram", "8G"], ["--fresh"]]) {
-          const before = linux.creates.length;
-
-          const fresh = yield* cli(
-            [
-              "create",
-              `box${before}`,
-              "--profile",
-              "dev",
-              ...flags,
-              "--config",
-              config,
-            ],
-            { endpoints }
-          );
-
-          expect(fresh.code).toBe(0);
-          expect(fresh.stderr).toBe("");
-          expect(linux.creates).toHaveLength(before + 1);
-        }
       })
   );
 
   it.effect(
-    "prebuild sends the host its spec and its setup's script, and prints the host's error",
+    "a create the control plane restored from a prebuild says which on stderr, and --fresh asks it not to",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
-        const config = yield* writeConfig(dir, ["linux"]);
+        yield* writeProfiles(dir);
+
+        const config = yield* writeConfig(dir, "profiles");
+        const stub = server({ bases: ["ubuntu-dev"] });
+
+        stub.script("box", [restored]);
+        stub.script("quiet", [restored]);
+
+        const text = yield* cli(
+          ["create", "box", "--profile", "dev", "--config", config],
+          { server: stub }
+        );
+
+        const json = yield* cli(
+          ["create", "quiet", "--profile", "dev", "--json", "--config", config],
+          { server: stub }
+        );
+
+        const fresh = yield* cli(
+          ["create", "slow", "--profile", "dev", "--fresh", "--config", config],
+          { server: stub }
+        );
+
+        expect(text).toMatchObject({
+          code: 0,
+          stdout: "box",
+          stderr: "clankerbox: restored from the prebuild prebuilt-0",
+        });
+        expect(json.stderr).toBe("");
+        expect(JSON.parse(json.stdout)).toMatchObject({
+          id: "quiet",
+          prebuild: "prebuilt-0",
+        });
+        expect(fresh).toMatchObject({ code: 0, stdout: "slow", stderr: "" });
+        expect(stub.creates.map(({ fresh: asked }) => asked)).toStrictEqual([
+          undefined,
+          undefined,
+          true,
+        ]);
+      })
+  );
+
+  it.effect(
+    "prebuild sends its spec and its setup's script, and prints the error of a refusal or of a build that fails",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        const config = yield* writeConfig(dir);
         const script = path.join(dir, "setup.sh");
 
         yield* write(script, "#!/bin/sh\ntrue\n");
 
-        const linux = host({ id: "linux", bases: ["ubuntu"] });
+        const stub = server();
+        const args = ["prebuild", ...sizes, "--setup", script];
 
-        const failing = host({
-          id: "linux",
-          bases: ["ubuntu"],
-          prebuild: () =>
-            Effect.fail(new Capacity({ message: "no room for the builder" })),
+        const refusing = server({
+          prebuild: ({ base }) =>
+            Effect.fail(new NotOffered({ message: "no host offers it", base })),
         });
 
-        const built = yield* cli(
-          ["prebuild", ...sizes, "--setup", script, "--config", config],
-          {
-            endpoints: [["linux", linux]],
-          }
-        );
+        const built = yield* cli([...args, "--config", config], {
+          server: stub,
+        });
 
-        const refused = yield* cli(
-          ["prebuild", ...sizes, "--setup", script, "--config", config],
-          {
-            endpoints: [["linux", failing]],
-          }
-        );
+        const refused = yield* cli([...args, "--config", config], {
+          server: refusing,
+        });
 
-        expect(built.code).toBe(0);
-        expect(linux.prebuilds).toStrictEqual([
+        stub.scriptBuild("prebuilt-1", [
           {
-            id: built.stdout,
-            base: "ubuntu",
-            cpu: 2,
-            ramMib: 4096,
-            diskGib: 20,
-            setup: {
-              script: "#!/bin/sh\ntrue\n",
-              authorizedKeys: `${operatorKey}\n`,
-            },
+            phase: "failed",
+            error: new ScriptFailed({
+              message: "setup exited 7",
+              script: "setup",
+            }),
           },
         ]);
+
+        const failed = yield* cli([...args, "--json", "--config", config], {
+          server: stub,
+        });
+
+        expect(built.code).toBe(0);
+        expect(stub.prebuilds[0]).toStrictEqual({
+          base: "ubuntu",
+          cpu: 2,
+          ramMib: 4096,
+          diskGib: 20,
+          setup: {
+            script: "#!/bin/sh\ntrue\n",
+            authorizedKeys: `${operatorKey}\n`,
+          },
+        });
         expect(refused.code).toBe(1);
-        expect(refused.stderr).toContain("Capacity: no room for the builder");
+        expect(refused.stderr).toContain("NotOffered: no host offers it");
+        expect(failed.code).toBe(1);
+        expect(decodeJsonError(failed.stdout).error).toMatchObject({
+          tag: "ScriptFailed",
+          message: "setup exited 7",
+          action: "prebuildCheckpoint",
+          id: "prebuilt-1",
+        });
       })
   );
 
   it.effect("prebuild names itself in a refusal of its spec", () =>
     Effect.gen(function* () {
       const dir = yield* scratch;
-      const config = yield* writeConfig(dir, ["linux"]);
-      const linux = host({ id: "linux", bases: ["ubuntu"] });
+      const config = yield* writeConfig(dir);
+      const stub = server();
 
       const { code, stderr } = yield* cli(
         ["prebuild", "--base", "ubuntu", "--config", config],
-        {
-          endpoints: [["linux", linux]],
-        }
+        { server: stub }
       );
 
       expect(code).toBe(1);
       expect(stderr).toBe(
         "clankerbox: Invalid: prebuild: --cpu: missing; --ram: missing; --disk: missing"
       );
-      expect(linux.calls).toStrictEqual([]);
+      expect(stub.calls).toStrictEqual([]);
     })
   );
 
   it.effect("prebuild needs a setup", () =>
     Effect.gen(function* () {
       const dir = yield* scratch;
-      const config = yield* writeConfig(dir, ["linux"]);
-      const linux = host({ id: "linux", bases: ["ubuntu"] });
+      const config = yield* writeConfig(dir);
+      const stub = server();
 
       const { code, stderr } = yield* cli(
         ["prebuild", ...sizes, "--config", config],
-        {
-          endpoints: [["linux", linux]],
-        }
+        { server: stub }
       );
 
       expect(code).toBe(1);
       expect(stderr).toBe(
         "clankerbox: Invalid: prebuild needs a setup: pass --setup, or a profile that has one"
       );
-      expect(linux.calls).toStrictEqual([]);
+      expect(stub.calls).toStrictEqual([]);
     })
   );
 });

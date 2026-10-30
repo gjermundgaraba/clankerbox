@@ -1,5 +1,4 @@
 import {
-  Client,
   describeFileError,
   describeIssues,
   Invalid,
@@ -7,7 +6,7 @@ import {
 import { Config, Effect, FileSystem, Option, Path, Schema } from "effect";
 
 const ClientConfig = Schema.Struct({
-  hosts: Schema.Array(Client.HostEntry),
+  server: Schema.String,
   profiles: Schema.optionalKey(Schema.String),
   authorizedKeys: Schema.optionalKey(Schema.String),
 });
@@ -18,7 +17,7 @@ const decodeConfig = Schema.decodeUnknownEffect(
 
 export interface LoadedConfig {
   readonly file: string;
-  readonly hosts: readonly Client.HostEntry[];
+  readonly server: string;
   readonly profiles: string | undefined;
   readonly authorizedKeys: string | undefined;
 }
@@ -80,7 +79,7 @@ export const loadConfig = (
 
     return {
       file,
-      hosts: config.hosts,
+      server: config.server,
       profiles: config.profiles,
       authorizedKeys: config.authorizedKeys,
     };

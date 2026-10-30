@@ -1,16 +1,24 @@
-import { Host, mibPerGib, Usage } from "@gjermundgaraba/clankerbox-sdk";
-import { Array as Arr, Schema } from "effect";
+import {
+  CapacityReport,
+  Host,
+  mibPerGib,
+} from "@gjermundgaraba/clankerbox-sdk";
+import type { Usage } from "@gjermundgaraba/clankerbox-sdk";
+import { Array as Arr, Console, Effect, Schema } from "effect";
+import { Command } from "effect/cli";
 
-import { listCommand } from "./command.ts";
+import { clientFlags, listCommand, table, withClient } from "./command.ts";
 
 export const hostRows = (hosts: readonly Host[]) => [
-  ["ID", "KIND", "VERSION", "RUNTIME_VERSION", "BASES"],
+  ["ID", "STATE", "KIND", "VERSION", "RUNTIME_VERSION", "BASES", "PROBLEM"],
   ...hosts.map((host) => [
     host.id,
-    host.kind,
-    host.version,
-    host.runtimeVersion,
-    host.bases.join(","),
+    host.state,
+    host.kind ?? "-",
+    host.version ?? "-",
+    host.runtimeVersion ?? "-",
+    host.bases.join(",") || "-",
+    host.problem ?? "-",
   ]),
 ];
 
@@ -54,24 +62,40 @@ export const unreadNotes = (usage: readonly Usage[]): readonly string[] =>
 
 export const encodeHost = Schema.encodeSync(Host);
 
-export const encodeUsage = Schema.encodeSync(Usage);
+const encodeCapacity = Schema.encodeSync(CapacityReport);
 
 export const hosts = listCommand({
   name: "hosts",
-  description: "List every host, with its kind, versions and bases.",
+  description:
+    "List every host, for an operator: whether it answers, with its kind, versions and bases.",
   key: "hosts",
   read: (client) => client.hosts,
   encode: encodeHost,
   rows: (answers) => hostRows(answers),
 });
 
-export const capacity = listCommand({
-  name: "capacity",
-  description:
-    "List every host's resources, how much of each is in use, and its limit, if any. A host refuses an action that would pass a limit.",
-  key: "capacity",
-  read: (client) => client.capacity,
-  encode: encodeUsage,
-  rows: (answers) => usageRows(answers),
-  notes: unreadNotes,
-});
+export const capacity = Command.make("capacity", clientFlags, (flags) =>
+  withClient(flags, (client) =>
+    Effect.gen(function* () {
+      const report = yield* client.capacity;
+
+      if (flags.json) {
+        return yield* Console.log(JSON.stringify(encodeCapacity(report)));
+      }
+
+      yield* Console.log(table(usageRows(report.usage)));
+
+      for (const note of unreadNotes(report.usage)) {
+        yield* Console.error(`clankerbox: ${note}`);
+      }
+
+      for (const host of report.unreachable) {
+        yield* Console.error(`clankerbox: host ${host} didn't answer`);
+      }
+    })
+  )
+).pipe(
+  Command.withDescription(
+    "List every host's resources, how much of each is in use, and its limit, if any, for an operator. A host refuses an action that would pass a limit."
+  )
+);

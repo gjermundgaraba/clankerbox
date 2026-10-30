@@ -30,6 +30,7 @@ const checkpointColumns: ReadonlyArray<
   ]
 > = [
   ["ID", (checkpoint) => checkpoint.id],
+  ["PHASE", (checkpoint) => checkpoint.phase],
   ["KIND", (checkpoint) => checkpoint.kind],
   ["MACHINE", (checkpoint) => checkpoint.machine],
   ["BASE", (checkpoint) => checkpoint.base],
@@ -52,6 +53,12 @@ export const checkpointFields = (checkpoint: Checkpoint, now: DateTime.Utc) => [
   ["CPU", String(checkpoint.cpu)],
   ["RAM", formatMib(checkpoint.ramMib)],
   ["DISK", formatGib(checkpoint.diskGib)],
+  [
+    "ERROR",
+    checkpoint.error === undefined
+      ? "-"
+      : `${checkpoint.error._tag}: ${checkpoint.error.message}`,
+  ],
 ];
 
 export const encodeCheckpoint = Schema.encodeSync(Checkpoint);
@@ -74,7 +81,7 @@ export const capture = Command.make(
 
 export const listCheckpoints = listCommand({
   name: "list",
-  description: "List every host's checkpoints.",
+  description: "List every checkpoint.",
   key: "checkpoints",
   read: (client) => client.checkpoints,
   encode: encodeCheckpoint,

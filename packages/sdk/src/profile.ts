@@ -2,7 +2,6 @@ import { Effect, FileSystem, Path, Predicate, Record, Schema } from "effect";
 
 import { describeFileError, describeIssues } from "./describe.ts";
 import { Invalid } from "./errors.ts";
-import { HostId } from "./ids.ts";
 import { MachineSpec, Setup } from "./resources.ts";
 import { readAuthorizedKeys, readSetup } from "./setup.ts";
 
@@ -21,7 +20,6 @@ export const Profile = Schema.Struct({
       timeoutSeconds: Setup.fields.timeoutSeconds,
     })
   ),
-  host: Schema.optionalKey(HostId),
 });
 
 export type Profile = typeof Profile.Type;
@@ -83,7 +81,7 @@ export const loadProfile = (
         };
   });
 
-type Sizes = Omit<Profile, "setup" | "host">;
+type Sizes = Omit<Profile, "setup">;
 
 /** Each field given replaces the profile's. */
 export type Overrides = {
@@ -92,20 +90,18 @@ export type Overrides = {
   /** A setup script or recipe directory, already resolved. */
   readonly setup?: string | undefined;
   readonly setupTimeoutSeconds?: number | undefined;
-  readonly host?: string | undefined;
   /** A public-key file, already resolved, which a setup needs and which is read only for one. */
   readonly authorizedKeys?: string | undefined;
 };
 
 export interface SpecRequest {
   readonly spec: MachineSpec;
-  readonly host: string | undefined;
 }
 
 const decodeSpec = Schema.decodeUnknownEffect(MachineSpec);
 
 /**
- * The spec and host a create of `profile` asks for, with the overrides applied and the setup
+ * The spec a create of `profile` asks for, with the overrides applied and the setup
  * read. Each refusal names `what`, and each field as `names` calls it.
  */
 export const specRequest = (
@@ -170,5 +166,5 @@ export const specRequest = (
       )
     );
 
-    return { spec, host: overrides.host ?? profile?.host };
+    return { spec };
   });

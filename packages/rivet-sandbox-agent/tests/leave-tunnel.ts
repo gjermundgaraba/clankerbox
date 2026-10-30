@@ -15,7 +15,7 @@ const port = await Effect.runPromise(
         args: forwarding(free, []),
         directory,
         port: free,
-        machine: "linux_left",
+        machine: "left",
       }),
       scope
     );

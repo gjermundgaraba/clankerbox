@@ -25,6 +25,7 @@ import type { ChildProcessSpawner } from "effect/process";
 
 import { lastLines } from "../../guest.ts";
 import {
+  CannotStart,
   changes,
   missing,
   Runtime,
@@ -36,12 +37,12 @@ import type {
   Held,
   Interface,
   MachineRef,
+  Native,
   MachineState,
   Observed,
   Sizes,
 } from "../../runtime.ts";
 import type { HostSettings } from "../../settings.ts";
-import { CannotStart } from "../../startup.ts";
 import { allotted, inUse } from "../../usage.ts";
 import { cliIn, expect, files } from "../process.ts";
 import * as Forwarder from "./forwarder.ts";
@@ -241,7 +242,8 @@ export const make = (
 
     const domain = `gui/${settings.uid}`;
     const forwarder = yield* Forwarder.make(settings.publishAddress);
-    const vmOf = (machine: MachineRef) => machineName(settings.hostId, machine);
+    const forwarded = new Map<string, number>();
+    const vmOf = (machine: Native) => machineName(settings.hostId, machine);
 
     const checkpointVm = (checkpoint: CheckpointRef) =>
       checkpointName(settings.hostId, checkpoint);
@@ -311,11 +313,11 @@ export const make = (
 
     const observedIn = (
       vms: ReadonlyMap<string, MachineState>,
-      machines: readonly MachineRef[]
+      machines: readonly Native[]
     ): Observed =>
       new Map(
         machines.map((machine) => [
-          machine.id,
+          machine.name,
           vms.get(vmOf(machine)) ?? "missing",
         ])
       );
@@ -348,15 +350,25 @@ export const make = (
       fs.readFileString(job(vm).log).pipe(Effect.orElseSucceed(() => ""));
 
     const listen = (machine: MachineRef) =>
-      forwarder.listen(machine.port, (input) =>
-        command(
-          settings.binary,
-          ["exec", "-i", vmOf(machine), "nc", "127.0.0.1", "22"],
-          input
+      Effect.andThen(
+        Effect.sync(() => forwarded.set(machine.name, machine.port)),
+        forwarder.listen(machine.port, (input) =>
+          command(
+            settings.binary,
+            ["exec", "-i", vmOf(machine), "nc", "127.0.0.1", "22"],
+            input
+          )
         )
       );
 
-    const unlisten = (machine: MachineRef) => forwarder.close(machine.port);
+    const unlisten = ({ name }: Native) =>
+      Effect.suspend(() => {
+        const port = forwarded.get(name);
+
+        forwarded.delete(name);
+
+        return port === undefined ? Effect.void : forwarder.close(port);
+      });
 
     const ready = (machine: MachineRef) => {
       const vm = vmOf(machine);
@@ -380,12 +392,12 @@ export const make = (
 
         if (output.includes(limitRefusal)) {
           return yield* new Capacity({
-            message: `Apple's limit of ${vmLimit} running macOS VMs per Mac refused ${machine.id}: ${lastLines(output)}`,
+            message: `Apple's limit of ${vmLimit} running macOS VMs per Mac refused ${machine.name}: ${lastLines(output)}`,
           });
         }
 
         return yield* new Internal({
-          message: `tart run for ${machine.id} exited ${printed(printedJob.stdout, "last exit code") ?? "early"}: ${lastLines(output)}`,
+          message: `tart run for ${machine.name} exited ${printed(printedJob.stdout, "last exit code") ?? "early"}: ${lastLines(output)}`,
         });
       });
 
@@ -398,7 +410,7 @@ export const make = (
           bootWait,
           () =>
             new Internal({
-              message: `${machine.id}'s guest agent didn't answer tart exec within ${Duration.format(bootWait)} of its start`,
+              message: `${machine.name}'s guest agent didn't answer tart exec within ${Duration.format(bootWait)} of its start`,
             })
         ),
         Effect.asVoid
@@ -500,7 +512,7 @@ export const make = (
 
             if (!stopped) {
               yield* Effect.logWarning(
-                `stop ${machine.id}: the guest didn't shut down within ${Duration.format(shutdownWait)}; forcing it off`
+                `stop ${machine.name}: the guest didn't shut down within ${Duration.format(shutdownWait)}; forcing it off`
               );
               yield* forceStop(vm);
             }
@@ -527,13 +539,13 @@ export const make = (
 
         if (ran.exitCode !== 0 && ran.stderr.includes(shrinkRefusal)) {
           return yield* new Unsizable({
-            message: `machine ${machine.id}'s disk of ${formatGib(sizes.diskGib)} is below the disk Tart holds for it, and Tart only grows a disk: ${lastLines(ran.stderr)}`,
+            message: `machine ${machine.name}'s disk of ${formatGib(sizes.diskGib)} is below the disk Tart holds for it, and Tart only grows a disk: ${lastLines(ran.stderr)}`,
           });
         }
 
         if (ran.exitCode !== 0 && ran.stderr.includes(minimumRefusal)) {
           return yield* new Unsizable({
-            message: `machine ${machine.id}'s ${sizes.cpu} vCPUs and ${formatMib(sizes.ramMib)} are below what its guest takes: ${lastLines(ran.stderr)}`,
+            message: `machine ${machine.name}'s ${sizes.cpu} vCPUs and ${formatMib(sizes.ramMib)} are below what its guest takes: ${lastLines(ran.stderr)}`,
           });
         }
 
@@ -565,8 +577,8 @@ export const make = (
           observed === "missing"
             ? missing("mac", machine)
             : new WrongState({
-                message: `a Tart ${what} copies a stopped machine's disk, and ${machine.id} is ${observed}: stop it first`,
-                machine: machine.id,
+                message: `a Tart ${what} copies a stopped machine's disk, and ${machine.name} is ${observed}: stop it first`,
+                machine: machine.name,
                 state: observed,
               })
         );
@@ -577,7 +589,7 @@ export const make = (
         Effect.catchTag("Internal", (error) =>
           Effect.fail(
             new Internal({
-              message: `${error.message}; macOS resumes a saved state only while the Mac's session is unlocked, so if it is locked, unlock it and start ${machine.id} again: a restore that fails keeps the saved state, and a stop discards it`,
+              message: `${error.message}; macOS resumes a saved state only while the Mac's session is unlocked, so if it is locked, unlock it and start ${machine.name} again: a restore that fails keeps the saved state, and a stop discards it`,
             })
           )
         )
@@ -599,8 +611,8 @@ export const make = (
 
         if (observed !== "running") {
           return yield* new WrongState({
-            message: `Tart reads ${machine.id} ${observed}, and suspends only a running machine`,
-            machine: machine.id,
+            message: `Tart reads ${machine.name} ${observed}, and suspends only a running machine`,
+            machine: machine.name,
             state: observed,
           });
         }
@@ -614,13 +626,13 @@ export const make = (
 
         if (loadedArguments === undefined) {
           return yield* new Internal({
-            message: `couldn't read the arguments in launchctl print ${target}, so the pause can't tell whether Tart can suspend ${machine.id}`,
+            message: `couldn't read the arguments in launchctl print ${target}, so the pause can't tell whether Tart can suspend ${machine.name}`,
           });
         }
 
         if (!loadedArguments.includes("--suspendable")) {
           yield* Effect.logWarning(
-            `pause ${machine.id}: an older host booted it without --suspendable, which Tart can't suspend, so it stops it instead`
+            `pause ${machine.name}: an older host booted it without --suspendable, which Tart can't suspend, so it stops it instead`
           );
 
           yield* stop(machine);
@@ -634,7 +646,7 @@ export const make = (
 
             if (!(yield* halted(vm, suspendWait))) {
               return yield* new Internal({
-                message: `${machine.id} still runs ${Duration.format(suspendWait)} after tart suspend`,
+                message: `${machine.name} still runs ${Duration.format(suspendWait)} after tart suspend`,
               });
             }
 
@@ -647,7 +659,7 @@ export const make = (
               yield* call(["stop", vm], `stop ${vm}`, [0, 2]);
 
               return yield* new Internal({
-                message: `Tart couldn't save ${machine.id}'s state and powered its VM off, as it does when the first save on a Mac runs while its session is locked: ${lastLines(output)}`,
+                message: `Tart couldn't save ${machine.name}'s state and powered its VM off, as it does when the first save on a Mac runs while its session is locked: ${lastLines(output)}`,
               });
             }
           })
@@ -660,23 +672,23 @@ export const make = (
       pin: undefined,
       stopResumes: false,
       growsLive: false,
-      startup: Effect.fn("Tart.startup")((machines) =>
-        Effect.gen(function* () {
-          yield* files(
-            `couldn't create ${jobs}`,
-            fs.makeDirectory(jobs, { recursive: true, mode: 0o700 })
-          );
-
-          for (const machine of machines) {
-            yield* listen(machine).pipe(
+      startup: files(
+        `couldn't create ${jobs}`,
+        fs.makeDirectory(jobs, { recursive: true, mode: 0o700 })
+      ),
+      adopt: Effect.fn("Tart.adopt")((machines) =>
+        Effect.forEach(
+          machines,
+          (machine) =>
+            listen(machine).pipe(
               Effect.catch((error) =>
                 Effect.logWarning(
-                  `startup: no forwarder for ${machine.id}: ${error.message}`
+                  `adopt: no forwarder for ${machine.name}: ${error.message}`
                 )
               )
-            );
-          }
-        })
+            ),
+          { discard: true }
+        )
       ),
       observe: Effect.fn("Tart.observe")((machines) =>
         Effect.map(list, (vms) => observedIn(vms, machines))
@@ -687,7 +699,7 @@ export const make = (
 
           if (counted.size > vmLimit) {
             return yield* new Capacity({
-              message: `${action} ${machine.id} would run ${counted.size} macOS VMs on this Mac, and Apple allows ${vmLimit}: ${[...counted].toSorted().join(", ")}`,
+              message: `${action} ${machine.name} would run ${counted.size} macOS VMs on this Mac, and Apple allows ${vmLimit}: ${[...counted].toSorted().join(", ")}`,
             });
           }
         })
@@ -782,7 +794,7 @@ export const make = (
         if (to.cpu > maximumFlag || diskGb(to.diskGib) > maximumFlag) {
           return Effect.fail(
             new Unsizable({
-              message: `tart set takes at most ${maximumFlag} vCPUs and ${maximumFlag} GB of disk, and ${machine.id} would have ${to.cpu} vCPUs and ${diskGb(to.diskGib)} GB`,
+              message: `tart set takes at most ${maximumFlag} vCPUs and ${maximumFlag} GB of disk, and ${machine.name} would have ${to.cpu} vCPUs and ${diskGb(to.diskGib)} GB`,
             })
           );
         }

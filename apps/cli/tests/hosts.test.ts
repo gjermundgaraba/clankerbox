@@ -1,48 +1,84 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import type { StubHost } from "@gjermundgaraba/clankerbox-sdk/testing/stub-host";
+import type { StubServer } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import { Effect } from "effect";
 import { afterEach, expect } from "vite-plus/test";
 
-import { cleanup, cli, hostIn, writeConfig } from "./support.ts";
-import type { CliOptions } from "./support.ts";
+import { cleanup, cli, serverIn, writeConfig } from "./support.ts";
 
-const stubs: StubHost[] = [];
+const stubs: StubServer[] = [];
 
-const host = hostIn(stubs);
+const server = serverIn(stubs);
 
 layer(NodeServices.layer)((it) => {
   afterEach(async () => {
     await cleanup(stubs);
   });
 
-  it.effect("hosts lists every host with its bases", () =>
-    Effect.gen(function* () {
-      const dir = yield* scratch;
-      const config = yield* writeConfig(dir, ["linux", "mac"]);
+  it.effect(
+    "hosts lists what the control plane knows of every host, with why one is unreachable",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        const config = yield* writeConfig(dir);
 
-      const { code, stdout } = yield* cli(["hosts", "--config", config], {
-        endpoints: [
-          ["linux", host({ id: "linux", bases: ["ubuntu", "ubuntu-dev"] })],
-          ["mac", host({ id: "mac", bases: ["macos"], kind: "mac" })],
-        ],
-      });
+        const stub = server({
+          hosts: [
+            {
+              id: "linux",
+              state: "up",
+              kind: "linux",
+              version: "1.2.3",
+              runtimeVersion: "0.5.0",
+              bases: ["ubuntu", "ubuntu-dev"],
+            },
+            { id: "mac", state: "draining", kind: "mac", bases: ["macos"] },
+            {
+              id: "spare",
+              state: "unreachable",
+              bases: [],
+              problem: "connect refused",
+            },
+          ],
+        });
 
-      expect(code).toBe(0);
-      expect(
-        stdout
-          .trim()
-          .split("\n")
-          .map((row) => row.split(/\s+/u).slice(0, 2))
-      ).toStrictEqual([
-        ["ID", "KIND"],
-        ["linux", "linux"],
-        ["mac", "mac"],
-      ]);
-      expect(stdout).toContain("ubuntu,ubuntu-dev");
-      expect(stdout).toContain("macos");
-    })
+        const { code, stdout } = yield* cli(["hosts", "--config", config], {
+          server: stub,
+        });
+
+        const json = yield* cli(["hosts", "--json", "--config", config], {
+          server: stub,
+        });
+
+        expect(code).toBe(0);
+        expect(
+          stdout
+            .trim()
+            .split("\n")
+            .map((row) => row.split(/\s{2,}/u))
+        ).toStrictEqual([
+          [
+            "ID",
+            "STATE",
+            "KIND",
+            "VERSION",
+            "RUNTIME_VERSION",
+            "BASES",
+            "PROBLEM",
+          ],
+          ["linux", "up", "linux", "1.2.3", "0.5.0", "ubuntu,ubuntu-dev", "-"],
+          ["mac", "draining", "mac", "-", "-", "macos", "-"],
+          ["spare", "unreachable", "-", "-", "-", "-", "connect refused"],
+        ]);
+        expect(JSON.parse(json.stdout)).toMatchObject({
+          hosts: [
+            { id: "linux", state: "up", kind: "linux" },
+            { id: "mac", state: "draining" },
+            { id: "spare", state: "unreachable", problem: "connect refused" },
+          ],
+        });
+      })
   );
 
   it.effect(
@@ -50,45 +86,33 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
-        const config = yield* writeConfig(dir, ["linux", "mac", "spare"]);
+        const config = yield* writeConfig(dir);
 
-        const endpoints: CliOptions["endpoints"] = [
-          [
-            "linux",
-            host({
-              id: "linux",
-              bases: ["ubuntu"],
-              capacity: [
-                { resource: "cpu", used: 3 },
-                { resource: "ramMib", limit: 14_336, used: 3072 },
-              ],
-            }),
-          ],
-          [
-            "mac",
-            host({
-              id: "mac",
-              bases: ["macos"],
-              kind: "mac",
-              capacity: [
-                { resource: "runningVms", limit: 2, used: 1 },
-                { resource: "cpu", unread: ["mac_review", "mac_ci"] },
-                { resource: "ramMib", unread: ["mac_review", "mac_ci"] },
-              ],
-            }),
-          ],
-          ["spare", "down"],
-        ];
+        const stub = server({
+          capacity: {
+            usage: [
+              { host: "linux", resource: "cpu", used: 3 },
+              {
+                host: "linux",
+                resource: "ramMib",
+                limit: 14_336,
+                used: 3072,
+              },
+              { host: "mac", resource: "runningVms", limit: 2, used: 1 },
+              { host: "mac", resource: "cpu", unread: ["review", "ci"] },
+              { host: "mac", resource: "ramMib", unread: ["review", "ci"] },
+            ],
+            unreachable: ["spare"],
+          },
+        });
 
         const { code, stdout, stderr } = yield* cli(
           ["capacity", "--config", config],
-          {
-            endpoints,
-          }
+          { server: stub }
         );
 
         const json = yield* cli(["capacity", "--json", "--config", config], {
-          endpoints,
+          server: stub,
         });
 
         expect(code).toBe(0);
@@ -105,25 +129,19 @@ layer(NodeServices.layer)((it) => {
           ["mac", "cpu", "?", "-"],
           ["mac", "ram", "?", "-"],
         ]);
-        expect(stderr).toContain("spare");
-        expect(
-          stderr.split("\n").filter((line) => line.includes("couldn't read"))
-        ).toStrictEqual([
-          "clankerbox: mac couldn't read the state of mac_review, mac_ci, so it shows ? for what they use",
+        expect(stderr.split("\n")).toStrictEqual([
+          "clankerbox: mac couldn't read the state of review, ci, so it shows ? for what they use",
+          "clankerbox: host spare didn't answer",
         ]);
         expect(JSON.parse(json.stdout)).toMatchObject({
-          capacity: [
+          usage: [
             { host: "linux", resource: "cpu", used: 3 },
             { host: "linux", resource: "ramMib", limit: 14_336, used: 3072 },
             { host: "mac", resource: "runningVms", limit: 2, used: 1 },
-            { host: "mac", resource: "cpu", unread: ["mac_review", "mac_ci"] },
-            {
-              host: "mac",
-              resource: "ramMib",
-              unread: ["mac_review", "mac_ci"],
-            },
+            { host: "mac", resource: "cpu", unread: ["review", "ci"] },
+            { host: "mac", resource: "ramMib", unread: ["review", "ci"] },
           ],
-          unreachable: [{ host: "spare" }],
+          unreachable: ["spare"],
         });
       })
   );

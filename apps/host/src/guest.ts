@@ -341,7 +341,7 @@ export const prepare = (
         preparationScript,
         "clankerbox-prepare",
         machine.instance,
-        machine.id,
+        machine.name,
       ],
       stdin: globalThis.crypto.getRandomValues(new Uint8Array(seedBytes)),
     },

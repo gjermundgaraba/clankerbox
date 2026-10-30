@@ -1,14 +1,12 @@
 import { Match, Predicate, Record, Schema } from "effect";
 
 const located = {
-  host: Schema.optionalKey(Schema.String),
   action: Schema.optionalKey(Schema.String),
   id: Schema.optionalKey(Schema.String),
   made: Schema.optionalKey(Schema.String),
 };
 
 export interface Where {
-  readonly host?: string | undefined;
   readonly action?: string | undefined;
   readonly id?: string | undefined;
   readonly made?: string | undefined;
@@ -17,7 +15,6 @@ export interface Where {
 const at = (error: Where, where: Where) =>
   Record.filter(
     {
-      host: error.host ?? where.host,
       action: error.action ?? where.action,
       id: error.id ?? where.id,
       made: error.made ?? where.made,
@@ -26,8 +23,8 @@ const at = (error: Where, where: Where) =>
   );
 
 /**
- * The request is malformed, or the host list is one a client can't route by, or a config,
- * profile or setup file couldn't be read or doesn't hold what it should: then `file` names it.
+ * The request is malformed, or a config, profile or setup file couldn't be read or doesn't hold
+ * what it should: then `file` names it.
  */
 export class Invalid extends Schema.TaggedError<
   Invalid,
@@ -120,7 +117,7 @@ export class Superseded extends Schema.TaggedError<
   }
 }
 
-/** No host offers `base`: the host a create names, or any in the client's list. */
+/** No host offers `base`. */
 export class NotOffered extends Schema.TaggedError<
   NotOffered,
   { readonly brand: unique symbol }
@@ -274,17 +271,22 @@ export class Capacity extends Schema.TaggedError<
 }
 
 /**
- * No reply: only the client library makes it. A mutation's request may have reached the host
- * and run, so it is retryable only when `readOnly`.
+ * No answer. The client makes it when the control plane gives no reply, or when a wait stops with
+ * the request saved, and the control plane when no host it could place on answers. A mutation may
+ * have been recorded and may yet run, so it is retryable only when `readOnly`.
  */
 export class Unavailable extends Schema.TaggedError<
   Unavailable,
   { readonly brand: unique symbol }
->()("Unavailable", {
-  message: Schema.String,
-  readOnly: Schema.Boolean,
-  ...located,
-}) {
+>()(
+  "Unavailable",
+  {
+    message: Schema.String,
+    readOnly: Schema.Boolean,
+    ...located,
+  },
+  { httpApiStatus: 503 }
+) {
   located(where: Where): Unavailable {
     return new Unavailable({
       ...at(this, where),
@@ -307,7 +309,7 @@ export class Internal extends Schema.TaggedError<
   }
 }
 
-/** What a host may answer with; each action declares its own share. */
+/** What the control plane may answer with; each action declares its own share. */
 export const hostErrors = [
   Invalid,
   NotFound,
@@ -321,6 +323,7 @@ export const hostErrors = [
   Unsizable,
   ScriptFailed,
   Capacity,
+  Unavailable,
   Internal,
 ] as const;
 
@@ -329,16 +332,16 @@ export const HostError = Schema.Union(hostErrors);
 export type HostError = typeof HostError.Type;
 
 /**
- * Each carries, where known: `host` and `action`, which the client sets; `id`, the resource the
- * error is about, which a host sets on `NotFound` and `Conflict` and the client sets to the call's
- * subject otherwise; and `made`, the resource a create, fork, restore or capture makes. The host
- * deletes a machine whose copy or setup fails, again at each recheck while that delete fails, and
- * keeps one whose preparation fails; a call whose answer was lost, `Unavailable`, may leave
- * `made` behind unmade.
+ * Each carries, where known: `action`, which the client sets; `id`, the resource the error is
+ * about, which the control plane sets on `NotFound` and `Conflict` and the client sets to the
+ * call's subject otherwise; and `made`, the resource a create, fork, restore or capture makes. A
+ * machine whose copy or setup fails is deleted, again at each recheck while that delete fails, and
+ * one whose preparation fails is kept; a call whose answer was lost, `Unavailable`, may leave
+ * `made` behind.
  */
-export const ClankerboxError = Schema.Union([...hostErrors, Unavailable]);
+export const ClankerboxError = HostError;
 
-export type ClankerboxError = typeof ClankerboxError.Type;
+export type ClankerboxError = HostError;
 
 /**
  * Whether the same call may succeed later: a full host may free up, and a read that got no reply

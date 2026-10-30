@@ -1,7 +1,7 @@
 {
   "name": "@gjermundgaraba/clankerbox",
   "version": "0.30.1",
-  "description": "The clankerbox command line, and the host it runs as `clankerbox host`",
+  "description": "The clankerbox command line",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -26,14 +26,12 @@
     "@effect/platform-node": "catalog:",
     "@effect/platform-node-shared": "catalog:",
     "@gjermundgaraba/effect-actions": "catalog:",
-    "@xstate/effect": "catalog:",
-    "effect": "catalog:",
-    "xstate": "catalog:"
+    "effect": "catalog:"
   },
   "devDependencies": {
-    "@clankerbox/host": "workspace:*",
     "@effect/vitest": "catalog:",
     "@gjermundgaraba/clankerbox-sdk": "workspace:*",
+    "@gjermundgaraba/clankerbox-server": "workspace:*",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",

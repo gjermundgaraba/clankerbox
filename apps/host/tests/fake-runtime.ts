@@ -20,6 +20,7 @@ import type {
   Held,
   MachineRef,
   MachineState,
+  Native,
   Observed,
   Interface,
   RuntimeError,
@@ -286,12 +287,12 @@ export const fakeRuntime = (options: FakeOptions) => {
 
   const call = <O extends Operation, A, E, R>(
     operation: O,
-    resource: { readonly id: string },
+    resource: { readonly name: string },
     body: Effect.Effect<A, E, R>
   ): Effect.Effect<A, E | FailureOf<O>, R> =>
     Effect.uninterruptibleMask((restore) =>
       Effect.suspend((): Effect.Effect<A, E | FailureOf<O>, R> => {
-        record(`${operation} ${resource.id}`);
+        record(`${operation} ${resource.name}`);
 
         const injection = injections[operation].shift();
 
@@ -319,19 +320,19 @@ export const fakeRuntime = (options: FakeOptions) => {
       })
     );
 
-  const states = (refs: readonly MachineRef[]): Effect.Effect<Observed> =>
+  const states = (refs: readonly Native[]): Effect.Effect<Observed> =>
     Effect.sync(() => {
-      observed.push(refs.map(({ id }) => id));
+      observed.push(refs.map(({ name }) => name));
 
       return new Map(
         refs.map((machine) => [
-          machine.id,
+          machine.name,
           machines.get(machine.name)?.state ?? "missing",
         ])
       );
     });
 
-  const observe = (refs: readonly MachineRef[]) =>
+  const observe = (refs: readonly Native[]) =>
     Effect.suspend(() => {
       const held = observeHolds.shift();
 
@@ -362,7 +363,7 @@ export const fakeRuntime = (options: FakeOptions) => {
   const capacity = (held: readonly Held[]) =>
     call(
       "capacity",
-      { id: "host" },
+      { name: "host" },
       Effect.map(inUse(held, states), ({ running, unread }) =>
         allotted(running, unread, options.ramBudgetMib)
       )
@@ -382,7 +383,9 @@ export const fakeRuntime = (options: FakeOptions) => {
         sizes.set(machine.name, sizesOf(machine));
       },
       catch: (cause) =>
-        new Internal({ message: `copy into ${machine.id}: ${String(cause)}` }),
+        new Internal({
+          message: `copy into ${machine.name}: ${String(cause)}`,
+        }),
     });
 
   const copyable = (machine: MachineRef) => {
@@ -396,8 +399,8 @@ export const fakeRuntime = (options: FakeOptions) => {
       state === "missing"
         ? missing(kind, machine)
         : new WrongState({
-            message: `${machine.id} is ${state}: ${kind === "mac" ? "stop" : "start"} it first`,
-            machine: machine.id,
+            message: `${machine.name} is ${state}: ${kind === "mac" ? "stop" : "start"} it first`,
+            machine: machine.name,
             state,
           })
     );
@@ -407,7 +410,7 @@ export const fakeRuntime = (options: FakeOptions) => {
     const found = machines.get(machine.name);
 
     return found === undefined
-      ? Effect.fail(new Internal({ message: `no machine ${machine.id}` }))
+      ? Effect.fail(new Internal({ message: `no machine ${machine.name}` }))
       : Effect.succeed(found.root);
   };
 
@@ -416,7 +419,7 @@ export const fakeRuntime = (options: FakeOptions) => {
     Set<ChildProcessSpawner.ChildProcessHandle>
   >();
 
-  const endCommands = (machine: MachineRef) =>
+  const endCommands = (machine: Native) =>
     Effect.forEach(
       commands.get(machine.name) ?? [],
       (handle) => Effect.ignore(handle.kill()),
@@ -440,15 +443,18 @@ export const fakeRuntime = (options: FakeOptions) => {
         stopResumes: kind === "linux",
         growsLive: kind === "linux",
         sizable: (machine, from, to, live) => {
-          sized.push([machine.id, sizesOf(from), sizesOf(to), live]);
+          sized.push([machine.name, sizesOf(from), sizesOf(to), live]);
 
           const refusal = sizableRefusals.shift();
 
           return refusal === undefined ? Effect.void : Effect.fail(refusal);
         },
-        startup: () =>
+        startup: Effect.sync(() => {
+          record("startup");
+        }),
+        adopt: (refs) =>
           Effect.sync(() => {
-            record("startup");
+            record(`adopt ${refs.map(({ name }) => name).join(" ")}`);
           }),
         observe,
         admit: (activation: Activation) =>
@@ -522,8 +528,8 @@ export const fakeRuntime = (options: FakeOptions) => {
               if (found.state === "stopped") {
                 return Effect.fail(
                   new WrongState({
-                    message: `${machine.id} is stopped: start it first`,
-                    machine: machine.id,
+                    message: `${machine.name} is stopped: start it first`,
+                    machine: machine.name,
                     state: found.state,
                   })
                 );
@@ -543,7 +549,7 @@ export const fakeRuntime = (options: FakeOptions) => {
 
               if (had === undefined) {
                 return Effect.fail(
-                  new Internal({ message: `no machine ${machine.id}` })
+                  new Internal({ message: `no machine ${machine.name}` })
                 );
               }
 
@@ -575,7 +581,7 @@ export const fakeRuntime = (options: FakeOptions) => {
 
               return held === undefined
                 ? Effect.fail(
-                    new Internal({ message: `no machine ${machine.id}` })
+                    new Internal({ message: `no machine ${machine.name}` })
                   )
                 : Effect.succeed(held);
             })
@@ -644,7 +650,7 @@ export const fakeRuntime = (options: FakeOptions) => {
                 return {
                   output: Stream.make(
                     new TextEncoder().encode(
-                      `exec: ${machine.id} isn't running\n`
+                      `exec: ${machine.name} isn't running\n`
                     )
                   ),
                   exitCode: Effect.succeed(1),
