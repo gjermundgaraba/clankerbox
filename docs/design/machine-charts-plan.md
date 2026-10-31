@@ -476,7 +476,7 @@ One agent ran this program, so a box still open is one that didn't run as writte
 
 ## Appendix A. Prototype evidence
 
-Each result is measured. The spike is `spike/xstate6` at `19782ba`, in `apps/server/tests/spike/`, and is not for landing. The chart probes and both designs are kept, uncommitted, in `research_notes/Machine charts/`.
+Each result is measured. The spike is `spike/xstate6` at `19782ba`, in `apps/server/tests/spike/`, and is not for landing. The chart probes and both designs were in `research_notes/Machine charts/`, uncommitted, and were deleted once the charts landed, so the plan's references to them point at nothing.
 
 | Question | Result |
 | --- | --- |
