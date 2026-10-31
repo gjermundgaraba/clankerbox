@@ -58,10 +58,15 @@ const serve = Effect.gen(function* () {
 
   yield* Effect.forEach([evidence, hosts], mkdir);
 
+  const previous = (yield* fs.exists(url))
+    ? new URL((yield* fs.readFileString(url)).trim())
+    : undefined;
+
   const host = yield* startHost(path.join(yield* scratch, "host"), {
     id,
     kind,
     bases: new Map([[base, image]]),
+    ...(previous === undefined ? {} : { port: Number(previous.port) }),
     logger: Logger.consolePretty({ colors: false }),
     runtime: {
       ramBudgetMib,
@@ -76,10 +81,13 @@ const serve = Effect.gen(function* () {
       Effect.ignore
     )
   );
-  yield* write(pid, `${process.pid}\n`);
+  process.on("SIGUSR2", () => {
+    host.fake.holdNext("capture");
+  });
   yield* Console.log(`ready ${kind} host ${id} at ${host.url}`);
   yield* write(`${url}.part`, `${host.url}\n`);
   yield* fs.rename(`${url}.part`, url);
+  yield* write(pid, `${process.pid}\n`);
 
   return yield* Effect.never;
 });

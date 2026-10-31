@@ -9,6 +9,7 @@ budget=${2:-}
 count=${3:-1}
 mkdir "$evidence" "$run/hosts"
 echo "$kind" >"$run/kind"
+echo "$budget" >"$run/budget"
 
 fail() {
   echo "launch: $1; its log:" >&2
@@ -24,14 +25,7 @@ vp run -r build >"$evidence/build.log" 2>&1 || fail "the build failed" "$evidenc
 number=0
 while [ "$number" -lt "$count" ]; do
   number=$((number + 1))
-  id=$kind-$number
-  nohup vpx apps/host/tests/serve.ts "$run" "$id" "$kind" ${budget:+"$budget"} \
-    >"$evidence/host-$id.log" 2>&1 </dev/null &
-  launched=$!
-  until [ -e "$run/hosts/$id.url" ]; do
-    kill -0 "$launched" 2>/dev/null || fail "host $id exited before it served" "$evidence/host-$id.log"
-    sleep 0.25
-  done
+  start_host "$kind-$number"
 done
 
 start_server

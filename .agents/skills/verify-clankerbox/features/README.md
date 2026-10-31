@@ -17,6 +17,7 @@ that drive it here, with `--json` fields to check. `cb` is
 | A create moves to the next host | `RUN=$(launch.sh linux 2048 2)`; create 2G, then 2G | both `settled` with bare IDs; `capacity --json` shows one on each host; the client saw no host |
 | An unreachable host | `fault.sh "$RUN" kill-host linux-2` on a two-host run | `hosts --json` lists `linux-2` as down; a machine there reads `state` `unknown`; a create lands on `linux-1` |
 | The control plane dies mid-create | see the skill's Faults section | the table there |
+| A host restarts mid-capture or mid-delete | see the skill's Faults section | the second table there |
 | SSH config sync | `cb machines` (a command that reads no server, such as `profiles`, doesn't sync) | `$(cat "$RUN/home")/.ssh/clankerbox` has the one block `Host *.cbx` |
 | `ssh-known-hosts` | `cb ssh-known-hosts app app.example` | prints `app.example <hostKey>` |
 

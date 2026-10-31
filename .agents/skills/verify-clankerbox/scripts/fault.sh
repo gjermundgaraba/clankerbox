@@ -1,9 +1,9 @@
 #!/bin/sh
-# Usage: fault.sh <run-dir> kill-server | start-server | kill-host <id> | setup-go
+# Usage: fault.sh <run-dir> kill-server | start-server | kill-host <id> | start-host <id> | hold-capture <id> | setup-go
 set -eu
 . "$(dirname "$0")/common.sh"
 use_run "$@"
-action=${2:?usage: fault.sh <run-dir> kill-server|start-server|kill-host <id>|setup-go}
+action=${2:?usage: fault.sh <run-dir> kill-server|start-server|kill-host <id>|start-host <id>|hold-capture <id>|setup-go}
 
 case $action in
   kill-server)
@@ -21,6 +21,14 @@ case $action in
     kill -KILL "$pid"
     while kill -0 "$pid" 2>/dev/null; do sleep 0.05; done
     echo "host $3 killed" >>"$evidence/transcript.txt"
+    ;;
+  start-host)
+    start_host "${3:?host id}"
+    echo "host $3 back" >>"$evidence/transcript.txt"
+    ;;
+  hold-capture)
+    kill -USR2 "$(host_pid "${3:?host id}")"
+    echo "host $3 holds its next capture" >>"$evidence/transcript.txt"
     ;;
   setup-go)
     touch "$run/setup-go"

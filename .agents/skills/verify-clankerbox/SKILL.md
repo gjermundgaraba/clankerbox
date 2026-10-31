@@ -91,8 +91,12 @@ launch a new run. A control plane that is down answers `Unavailable`, exit 1.
 
 `fault.sh <run> kill-server` sends `KILL` to the control plane and
 `fault.sh <run> start-server` starts it again on the same port and state.
-`fault.sh <run> kill-host <id>` kills a host. `fault.sh <run> setup-go` lets the
-`slow` profile's setup finish. Each is written to the transcript.
+`fault.sh <run> kill-host <id>` kills a host, and `fault.sh <run> start-host <id>`
+starts it again on the same port under a new `boot`.
+`fault.sh <run> hold-capture <id>` makes a host hold its next capture until it
+dies, as the fake's captures are too quick for a kill to catch one.
+`fault.sh <run> setup-go` lets the `slow` profile's setup finish. Each is written
+to the transcript.
 
 The make a kill catches decides the outcome:
 
@@ -104,6 +108,17 @@ The make a kill catches decides the outcome:
 Run the first with `slow` and `--no-wait`, waiting for `$RUN/setup-began` before
 the kill. `apps/server/tests/crash.test.ts` covers the second, which a
 user can't time from the CLI.
+
+So does what a restarted host held:
+
+| What the host held when it died     | Where it must end                                                               |
+| ----------------------------------- | ------------------------------------------------------------------------------- |
+| A capture                           | `capturing` while the host is down, then `failed` with its error, and `deleteCheckpoint <name>` in `runtime-calls.txt` from the restarted host: the row went `discarding`, which a client reads as `failed` |
+| A delete of a checkpoint            | `deleting` while the host is down, then `NotFound`                              |
+
+Run them with `hold-capture <id>`, then `checkpoint capture <machine> <name>
+--no-wait`, then `kill-host <id>`. For the second, ask `checkpoint delete <name>
+--no-wait` before `start-host <id>`.
 
 ## Evidence
 
@@ -135,7 +150,9 @@ The fake stands in for the VM, so this proves none of:
 - what a capture, fork or restore copies;
 - setup and preparation in a real guest;
 - `ssh` and `ssh-proxy` (see the index);
-- the tailnet.
+- the tailnet;
+- what a restarted host keeps: `start-host` starts a new fake with no machines,
+  so each of its machines reads `missing`, where a real runtime keeps its VMs.
 
 Proving those takes a `linux` host with KVM and the pinned smolvm
 (`bump-smolvm`), or a Mac with Tart (`bump-tart`), running

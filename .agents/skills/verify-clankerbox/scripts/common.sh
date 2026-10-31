@@ -43,6 +43,28 @@ host_pid() {
   serving "$run/hosts/${1:?host id}.pid"
 }
 
+# Starts a host on the port of the run's URL file for it, if any, and waits until it serves.
+start_host() {
+  id=${1:?host id}
+  rm -f "$run/hosts/$id.pid"
+  (
+    cd "$repo" &&
+      nohup vpx apps/host/tests/serve.ts "$run" "$id" "$(cat "$run/kind")" $(cat "$run/budget") \
+        >>"$evidence/host-$id.log" 2>&1 </dev/null &
+    echo $! >"$run/hosts/$id.starting"
+  )
+  starting=$(cat "$run/hosts/$id.starting")
+  rm "$run/hosts/$id.starting"
+  until [ -e "$run/hosts/$id.pid" ]; do
+    kill -0 "$starting" 2>/dev/null || {
+      echo "host $id exited before it served; its log:" >&2
+      cat "$evidence/host-$id.log" >&2
+      return 1
+    }
+    sleep 0.25
+  done
+}
+
 # Starts the control plane over the hosts in the run, and waits until it serves.
 start_server() {
   rm -f "$run/server.ready"
