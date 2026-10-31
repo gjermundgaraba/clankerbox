@@ -157,7 +157,7 @@ export const make = (settings: {
     const drive = yield* driver(settings.recheck, {
       kind: "checkpoint",
       find: store.findCheckpoint,
-      operationOn: (name) => store.operationOn("checkpoint", name),
+      operationOn: store.operationOn,
       activityOf,
       looking: (record) =>
         Effect.flatMap(hosts.read(record.host), ({ boot }) =>

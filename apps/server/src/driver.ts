@@ -5,7 +5,12 @@ import type { Scope } from "effect";
 import type { Activity } from "./chart.ts";
 import type { Unreachable } from "./hosts.ts";
 import type { Polled } from "./operations.ts";
-import type { Advanced, Lease, Operation } from "./store.ts";
+import type {
+  Advanced,
+  Interface as Store,
+  Lease,
+  Operation,
+} from "./store.ts";
 
 const busyWait = Duration.millis(100);
 
@@ -21,9 +26,7 @@ type Turned = "again" | "rest" | "over";
 export interface Resource<R extends { readonly state: string }> {
   readonly kind: Lease["resource"];
   readonly find: (name: string) => Effect.Effect<Option.Option<R>, Internal>;
-  readonly operationOn: (
-    name: string
-  ) => Effect.Effect<Option.Option<Operation>, Internal>;
+  readonly operationOn: Store["operationOn"];
   readonly activityOf: (state: R["state"]) => Activity;
   /** Reads what the chart's `read` needs, and writes it. */
   readonly looking: (
@@ -75,7 +78,7 @@ const followed = <R extends { readonly state: string }>(
 ) =>
   Effect.gen(function* () {
     const op = yield* Effect.fromOption(
-      yield* resource.operationOn(name),
+      yield* resource.operationOn(resource.kind, name),
       () =>
         new Internal({
           message: `${resource.kind} ${name} is at ${found.state} with no operation`,

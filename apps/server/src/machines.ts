@@ -369,7 +369,7 @@ export const make = (
     const drive = yield* driver(settings.recheck, {
       kind: "machine",
       find: store.findMachine,
-      operationOn: (name) => store.operationOn("machine", name),
+      operationOn: store.operationOn,
       activityOf,
       looking,
       polling: (found, op) =>
