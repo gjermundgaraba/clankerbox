@@ -113,7 +113,8 @@ export interface Rows {
 
 /**
  * What a write did. `written` also answers a `decide` that changed nothing: then `moved` is false
- * and `next` the row as it stands. `busy` is a lease that refused the operation, and wrote nothing.
+ * and `next` the row as it stands. `busy` wrote nothing, as the operation in flight `by` holds a
+ * lease the one begun conflicts with.
  */
 export type Advanced<R> =
   | {
@@ -122,7 +123,7 @@ export type Advanced<R> =
       readonly moved: boolean;
     }
   | { readonly at: "absent" }
-  | { readonly at: "busy" };
+  | { readonly at: "busy"; readonly by: Operation };
 
 export interface Interface {
   readonly machines: Effect.Effect<readonly MachineRow[], Internal>;

@@ -54,6 +54,7 @@ interface Hooks {
   looking?: Resource<Row>["looking"];
   polling?: Resource<Row>["polling"];
   following?: Resource<Row>["following"];
+  operationOn?: Resource<Row>["operationOn"];
   noOperation?: boolean;
 }
 
@@ -80,7 +81,8 @@ const harness = (start: Row | undefined) =>
 
           return Option.fromUndefinedOr(seen);
         }),
-      operationOn: () =>
+      operationOn: (resource, name) =>
+        hooks.operationOn?.(resource, name) ??
         Effect.succeed(
           hooks.noOperation === true
             ? Option.none()
@@ -318,18 +320,57 @@ describe("a loop", () => {
     })
   );
 
-  it.effect("tries again soon when a lease refuses, whatever the recheck", () =>
+  it.effect(
+    "a look a lease refuses looks again soon after the operation holding it ends, and not before",
+    () =>
+      Effect.gen(function* () {
+        const { counts, hooks, drive } = yield* harness({ state: "reading" });
+
+        const capture = flight("capture", {
+          id: "capture",
+          resource: "checkpoint",
+          name: "snap",
+        });
+
+        const holding = { now: true };
+
+        hooks.looking = (row) =>
+          Effect.sync(() =>
+            holding.now ? { at: "busy", by: capture } : written(row, false)
+          );
+        hooks.operationOn = (resource, name) =>
+          Effect.sync(() =>
+            holding.now && resource === "checkpoint" && name === "snap"
+              ? Option.some(capture)
+              : Option.none()
+          );
+
+        yield* drive("dev");
+        yield* settled;
+        yield* TestClock.adjust(Duration.minutes(1));
+        yield* settled;
+
+        expect(counts.looks).toBe(1);
+
+        holding.now = false;
+        yield* TestClock.adjust(Duration.millis(100));
+        yield* settled;
+
+        expect(counts.looks).toBe(2);
+      })
+  );
+
+  it.effect("a wake cuts short a wait on a lease", () =>
     Effect.gen(function* () {
       const { counts, hooks, drive } = yield* harness({ state: "reading" });
+      const capture = flight("capture", { id: "capture" });
 
-      hooks.looking = () => Effect.succeed({ at: "busy" });
+      hooks.looking = () => Effect.succeed({ at: "busy", by: capture });
+      hooks.operationOn = () => Effect.succeedSome(capture);
 
       yield* drive("dev");
       yield* settled;
-
-      expect(counts.looks).toBe(1);
-
-      yield* TestClock.adjust(Duration.millis(100));
+      yield* drive("dev");
       yield* settled;
 
       expect(counts.looks).toBe(2);

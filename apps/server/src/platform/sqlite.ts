@@ -11,7 +11,6 @@ import {
   Sizing,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
-  Data,
   DateTime,
   Effect,
   FileSystem,
@@ -124,31 +123,28 @@ const sql = <A>(what: string, run: () => A): Effect.Effect<A, Internal> =>
       new Internal({ message: `state database: ${what}: ${describe(cause)}` }),
   });
 
-export const transaction = <A, E>(
+export const transaction = <A>(
   db: DatabaseSync,
   what: string,
-  body: () => Result.Result<A, E>
-): Effect.Effect<A, E | Internal> =>
-  Effect.flatMap(
-    sql(what, () => {
-      db.exec("BEGIN IMMEDIATE");
+  body: () => A
+): Effect.Effect<A, Internal> =>
+  sql(what, () => {
+    db.exec("BEGIN IMMEDIATE");
 
-      try {
-        const result = body();
+    try {
+      const result = body();
 
-        db.exec(Result.isSuccess(result) ? "COMMIT" : "ROLLBACK");
+      db.exec("COMMIT");
 
-        return result;
-      } catch (error) {
-        if (db.isTransaction) {
-          db.exec("ROLLBACK");
-        }
-
-        throw error;
+      return result;
+    } catch (error) {
+      if (db.isTransaction) {
+        db.exec("ROLLBACK");
       }
-    }),
-    Effect.fromResult
-  );
+
+      throw error;
+    }
+  });
 
 const pragma = (db: DatabaseSync, name: string): number => {
   const row = db.prepare(`PRAGMA ${name}`).get();
@@ -216,8 +212,6 @@ const migrate = (
 
       db.exec(`PRAGMA user_version = ${migrations.length}`);
       db.exec(`PRAGMA application_id = ${applicationId}`);
-
-      return Result.void;
     });
   });
 
@@ -457,8 +451,6 @@ const conflicting = (wanted: Lease, held: Lease): boolean =>
   wanted.name === held.name &&
   (wanted.mode === "own" || held.mode === "own");
 
-class Busy extends Data.TaggedError("Busy") {}
-
 export interface Owner {
   readonly stateDir: string;
 }
@@ -611,41 +603,33 @@ export const open = (
         Effect.fromResult
       );
 
-    const leased = (
-      operation: Omit<Operation, "sequence">
-    ): Operation | undefined => {
-      const held = selectOperations
+    const holderOf = (wanted: readonly Lease[]): Operation | undefined =>
+      selectOperations
         .all()
-        .flatMap((row) => operationOf(row).leases);
+        .map(operationOf)
+        .find(({ leases }) =>
+          wanted.some((lease) =>
+            leases.some((held) => conflicting(lease, held))
+          )
+        );
 
-      if (
-        operation.leases.some((wanted) =>
-          held.some((lease) => conflicting(wanted, lease))
-        )
-      ) {
-        return undefined;
-      }
-
+    const begun = (operation: Omit<Operation, "sequence">) => {
       const { last } = Schema.decodeUnknownSync(
         Schema.Struct({ last: Schema.Int })
       )(raiseSequence.get());
 
-      const begun: Operation = { ...operation, sequence: last };
-
       insertOperation.run({
-        id: begun.id,
-        kind: begun.kind,
-        resource: begun.resource,
-        name: begun.name,
-        host: begun.host,
-        boot: begun.boot,
-        sequence: begun.sequence,
-        seen: begun.seen,
-        leases: encodeLeases(begun.leases),
-        to: begun.to === undefined ? null : encodeSizing(begun.to),
+        id: operation.id,
+        kind: operation.kind,
+        resource: operation.resource,
+        name: operation.name,
+        host: operation.host,
+        boot: operation.boot,
+        sequence: last,
+        seen: operation.seen,
+        leases: encodeLeases(operation.leases),
+        to: operation.to === undefined ? null : encodeSizing(operation.to),
       });
-
-      return begun;
     };
 
     const tables: Tables = {
@@ -671,46 +655,40 @@ export const open = (
       name: string,
       decide: (row: R, op: Operation | undefined) => Decision<R>
     ) =>
-      transaction(
-        db,
-        `advance ${resource} ${name}`,
-        (): Result.Result<Advanced<R>, Busy> => {
-          const raw = table.select.get(name);
+      transaction(db, `advance ${resource} ${name}`, (): Advanced<R> => {
+        const raw = table.select.get(name);
 
-          if (raw === undefined) {
-            return Result.succeed({ at: "absent" });
-          }
-
-          const row = table.decoded(raw);
-          const stored = selectOperation.get(resource, name);
-          const op = stored === undefined ? undefined : operationOf(stored);
-          const { next, begin, finish } = decide(row, op);
-
-          if (begin !== undefined && leased(begin) === undefined) {
-            return Result.fail(new Busy());
-          }
-
-          if (finish && op !== undefined) {
-            deleteOperation.run(op.id);
-          }
-
-          if (next === "removed") {
-            table.remove.run(name);
-          } else if (next !== row) {
-            table.update.run(table.columns(next));
-          }
-
-          return Result.succeed({
-            at: "written",
-            next,
-            moved: next !== row,
-          });
+        if (raw === undefined) {
+          return { at: "absent" };
         }
-      ).pipe(
-        Effect.catchTag("Busy", () =>
-          Effect.succeed<Advanced<R>>({ at: "busy" })
-        )
-      );
+
+        const row = table.decoded(raw);
+        const stored = selectOperation.get(resource, name);
+        const op = stored === undefined ? undefined : operationOf(stored);
+        const { next, begin, finish } = decide(row, op);
+
+        if (begin !== undefined) {
+          const by = holderOf(begin.leases);
+
+          if (by !== undefined) {
+            return { at: "busy", by };
+          }
+
+          begun(begin);
+        }
+
+        if (finish && op !== undefined) {
+          deleteOperation.run(op.id);
+        }
+
+        if (next === "removed") {
+          table.remove.run(name);
+        } else if (next !== row) {
+          table.update.run(table.columns(next));
+        }
+
+        return { at: "written", next, moved: next !== row };
+      });
 
     const store: Interface = {
       machines: sql("list machines", () =>

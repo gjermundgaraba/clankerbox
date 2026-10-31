@@ -42,9 +42,22 @@ export interface Resource<R extends { readonly state: string }> {
   ) => Effect.Effect<void, Internal>;
 }
 
+const ended = <R extends { readonly state: string }>(
+  resource: Resource<R>,
+  by: Operation
+) =>
+  resource.operationOn(by.resource, by.name).pipe(
+    Effect.repeat({
+      until: (op) => !Option.exists(op, ({ id }) => id === by.id),
+      schedule: Schedule.spaced(busyWait),
+    }),
+    Effect.asVoid
+  );
+
 const looked = <R extends { readonly state: string }>(
   resource: Resource<R>,
-  found: R
+  found: R,
+  latch: Latch.Latch
 ) =>
   Effect.gen(function* () {
     const answer = yield* resource.looking(found);
@@ -55,7 +68,7 @@ const looked = <R extends { readonly state: string }>(
       }
 
       case "busy": {
-        yield* Effect.sleep(busyWait);
+        yield* Effect.raceFirst(ended(resource, answer.by), latch.await);
 
         return "again" as const;
       }
@@ -124,7 +137,7 @@ const turn = <R extends { readonly state: string }>(
 
     switch (resource.activityOf(found.state)) {
       case "read": {
-        return yield* looked(resource, found);
+        return yield* looked(resource, found, latch);
       }
 
       case "follow": {
@@ -134,7 +147,9 @@ const turn = <R extends { readonly state: string }>(
       }
 
       case "recheck": {
-        return rechecked ? yield* looked(resource, found) : ("rest" as const);
+        return rechecked
+          ? yield* looked(resource, found, latch)
+          : ("rest" as const);
       }
 
       case "none": {

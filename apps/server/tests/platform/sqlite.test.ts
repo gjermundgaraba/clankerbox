@@ -16,7 +16,7 @@ import {
   scratch,
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { Arbitrary, DateTime, Effect, Option, Result, Schema } from "effect";
+import { Arbitrary, DateTime, Effect, Option, Schema } from "effect";
 import { expect } from "vite-plus/test";
 
 import { applied } from "../../src/chart.ts";
@@ -310,7 +310,7 @@ layer(NodeServices.layer)((it) => {
           );
 
         expect(operations).toStrictEqual([held]);
-        expect(conflict).toStrictEqual({ at: "busy" });
+        expect(conflict).toStrictEqual({ at: "busy", by: held });
         expect(later.sequence).toBeGreaterThan(held.sequence);
         expect(boot).toStrictEqual(Option.some("boot-1"));
         expect(checkpoints).toStrictEqual([snap]);
@@ -398,8 +398,6 @@ layer(NodeServices.layer)((it) => {
           db.prepare("INSERT INTO blobs VALUES (?)").run(
             new Uint8Array(1 << 20)
           );
-
-          return Result.void;
         }).pipe(Effect.flip);
 
         expect(error.message).toBe(
@@ -1052,7 +1050,7 @@ layer(NodeServices.layer)((it) => {
           );
 
         expect(taken.at).toBe("written");
-        expect(refused).toStrictEqual({ at: "busy" });
+        expect(refused).toStrictEqual({ at: "busy", by: operations[0] });
         expect(after).toStrictEqual(
           row("dev", { state: "made.stepping.starting", pin: "fake 2" })
         );

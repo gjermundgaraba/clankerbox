@@ -750,6 +750,33 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a stop a capture's lease holds back reads its host once, and runs once the capture ends",
+    () =>
+      Effect.gen(function* () {
+        const { asking, client, fake, rests } = yield* served();
+
+        yield* client.create("dev", request("dev"));
+
+        const { release, entered } = fake.holdNext("capture");
+
+        yield* asking.captureCheckpoint({ machine: "dev", name: "snap" });
+        yield* entered;
+        fake.observed.length = 0;
+        yield* asking.stopMachine({ id: "dev" });
+        yield* Effect.sleep(Duration.millis(500));
+
+        const whileCapturing = [...fake.observed];
+
+        yield* release;
+
+        const stopped = yield* rests("dev");
+
+        expect(whileCapturing).toStrictEqual([["dev"]]);
+        expect(at(stopped)).toStrictEqual(["stopped", "stopped", "settled"]);
+      })
+  );
+
+  it.effect(
     "a stop and a delete of a made machine are never refused for an earlier failure",
     () =>
       Effect.gen(function* () {
