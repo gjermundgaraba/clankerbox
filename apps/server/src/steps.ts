@@ -45,12 +45,18 @@ const others = (store: Store, found: MachineRow) =>
     };
   });
 
-const sourceStep = (store: Store, found: MachineRow) =>
+const sourceStep = (store: Store, found: MachineRow, held: Setup | undefined) =>
   Effect.gen(function* () {
     const { source } = found;
 
     if (source.kind === "base") {
-      return { _tag: "base", base: found.base } as const;
+      if (!source.scripted) {
+        return { _tag: "base", base: found.base } as const;
+      }
+
+      return held === undefined
+        ? undefined
+        : ({ _tag: "base", base: found.base, setup: held } as const);
     }
 
     if (source.kind === "machine") {
@@ -97,28 +103,23 @@ export const machineStep = (
     }
 
     if (op.kind === "make") {
-      const scripted = found.source.kind === "base" && found.source.scripted;
-      const setup = scripted ? held : undefined;
-      const source = yield* sourceStep(store, found);
+      const source = yield* sourceStep(store, found, held);
 
-      if (source === undefined || (scripted && setup === undefined)) {
-        return undefined;
-      }
-
-      return {
-        _tag: "make",
-        machine: {
-          name,
-          instance,
-          cpu: found.cpu,
-          ramMib: found.ramMib,
-          diskGib: found.diskGib,
-        },
-        source,
-        ...(setup === undefined ? {} : { setup }),
-        ports,
-        machines,
-      };
+      return source === undefined
+        ? undefined
+        : {
+            _tag: "make",
+            machine: {
+              name,
+              instance,
+              cpu: found.cpu,
+              ramMib: found.ramMib,
+              diskGib: found.diskGib,
+            },
+            source,
+            ports,
+            machines,
+          };
     }
 
     if (ref === undefined) {

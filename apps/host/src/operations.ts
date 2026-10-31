@@ -384,7 +384,7 @@ export const make = (
       );
 
     const made = (
-      { machine, source, setup, machines }: Make,
+      { machine, source, machines }: Make,
       port: number
     ): Effect.Effect<void, HostError> =>
       Effect.gen(function* () {
@@ -406,8 +406,8 @@ export const make = (
           )
         );
 
-        if (setup !== undefined) {
-          yield* runSetup(runtime, ref, setup);
+        if (source._tag === "base" && source.setup !== undefined) {
+          yield* runSetup(runtime, ref, source.setup);
         }
       });
 

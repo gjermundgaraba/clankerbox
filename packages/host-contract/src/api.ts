@@ -65,8 +65,12 @@ export type MachineState = typeof MachineState.Type;
 
 const pinned = { pin: Schema.optionalKey(Schema.String) };
 
+/** Where a make's disk comes from. A copy holds what a setup did, so only a base has one to run. */
 export const Source = Schema.Union([
-  Schema.TaggedStruct("base", { base: Schema.String }),
+  Schema.TaggedStruct("base", {
+    base: Schema.String,
+    setup: Schema.optionalKey(Setup),
+  }),
   Schema.TaggedStruct("checkpoint", { checkpoint: CheckpointRef, ...pinned }),
   Schema.TaggedStruct("machine", { machine: MachineRef, ...pinned }),
 ]);
@@ -83,7 +87,6 @@ export const Step = Schema.Union([
   Schema.TaggedStruct("make", {
     machine: NewMachine,
     source: Source,
-    setup: Schema.optionalKey(Setup),
     ports: Schema.Array(Port),
     ...others,
   }),

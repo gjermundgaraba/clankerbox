@@ -130,10 +130,13 @@ const makes = (
 ): Step => ({
   _tag: "make",
   machine: fresh(name, fields?.machine),
-  source: fields?.source ?? { _tag: "base", base: "ubuntu" },
+  source: fields?.source ?? {
+    _tag: "base",
+    base: "ubuntu",
+    ...(fields?.setup === undefined ? {} : { setup: fields.setup }),
+  },
   ports: fields?.ports ?? [],
   machines: fields?.machines ?? [],
-  ...(fields?.setup === undefined ? {} : { setup: fields.setup }),
 });
 
 let delivered = 0;
