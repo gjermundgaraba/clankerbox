@@ -170,17 +170,14 @@ export const checkpointStep = (
     }
 
     const source = yield* store.findMachine(record.machine);
+    const ref = Option.flatMapNullishOr(source, refOf);
 
-    if (Option.isNone(source) || source.value.port === undefined) {
-      return undefined;
-    }
-
-    const { name, instance, cpu, ramMib, diskGib, port, pin } = source.value;
-
-    return {
-      _tag: "capture",
-      machine: { name, instance, cpu, ramMib, diskGib, port },
-      checkpoint,
-      ...pinned(pin),
-    };
+    return Option.isSome(ref) && Option.isSome(source)
+      ? {
+          _tag: "capture",
+          machine: ref.value,
+          checkpoint,
+          ...pinned(source.value.pin),
+        }
+      : undefined;
   });

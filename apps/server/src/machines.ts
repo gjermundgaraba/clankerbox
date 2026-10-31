@@ -215,9 +215,6 @@ export const make = (
       };
     };
 
-    const stepOf = (found: MachineRow, op: Operation) =>
-      machineStep(store, found, op, creates.get(found.name)?.setup);
-
     const stored = (name: string, event: MachineEvent) =>
       Effect.gen(function* () {
         const answer = yield* applying(name, event);
@@ -379,7 +376,7 @@ export const make = (
       polling: (found, op) =>
         poll(hosts, op, {
           cut: !wants(op.kind, desiredOf(found)),
-          step: stepOf(found, op),
+          step: machineStep(store, found, op, creates.get(found.name)?.setup),
         }),
       following,
     });

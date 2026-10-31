@@ -55,11 +55,13 @@ export const checkpoint = setup({
   states: {
     capturing: {
       initial: "due",
-      on: { delete: { target: "#checkpoint.deleting.due" } },
       states: {
         due: {
           meta: { phase: "capturing", activity: "read" },
-          on: { read: { target: "sent" } },
+          on: {
+            read: { target: "sent" },
+            delete: { target: "#checkpoint.deleting.due" },
+          },
         },
         sent: {
           meta: { phase: "capturing", step: "capture", activity: "follow" },

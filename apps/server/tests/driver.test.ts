@@ -425,11 +425,7 @@ describe("following a step", () => {
       Effect.gen(function* () {
         const { counts, hooks, drive } = yield* harness({ state: "following" });
 
-        hooks.polling = () =>
-          Effect.succeed<Polled>({
-            at: "unreachable",
-            error: new Unreachable({ host: "linux", message: "down" }),
-          });
+        hooks.polling = () => Effect.succeed<Polled>({ at: "unreachable" });
 
         yield* drive("dev");
         yield* settled;

@@ -2,7 +2,7 @@ import type { Report, Step } from "@clankerbox/host-contract";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect } from "effect";
 
-import type { Interface as Hosts, Unreachable } from "./hosts.ts";
+import type { Interface as Hosts } from "./hosts.ts";
 import type { Operation } from "./store.ts";
 
 /** Where a step stands, as far as a look at its host can tell. */
@@ -10,7 +10,7 @@ export type Polled =
   | { readonly at: "running"; readonly report: Report }
   | { readonly at: "ended"; readonly report: Report }
   | { readonly at: "lost" }
-  | { readonly at: "unreachable"; readonly error: Unreachable };
+  | { readonly at: "unreachable" };
 
 const scopeOf = (op: Operation) => `${op.resource} ${op.name}`;
 
@@ -76,8 +76,8 @@ export const poll = (
 
     return { at: "running", report: sent } as const;
   }).pipe(
-    Effect.catchTag("Unreachable", (error) =>
-      Effect.succeed<Polled>({ at: "unreachable", error })
+    Effect.catchTag("Unreachable", () =>
+      Effect.succeed<Polled>({ at: "unreachable" })
     )
   );
 
