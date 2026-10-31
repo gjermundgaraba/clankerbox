@@ -386,10 +386,39 @@ const time = (value: DateTime.Utc | undefined) =>
 
 type Bound = string | number | null;
 
+type Columns<S extends { readonly fields: object }> = {
+  readonly [K in keyof S["fields"]]: Bound;
+};
+
+const insertInto = (
+  table: string,
+  { fields }: { readonly fields: object }
+): string => {
+  const names = Object.keys(fields);
+  const columns = names.map((name) => `"${name}"`).join(", ");
+  const values = names.map((name) => `$${name}`).join(", ");
+
+  return `INSERT INTO ${table} (${columns}) VALUES (${values})`;
+};
+
+const updateIn = (
+  table: string,
+  { fields }: { readonly fields: object }
+): string => {
+  const set = Object.keys(fields)
+    .filter((name) => name !== "name")
+    .map((name) => `"${name}" = $${name}`);
+
+  return `UPDATE ${table} SET ${set.join(", ")} WHERE name = $name`;
+};
+
 const encodedError = (error: HostError | undefined): Bound =>
   error === undefined ? null : encodeError(error);
 
-const machineColumns = (row: MachineRow) => ({
+const sizing = (value: Sizing | undefined): Bound =>
+  value === undefined ? null : encodeSizing(value);
+
+const machineColumns = (row: MachineRow): Columns<typeof MachineFields> => ({
   name: row.name,
   instance: row.instance,
   created_at: DateTime.formatIso(row.createdAt),
@@ -405,7 +434,7 @@ const machineColumns = (row: MachineRow) => ({
   state: row.state,
   prepared: flag(row.prepared),
   error: encodedError(row.error),
-  resize: row.resize === undefined ? null : encodeSizing(row.resize),
+  resize: sizing(row.resize),
   ephemeral: flag(row.ephemeral),
   source: encodeSource(row.source),
   prebuild: row.prebuild ?? null,
@@ -414,7 +443,9 @@ const machineColumns = (row: MachineRow) => ({
   undone_at: time(row.undoneAt),
 });
 
-const checkpointColumns = (row: CheckpointRow) => ({
+const checkpointColumns = (
+  row: CheckpointRow
+): Columns<typeof CheckpointFields> => ({
   name: row.name,
   instance: row.instance,
   created_at: DateTime.formatIso(row.createdAt),
@@ -433,12 +464,27 @@ const checkpointColumns = (row: CheckpointRow) => ({
   failed_at: time(row.failedAt),
 });
 
+const operationColumns = (
+  operation: Operation
+): Columns<typeof OperationFields> => ({
+  id: operation.id,
+  kind: operation.kind,
+  resource: operation.resource,
+  name: operation.name,
+  host: operation.host,
+  boot: operation.boot,
+  sequence: operation.sequence,
+  seen: operation.seen,
+  leases: encodeLeases(operation.leases),
+  to: sizing(operation.to),
+});
+
 interface Table<R> {
   readonly select: StatementSync;
   readonly update: StatementSync;
   readonly remove: StatementSync;
   readonly decoded: (raw: unknown) => R;
-  readonly columns: (row: R) => Record<string, Bound>;
+  readonly columns: (row: R) => Readonly<Record<string, Bound>>;
 }
 
 type Tables = { readonly [K in Lease["resource"]]: Table<Rows[K]> };
@@ -493,23 +539,9 @@ export const open = (
 
     const selectMachine = db.prepare("SELECT * FROM machines WHERE name = ?");
 
-    const insertMachine = db.prepare(
-      `INSERT INTO machines (name, instance, created_at, kind, base, profile, cpu, ram_mib,
-        disk_gib, host, port, desired, state, prepared, error, resize, ephemeral, source, prebuild,
-        host_key, pin, undone_at)
-       VALUES ($name, $instance, $created_at, $kind, $base, $profile, $cpu, $ram_mib, $disk_gib,
-        $host, $port, $desired, $state, $prepared, $error, $resize, $ephemeral, $source, $prebuild,
-        $host_key, $pin, $undone_at)`
-    );
+    const insertMachine = db.prepare(insertInto("machines", MachineFields));
 
-    const updateMachine = db.prepare(
-      `UPDATE machines SET instance = $instance, created_at = $created_at, kind = $kind,
-        base = $base, profile = $profile, cpu = $cpu, ram_mib = $ram_mib, disk_gib = $disk_gib,
-        host = $host, port = $port, desired = $desired, state = $state, prepared = $prepared,
-        error = $error, resize = $resize, ephemeral = $ephemeral, source = $source,
-        prebuild = $prebuild, host_key = $host_key, pin = $pin, undone_at = $undone_at
-       WHERE name = $name`
-    );
+    const updateMachine = db.prepare(updateIn("machines", MachineFields));
 
     const deleteUndone = db.prepare(
       "DELETE FROM machines WHERE name = ? AND undone_at IS NOT NULL"
@@ -534,18 +566,11 @@ export const open = (
     );
 
     const insertCheckpoint = db.prepare(
-      `INSERT INTO checkpoints (name, instance, created_at, machine, host, kind, pin, port, base,
-        profile, cpu, ram_mib, disk_gib, state, error, failed_at)
-       VALUES ($name, $instance, $created_at, $machine, $host, $kind, $pin, $port, $base,
-        $profile, $cpu, $ram_mib, $disk_gib, $state, $error, $failed_at)`
+      insertInto("checkpoints", CheckpointFields)
     );
 
     const updateCheckpoint = db.prepare(
-      `UPDATE checkpoints SET instance = $instance, created_at = $created_at, machine = $machine,
-        host = $host, kind = $kind, pin = $pin, port = $port, base = $base, profile = $profile,
-        cpu = $cpu, ram_mib = $ram_mib, disk_gib = $disk_gib, state = $state, error = $error,
-        failed_at = $failed_at
-       WHERE name = $name`
+      updateIn("checkpoints", CheckpointFields)
     );
 
     const deleteCheckpoint = db.prepare(
@@ -565,8 +590,7 @@ export const open = (
     );
 
     const insertOperation = db.prepare(
-      `INSERT INTO operations (id, kind, resource, name, host, boot, sequence, seen, leases, "to")
-       VALUES ($id, $kind, $resource, $name, $host, $boot, $sequence, $seen, $leases, $to)`
+      insertInto("operations", OperationFields)
     );
 
     const deleteOperation = db.prepare("DELETE FROM operations WHERE id = ?");
@@ -618,18 +642,7 @@ export const open = (
         Schema.Struct({ last: Schema.Int })
       )(raiseSequence.get());
 
-      insertOperation.run({
-        id: operation.id,
-        kind: operation.kind,
-        resource: operation.resource,
-        name: operation.name,
-        host: operation.host,
-        boot: operation.boot,
-        sequence: last,
-        seen: operation.seen,
-        leases: encodeLeases(operation.leases),
-        to: operation.to === undefined ? null : encodeSizing(operation.to),
-      });
+      insertOperation.run(operationColumns({ ...operation, sequence: last }));
     };
 
     const tables: Tables = {
