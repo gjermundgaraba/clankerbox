@@ -31,7 +31,6 @@ import {
   activityOf,
   desiredOf,
   machineChart,
-  phaseOf,
   stageOf,
   wants,
 } from "./machine-chart.ts";
@@ -145,24 +144,11 @@ export const make = (
         applied(machineChart, found, event, op)
       );
 
-    const resource = (
-      found: MachineRow,
-      state: MachineState,
-      phase: Machine["phase"]
-    ) =>
-      machineOf(
-        found,
-        state,
-        phase,
-        hosts.known(found.host)?.publishAddress,
-        tailnets.get(found.name)?.status
-      );
-
-    const unread = (found: MachineRow) =>
-      resource(found, "unknown", phaseOf(found.state));
-
-    const shown = (found: MachineRow, state: MachineState) =>
-      resource(found, state, phaseShown(found, state));
+    const shown = (found: MachineRow, seen?: MachineState) =>
+      machineOf(found, seen, {
+        address: hosts.known(found.host)?.publishAddress,
+        tailnet: tailnets.get(found.name)?.status,
+      });
 
     const movedPastCapacity = (found: MachineRow): Move | undefined => {
       const [candidate] = creates.get(found.name)?.untried ?? [];
@@ -420,7 +406,7 @@ export const make = (
         creates.set(name, held);
         yield* drive(name);
 
-        return unread(created);
+        return shown(created);
       });
 
     const asked = (name: string, desired: Wish) =>
@@ -431,7 +417,7 @@ export const make = (
         });
 
         return moved || stageOf(next.state) === "deleting"
-          ? unread(next)
+          ? shown(next)
           : yield* notFound("machine", name);
       });
 
@@ -583,7 +569,7 @@ export const make = (
         });
 
         return moved || stageOf(next.state) === "deleting"
-          ? unread(next)
+          ? shown(next)
           : yield* unmade(next);
       });
 
