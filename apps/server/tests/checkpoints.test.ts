@@ -1705,6 +1705,61 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a prebuild ends built past a read that fails between its steps",
+    () =>
+      Effect.gen(function* () {
+        const { client, host, store } = yield* withClient({
+          recheck: Duration.millis(200),
+        });
+
+        const setup = host.fake.holdNext("exec");
+
+        const prebuilt = yield* Effect.forkChild(
+          client.prebuild(prebuild({ setup: { script: "#!/bin/sh\n" } }))
+        );
+
+        yield* setup.entered;
+
+        const fault = new Internal({ message: "the runtime didn't answer" });
+
+        host.fake.failNextObserve(fault);
+        host.fake.failNextObserve(fault);
+        yield* setup.release;
+
+        const built = yield* Fiber.join(prebuilt);
+        const rows = yield* store.checkpoints;
+
+        expect(rows.map(({ name, state }) => [name, state])).toStrictEqual([
+          [built.id, "ready"],
+        ]);
+      })
+  );
+
+  it.effect("a prebuild ends when its host dies in the middle of a step", () =>
+    Effect.gen(function* () {
+      const served = yield* withClient({ recheck: Duration.millis(200) });
+      const { client, host } = served;
+      const setup = host.fake.holdNext("exec");
+
+      const prebuilt = yield* Effect.forkChild(
+        Effect.flip(
+          client.prebuild(prebuild({ setup: { script: "#!/bin/sh\n" } }))
+        )
+      );
+
+      yield* setup.entered;
+      yield* host.dispose;
+
+      const error = yield* Fiber.join(prebuilt);
+
+      yield* restartedHost(host);
+      yield* noMachines(served);
+
+      expect(error).toMatchObject({ _tag: "Unavailable", readOnly: true });
+    })
+  );
+
+  it.effect(
     "a builder a control plane's restart left behind is deleted by the next one, and its prebuild reads NotFound",
     () =>
       Effect.gen(function* () {

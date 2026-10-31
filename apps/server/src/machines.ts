@@ -16,14 +16,14 @@ import type {
   Setup,
   Sizing,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Context, DateTime, Duration, Effect, Layer, Option } from "effect";
-import type { Scope } from "effect";
+import { Context, DateTime, Effect, Layer, Option } from "effect";
+import type { Scope, Duration } from "effect";
 import { Hex } from "effect/encoding";
 
 import { applied } from "./chart.ts";
 import { copied, outgrownBySource } from "./copies.ts";
 import type { Spec } from "./copies.ts";
-import { driver } from "./driver.ts";
+import { driver, untilRest } from "./driver.ts";
 import type { Heard } from "./driver.ts";
 import { capacity, recheckHosts } from "./fleet.ts";
 import type { CapacityRead } from "./fleet.ts";
@@ -100,7 +100,7 @@ export interface Interface {
   readonly capacity: Effect.Effect<CapacityRead, Internal>;
   /**
    * Waits until a machine rests or is gone, for a prebuild's own steps. A machine that can't be read
-   * ends the wait as `Unavailable`, as nothing it would go on to do can begin.
+   * for a whole recheck ends the wait as `Unavailable`, whatever step it is in.
    */
   readonly rest: (
     name: string
@@ -115,8 +115,6 @@ interface CreateHeldInMemory {
   readonly setup: Setup | undefined;
   readonly untried: readonly Candidate[];
 }
-
-const restPoll = Duration.millis(100);
 
 const newId = (): string =>
   Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(16)));
@@ -608,36 +606,34 @@ export const make = (
         answer.at === "absent" ? Effect.fail(notFound(name)) : drive(name)
       );
 
-    const rest = (name: string) =>
+    const rests = (name: string) =>
       Effect.gen(function* () {
-        for (;;) {
-          const found = yield* store.findMachine(name);
+        const found = yield* store.findMachine(name);
 
-          if (Option.isNone(found)) {
-            return found;
-          }
-
-          if (activityOf(found.value.state) !== "follow") {
-            const phase = phaseShown(
-              found.value,
-              yield* stateOf(hosts, found.value)
-            );
-
-            if (phase === "waiting") {
-              return yield* new Unavailable({
-                message: `machine ${name}'s host can't be reached`,
-                readOnly: true,
-              });
-            }
-
-            if (isResting(phase)) {
-              return found;
-            }
-          }
-
-          yield* Effect.sleep(restPoll);
+        if (Option.isNone(found)) {
+          return true;
         }
+
+        const phase = phaseShown(
+          found.value,
+          yield* stateOf(hosts, found.value)
+        );
+
+        if (phase === "waiting") {
+          return yield* new Unavailable({
+            message: `machine ${name}'s host can't be reached`,
+            readOnly: true,
+          });
+        }
+
+        return activityOf(found.value.state) !== "follow" && isResting(phase);
       });
+
+    const rest = (name: string) =>
+      Effect.andThen(
+        untilRest(settings.recheck, rests(name)),
+        store.findMachine(name)
+      );
 
     const tick = recheckHosts(store, hosts, settings.failedRowsLast);
 

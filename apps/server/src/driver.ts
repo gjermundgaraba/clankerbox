@@ -1,5 +1,5 @@
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Cause, Duration, Effect, Latch, Option } from "effect";
+import { Cause, Duration, Effect, Latch, Option, Schedule } from "effect";
 import type { Scope } from "effect";
 
 import type { Activity } from "./chart.ts";
@@ -10,6 +10,8 @@ import type { Advanced, Lease, Operation } from "./store.ts";
 const busyWait = Duration.millis(100);
 
 const unreachableWait = Duration.seconds(1);
+
+const restPoll = Duration.millis(100);
 
 /** What a look at an operation found that its resource acts on. */
 export type Heard = Exclude<Polled, { readonly at: "unreachable" }>;
@@ -139,6 +141,28 @@ const turn = <R extends { readonly state: string }>(
       }
     }
   });
+
+/**
+ * Looks until `rests` answers true. A look that fails with `Unavailable` tells of a host's fault,
+ * which may pass, so it is tried again, and ends the wait once it has failed for `bound` on end.
+ */
+export const untilRest = <E extends { readonly _tag: string }>(
+  bound: Duration.Duration,
+  rests: Effect.Effect<boolean, E>
+): Effect.Effect<void, E> =>
+  rests.pipe(
+    Effect.retry({
+      while: ({ _tag }) => _tag === "Unavailable",
+      schedule: Schedule.spaced(restPoll).pipe(
+        Schedule.upTo({ duration: bound })
+      ),
+    }),
+    Effect.repeat({
+      until: (rested) => rested,
+      schedule: Schedule.spaced(restPoll),
+    }),
+    Effect.asVoid
+  );
 
 /**
  * The loops of one resource, at most one per name, each moving its row a whole step at a time. The
