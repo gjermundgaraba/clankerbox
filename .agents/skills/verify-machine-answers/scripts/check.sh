@@ -5,10 +5,13 @@ case ${1:-} in
   '' | --quick) ;;
   *) echo "usage: check.sh [--quick]" >&2; exit 2 ;;
 esac
-model=$(cd "$(dirname "$0")/../model" && pwd)
+scripts=$(cd "$(dirname "$0")" && pwd)
+model=$scripts/../model
 tla_version=1.8.0
 cache=${XDG_CACHE_HOME:-$HOME/.cache}/clankerbox-tla
 jar=$cache/tla2tools-$tla_version.jar
+
+vpx "$scripts/export-chart.ts"
 
 command -v java >/dev/null || { echo "check: needs java 11 or later on PATH" >&2; exit 2; }
 spec=$(java -XshowSettings:properties -version 2>&1 | sed -n 's/^ *java.specification.version = //p')
@@ -22,7 +25,7 @@ if [ ! -r "$jar" ]; then
 fi
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/verify-machine-answers.XXXXXX")
-cp "$model/MachineAnswers.tla" "$model/MachineAnswers.cfg" "$model/TwoClients.cfg" "$work/"
+cp "$model/Chart.tla" "$model/MachineAnswers.tla" "$model/MachineAnswers.cfg" "$model/TwoClients.cfg" "$work/"
 
 cd "$work"
 status=0

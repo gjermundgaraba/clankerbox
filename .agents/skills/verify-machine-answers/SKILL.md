@@ -1,6 +1,6 @@
 ---
 name: verify-machine-answers
-description: Model-check, with TLA+ and TLC, that a clankerbox machine request's answer is true under every interleaving of concurrent requests, a control plane crash, a host restart, a partition and lost, repeated or late delivery of operations. Use when a change touches apps/server/src/machines.ts, reconcile.ts, operations.ts, the store's desire, begin or finish, apps/host/src/operations.ts, or the SDK client's wait, before calling it done.
+description: Model-check, with TLA+ and TLC, that a clankerbox machine request's answer is true under every interleaving of concurrent requests, a control plane crash, a host restart, a partition and lost, repeated or late delivery of operations. Use when a change touches apps/server/src/chart.ts, machine-chart.ts, machines.ts, reconcile.ts, operations.ts, the store's desire, begin or finish, apps/host/src/operations.ts, or the SDK client's wait, before calling it done.
 ---
 
 # Verify machine answers
@@ -26,8 +26,19 @@ the report was stored. `apps/server/tests/crash.test.ts` checks a few such
 orders. The model checks all of them.
 
 The model is `model/MachineAnswers.tla`: one machine, its row, the operation in
-flight, the host's runner, the network, and the clients. TLC checks these
-invariants on every reachable state:
+flight, the host's runner, the network, and the clients. It writes no rule of
+the row's own: each write is a lookup, `Row(row, event, op)`, in `model/Chart.tla`,
+a table `scripts/export-chart.ts` generates by walking every leaf, wish, flag and
+abstract event through the real chart, `apps/server/src/machine-chart.ts`, with
+`applied`. So the chart TLC checks is the chart that compiles. A stale table
+fails `apps/server/tests/machine-chart.test.ts`, with no Java. `check.sh` exports
+it first.
+
+Nothing live calls the chart yet. Until the writes move onto it, that test holds
+every event from every leaf to `reconcile.ts` and the store's SQL, and names each
+difference, which is what ties this model to the code that runs.
+
+TLC checks these invariants on every reachable state:
 
 | Invariant          | In plain words                                                                       |
 | ------------------ | ------------------------------------------------------------------------------------ |
@@ -37,13 +48,15 @@ invariants on every reachable state:
 | `NoOrphan`         | A failed create once undone, and a deleted machine, leave no VM                      |
 | `OnceOnly`         | Each operation runs once, however often it is delivered                              |
 | `FailedSays`       | A row resting `failed` carries its error                                             |
+| `OpIsState`        | An operation is in flight exactly while the row's leaf has a step                    |
 | `AllAnswered`      | (temporal, in `MachineAnswers.cfg`) every request is answered, given fair scheduling |
 
 ## Run it
 
 ```sh
 .agents/skills/verify-machine-answers/scripts/check.sh --quick   # two clients, about 1 min
-.agents/skills/verify-machine-answers/scripts/check.sh           # and every fault with AllAnswered, up to 11 min
+.agents/skills/verify-machine-answers/scripts/check.sh           # and every fault with AllAnswered, about 6 min
+vpx .agents/skills/verify-machine-answers/scripts/breaks.ts      # every break below, or those named
 ```
 
 The script needs Java 11 or later on `PATH` and `curl`. It downloads
@@ -75,13 +88,17 @@ A pass covers this scope, and only it:
 - **One machine**, created once. Copies (fork, restore, capture), resize and
   the tailnet join are out, so a resize's `Operation.to`, and a failing step
   giving way to a resize owed, rest on `apps/server/tests`.
+- **The table holds what the model holds of a row**: its leaf, wish, `prepared`
+  and whether it has an error. A key it lacks is an event the chart leaves
+  unhandled. `resize`, `sized`, `refused`, `ran`, a report's `move` and what a
+  report tells rest on `machine-chart.test.ts`.
 - **`MachineAnswers.cfg`**: one client beside the creator, with one of each
   fault: a step or read that fails, a control plane crash, a partition, a host
   restart and a lost delivery, and nine operations. Every invariant and
-  `AllAnswered` hold over all 6,412,809 distinct states, 5 to 10 minutes.
+  `AllAnswered` hold over all 6,361,549 distinct states, about 5 minutes.
 - **`TwoClients.cfg`**: two clients beside the creator, with a crash and a
   partition and no other fault, and seven operations. Every invariant holds over
-  all 9,301,296 distinct states, about 1 minute. `AllAnswered` is not checked
+  all 8,745,554 distinct states, about 1 minute. `AllAnswered` is not checked
   here.
 - **Both at once is out of reach.** Two clients with every fault passed 152
   million distinct states in about 40 minutes with no violation and its queue
@@ -112,26 +129,28 @@ A pass covers this scope, and only it:
 Last confirmed against the commit that adds this table. Each model part stands
 for this code:
 
-| Model                            | Code                                                                     |
-| -------------------------------- | ------------------------------------------------------------------------ |
-| `Next_`, `Decide`                | `apps/server/src/reconcile.ts` `next`; `machines.ts` `advance`, `begin`  |
-| `Create`                         | `apps/server/src/machines.ts` `born`, `store.insertMachine`              |
-| `Request`                        | `machines.ts` `asked`, `remove`; `store.desire`                          |
-| `Read`                           | `machines.ts` `stateOf`                                                  |
-| `Send`, `Cut`                    | `apps/server/src/operations.ts` `poll`                                   |
-| `Wants`                          | `apps/server/src/reconcile.ts` `wants`, for a cut and for a failure      |
-| `Collect`, `Failing`, `Done`     | `machines.ts` `follow`, `ended`; `reconcile.ts` `settled`; `store.finish` |
-| `Lost`                           | `operations.ts` `poll`; `reconcile.ts` `lost`                            |
-| `Deliver`, `Repeat`, `Lose`      | `apps/host/src/operations.ts` `run`, its boot and sequence fence         |
-| `HostStep`, `HostFail`           | `apps/host/src/operations.ts` `perform`, and `picking`, `made` for a make |
-| `HostCancel`                     | `apps/host/src/operations.ts` `cancel`, `ended`                          |
-| `HostRestart`                    | a new process: `Operations.boot`, empty `entries` and `scopes`           |
+| Model                            | Code                                                                       |
+| -------------------------------- | -------------------------------------------------------------------------- |
+| `Row`, `To`, `Chart.tla`         | `apps/server/src/chart.ts` `applied`; `machine-chart.ts`, the whole chart  |
+| `Phase`, `IsStep`                | `machine-chart.ts` `phaseOf`, a leaf's `step`                              |
+| `Wants`                          | `machine-chart.ts` `wants`, for a cut and for a failure                    |
+| `Decide`                         | `machine-chart.ts` `read`; `machines.ts` `advance`, `begin`                |
+| `Create`                         | `apps/server/src/machines.ts` `born`, `store.insertMachine`                |
+| `Request`                        | `machine-chart.ts` `ask`, `delete`; `machines.ts` `asked`, `remove`        |
+| `Read`                           | `machines.ts` `stateOf`                                                    |
+| `Send`, `Cut`                    | `apps/server/src/operations.ts` `poll`                                     |
+| `Collect`                        | `machine-chart.ts` `reported`, `lost`; `machines.ts` `follow`, `ended`; `operations.ts` `poll`; `store.finish` |
+| `Deliver`, `Repeat`, `Lose`      | `apps/host/src/operations.ts` `run`, its boot and sequence fence           |
+| `HostStep`, `HostFail`           | `apps/host/src/operations.ts` `perform`, and `picking`, `made` for a make  |
+| `HostCancel`                     | `apps/host/src/operations.ts` `cancel`, `ended`                            |
+| `HostRestart`                    | a new process: `Operations.boot`, empty `entries` and `scopes`             |
 | `Crash`, `Revive`                | a new process: the store stays, `creates` goes; `machines.ts` start-up     |
-| `Shown`                          | `machines.ts` `phaseShown`, in `Machines.get` and `list`                 |
-| `Answer`                         | `packages/sdk/src/client.ts` `machineRest`, `machineGone`, `answerOf`    |
+| `Shown`                          | `machines.ts` `phaseShown`, in `Machines.get` and `list`                   |
+| `Answer`                         | `packages/sdk/src/client.ts` `machineRest`, `machineGone`, `answerOf`      |
 
-When a covered function changes, update the matching action so the model still
-describes the code, then rerun. Move the sync commit forward only after you have
+A change to the chart needs no change here: rerun `check.sh`, which exports it.
+When any other covered function changes, update the matching action so the model
+still describes the code, then rerun. Move the sync commit forward only after you have
 read the changed code against the model at that commit. A passing check alone
 doesn't move it.
 
@@ -153,35 +172,47 @@ doesn't move it.
 
 ## Proven able to fail
 
-Each check was run against a broken copy of the model, TLC run, then reverted.
+`scripts/breaks.ts` breaks a copy of the chart or the model, re-exports the table
+and runs TLC, for each row here, and stops at an edit that finds nothing to
+change.
 
-| Break                                                        | Violated           |
-| ------------------------------------------------------------ | ------------------ |
-| The host accepts any delivery: no sequence or boot fence     | `OnceOnly`         |
-| A failed make skips undoing and rests undone                 | `NoOrphan`         |
-| A client answers without waiting for rest                    | `AnswerTrue`       |
-| `store.desire` leaves the row at rest                        | `RestTrue`         |
-| `Superseded` names what the client asked                     | `SupersededHonest` |
-| Failing a step records no error                              | `FailedSays`       |
-| A start's report rests the row settled without a new read    | `RestTrue`         |
-| A make the host never got is never given up                  | deadlock           |
-| A host restart isn't noticed                                 | `AllAnswered`      |
-| A read that fails writes a rest                              | `RestTrue`         |
+| Break                                                        | In    | Violated           |
+| ------------------------------------------------------------ | ----- | ------------------ |
+| `ask` leaves the row at rest                                 | chart | `RestTrue`         |
+| A start's report rests the row settled without a new read    | chart | `RestTrue`         |
+| A read that fails writes a rest                              | chart | `RestTrue`         |
+| A failed make skips undoing and rests undone                 | chart | `NoOrphan`         |
+| Failing a step records no error                              | chart | `FailedSays`       |
+| A report enters a leaf with a step                           | chart | `OpIsState`        |
+| The host accepts any delivery: no sequence or boot fence     | model | `OnceOnly`         |
+| A client answers without waiting for rest                    | model | `AnswerTrue`       |
+| `Superseded` names what the client asked                     | model | `SupersededHonest` |
+| A make the host never got is never given up                  | model | deadlock           |
+| A host restart isn't noticed                                 | model | `AllAnswered`      |
 
-Removing the client's generation check broke nothing, because `store.desire`
-leaves rest in the write that records the request. That is why the check, and
-`Machine.generation`, are gone.
+The last two rows break `Collect`, which stands for `poll`, outside the chart. An
+edge taken off the chart isn't a deadlock: `Collect` clears the operation and
+`OpIsState` fails.
 
-A failing step also has no such row. Resting every failure `failed`, also of a
-step no longer wanted, broke nothing over `MachineAnswers.cfg`, with
-`AllAnswered`, over 6,553,479 distinct states. So a
-report's `wants` is a product rule and not safety: the machine moves to what is
-asked in place of a client reading a failure of what it no longer wants. For the
-same reason `Failing` reads what is asked now and not `gen`: a wish that goes
-stopped, running, stopped during a stop that fails rests failed with its error,
-and a repeated request answers that failure with no more tries.
-`TwoClients.cfg` injects no failure, so this break only counts on the full
-config.
+Two breaks pass, on purpose, and `breaks.ts` fails if they stop passing.
+
+`no-overtaken` rests every failure `failed`, also of a step no longer wanted, and
+broke nothing over `MachineAnswers.cfg`, with `AllAnswered`. So a report's `wants`
+is a product rule and not safety: the machine moves to what is asked in place of
+a client reading a failure of what it no longer wants. A failure reads what is
+asked now: a wish that goes stopped, running, stopped during a stop that fails
+rests failed with its error, and a repeated request answers that failure with no
+more tries. `TwoClients.cfg` injects no failure, so this break only counts on the
+full config.
+
+`stop-keeps-prepared` leaves `prepared` set across a stop. It broke nothing here,
+as `ask` clears it for a start in the write that records the request, and the
+model's VM changes only under a step.
+
+The chart has no generation, and the client's check and `Machine.generation` went
+before it. A write decides from the row as it stands, a request leaves rest in
+that write, and a VM changes only under an operation, so a read from before a
+request is still true of the VM when it is decided. No invariant needed more.
 
 `Shown` has no such row. A client that reads the stored phase, or that reads
 `waiting` over a failed row, gets a different answer, and no invariant reads the

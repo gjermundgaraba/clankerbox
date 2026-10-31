@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { setFlagsFromString } from "node:v8";
@@ -14,6 +15,7 @@ import { setup, transition, types } from "xstate";
 import type { SnapshotFrom } from "xstate";
 import { adjacencyMapToArray, getAdjacencyMap } from "xstate/graph";
 
+import { chartModule } from "../../../.agents/skills/verify-machine-answers/scripts/export-chart.ts";
 import { applied, leavesOf } from "../src/chart.ts";
 import type { Chart } from "../src/chart.ts";
 import {
@@ -1568,6 +1570,18 @@ describe("the chart", () => {
         undefined
       )
     ).toThrow(error);
+  });
+
+  it("the model's table is the chart's", () => {
+    expect(
+      readFileSync(
+        new URL(
+          "../../../.agents/skills/verify-machine-answers/model/Chart.tla",
+          import.meta.url
+        ),
+        "utf8"
+      )
+    ).toBe(chartModule());
   });
 
   it(
