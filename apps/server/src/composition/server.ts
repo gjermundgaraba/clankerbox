@@ -13,7 +13,6 @@ import type {
 import * as Checkpoints from "../checkpoints.ts";
 import * as Hosts from "../hosts.ts";
 import * as Machines from "../machines.ts";
-import * as Operations from "../operations.ts";
 import * as Sqlite from "../platform/sqlite.ts";
 import type { ServerSettings } from "../settings.ts";
 import type { CannotStart, Store } from "../store.ts";
@@ -54,7 +53,6 @@ export const serverLayer = (
     ),
     Layer.provideMerge(Checkpoints.layer(config)),
     Layer.provideMerge(Machines.layer(config)),
-    Layer.provide(Operations.layer),
     Layer.provideMerge(Hosts.layer(config.hosts)),
     Layer.provideMerge(Sqlite.layer(config))
   );

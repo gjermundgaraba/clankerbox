@@ -35,7 +35,7 @@ import type { Heard } from "./driver.ts";
 import { Hosts } from "./hosts.ts";
 import { stageOf } from "./machine-chart.ts";
 import { Machines } from "./machines.ts";
-import { cutShort, Operations } from "./operations.ts";
+import { collect, cutShort, poll } from "./operations.ts";
 import { placing } from "./placement.ts";
 import { builderName, nameOf } from "./prebuilds.ts";
 import { Store } from "./store.ts";
@@ -122,12 +122,11 @@ export const make = (settings: {
 }): Effect.Effect<
   Interface,
   Internal,
-  Store | Hosts | Operations | Machines | Scope.Scope
+  Store | Hosts | Machines | Scope.Scope
 > =>
   Effect.gen(function* () {
     const store = yield* Store;
     const hosts = yield* Hosts;
-    const operations = yield* Operations;
     const machines = yield* Machines;
     const scope = yield* Effect.scope;
 
@@ -190,7 +189,7 @@ export const make = (settings: {
             ? reportedBy(op, heard.report, yield* DateTime.now)
             : { type: "lost", error: yield* lostWhy(record, op) }
         );
-        yield* operations.collect(op);
+        yield* collect(hosts, op);
       });
 
     const drive = yield* driver(settings.recheck, {
@@ -203,7 +202,7 @@ export const make = (settings: {
           applying(record.name, { type: "read", boot, id: newId() })
         ),
       polling: (record, op) =>
-        operations.poll(op, { cut: false, step: stepOf(record, op) }),
+        poll(hosts, op, { cut: false, step: stepOf(record, op) }),
       following,
     });
 
@@ -413,5 +412,5 @@ export const make = (settings: {
 
 export const layer = (settings: {
   readonly recheck: Duration.Duration;
-}): Layer.Layer<Checkpoints, Internal, Store | Hosts | Operations | Machines> =>
+}): Layer.Layer<Checkpoints, Internal, Store | Hosts | Machines> =>
   Layer.effect(Checkpoints, make(settings));

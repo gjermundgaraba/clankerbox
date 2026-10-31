@@ -53,7 +53,7 @@ import {
   wants,
 } from "./machine-chart.ts";
 import type { MachineEvent, MachineRow, Move, Wish } from "./machine-chart.ts";
-import { cutShort, Operations } from "./operations.ts";
+import { collect, cutShort, poll } from "./operations.ts";
 import { placing, preferring } from "./placement.ts";
 import { nameOf } from "./prebuilds.ts";
 import { Store } from "./store.ts";
@@ -224,15 +224,10 @@ const unmade = (found: MachineRow): NotMade | NotFound =>
 
 export const make = (
   settings: Settings
-): Effect.Effect<
-  Interface,
-  Internal,
-  Store | Hosts | Operations | Scope.Scope
-> =>
+): Effect.Effect<Interface, Internal, Store | Hosts | Scope.Scope> =>
   Effect.gen(function* () {
     const store = yield* Store;
     const hosts = yield* Hosts;
-    const operations = yield* Operations;
     const scope = yield* Effect.scope;
 
     const creates = new Map<string, CreateHeldInMemory>();
@@ -582,7 +577,7 @@ export const make = (
               tailnets.set(name, firstCheck);
             }
 
-            return yield* operations.collect(op);
+            return yield* collect(hosts, op);
           }
 
           case "lost": {
@@ -605,7 +600,7 @@ export const make = (
               yield* sizesRead(found);
             }
 
-            return yield* operations.collect(op);
+            return yield* collect(hosts, op);
           }
         }
       });
@@ -680,7 +675,7 @@ export const make = (
       activityOf,
       looking,
       polling: (found, op) =>
-        operations.poll(op, {
+        poll(hosts, op, {
           cut: !wants(op.kind, desiredOf(found)),
           step: stepOf(found, op),
         }),
@@ -1099,5 +1094,5 @@ export const make = (
 
 export const layer = (
   settings: Settings
-): Layer.Layer<Machines, Internal, Store | Hosts | Operations> =>
+): Layer.Layer<Machines, Internal, Store | Hosts> =>
   Layer.effect(Machines, make(settings));
