@@ -1,11 +1,17 @@
 import { setup, transition, types } from "xstate";
 import type { InferEvents, SnapshotFrom } from "xstate";
 
-import { rowLeavesOf } from "./chart.ts";
-import type { Chart, LeafMeta, PathOf } from "./chart.ts";
+import { deletingRegion, rowLeavesOf, undoingRegion } from "./chart.ts";
+import type {
+  Chart,
+  LeafMeta,
+  LeafOf,
+  Read as Begins,
+  Stated,
+} from "./chart.ts";
 import type { Facts, Lease, MachinePhase, Operation } from "./store.ts";
 
-/** What a machine can be asked to be. A delete is the `deleting` region, with no edge out of it. */
+/** What a machine can be asked to be. */
 export type Wish = Facts["desired"];
 
 /** What a client reads as `desired`, and what `wants` decides by. */
@@ -25,16 +31,9 @@ export interface Outcome {
 /** Where a failed create goes next, past a host that hadn't the capacity. */
 export type Move = Pick<Facts, "host" | "kind" | "pin" | "source" | "prebuild">;
 
-export interface Read {
+export interface Read extends Begins {
   readonly seen: Operation["seen"];
-  /**
-   * From a fresh `hosts.read`, never `hosts.known`, whose boot may be from before a restart: a step
-   * sent under it is lost as soon as it is polled.
-   */
-  readonly boot: string;
   readonly pin: string | undefined;
-  /** The ID of the operation this read begins, if it begins one. */
-  readonly id: string;
   /** Whether a tailnet join is due, should the machine settle. */
   readonly joins: boolean;
 }
@@ -73,7 +72,7 @@ interface On<T extends MachineEvent["type"]> {
   readonly event: Extract<MachineEvent, { readonly type: T }>;
 }
 
-/** Whether a wish still wants a step of `kind`. Under `deleting`, the wire's `deleted` is the wish. */
+/** Whether what is asked still wants a step of `kind`. */
 export const wants = (kind: Operation["kind"], desired: Asked): boolean => {
   switch (kind) {
     case "make": {
@@ -344,129 +343,77 @@ export const machine = setup({
         },
       },
     },
-    undoing: {
-      initial: "due",
-      on: { delete: { target: "#machine.deleting.due" } },
-      states: {
-        due: {
-          meta: { phase: "observing", activity: "read" },
-          on: { read: { target: "sent" } },
-        },
-        sent: {
-          meta: { phase: "deleting", step: "remove", activity: "follow" },
-          on: {
-            reported: ({ event }) => {
-              if (event.status !== "done") {
-                return event.status === "failed"
-                  ? { target: "held" }
-                  : { target: "due" };
-              }
-
-              return event.move === undefined
-                ? {
-                    target: "#machine.undone",
-                    context: { undoneAt: event.at },
-                  }
-                : {
-                    target: "#machine.making.due",
-                    context: {
-                      ...event.move,
-                      error: undefined,
-                      port: undefined,
-                    },
-                  };
-            },
-            lost: { target: "due" },
-            delete: { target: "#machine.deleting.sent" },
-          },
-        },
-        held: {
-          meta: { phase: "failed", activity: "recheck" },
-          on: { read: { target: "sent" } },
-        },
-      },
-    },
+    undoing: undoingRegion(
+      "machine",
+      "remove",
+      { due: "observing", sent: "deleting", held: "failed" },
+      ({ move, at }: Done) =>
+        move === undefined
+          ? ({ target: "#machine.undone", context: { undoneAt: at } } as const)
+          : ({
+              target: "#machine.making.due",
+              context: { ...move, error: undefined, port: undefined },
+            } as const)
+    ),
     undone: {
       meta: { phase: "failed", activity: "none" },
       on: { delete: { target: "gone" } },
     },
-    deleting: {
-      initial: "due",
-      entry: () => ({ context: { error: undefined } }),
-      on: { delete: { context: { error: undefined } } },
-      states: {
-        draining: {
-          meta: { phase: "deleting", step: "any", activity: "follow" },
-          on: {
-            ran: ({ event }) => ({ context: { port: event.port } }),
-            reported: ({ context, event }) => ({
-              target: "due",
-              context: {
-                ...told(context, event),
-                ...(event.status === "failed" ? { error: event.error } : {}),
-              },
-            }),
-            lost: { target: "due" },
-          },
-        },
-        due: {
-          meta: { phase: "observing", activity: "read" },
-          on: { read: { target: "sent" } },
-        },
-        sent: {
-          meta: { phase: "deleting", step: "remove", activity: "follow" },
-          on: {
-            reported: ({ event }) => {
-              if (event.status === "done") {
-                return { target: "#machine.gone" };
-              }
-
-              return event.status === "failed"
-                ? { target: "held", context: { error: event.error } }
-                : { target: "due" };
+    deleting: deletingRegion(
+      "machine",
+      "remove",
+      { due: "observing", held: "failed" },
+      {
+        ran: ({ event }: On<"ran">) => ({ context: { port: event.port } }),
+        reported: ({ context, event }: On<"reported">) =>
+          ({
+            target: "due",
+            context: {
+              ...told(context, event),
+              ...(event.status === "failed" ? { error: event.error } : {}),
             },
-            lost: { target: "due" },
-          },
-        },
-        held: {
-          meta: { phase: "failed", activity: "recheck" },
-          on: {
-            read: { target: "sent" },
-            delete: { target: "due", context: { error: undefined } },
-          },
-        },
-      },
-    },
+          }) as const,
+      }
+    ),
     gone: { type: "final" },
   },
 });
 
-/** A leaf a row can hold. `gone` isn't one: the row goes in the write that reaches it. */
-export type Leaf = Exclude<
-  PathOf<SnapshotFrom<typeof machine>["value"]>,
-  "gone"
->;
+export type Leaf = LeafOf<typeof machine>;
 
-/** A machine's row: the facts, and the one leaf that holds how far it is and what it does. */
-export type MachineRow = Facts & { readonly state: Leaf };
+export type MachineRow = Stated<Facts, Leaf>;
 
 export const { leaves, metaOf, phaseOf, activityOf } = rowLeavesOf<
   Leaf,
   MachinePhase
 >(machine);
 
-const stages = ["making", "made", "undoing", "undone", "deleting"] as const;
+type TopOf<L> = L extends `${infer Top}.${string}` ? Top : L;
 
-/** A leaf's top region, which is how far a machine is. `gone` isn't one, as no row holds it. */
-export const stageOf = (state: Leaf): (typeof stages)[number] =>
-  stages.find((stage) => state.startsWith(stage)) ?? "undone";
+/** A leaf's top region, which is how far a machine is. */
+export type Stage = TopOf<Leaf>;
 
-/** The wire's `desired`, which a client reads and `wants` decides by. */
+const stages = Object.keys(machine.root.states).filter(
+  (top): top is Stage => top !== "gone"
+);
+
+export const stageOf = (state: Leaf): Stage => {
+  const stage = stages.find(
+    (top) => state === top || state.startsWith(`${top}.`)
+  );
+
+  if (stage === undefined) {
+    throw new Error(`leaf ${state} is in no region`);
+  }
+
+  return stage;
+};
+
 export const desiredOf = ({
   state,
   desired,
 }: Pick<MachineRow, "state" | "desired">): Asked =>
-  state.startsWith("deleting.") ? "deleted" : desired;
+  stageOf(state) === "deleting" ? "deleted" : desired;
 
 const leasesOf = (
   row: MachineRow,
@@ -491,25 +438,16 @@ export const machineChart: Chart<
   Leaf,
   MachineEvent
 > = {
+  resource: "machine",
   resolve: (value, context) => machine.resolveState({ value, context }),
   transition: (snapshot, event) => transition(machine, snapshot, event),
   leaves,
   metaOf,
-  begin: (row, kind, event) => {
-    if (event.type !== "read") {
-      throw new Error(`a ${event.type} began a ${kind} of ${row.name}`);
-    }
-
-    return {
-      id: event.id,
-      kind,
-      resource: "machine",
-      name: row.name,
-      host: row.host,
-      boot: event.boot,
-      seen: event.seen,
-      leases: leasesOf(row, kind),
-      to: kind === "resize" ? row.resize : undefined,
-    };
-  },
+  begins: (row, kind, { id, boot, seen }) => ({
+    id,
+    boot,
+    seen,
+    leases: leasesOf(row, kind),
+    to: kind === "resize" ? row.resize : undefined,
+  }),
 };

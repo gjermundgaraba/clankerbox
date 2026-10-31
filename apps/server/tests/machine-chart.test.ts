@@ -1382,11 +1382,11 @@ describe("the chart", () => {
   it("a transition that throws reaches the caller, so its write rolls back", () => {
     const thrown = setup({
       schemas: {
-        context: types<{ readonly name: string }>(),
+        context: types<{ readonly name: string; readonly host: string }>(),
         events: { boom: types<object>() },
       },
     }).createMachine({
-      context: { name: "dev" },
+      context: { name: "dev", host: "linux" },
       id: "thrown",
       initial: "here",
       states: {
@@ -1405,11 +1405,12 @@ describe("the chart", () => {
       "here",
       { readonly type: "boom" }
     > = {
+      resource: "machine",
       resolve: (value, context) => thrown.resolveState({ value, context }),
       transition: (snapshot, event) => transition(thrown, snapshot, event),
       leaves: ["here"],
       metaOf: () => ({ phase: "here", activity: "none" }),
-      begin: () => {
+      begins: () => {
         throw new Error("no step here");
       },
     };
@@ -1417,7 +1418,7 @@ describe("the chart", () => {
     expect(() =>
       applied(
         chart,
-        { name: "dev", state: "here" },
+        { name: "dev", host: "linux", state: "here" },
         { type: "boom" },
         undefined
       )
