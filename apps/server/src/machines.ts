@@ -20,7 +20,7 @@ import { Context, DateTime, Effect, Layer, Option } from "effect";
 import type { Duration, Scope } from "effect";
 
 import { applied } from "./chart.ts";
-import { copied, outgrownBySource } from "./copies.ts";
+import { copied, refusedBySource } from "./copies.ts";
 import type { Spec } from "./copies.ts";
 import { driver, untilRest } from "./driver.ts";
 import type { Heard } from "./driver.ts";
@@ -319,7 +319,7 @@ export const make = (
 
         const refused =
           found.state === "making.due"
-            ? yield* outgrownBySource(store, found)
+            ? yield* refusedBySource(store, found)
             : undefined;
 
         if (refused !== undefined) {

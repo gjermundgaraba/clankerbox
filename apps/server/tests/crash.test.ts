@@ -450,6 +450,57 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a restore whose checkpoint a delete took first fails as NotFound, naming the checkpoint",
+    () =>
+      Effect.gen(function* () {
+        const { client, first, fake, planned, restart } = yield* killedPlane();
+        const [host] = planned.hosts;
+
+        yield* client.create("dev", request("dev"));
+        yield* client.captureCheckpoint({ machine: "dev", name: "snap" });
+        fake.calls.length = 0;
+
+        const template = Option.getOrThrow(
+          yield* first.store.findMachine("dev")
+        );
+
+        yield* first.store.insertMachine({
+          ...template,
+          name: "copy",
+          instance: "unsent",
+          port: undefined,
+          state: "making.due",
+          prepared: false,
+          hostKey: undefined,
+          source: { kind: "checkpoint", name: "snap" },
+        });
+
+        for (const event of [
+          { type: "delete" },
+          { type: "read", boot: host!.operations.boot, id: "unsent-snap" },
+        ] as const) {
+          yield* first.store.advance("checkpoint", "snap", (row, op) =>
+            applied(checkpointChart, row, event, op)
+          );
+        }
+
+        const second = yield* restart;
+
+        const copy = yield* eventually(
+          second.client.getMachine({ id: "copy" }),
+          ({ phase }) => ["settled", "failed"].includes(phase)
+        );
+
+        expect([
+          copy.phase,
+          copy.error?._tag,
+          copy.error?.message,
+        ]).toStrictEqual(["failed", "NotFound", "no checkpoint snap"]);
+        expect(fake.calls).not.toContain("restore copy");
+      })
+  );
+
+  it.effect(
     "a make its host lost to a restart is undone, and its row says why",
     () =>
       Effect.gen(function* () {

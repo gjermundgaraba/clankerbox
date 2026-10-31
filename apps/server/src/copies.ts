@@ -4,10 +4,16 @@ import {
   formatMib,
   Unsizable,
 } from "@gjermundgaraba/clankerbox-sdk";
-import type { Internal, Kind, Sizing } from "@gjermundgaraba/clankerbox-sdk";
+import type {
+  Internal,
+  Kind,
+  NotFound,
+  Sizing,
+} from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Option } from "effect";
 
 import type { MachineRow } from "./machine-chart.ts";
+import { notFound } from "./store.ts";
 import type { Interface as Store } from "./store.ts";
 
 export interface Spec {
@@ -54,11 +60,14 @@ export const copied = (
     return spec;
   });
 
-/** Why a copy can't be made at the sizes it was asked, as its source may have grown since. */
-export const outgrownBySource = (
+/**
+ * Why a copy can't be made: its source went before it began, or it can't be at the sizes it was
+ * asked, as its source may have grown since.
+ */
+export const refusedBySource = (
   store: Store,
   found: MachineRow
-): Effect.Effect<Unsizable | undefined, Internal> =>
+): Effect.Effect<NotFound | Unsizable | undefined, Internal> =>
   Effect.gen(function* () {
     const { source } = found;
 
@@ -72,7 +81,7 @@ export const outgrownBySource = (
         : yield* store.findCheckpoint(source.name);
 
     return Option.isNone(from)
-      ? undefined
+      ? notFound(source.kind, source.name)
       : yield* copied(found.name, from.value, found, found.kind).pipe(
           Effect.match({
             onFailure: (refusal) => refusal,
