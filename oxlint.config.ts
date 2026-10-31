@@ -56,7 +56,12 @@ export default config({
       },
     },
     {
-      excludeFiles: ["apps/server/src/hosts.ts", "apps/server/src/main.ts"],
+      excludeFiles: [
+        "apps/server/src/chart.ts",
+        "apps/server/src/*-chart.ts",
+        "apps/server/src/hosts.ts",
+        "apps/server/src/main.ts",
+      ],
       files: ["apps/server/src/*.ts"],
       rules: {
         "fence/allowed-imports": [
@@ -73,6 +78,21 @@ export default config({
               "a server domain file imports only other domain files, effect, the SDK and the host contract; a host is reached through hosts.ts, and platform/ and Node are for composition/",
           },
         ],
+      },
+    },
+    {
+      files: ["apps/server/src/chart.ts", "apps/server/src/*-chart.ts"],
+      rules: {
+        "fence/allowed-imports": [
+          "error",
+          {
+            allow: ["^xstate$", "^\\./chart\\.ts$", "^\\./[a-z-]+-chart\\.ts$"],
+            allowTypes: ["^\\./store\\.ts$"],
+            because:
+              "a chart is a pure function run inside the SQLite write: it imports xstate, other charts and the store's types, and what else it needs rides on the event",
+          },
+        ],
+        "fence/no-impure": "error",
       },
     },
     {

@@ -34,7 +34,8 @@
     "@effect/platform-node": "catalog:",
     "@effect/platform-node-shared": "catalog:",
     "@gjermundgaraba/effect-actions": "catalog:",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "xstate": "catalog:"
   },
   "devDependencies": {
     "@clankerbox/host-contract": "workspace:*",

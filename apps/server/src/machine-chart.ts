@@ -1,0 +1,528 @@
+import { setup, transition, types } from "xstate";
+import type { InferEvents, SnapshotFrom } from "xstate";
+
+import { leavesOf } from "./chart.ts";
+import type { Activity, Chart, LeafMeta, PathOf } from "./chart.ts";
+import type { Lease, MachinePhase, MachineRow, Operation } from "./store.ts";
+
+/** What a machine can be asked to be. A delete is the `deleting` region, with no edge out of it. */
+export type Wish = Exclude<MachineRow["desired"], "deleted">;
+
+/** A machine's row but for its leaf: the facts no leaf can tell, and the chart's context. */
+export type Facts = Omit<
+  MachineRow,
+  "stage" | "phase" | "generation" | "desired"
+> & { readonly desired: Wish };
+
+type HostError = NonNullable<MachineRow["error"]>;
+
+type Sizing = NonNullable<MachineRow["resize"]>;
+
+/** What a step leaves that only its host can tell. */
+export interface Outcome {
+  readonly port?: number;
+  readonly hostKey?: string;
+  readonly sizes?: Pick<MachineRow, "cpu" | "ramMib" | "diskGib">;
+}
+
+/** Where a failed create goes next, past a host that hadn't the capacity. */
+export type Move = Pick<
+  MachineRow,
+  "host" | "kind" | "pin" | "source" | "prebuild"
+>;
+
+export interface Read {
+  readonly seen: Operation["seen"];
+  /**
+   * From a fresh `hosts.read`, never `hosts.known`, whose boot may be from before a restart: a step
+   * sent under it is lost as soon as it is polled.
+   */
+  readonly boot: string;
+  readonly pin: string | undefined;
+  /** The ID of the operation this read begins, if it begins one. */
+  readonly id: string;
+  /** Whether a tailnet join is due, should the machine settle. */
+  readonly joins: boolean;
+}
+
+export interface Done {
+  readonly status: "done";
+  readonly outcome: Outcome;
+  /** When a failed create's VM went, should this end its undoing. */
+  readonly at: NonNullable<MachineRow["undoneAt"]>;
+  readonly move?: Move;
+}
+
+/** `error` also says what cut a cancelled make short, which its host doesn't. */
+export interface NotDone {
+  readonly status: "failed" | "cancelled";
+  readonly outcome: Outcome;
+  readonly error: HostError;
+}
+
+const events = {
+  ask: types<{ readonly desired: Wish }>(),
+  resize: types<{ readonly sizing: Sizing }>(),
+  delete: types<object>(),
+  read: types<Read>(),
+  refused: types<{ readonly error: HostError }>(),
+  ran: types<{ readonly port: number }>(),
+  reported: types<Done | NotDone>(),
+  lost: types<{ readonly error: HostError }>(),
+  sized: types<{ readonly sizing: Sizing }>(),
+};
+
+export type MachineEvent = InferEvents<typeof events>;
+
+interface On<T extends MachineEvent["type"]> {
+  readonly context: Facts;
+  readonly event: Extract<MachineEvent, { readonly type: T }>;
+}
+
+/** Whether a wish still wants a step of `kind`. Under `deleting`, the wire's `deleted` is the wish. */
+export const wants = (
+  kind: Operation["kind"],
+  desired: MachineRow["desired"]
+): boolean => {
+  switch (kind) {
+    case "make": {
+      return desired !== "deleted";
+    }
+
+    case "start":
+    case "join": {
+      return desired === "running";
+    }
+
+    case "stop": {
+      return desired === "stopped";
+    }
+
+    case "pause": {
+      return desired === "paused";
+    }
+
+    case "remove":
+    case "resize":
+    case "capture":
+    case "deleteCheckpoint": {
+      return true;
+    }
+  }
+};
+
+const asked = ({ context, event }: On<"ask">) => ({
+  desired: event.desired,
+  error: undefined,
+  prepared: event.desired === "running" ? false : context.prepared,
+});
+
+const owed = ({ event }: On<"resize">) => ({
+  resize: event.sizing,
+  error: undefined,
+});
+
+const told = (context: Facts, { outcome }: On<"reported">["event"]) => ({
+  port: outcome.port ?? context.port,
+  hostKey: outcome.hostKey ?? context.hostKey,
+  ...outcome.sizes,
+});
+
+const ended =
+  (kind: Operation["kind"], done: Pick<Facts, "prepared">) =>
+  ({ context, event }: On<"reported">) => {
+    if (
+      event.status === "failed" &&
+      wants(kind, context.desired) &&
+      context.resize === undefined
+    ) {
+      return {
+        target: "#machine.made.failed",
+        context: { ...told(context, event), error: event.error },
+      } as const;
+    }
+
+    return {
+      target: "#machine.made.observing",
+      context: {
+        ...told(context, event),
+        ...(event.status === "done" ? done : {}),
+      },
+    } as const;
+  };
+
+const decided = ({ context, event }: On<"read">) => {
+  const { desired, prepared, resize } = context;
+  const { seen, joins, pin } = event;
+
+  if (seen === "unknown") {
+    return;
+  }
+
+  if (seen === "missing") {
+    return { target: "#machine.made.lost" } as const;
+  }
+
+  if (resize !== undefined) {
+    return { target: "#machine.made.stepping.resizing" } as const;
+  }
+
+  if (desired === "paused") {
+    return seen === "running"
+      ? ({ target: "#machine.made.stepping.pausing" } as const)
+      : ({ target: "#machine.made.settled" } as const);
+  }
+
+  if (desired === "stopped") {
+    return seen === "stopped"
+      ? ({ target: "#machine.made.settled" } as const)
+      : ({ target: "#machine.made.stepping.stopping" } as const);
+  }
+
+  if (seen !== "running" || !prepared) {
+    return seen === "stopped"
+      ? ({
+          target: "#machine.made.stepping.starting",
+          context: { pin },
+        } as const)
+      : ({ target: "#machine.made.stepping.starting" } as const);
+  }
+
+  return joins
+    ? ({ target: "#machine.made.stepping.joining" } as const)
+    : ({ target: "#machine.made.settled" } as const);
+};
+
+export const machine = setup({
+  schemas: {
+    context: types<Facts>(),
+    input: types<Facts>(),
+    meta: types<LeafMeta<MachinePhase>>(),
+    events,
+  },
+}).createMachine({
+  id: "machine",
+  context: ({ input }) => input,
+  initial: "making",
+  on: {
+    sized: ({ context, event }) => ({
+      context: {
+        cpu: event.sizing.cpu ?? context.cpu,
+        ramMib: event.sizing.ramMib ?? context.ramMib,
+        diskGib: event.sizing.diskGib ?? context.diskGib,
+      },
+    }),
+  },
+  states: {
+    making: {
+      initial: "due",
+      on: {
+        ask: (args) => ({ context: asked(args) }),
+        delete: { target: "#machine.deleting.due" },
+      },
+      states: {
+        due: {
+          meta: { phase: "observing", activity: "read" },
+          on: {
+            read: { target: "sent" },
+            refused: ({ event }) => ({
+              target: "#machine.undoing.due",
+              context: { error: event.error },
+            }),
+          },
+        },
+        sent: {
+          meta: { phase: "creating", step: "make", activity: "follow" },
+          on: {
+            ran: ({ event }) => ({ context: { port: event.port } }),
+            reported: ({ context, event }) =>
+              event.status === "done"
+                ? {
+                    target: "#machine.made.observing",
+                    context: { ...told(context, event), prepared: false },
+                  }
+                : {
+                    target: "#machine.undoing.due",
+                    context: { ...told(context, event), error: event.error },
+                  },
+            lost: ({ event }) => ({
+              target: "#machine.undoing.due",
+              context: { error: event.error },
+            }),
+            delete: { target: "#machine.deleting.draining" },
+          },
+        },
+      },
+    },
+    made: {
+      initial: "observing",
+      on: {
+        ask: (args) => ({
+          target: "#machine.made.observing",
+          context: asked(args),
+        }),
+        resize: (args) => ({
+          target: "#machine.made.observing",
+          context: owed(args),
+        }),
+        delete: { target: "#machine.deleting.due" },
+      },
+      states: {
+        observing: {
+          meta: { phase: "observing", activity: "read" },
+          on: { read: decided },
+        },
+        settled: {
+          meta: { phase: "settled", activity: "recheck" },
+          on: { read: decided },
+        },
+        lost: {
+          meta: { phase: "lost", activity: "recheck" },
+          on: { read: decided },
+        },
+        failed: { meta: { phase: "failed", activity: "none" } },
+        stepping: {
+          initial: "starting",
+          on: {
+            ask: (args) => ({ context: asked(args) }),
+            resize: (args) => ({ context: owed(args) }),
+            delete: { target: "#machine.deleting.draining" },
+            lost: { target: "#machine.made.observing" },
+          },
+          states: {
+            starting: {
+              meta: { phase: "starting", step: "start", activity: "follow" },
+              on: { reported: ended("start", { prepared: true }) },
+            },
+            stopping: {
+              meta: { phase: "stopping", step: "stop", activity: "follow" },
+              on: { reported: ended("stop", { prepared: false }) },
+            },
+            pausing: {
+              meta: { phase: "pausing", step: "pause", activity: "follow" },
+              on: { reported: ended("pause", { prepared: false }) },
+            },
+            resizing: {
+              meta: { phase: "resizing", step: "resize", activity: "follow" },
+              entry: () => ({ context: { resize: undefined } }),
+              on: {
+                reported: ({ context, event }) =>
+                  event.status === "failed"
+                    ? {
+                        target: "#machine.made.failed",
+                        context: {
+                          ...told(context, event),
+                          error: event.error,
+                        },
+                      }
+                    : {
+                        target: "#machine.made.observing",
+                        context: told(context, event),
+                      },
+              },
+            },
+            joining: {
+              initial: "sent",
+              states: {
+                sent: {
+                  meta: { phase: "settled", step: "join", activity: "follow" },
+                  on: {
+                    ask: (args) => ({
+                      target: "asked",
+                      context: asked(args),
+                    }),
+                    resize: (args) => ({
+                      target: "asked",
+                      context: owed(args),
+                    }),
+                    reported: { target: "#machine.made.settled" },
+                    lost: { target: "#machine.made.settled" },
+                  },
+                },
+                asked: {
+                  meta: {
+                    phase: "observing",
+                    step: "join",
+                    activity: "follow",
+                  },
+                  on: { reported: { target: "#machine.made.observing" } },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    undoing: {
+      initial: "due",
+      on: { delete: { target: "#machine.deleting.due" } },
+      states: {
+        due: {
+          meta: { phase: "observing", activity: "read" },
+          on: { read: { target: "sent" } },
+        },
+        sent: {
+          meta: { phase: "deleting", step: "remove", activity: "follow" },
+          on: {
+            reported: ({ event }) => {
+              if (event.status !== "done") {
+                return event.status === "failed"
+                  ? { target: "held" }
+                  : { target: "due" };
+              }
+
+              return event.move === undefined
+                ? {
+                    target: "#machine.undone",
+                    context: { undoneAt: event.at },
+                  }
+                : {
+                    target: "#machine.making.due",
+                    context: {
+                      ...event.move,
+                      error: undefined,
+                      port: undefined,
+                    },
+                  };
+            },
+            lost: { target: "due" },
+            delete: { target: "#machine.deleting.sent" },
+          },
+        },
+        held: {
+          meta: { phase: "failed", activity: "recheck" },
+          on: { read: { target: "sent" } },
+        },
+      },
+    },
+    undone: {
+      meta: { phase: "failed", activity: "none" },
+      on: { delete: { target: "gone" } },
+    },
+    deleting: {
+      initial: "due",
+      entry: () => ({ context: { error: undefined } }),
+      on: { delete: { context: { error: undefined } } },
+      states: {
+        draining: {
+          meta: { phase: "deleting", step: "any", activity: "follow" },
+          on: {
+            ran: ({ event }) => ({ context: { port: event.port } }),
+            reported: ({ context, event }) => ({
+              target: "due",
+              context: {
+                ...told(context, event),
+                ...(event.status === "failed" ? { error: event.error } : {}),
+              },
+            }),
+            lost: { target: "due" },
+          },
+        },
+        due: {
+          meta: { phase: "observing", activity: "read" },
+          on: { read: { target: "sent" } },
+        },
+        sent: {
+          meta: { phase: "deleting", step: "remove", activity: "follow" },
+          on: {
+            reported: ({ event }) => {
+              if (event.status === "done") {
+                return { target: "#machine.gone" };
+              }
+
+              return event.status === "failed"
+                ? { target: "held", context: { error: event.error } }
+                : { target: "due" };
+            },
+            lost: { target: "due" },
+          },
+        },
+        held: {
+          meta: { phase: "failed", activity: "recheck" },
+          on: {
+            read: { target: "sent" },
+            delete: { target: "due", context: { error: undefined } },
+          },
+        },
+      },
+    },
+    gone: { type: "final" },
+  },
+});
+
+/** A leaf a row can hold. `gone` isn't one: the row goes in the write that reaches it. */
+export type Leaf = Exclude<
+  PathOf<SnapshotFrom<typeof machine>["value"]>,
+  "gone"
+>;
+
+/** A machine's row: the facts, and the one leaf that holds its stage and phase. */
+export type Row = Facts & { readonly state: Leaf };
+
+const isLeaf = (path: string): path is Leaf => path !== "gone";
+
+export const leaves: readonly Leaf[] = leavesOf(machine).filter(isLeaf);
+
+export const metaOf = (state: Leaf): LeafMeta<MachinePhase> => {
+  const { meta } = machine.getStateNodeById(`machine.${state}`);
+
+  if (meta === undefined) {
+    throw new Error(`leaf ${state} has no meta`);
+  }
+
+  return meta;
+};
+
+export const phaseOf = (state: Leaf): MachinePhase => metaOf(state).phase;
+
+export const activityOf = (state: Leaf): Activity => metaOf(state).activity;
+
+/** The wire's `desired`, which a client reads and `wants` decides by. */
+export const desiredOf = ({
+  state,
+  desired,
+}: Pick<Row, "state" | "desired">): MachineRow["desired"] =>
+  state.startsWith("deleting.") ? "deleted" : desired;
+
+const leasesOf = (row: Row, kind: Operation["kind"]): readonly Lease[] => {
+  const self: Lease = {
+    resource: "machine",
+    name: row.name,
+    mode: kind === "join" ? "share" : "own",
+  };
+
+  return kind === "make" && row.source.kind !== "base"
+    ? [
+        self,
+        { resource: row.source.kind, name: row.source.name, mode: "share" },
+      ]
+    : [self];
+};
+
+export const machineChart: Chart<
+  SnapshotFrom<typeof machine>,
+  Leaf,
+  MachineEvent
+> = {
+  resolve: (value, context) => machine.resolveState({ value, context }),
+  transition: (snapshot, event) => transition(machine, snapshot, event),
+  leaves,
+  metaOf,
+  begin: (row, kind, event) => {
+    if (event.type !== "read") {
+      throw new Error(`a ${event.type} began a ${kind} of ${row.name}`);
+    }
+
+    return {
+      id: event.id,
+      kind,
+      resource: "machine",
+      name: row.name,
+      host: row.host,
+      boot: event.boot,
+      seen: event.seen,
+      leases: leasesOf(row, kind),
+      to: kind === "resize" ? row.resize : undefined,
+    };
+  },
+};
