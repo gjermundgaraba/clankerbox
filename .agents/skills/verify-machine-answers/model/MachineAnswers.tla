@@ -73,13 +73,13 @@ KindOf(s) ==
     [] s = "pausing" -> "pause"
     [] s = "deleting" -> "remove"
 
-(* reconcile.ts cuts: which request stops which step short *)
-Cuts(r) ==
-  CASE r.op.kind = "make" -> r.desired = "deleted"
-    [] r.op.kind = "start" -> r.desired # "running"
-    [] r.op.kind = "stop" -> r.desired # "stopped"
-    [] r.op.kind = "pause" -> r.desired # "paused"
-    [] OTHER -> FALSE
+(* reconcile.ts wants: which steps what is asked now still wants *)
+Wants(r) ==
+  CASE r.op.kind = "make" -> r.desired # "deleted"
+    [] r.op.kind = "start" -> r.desired = "running"
+    [] r.op.kind = "stop" -> r.desired = "stopped"
+    [] r.op.kind = "pause" -> r.desired = "paused"
+    [] OTHER -> TRUE
 
 (* the client's wait, in client.ts *)
 Matches(d, v) ==
@@ -216,7 +216,7 @@ Send ==
 
 (* machines.ts cancel, when a later request cuts the step short *)
 Cut ==
-  /\ up /\ linked /\ row.stage # "absent" /\ row.op.id # 0 /\ Cuts(row)
+  /\ up /\ linked /\ row.stage # "absent" /\ row.op.id # 0 /\ ~Wants(row)
   /\ row.op.id \notin cut
   /\ cut' = cut \cup {row.op.id}
   /\ UNCHANGED <<row, up, script, read, known, linked, net, cl, nextOp>>
@@ -227,7 +227,7 @@ Failing(r) ==
   IF r.op.kind = "make"
   THEN [r EXCEPT !.stage = "undoing", !.err = TRUE, !.op = NoOp,
                  !.phase = "observing"]
-  ELSE IF r.op.gen < r.gen
+  ELSE IF ~Wants(r)
   THEN [r EXCEPT !.op = NoOp, !.phase = "observing"]
   ELSE [r EXCEPT !.err = TRUE, !.op = NoOp, !.phase = "failed"]
 

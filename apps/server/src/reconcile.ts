@@ -64,34 +64,31 @@ export const next = (decided: Decided, seen: MachineState): Next => {
 export const holds = ({ phase, stage, desired }: MachineRow): boolean =>
   phase === "failed" && stage === "made" && desired !== "deleted";
 
-/** Whether what was asked since a step began cuts it short. */
-export const cuts = (
-  { desired }: Pick<MachineRow, "desired">,
-  op: Operation
-) => {
-  switch (op.kind) {
+/** Whether `desired` still wants a step of `kind`: one it doesn't is cut short. */
+export const wants = (kind: Operation["kind"], desired: Desired): boolean => {
+  switch (kind) {
     case "make": {
-      return desired === "deleted";
+      return desired !== "deleted";
     }
 
     case "start":
     case "join": {
-      return desired !== "running";
+      return desired === "running";
     }
 
     case "stop": {
-      return desired !== "stopped";
+      return desired === "stopped";
     }
 
     case "pause": {
-      return desired !== "paused";
+      return desired === "paused";
     }
 
     case "remove":
     case "resize":
     case "capture":
     case "deleteCheckpoint": {
-      return false;
+      return true;
     }
   }
 };
@@ -108,15 +105,11 @@ export type Patch = Partial<
     | "ramMib"
     | "diskGib"
     | "port"
-    | "resize"
   >
 >;
 
-const askedSince = (row: MachineRow, op: Operation) =>
-  op.generation < row.generation;
-
-const resizeLeft = (row: MachineRow, op: Operation) =>
-  op.kind === "resize" && !askedSince(row, op) ? undefined : row.resize;
+const failureAnswers = (row: MachineRow, op: Operation) =>
+  wants(op.kind, row.desired) && row.resize === undefined;
 
 const failing = (
   row: MachineRow,
@@ -129,16 +122,18 @@ const failing = (
   }
 
   if (op.kind === "resize") {
-    return { resize: resizeLeft(row, op), error, phase: "failed", ...sized };
+    return { error, phase: "failed", ...sized };
   }
 
-  if (op.kind === "remove" && row.stage === "undoing") {
-    return { phase: "failed" };
+  if (op.kind === "remove") {
+    return row.stage === "undoing"
+      ? { phase: "failed" }
+      : { error, phase: "failed" };
   }
 
-  return askedSince(row, op)
-    ? { phase: "observing" }
-    : { error, phase: "failed" };
+  return failureAnswers(row, op)
+    ? { error, phase: "failed" }
+    : { phase: "observing" };
 };
 
 const cutShort = ({ name }: Operation) =>
@@ -154,7 +149,7 @@ export const settled = (
   const sized = outcome.sizes ?? {};
 
   if (report.status === "cancelled") {
-    return op.kind === "make" && row.desired !== "deleted"
+    return op.kind === "make" && wants(op.kind, row.desired)
       ? failing(row, op, cutShort(op), sized)
       : { phase: "observing" };
   }
@@ -187,7 +182,7 @@ export const settled = (
     }
 
     case "resize": {
-      return { resize: resizeLeft(row, op), phase: "observing", ...sized };
+      return { phase: "observing", ...sized };
     }
 
     case "remove": {
@@ -208,11 +203,7 @@ export const settled = (
  * What an operation its host no longer holds does to the row: a make is undone, as nothing can say
  * how far it got, and any other step is decided afresh from a new read.
  */
-export const lost = (
-  row: MachineRow,
-  op: Operation,
-  error: HostError
-): Patch =>
+export const lost = (op: Operation, error: HostError): Patch =>
   op.kind === "make"
     ? { stage: "undoing", error, phase: "observing" }
-    : { phase: "observing", resize: resizeLeft(row, op) };
+    : { phase: "observing" };

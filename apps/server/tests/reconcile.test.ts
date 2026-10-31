@@ -1,10 +1,10 @@
 import { MachineState } from "@clankerbox/host-contract";
 import type { Report } from "@clankerbox/host-contract";
 import { describe, expect, it } from "@effect/vitest";
-import { Desired } from "@gjermundgaraba/clankerbox-sdk";
+import { Desired, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime } from "effect";
 
-import { next, settled } from "../src/reconcile.ts";
+import { lost, next, settled, wants } from "../src/reconcile.ts";
 import type { Decided, Next } from "../src/reconcile.ts";
 import type { MachineRow, Operation, Stage } from "../src/store.ts";
 
@@ -281,6 +281,7 @@ const make: Operation = {
   generation: 1,
   seen: "missing",
   leases: [],
+  to: undefined,
 };
 
 const cancelled: Report = {
@@ -289,6 +290,46 @@ const cancelled: Report = {
   status: "cancelled",
   outcome: {},
 };
+
+const error = new Internal({ message: "krun busy" });
+
+const failed: Report = { ...cancelled, status: "failed", error };
+
+const done: Report = { ...cancelled, status: "done" };
+
+const madeRow = (desired: Desired, fields?: Partial<MachineRow>) => ({
+  ...row(desired),
+  stage: "made" as const,
+  generation: 3,
+  ...fields,
+});
+
+const step = (kind: Operation["kind"], fields?: Partial<Operation>) => ({
+  ...make,
+  kind,
+  ...fields,
+});
+
+const wishes: ReadonlyArray<readonly [Operation["kind"], readonly Desired[]]> =
+  [
+    ["make", ["running", "stopped", "paused"]],
+    ["start", ["running"]],
+    ["join", ["running"]],
+    ["stop", ["stopped"]],
+    ["pause", ["paused"]],
+    ["remove", desires],
+    ["resize", desires],
+    ["capture", desires],
+    ["deleteCheckpoint", desires],
+  ];
+
+describe("wants", () => {
+  it.each(wishes)("a %s is wanted by just these wishes", (kind, wanted) => {
+    expect(desires.filter((desired) => wants(kind, desired))).toStrictEqual([
+      ...wanted,
+    ]);
+  });
+});
 
 describe("settled", () => {
   it("a make cut short though no delete asked is undone, saying why, not run again", () => {
@@ -303,5 +344,49 @@ describe("settled", () => {
     expect(settled(row("deleted"), make, cancelled)).toStrictEqual({
       phase: "observing",
     });
+  });
+
+  it("a step that fails still wanted rests failed, however often it was asked since it began", () => {
+    expect(
+      settled(madeRow("stopped"), step("stop", { generation: 1 }), failed)
+    ).toStrictEqual({ error, phase: "failed" });
+  });
+
+  it("a step that fails no longer wanted is decided afresh, and its failure answers nobody", () => {
+    expect(settled(madeRow("running"), step("stop"), failed)).toStrictEqual({
+      phase: "observing",
+    });
+  });
+
+  it("a step that fails with a resize owed is decided afresh, so the resize runs", () => {
+    expect(
+      settled(madeRow("stopped", { resize: { cpu: 2 } }), step("stop"), failed)
+    ).toStrictEqual({ phase: "observing" });
+  });
+
+  it("a delete that fails rests failed though a resize is owed, as a delete comes first", () => {
+    expect(
+      settled(
+        madeRow("deleted", { resize: { cpu: 2 } }),
+        step("remove"),
+        failed
+      )
+    ).toStrictEqual({ error, phase: "failed" });
+  });
+
+  it("no resize's report writes the resize owed, which a later request may have set", () => {
+    const sizes = { cpu: 2, ramMib: 2048, diskGib: 20 };
+    const owed = madeRow("running", { resize: { cpu: 3 } });
+    const sized = { ...done, outcome: { sizes } };
+
+    expect([
+      settled(owed, step("resize"), sized),
+      settled(owed, step("resize"), { ...sized, status: "failed", error }),
+      lost(step("resize"), error),
+    ]).toStrictEqual([
+      { phase: "observing", ...sizes },
+      { error, phase: "failed", ...sizes },
+      { phase: "observing" },
+    ]);
   });
 });

@@ -1096,7 +1096,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a request sent while a step runs that then fails is acted on, not the failure",
+    "a request repeated while a step runs that then fails answers the failure, with no more tries",
     () =>
       Effect.gen(function* () {
         const { client, fake, generation } = yield* served();
@@ -1117,29 +1117,91 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* booting.entered;
 
         const second = yield* Effect.forkChild(
-          client.startMachine({ id: "dev" })
+          Effect.flip(client.startMachine({ id: "dev" }))
         );
 
         yield* eventually(generation("dev"), (now) => now === asked + 2);
         yield* booting.release;
 
-        const rest = yield* Fiber.join(second);
+        const failure = yield* Fiber.join(second);
 
         yield* Fiber.await(first);
 
-        expect([...at(rest), rest.error]).toStrictEqual([
-          "running",
-          "running",
-          "settled",
-          undefined,
-        ]);
-        expect(fake.calls).toStrictEqual([
-          "admit dev",
-          "start dev",
-          "admit dev",
-          "start dev",
-          "exec dev",
-        ]);
+        expect(failure.message).toBe("crun create failed");
+        expect(fake.calls).toStrictEqual(["admit dev", "start dev"]);
+      })
+  );
+
+  it.effect(
+    "a wish that goes stopped, running, stopped during a stop that fails reads as asked, and answers the failure",
+    () =>
+      Effect.gen(function* () {
+        const { client, fake, generation, machine, machines, store } =
+          yield* served();
+
+        yield* client.create("dev", request("dev"));
+        yield* client.pauseMachine({ id: "dev" });
+        fake.calls.length = 0;
+
+        const asked = yield* generation("dev");
+        const resuming = fake.holdNext("admit");
+
+        fake.failNext("stop", new Internal({ message: "guest didn't flush" }));
+
+        const stop = yield* Effect.forkChild(
+          Effect.flip(client.stopMachine({ id: "dev" }))
+        );
+
+        yield* resuming.entered;
+        yield* store.desire("dev", "running");
+        yield* store.desire("dev", "stopped");
+        yield* machines.wake("dev");
+        yield* pause;
+        yield* resuming.release;
+
+        const failure = yield* Fiber.join(stop);
+        const rest = yield* machine("dev");
+
+        expect(yield* generation("dev")).toBe(asked + 3);
+        expect(failure.message).toBe("guest didn't flush");
+        expect(at(rest)).toStrictEqual(["paused", "stopped", "failed"]);
+        expect(rest.error?.message).toBe("guest didn't flush");
+        expect(fake.calls.filter((call) => call === "stop dev")).toHaveLength(
+          1
+        );
+      })
+  );
+
+  it.effect(
+    "a client that goes stopped, running, stopped during a stop is told the truth at each end",
+    () =>
+      Effect.gen(function* () {
+        const { asking, client, fake, machine } = yield* served();
+
+        yield* client.create("dev", request("dev"));
+
+        const stopping = fake.holdNext("stop", { runsOn: true });
+
+        const stop = yield* Effect.forkChild(client.stopMachine({ id: "dev" }));
+
+        yield* stopping.entered;
+
+        const start = yield* Effect.forkChild(
+          Effect.flip(client.startMachine({ id: "dev" }))
+        );
+
+        yield* eventually(
+          machine("dev"),
+          ({ desired }) => desired === "running"
+        );
+        yield* asking.stopMachine({ id: "dev" });
+        yield* stopping.release;
+
+        const rest = yield* Fiber.join(stop);
+
+        expect((yield* Fiber.join(start))._tag).toBe("Superseded");
+        expect(at(rest)).toStrictEqual(["stopped", "stopped", "settled"]);
+        expect(fake.machines.get("dev")?.state).toBe("stopped");
       })
   );
 
@@ -2815,6 +2877,41 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           2
         );
       })
+  );
+
+  it.effect("a resize asked during a failing stop still runs", () =>
+    Effect.gen(function* () {
+      const { asking, client, fake, machine, row } = yield* served();
+
+      yield* client.create("dev", request("dev"));
+      yield* client.pauseMachine({ id: "dev" });
+
+      const resuming = fake.holdNext("admit");
+
+      fake.failNext("stop", new Internal({ message: "guest didn't flush" }));
+
+      yield* asking.stopMachine({ id: "dev" });
+      yield* resuming.entered;
+      fake.machines.set("dev", {
+        state: "running",
+        root: fake.root("dev") ?? "",
+      });
+
+      const resize = yield* Effect.forkChild(
+        client.resizeMachine({ id: "dev", cpu: 2 })
+      );
+
+      yield* eventually(row("dev"), ({ resize: owed }) => owed !== undefined);
+      yield* pause;
+      yield* resuming.release;
+
+      const resized = yield* Fiber.join(resize);
+      const rest = yield* machine("dev");
+
+      expect(sizesOf(resized)).toStrictEqual([2, 1024, 10]);
+      expect(at(rest)).toStrictEqual(["stopped", "stopped", "settled"]);
+      expect(rest.error).toBeUndefined();
+    })
   );
 
   it.effect(

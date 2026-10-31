@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
+import type { Sizing } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Option } from "effect";
 import { expect } from "vite-plus/test";
 
@@ -45,13 +46,20 @@ const killedPlane = (options?: Parameters<typeof plane>[0]) =>
     return { planned, first, client, asking, fake, restart };
   });
 
+const phases = {
+  make: "creating",
+  stop: "stopping",
+  resize: "resizing",
+} as const;
+
 const unsent = (
   store: Started["store"],
   host: string,
   boot: string,
   name: string,
-  kind: "make" | "stop",
-  generation: number
+  kind: "make" | "stop" | "resize",
+  generation: number,
+  to?: Sizing
 ) =>
   store.begin(
     {
@@ -62,10 +70,11 @@ const unsent = (
       host,
       boot,
       generation,
-      seen: kind === "stop" ? "running" : "unknown",
+      seen: kind === "make" ? "unknown" : "running",
       leases: [{ resource: "machine", name, mode: "own" }],
+      to,
     },
-    kind === "stop" ? "stopping" : "creating",
+    phases[kind],
     {}
   );
 
@@ -270,6 +279,71 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(fake.calls).toStrictEqual(["stop dev"]);
         expect(fake.machines.get("dev")?.state).toBe("stopped");
+      })
+  );
+
+  it.effect(
+    "a resize recorded but never sent when the control plane died is sent from its operation, and one owed follows",
+    () =>
+      Effect.gen(function* () {
+        const { client, first, fake, planned, restart } = yield* killedPlane();
+        const [host] = planned.hosts;
+
+        yield* client.create("dev", request("dev"));
+        yield* client.stopMachine({ id: "dev" });
+        fake.calls.length = 0;
+
+        const asked = Option.getOrThrow(yield* first.store.findMachine("dev"));
+
+        yield* unsent(
+          first.store,
+          host!.id,
+          host!.operations.boot,
+          "dev",
+          "resize",
+          asked.generation,
+          { cpu: 2, diskGib: 20 }
+        );
+        yield* first.store.resize("dev", { cpu: 3 });
+
+        const second = yield* restart;
+        const rest = Option.getOrThrow(yield* second.rests("dev"));
+
+        expect([rest.cpu, rest.diskGib, rest.resize]).toStrictEqual([
+          3,
+          20,
+          undefined,
+        ]);
+        expect(fake.calls.filter((call) => call === "resize dev")).toHaveLength(
+          2
+        );
+      })
+  );
+
+  it.effect(
+    "a resize its host lost to a restart goes with its operation, and leaves the one owed",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* running();
+        const asking = yield* clientOf(served.url, { noWait: true });
+        const client = yield* clientOf(served.url);
+        const [host] = served.hosts;
+
+        yield* client.create("dev", request("dev"));
+
+        const resizing = host!.fake.holdNext("resize");
+
+        yield* asking.resizeMachine({ id: "dev", ramMib: 2048 });
+        yield* resizing.entered;
+        yield* asking.resizeMachine({ id: "dev", cpu: 2 });
+        yield* restartedHost(host!);
+
+        const rest = yield* eventually(
+          client.getMachine({ id: "dev" }),
+          ({ cpu, phase }) => cpu === 2 && phase === "settled"
+        );
+
+        expect([rest.cpu, rest.ramMib]).toStrictEqual([2, 1024]);
       })
   );
 

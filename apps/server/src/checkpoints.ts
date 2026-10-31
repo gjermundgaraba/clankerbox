@@ -163,6 +163,7 @@ export const make = (settings: {
             boot: info.boot,
             generation: 0,
             seen: "unknown",
+            to: undefined,
             leases:
               kind === "capture"
                 ? [

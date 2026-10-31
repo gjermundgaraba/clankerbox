@@ -52,6 +52,8 @@ export interface Operation {
   readonly generation: number;
   readonly seen: "running" | "stopped" | "paused" | "missing" | "unknown";
   readonly leases: readonly Lease[];
+  /** What a resize gives, which left the row when the step began. */
+  readonly to: Sizing | undefined;
 }
 
 /** `waiting` is never stored: a read tells it, as it tells the state. */
@@ -75,6 +77,7 @@ export interface MachineRow {
   readonly stage: Stage;
   readonly prepared: boolean;
   readonly error: HostError | undefined;
+  /** The resize still owed. One that runs is on its operation. */
   readonly resize: Sizing | undefined;
   readonly ephemeral: boolean;
   readonly source: Source;

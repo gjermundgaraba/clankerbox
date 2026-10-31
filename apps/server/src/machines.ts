@@ -45,7 +45,7 @@ import { Hosts } from "./hosts.ts";
 import { Operations } from "./operations.ts";
 import { placing, preferring } from "./placement.ts";
 import { nameOf } from "./prebuilds.ts";
-import { cuts, holds, lost, next as nextFrom, settled } from "./reconcile.ts";
+import { holds, lost, next as nextFrom, settled, wants } from "./reconcile.ts";
 import type { Next, Patch } from "./reconcile.ts";
 import { Store } from "./store.ts";
 import type {
@@ -209,6 +209,18 @@ const nextOf = (found: MachineRow, seen: MachineState): Next =>
   nextFrom({ ...found, resizing: found.resize !== undefined }, seen);
 
 const pinned = (pin: string | undefined) => (pin === undefined ? {} : { pin });
+
+const atBegin = (
+  kind: Operation["kind"],
+  seen: MachineState,
+  pin: string | undefined
+): MachinePatch => {
+  if (kind === "resize") {
+    return { resize: undefined };
+  }
+
+  return kind === "start" && seen === "stopped" ? { pin } : {};
+};
 
 const leasesOf = (
   found: MachineRow,
@@ -495,7 +507,7 @@ export const make = (
             return {
               _tag: "resize",
               machine: ref,
-              to: found.resize ?? {},
+              to: op.to ?? {},
               machines,
             };
           }
@@ -535,9 +547,10 @@ export const make = (
             generation: found.generation,
             seen,
             leases: leasesOf(found, kind),
+            to: kind === "resize" ? found.resize : undefined,
           },
           phase,
-          kind === "start" && seen === "stopped" ? { pin: info.pin } : {}
+          atBegin(kind, seen, info.pin)
         );
 
         if (Option.isNone(begun)) {
@@ -663,7 +676,7 @@ export const make = (
 
         const polled = yield* Effect.raceFirst(
           operations.poll(op, {
-            cut: cuts(found, op),
+            cut: !wants(op.kind, found.desired),
             step: stepOf(found, op),
           }),
           Effect.as(latch.await, { at: "woken" } as const)
@@ -707,7 +720,6 @@ export const make = (
               found,
               op,
               lost(
-                found,
                 op,
                 new Internal({
                   message: `the ${op.kind} of machine ${found.name} ended before its host reported it: its host restarted, or the setup left with a restart of the control plane`,

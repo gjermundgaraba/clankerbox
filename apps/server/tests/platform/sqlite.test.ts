@@ -122,6 +122,7 @@ const operation = (
     generation: 1,
     seen: "stopped",
     leases: [{ resource: "machine", name, mode: "own" }],
+    to: undefined,
     ...fields,
   };
 };
@@ -1069,6 +1070,35 @@ layer(NodeServices.layer)((it) => {
       );
       expect(Option.isSome(again)).toBe(true);
     })
+  );
+
+  it.effect(
+    "a resize leaves the row when it begins, and its operation keeps it through a restart",
+    () =>
+      Effect.gen(function* () {
+        const stateDir = yield* stateIn;
+
+        const left = yield* withStore(stateDir, (store) =>
+          Effect.gen(function* () {
+            yield* store.insertMachine(row("dev", { resize: { cpu: 2 } }));
+            yield* store.begin(
+              operation("dev", { kind: "resize", to: { cpu: 2 } }),
+              "resizing",
+              { resize: undefined }
+            );
+
+            return yield* found(store, "dev");
+          })
+        );
+
+        const operations = yield* withStore(
+          stateDir,
+          (store) => store.operations
+        );
+
+        expect(left.resize).toBeUndefined();
+        expect(operations.map(({ to }) => to)).toStrictEqual([{ cpu: 2 }]);
+      })
   );
 
   it.effect(

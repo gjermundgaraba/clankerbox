@@ -110,6 +110,7 @@ export const migrations: readonly string[] = [
     WHERE json_extract(source, '$.kind') = 'base';
   ALTER TABLE machines DROP COLUMN scripted`,
   "UPDATE machines SET phase = 'observing' WHERE phase = 'waiting'",
+  'ALTER TABLE operations ADD COLUMN "to" TEXT',
 ];
 
 const isSqliteError = (
@@ -337,6 +338,7 @@ const OperationFields = Schema.Struct({
   generation: Schema.Int,
   seen: MachineState,
   leases: LeasesJson,
+  to: Stored(SizingJson),
 });
 
 const decodeMachine = Schema.decodeUnknownSync(MachineFields);
@@ -407,7 +409,11 @@ const checkpointOf = (raw: unknown): CheckpointRow => {
   };
 };
 
-const operationOf = (raw: unknown): Operation => decodeOperation(raw);
+const operationOf = (raw: unknown): Operation => {
+  const operation = decodeOperation(raw);
+
+  return { ...operation, to: operation.to ?? undefined };
+};
 
 const decodeBoot = Schema.decodeUnknownSync(
   Schema.Struct({ boot: Schema.String })
@@ -607,8 +613,9 @@ export const open = (
 
     const insertOperation = db.prepare(
       `INSERT INTO operations (id, kind, resource, name, host, boot, sequence, generation, seen,
-        leases)
-       VALUES ($id, $kind, $resource, $name, $host, $boot, $sequence, $generation, $seen, $leases)`
+        leases, "to")
+       VALUES ($id, $kind, $resource, $name, $host, $boot, $sequence, $generation, $seen, $leases,
+        $to)`
     );
 
     const deleteOperation = db.prepare("DELETE FROM operations WHERE id = ?");
@@ -876,6 +883,7 @@ export const open = (
               generation: begun.generation,
               seen: begun.seen,
               leases: encodeLeases(begun.leases),
+              to: begun.to === undefined ? null : encodeSizing(begun.to),
             });
 
             return Result.succeed(Option.some(begun));

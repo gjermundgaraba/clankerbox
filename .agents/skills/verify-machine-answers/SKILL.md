@@ -73,11 +73,12 @@ state by state: the action, then what changed, mostly `row`, `vm`, `runs` and
 A pass covers this scope, and only it:
 
 - **One machine**, created once. Copies (fork, restore, capture), resize and
-  the tailnet join are out.
+  the tailnet join are out, so a resize's `Operation.to`, and a failing step
+  giving way to a resize owed, rest on `apps/server/tests`.
 - **`MachineAnswers.cfg`**: one client beside the creator, with one of each
   fault: a step or read that fails, a control plane crash, a partition, a host
   restart and a lost delivery, and nine operations. Every invariant and
-  `AllAnswered` hold over all 6,415,733 distinct states, 5 to 10 minutes.
+  `AllAnswered` hold over all 6,412,809 distinct states, 5 to 10 minutes.
 - **`TwoClients.cfg`**: two clients beside the creator, with a crash and a
   partition and no other fault, and seven operations. Every invariant holds over
   all 9,301,296 distinct states, about 1 minute. `AllAnswered` is not checked
@@ -118,6 +119,7 @@ for this code:
 | `Request`                        | `machines.ts` `asked`, `remove`; `store.desire`                          |
 | `Read`                           | `machines.ts` `stateOf`                                                  |
 | `Send`, `Cut`                    | `apps/server/src/operations.ts` `poll`                                   |
+| `Wants`                          | `apps/server/src/reconcile.ts` `wants`, for a cut and for a failure      |
 | `Collect`, `Failing`, `Done`     | `machines.ts` `follow`, `ended`; `reconcile.ts` `settled`; `store.finish` |
 | `Lost`                           | `operations.ts` `poll`; `reconcile.ts` `lost`                            |
 | `Deliver`, `Repeat`, `Lose`      | `apps/host/src/operations.ts` `run`, its boot and sequence fence         |
@@ -169,6 +171,17 @@ Each check was run against a broken copy of the model, TLC run, then reverted.
 Removing the client's generation check broke nothing, because `store.desire`
 leaves rest in the write that records the request. That is why the check, and
 `Machine.generation`, are gone.
+
+A failing step also has no such row. Resting every failure `failed`, also of a
+step no longer wanted, broke nothing over `MachineAnswers.cfg`, with
+`AllAnswered`, over 6,553,479 distinct states. So a
+report's `wants` is a product rule and not safety: the machine moves to what is
+asked in place of a client reading a failure of what it no longer wants. For the
+same reason `Failing` reads what is asked now and not `gen`: a wish that goes
+stopped, running, stopped during a stop that fails rests failed with its error,
+and a repeated request answers that failure with no more tries.
+`TwoClients.cfg` injects no failure, so this break only counts on the full
+config.
 
 `Shown` has no such row. A client that reads the stored phase, or that reads
 `waiting` over a failed row, gets a different answer, and no invariant reads the
