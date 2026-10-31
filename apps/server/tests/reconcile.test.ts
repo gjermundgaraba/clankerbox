@@ -6,7 +6,7 @@ import { DateTime } from "effect";
 
 import { next, settled } from "../src/reconcile.ts";
 import type { Decided, Next } from "../src/reconcile.ts";
-import type { Operation, Row, Stage } from "../src/store.ts";
+import type { MachineRow, Operation, Stage } from "../src/store.ts";
 
 interface State extends Decided {
   readonly seen: MachineState;
@@ -243,7 +243,7 @@ describe("next", () => {
   });
 });
 
-const row = (desired: Desired): Row => ({
+const row = (desired: Desired): MachineRow => ({
   name: "dev",
   instance: "1",
   createdAt: DateTime.makeUnsafe(0),

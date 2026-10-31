@@ -2,7 +2,7 @@ import type { MachineState, Report } from "@clankerbox/host-contract";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import type { Desired, HostError } from "@gjermundgaraba/clankerbox-sdk";
 
-import type { Operation, Row, Stage } from "./store.ts";
+import type { MachineRow, Operation, Stage } from "./store.ts";
 
 export type Next =
   | "creating"
@@ -60,11 +60,14 @@ export const next = (decided: Decided, seen: MachineState): Next => {
 };
 
 /** A failed machine rests until the next request; a failed delete runs again at each recheck. */
-export const holds = ({ phase, stage, desired }: Row): boolean =>
+export const holds = ({ phase, stage, desired }: MachineRow): boolean =>
   phase === "failed" && stage === "made" && desired !== "deleted";
 
 /** Whether what was asked since a step began cuts it short. */
-export const cuts = ({ desired }: Pick<Row, "desired">, op: Operation) => {
+export const cuts = (
+  { desired }: Pick<MachineRow, "desired">,
+  op: Operation
+) => {
   switch (op.kind) {
     case "make": {
       return desired === "deleted";
@@ -94,7 +97,7 @@ export const cuts = ({ desired }: Pick<Row, "desired">, op: Operation) => {
 
 export type Patch = Partial<
   Pick<
-    Row,
+    MachineRow,
     | "stage"
     | "prepared"
     | "phase"
@@ -108,13 +111,14 @@ export type Patch = Partial<
   >
 >;
 
-const askedSince = (row: Row, op: Operation) => op.generation < row.generation;
+const askedSince = (row: MachineRow, op: Operation) =>
+  op.generation < row.generation;
 
-const resizeLeft = (row: Row, op: Operation) =>
+const resizeLeft = (row: MachineRow, op: Operation) =>
   op.kind === "resize" && !askedSince(row, op) ? undefined : row.resize;
 
 const failing = (
-  row: Row,
+  row: MachineRow,
   op: Operation,
   error: HostError,
   sized: Patch
@@ -141,7 +145,7 @@ const cutShort = ({ name }: Operation) =>
 
 /** What a report does to the row, or `removed` when the row goes with it. */
 export const settled = (
-  row: Row,
+  row: MachineRow,
   op: Operation,
   report: Report
 ): Patch | "removed" => {
@@ -203,7 +207,11 @@ export const settled = (
  * What an operation its host no longer holds does to the row: a make is undone, as nothing can say
  * how far it got, and any other step is decided afresh from a new read.
  */
-export const lost = (row: Row, op: Operation, error: HostError): Patch =>
+export const lost = (
+  row: MachineRow,
+  op: Operation,
+  error: HostError
+): Patch =>
   op.kind === "make"
     ? { stage: "undoing", error, phase: "observing" }
     : { phase: "observing", resize: resizeLeft(row, op) };

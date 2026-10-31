@@ -30,8 +30,8 @@ import type {
   CheckpointRow,
   Interface,
   Lease,
+  MachineRow,
   Operation,
-  Row,
 } from "../../src/store.ts";
 
 const earlierApplicationId = 0x63_62_78_69;
@@ -53,7 +53,7 @@ const opening = (stateDir: string) =>
 
 const stateIn = Effect.map(scratch, (dir) => path.join(dir, "state"));
 
-const row = (name: string, fields?: Partial<Row>): Row => ({
+const row = (name: string, fields?: Partial<MachineRow>): MachineRow => ({
   name,
   instance: "0123456789abcdef0123456789abcdef",
   createdAt: DateTime.makeUnsafe("2026-10-04T12:00:00Z"),
@@ -561,7 +561,7 @@ layer(NodeServices.layer)((it) => {
           generation += 1;
           prepared = desired === "running" ? false : prepared;
 
-          const model: Row = {
+          const model: MachineRow = {
             ...row0,
             desired: kept,
             generation,
@@ -763,7 +763,7 @@ layer(NodeServices.layer)((it) => {
         yield* store.insertMachine(row("subject", { generation: 5 }));
 
         let held: readonly Operation[] = [];
-        let phase: Row["phase"] = "observing";
+        let phase: MachineRow["phase"] = "observing";
         let last = 0;
 
         for (const step of script) {

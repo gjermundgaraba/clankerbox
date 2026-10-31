@@ -47,7 +47,13 @@ import { nameOf } from "./prebuilds.ts";
 import { cuts, holds, lost, next as nextFrom, settled } from "./reconcile.ts";
 import type { Next, Patch } from "./reconcile.ts";
 import { Store } from "./store.ts";
-import type { Lease, Operation, Row, RowPatch, Source } from "./store.ts";
+import type {
+  Lease,
+  MachinePatch,
+  MachineRow,
+  Operation,
+  Source,
+} from "./store.ts";
 import { checked, due, firstCheck, ticked, unchecked } from "./tailnet.ts";
 import type { TailnetCheck } from "./tailnet.ts";
 
@@ -103,7 +109,9 @@ export interface Interface {
   /** Tells a machine's loop that something it may be waiting on changed. */
   readonly wake: (name: string) => Effect.Effect<void>;
   /** Waits until a machine rests or is gone, for a prebuild's own steps. */
-  readonly rest: (name: string) => Effect.Effect<Option.Option<Row>, Internal>;
+  readonly rest: (
+    name: string
+  ) => Effect.Effect<Option.Option<MachineRow>, Internal>;
 }
 
 export class Machines extends Context.Service<Machines, Interface>()(
@@ -171,7 +179,7 @@ const sizedBy = (from: Spec, sizing: Sizing | undefined): Spec => ({
   diskGib: sizing?.diskGib ?? from.diskGib,
 });
 
-const refOf = (row: Row): MachineRef | undefined =>
+const refOf = (row: MachineRow): MachineRef | undefined =>
   row.port === undefined
     ? undefined
     : {
@@ -183,12 +191,15 @@ const refOf = (row: Row): MachineRef | undefined =>
         port: row.port,
       };
 
-const nextOf = (found: Row, seen: MachineState): Next =>
+const nextOf = (found: MachineRow, seen: MachineState): Next =>
   nextFrom({ ...found, resizing: found.resize !== undefined }, seen);
 
 const pinned = (pin: string | undefined) => (pin === undefined ? {} : { pin });
 
-const leasesOf = (found: Row, kind: Operation["kind"]): readonly Lease[] => {
+const leasesOf = (
+  found: MachineRow,
+  kind: Operation["kind"]
+): readonly Lease[] => {
   const self: Lease = {
     resource: "machine",
     name: found.name,
@@ -236,7 +247,7 @@ const copied = (
     return spec;
   });
 
-const made = (found: Row) =>
+const made = (found: MachineRow) =>
   found.stage === "made"
     ? Effect.void
     : Effect.fail(
@@ -281,7 +292,7 @@ export const make = (
         )
       );
 
-    const readStates = (rows: readonly Row[]) =>
+    const readStates = (rows: readonly MachineRow[]) =>
       Effect.gen(function* () {
         const groups = Map.groupBy(
           rows.filter(({ stage }) => stage !== "undone"),
@@ -309,13 +320,13 @@ export const make = (
         );
       });
 
-    const stateOf = (found: Row) =>
+    const stateOf = (found: MachineRow) =>
       Effect.map(
         readStates([found]),
         (states): MachineState => states.get(found.name) ?? "unknown"
       );
 
-    const resource = (found: Row, state: MachineState): Machine => {
+    const resource = (found: MachineRow, state: MachineState): Machine => {
       const address = hosts.known(found.host)?.publishAddress;
       const tailnet = tailnets.get(found.name)?.status;
       const running = state === "running";
@@ -342,7 +353,7 @@ export const make = (
       };
     };
 
-    const shown = (found: Row) =>
+    const shown = (found: MachineRow) =>
       Effect.map(readStates([found]), (states) =>
         resource(
           found,
@@ -352,7 +363,7 @@ export const make = (
         )
       );
 
-    const others = (found: Row) =>
+    const others = (found: MachineRow) =>
       Effect.map(store.machines, (rows) => {
         const onHost = rows.filter(
           ({ host, name }) => host === found.host && name !== found.name
@@ -370,7 +381,7 @@ export const make = (
         };
       });
 
-    const sourceStep = (found: Row) =>
+    const sourceStep = (found: MachineRow) =>
       Effect.gen(function* () {
         const { source } = found;
 
@@ -410,7 +421,7 @@ export const make = (
       });
 
     const stepOf = (
-      found: Row,
+      found: MachineRow,
       op: Operation
     ): Effect.Effect<Step | undefined, Internal> =>
       Effect.gen(function* () {
@@ -491,7 +502,7 @@ export const make = (
       });
 
     const begin = (
-      found: Row,
+      found: MachineRow,
       kind: Operation["kind"],
       seen: MachineState,
       phase: Machine["phase"] | undefined
@@ -531,7 +542,7 @@ export const make = (
         )
       );
 
-    const movedPastCapacity = (found: Row): RowPatch | undefined => {
+    const movedPastCapacity = (found: MachineRow): MachinePatch | undefined => {
       const held = creates.get(found.name);
       const [candidate, ...untried] = held?.untried ?? [];
       const info = hosts.known(candidate?.host ?? "");
@@ -561,7 +572,11 @@ export const make = (
       };
     };
 
-    const ended = (found: Row, op: Operation, patch: Patch | "removed") =>
+    const ended = (
+      found: MachineRow,
+      op: Operation,
+      patch: Patch | "removed"
+    ) =>
       Effect.gen(function* () {
         if (patch === "removed") {
           creates.delete(found.name);
@@ -607,7 +622,7 @@ export const make = (
         )
       );
 
-    const sizesRead = (found: Row) => {
+    const sizesRead = (found: MachineRow) => {
       const ref = refOf(found);
 
       return ref === undefined
@@ -630,7 +645,7 @@ export const make = (
             );
     };
 
-    const follow = (found: Row, op: Operation, latch: Latch.Latch) =>
+    const follow = (found: MachineRow, op: Operation, latch: Latch.Latch) =>
       Effect.gen(function* () {
         const doing = phaseOfKind[op.kind];
 
@@ -723,7 +738,7 @@ export const make = (
         }
       });
 
-    const joining = (found: Row, seen: MachineState) =>
+    const joining = (found: MachineRow, seen: MachineState) =>
       Effect.gen(function* () {
         const check = tailnets.get(found.name) ?? firstCheck;
 
@@ -741,7 +756,7 @@ export const make = (
         return yield* begin(found, "join", seen, undefined);
       });
 
-    const outgrownBySource = (found: Row) =>
+    const outgrownBySource = (found: MachineRow) =>
       Effect.gen(function* () {
         const { source } = found;
 
@@ -881,7 +896,7 @@ export const make = (
       held: CreateHeldInMemory
     ) =>
       Effect.gen(function* () {
-        const created: Row = {
+        const created: MachineRow = {
           name,
           instance: newId(),
           createdAt: yield* DateTime.now,

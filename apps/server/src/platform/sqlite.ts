@@ -28,9 +28,9 @@ import type {
   CheckpointRow,
   Interface,
   Lease,
+  MachinePatch,
+  MachineRow,
   Operation,
-  Row,
-  RowPatch,
 } from "../store.ts";
 
 export const databaseFile = "server.db";
@@ -338,7 +338,7 @@ const encodeError = Schema.encodeSync(ErrorJson);
 
 const encodeSizing = Schema.encodeSync(SizingJson);
 
-const rowOf = (raw: unknown): Row => {
+const rowOf = (raw: unknown): MachineRow => {
   const row = decodeMachine(raw);
 
   return {
@@ -415,7 +415,7 @@ const plain = (value: string | number | undefined): Bound => value ?? null;
 const encodedError = (error: HostError | undefined): Bound =>
   error === undefined ? null : encodeError(error);
 
-const machineColumns: Columns<RowPatch> = {
+const machineColumns: Columns<MachinePatch> = {
   instance: ["instance", ({ instance }) => plain(instance)],
   kind: ["kind", ({ kind }) => plain(kind)],
   base: ["base", ({ base }) => plain(base)],
@@ -634,7 +634,7 @@ export const open = (
 
     const writeMachine = (
       name: string,
-      patch: RowPatch,
+      patch: MachinePatch,
       guard: number | undefined
     ): boolean => {
       const { sets, values } = assignments(patch, machineColumns);
@@ -668,7 +668,7 @@ export const open = (
     const released = (
       name: string,
       generation: number,
-      patch: RowPatch
+      patch: MachinePatch
     ): void => {
       const raw = selectMachine.get(name);
 

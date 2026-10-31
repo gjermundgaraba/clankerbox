@@ -51,7 +51,7 @@ export interface Operation {
   readonly leases: readonly Lease[];
 }
 
-export interface Row {
+export interface MachineRow {
   readonly name: string;
   readonly instance: string;
   readonly createdAt: DateTime.Utc;
@@ -106,7 +106,7 @@ export interface CheckpointRow {
   readonly failedAt: DateTime.Utc | undefined;
 }
 
-export type RowPatch = Partial<Omit<Row, "name" | "createdAt">>;
+export type MachinePatch = Partial<Omit<MachineRow, "name" | "createdAt">>;
 
 export type CheckpointPatch = Partial<
   Pick<CheckpointRow, "phase" | "error" | "failedAt">
@@ -122,7 +122,7 @@ export type Finish =
   | {
       readonly row: "patch";
       readonly generation: number;
-      readonly patch: RowPatch;
+      readonly patch: MachinePatch;
     }
   | {
       readonly row: "checkpoint";
@@ -134,13 +134,13 @@ export type Finish =
   | { readonly row: "kept" };
 
 export interface Interface {
-  readonly machines: Effect.Effect<readonly Row[], Internal>;
+  readonly machines: Effect.Effect<readonly MachineRow[], Internal>;
   readonly findMachine: (
     name: string
-  ) => Effect.Effect<Option.Option<Row>, Internal>;
+  ) => Effect.Effect<Option.Option<MachineRow>, Internal>;
   /** A create over a row left `undone` replaces it. */
   readonly insertMachine: (
-    row: Row
+    row: MachineRow
   ) => Effect.Effect<void, Conflict | Internal>;
   /**
    * Records what was asked: the generation rises, the row stops resting and its error goes, all in
@@ -149,16 +149,16 @@ export interface Interface {
   readonly desire: (
     name: string,
     desired: Desired
-  ) => Effect.Effect<Option.Option<Row>, Internal>;
+  ) => Effect.Effect<Option.Option<MachineRow>, Internal>;
   readonly resize: (
     name: string,
     sizing: Sizing
-  ) => Effect.Effect<Option.Option<Row>, Internal>;
+  ) => Effect.Effect<Option.Option<MachineRow>, Internal>;
   /** Writes a rest or a patch only at `generation`, so a later request is never overwritten. */
   readonly patch: (
     name: string,
     generation: number,
-    patch: RowPatch
+    patch: MachinePatch
   ) => Effect.Effect<boolean, Internal>;
   readonly removeMachine: (name: string) => Effect.Effect<void, Internal>;
   /** Removes the rows of failed creates and captures older than `before`. */
@@ -190,7 +190,7 @@ export interface Interface {
   readonly begin: (
     operation: Omit<Operation, "sequence">,
     phase: Phase | undefined,
-    patch: RowPatch
+    patch: MachinePatch
   ) => Effect.Effect<Option.Option<Operation>, Internal>;
   /** Frees the operation's leases and writes what its report says, in one write. */
   readonly finish: (
