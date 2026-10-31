@@ -66,13 +66,44 @@ const valueOf = (path: string): StateValue => {
 };
 
 /** Every leaf of a chart's tree, in the order the tree declares them. */
-export const leavesOf = (machine: AnyStateMachine): readonly string[] => {
+export const leavesOf = (
+  machine: Pick<AnyStateMachine, "root">
+): readonly string[] => {
   const under = (node: AnyStateMachine["root"]): readonly string[] =>
     Object.keys(node.states).length === 0
       ? [node.path.join(".")]
       : Object.values(node.states).flatMap(under);
 
   return under(machine.root);
+};
+
+/**
+ * What a chart's leaves say of a row: every leaf a row can hold, and each one's `meta`. `gone` is no
+ * such leaf, as the row goes in the write that reaches it.
+ */
+export const rowLeavesOf = <L extends string, Phase>(
+  machine: Pick<AnyStateMachine, "id" | "root"> & {
+    readonly getStateNodeById: (id: string) => {
+      readonly meta?: LeafMeta<Phase> | undefined;
+    };
+  }
+) => {
+  const metaOf = (leaf: L): LeafMeta<Phase> => {
+    const { meta } = machine.getStateNodeById(`${machine.id}.${leaf}`);
+
+    if (meta === undefined) {
+      throw new Error(`leaf ${leaf} has no meta`);
+    }
+
+    return meta;
+  };
+
+  return {
+    leaves: leavesOf(machine).filter((path): path is L => path !== "gone"),
+    metaOf,
+    phaseOf: (leaf: L): Phase => metaOf(leaf).phase,
+    activityOf: (leaf: L): Activity => metaOf(leaf).activity,
+  };
 };
 
 /**

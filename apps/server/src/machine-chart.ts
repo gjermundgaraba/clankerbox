@@ -1,8 +1,8 @@
 import { setup, transition, types } from "xstate";
 import type { InferEvents, SnapshotFrom } from "xstate";
 
-import { leavesOf } from "./chart.ts";
-import type { Activity, Chart, LeafMeta, PathOf } from "./chart.ts";
+import { rowLeavesOf } from "./chart.ts";
+import type { Chart, LeafMeta, PathOf } from "./chart.ts";
 import type { Facts, Lease, MachinePhase, Operation } from "./store.ts";
 
 /** What a machine can be asked to be. A delete is the `deleting` region, with no edge out of it. */
@@ -450,23 +450,10 @@ export type Leaf = Exclude<
 /** A machine's row: the facts, and the one leaf that holds how far it is and what it does. */
 export type MachineRow = Facts & { readonly state: Leaf };
 
-const isLeaf = (path: string): path is Leaf => path !== "gone";
-
-export const leaves: readonly Leaf[] = leavesOf(machine).filter(isLeaf);
-
-export const metaOf = (state: Leaf): LeafMeta<MachinePhase> => {
-  const { meta } = machine.getStateNodeById(`machine.${state}`);
-
-  if (meta === undefined) {
-    throw new Error(`leaf ${state} has no meta`);
-  }
-
-  return meta;
-};
-
-export const phaseOf = (state: Leaf): MachinePhase => metaOf(state).phase;
-
-export const activityOf = (state: Leaf): Activity => metaOf(state).activity;
+export const { leaves, metaOf, phaseOf, activityOf } = rowLeavesOf<
+  Leaf,
+  MachinePhase
+>(machine);
 
 const stages = ["making", "made", "undoing", "undone", "deleting"] as const;
 

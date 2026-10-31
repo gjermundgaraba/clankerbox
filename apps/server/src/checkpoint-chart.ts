@@ -1,8 +1,8 @@
 import { setup, transition, types } from "xstate";
 import type { InferEvents, SnapshotFrom } from "xstate";
 
-import { leavesOf } from "./chart.ts";
-import type { Activity, Chart, LeafMeta, PathOf } from "./chart.ts";
+import { rowLeavesOf } from "./chart.ts";
+import type { Chart, LeafMeta, PathOf } from "./chart.ts";
 import type { CheckpointFacts, Lease, Operation, ShownPhase } from "./store.ts";
 
 type HostError = NonNullable<CheckpointFacts["error"]>;
@@ -194,23 +194,10 @@ export type Leaf = Exclude<
 /** A checkpoint's row: the facts, and the one leaf that holds how far it is and what it does. */
 export type CheckpointRow = CheckpointFacts & { readonly state: Leaf };
 
-const isLeaf = (path: string): path is Leaf => path !== "gone";
-
-export const leaves: readonly Leaf[] = leavesOf(checkpoint).filter(isLeaf);
-
-export const metaOf = (state: Leaf): LeafMeta<ShownPhase> => {
-  const { meta } = checkpoint.getStateNodeById(`checkpoint.${state}`);
-
-  if (meta === undefined) {
-    throw new Error(`leaf ${state} has no meta`);
-  }
-
-  return meta;
-};
-
-export const phaseOf = (state: Leaf): ShownPhase => metaOf(state).phase;
-
-export const activityOf = (state: Leaf): Activity => metaOf(state).activity;
+export const { leaves, metaOf, phaseOf, activityOf } = rowLeavesOf<
+  Leaf,
+  ShownPhase
+>(checkpoint);
 
 const leasesOf = (
   row: CheckpointRow,
