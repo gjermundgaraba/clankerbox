@@ -73,8 +73,7 @@ const row = (name: string, fields?: Partial<MachineRow>): MachineRow => ({
   error: undefined,
   resize: undefined,
   ephemeral: false,
-  source: { kind: "base" },
-  scripted: false,
+  source: { kind: "base", scripted: false },
   prebuild: undefined,
   hostKey: undefined,
   pin: undefined,
@@ -212,7 +211,6 @@ layer(NodeServices.layer)((it) => {
             error: new Internal({ message: "sshd didn't start" }),
             resize: { cpu: 2, diskGib: 20 },
             source: { kind: "checkpoint", name: "snap" },
-            scripted: true,
             prebuild: "prebuilt-0123456789ab",
             pin: "smolvm 0.0.0-test linux-x64",
           }),
@@ -325,6 +323,54 @@ layer(NodeServices.layer)((it) => {
         );
 
         expect(reader).toContain("database is locked");
+      })
+  );
+
+  it.effect(
+    "a database at version 1 migrates, its base rows' scripted flags moved into their sources",
+    () =>
+      Effect.gen(function* () {
+        const stateDir = yield* stateIn;
+
+        yield* mkdir(stateDir);
+
+        const old = new DatabaseSync(path.join(stateDir, databaseFile));
+
+        old.exec(migrations[0] ?? "");
+        old.exec(
+          `PRAGMA user_version = 1; PRAGMA application_id = ${applicationId}`
+        );
+
+        const insert = old.prepare(
+          `INSERT INTO machines VALUES (?, 'i', '2026-10-04T12:00:00.000Z', 'linux', 'ubuntu', NULL,
+            1, 1024, 10, 'linux', NULL, 'running', 1, 'observing', 'making', 0, NULL, NULL, 0, ?, ?,
+            NULL, NULL, NULL, NULL)`
+        );
+
+        insert.run("scripted", '{"kind":"base"}', 1);
+        insert.run("plain", '{"kind":"base"}', 0);
+        insert.run("restored", '{"kind":"checkpoint","name":"snap"}', 0);
+        insert.run("forked", '{"kind":"machine","name":"dev"}', 0);
+        old.close();
+
+        const rows = yield* withStore(stateDir, (store) => store.machines);
+        const db = new DatabaseSync(path.join(stateDir, databaseFile));
+
+        expect(
+          Object.fromEntries(rows.map(({ name, source }) => [name, source]))
+        ).toStrictEqual({
+          forked: { kind: "machine", name: "dev" },
+          plain: { kind: "base", scripted: false },
+          restored: { kind: "checkpoint", name: "snap" },
+          scripted: { kind: "base", scripted: true },
+        });
+        expect({ ...db.prepare("PRAGMA user_version").get() }).toStrictEqual({
+          user_version: migrations.length,
+        });
+        expect(
+          db.prepare("PRAGMA table_info(machines)").all()
+        ).not.toContainEqual(expect.objectContaining({ name: "scripted" }));
+        db.close();
       })
   );
 
@@ -723,7 +769,6 @@ layer(NodeServices.layer)((it) => {
           resize: { cpu: 8 },
           ephemeral: true,
           source: { kind: "machine", name: "other" },
-          scripted: true,
           prebuild: "prebuilt-0123456789ab",
           hostKey: "key",
           pin: "fake 1",

@@ -434,10 +434,13 @@ export const make = (
         }
 
         if (op.kind === "make") {
-          const setup = creates.get(name)?.setup;
+          const scripted =
+            found.source.kind === "base" && found.source.scripted;
+
+          const setup = scripted ? creates.get(name)?.setup : undefined;
           const source = yield* sourceStep(found);
 
-          if (source === undefined || (found.scripted && setup === undefined)) {
+          if (source === undefined || (scripted && setup === undefined)) {
             return undefined;
           }
 
@@ -565,7 +568,6 @@ export const make = (
         pin: info.pin,
         source: candidate.source,
         prebuild: candidate.prebuild,
-        scripted: candidate.source.kind === "base" && held.setup !== undefined,
         error: undefined,
         port: undefined,
         phase: "observing",
@@ -917,7 +919,6 @@ export const make = (
           resize: undefined,
           ephemeral,
           source: placed.source,
-          scripted: placed.source.kind === "base" && held.setup !== undefined,
           prebuild: placed.prebuild,
           hostKey: undefined,
           pin: info.pin,
@@ -989,7 +990,7 @@ export const make = (
               host: id,
               source:
                 prebuilt === undefined
-                  ? { kind: "base" }
+                  ? { kind: "base", scripted: setup !== undefined }
                   : { kind: "checkpoint", name: prebuilt },
               prebuild: prebuilt,
             };
@@ -1024,7 +1025,11 @@ export const make = (
         yield* born(
           name,
           request,
-          { host, source: { kind: "base" }, prebuild: undefined },
+          {
+            host,
+            source: { kind: "base", scripted: true },
+            prebuild: undefined,
+          },
           info,
           true,
           { setup: request.setup, untried: [] }

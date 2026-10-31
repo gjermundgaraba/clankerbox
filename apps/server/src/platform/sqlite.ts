@@ -105,6 +105,10 @@ export const migrations: readonly string[] = [
     last INTEGER NOT NULL
   ) STRICT;
   INSERT INTO sequence (one, last) VALUES (1, 0)`,
+  `UPDATE machines
+    SET source = json_set(source, '$.scripted', json(CASE scripted WHEN 1 THEN 'true' ELSE 'false' END))
+    WHERE json_extract(source, '$.kind') = 'base';
+  ALTER TABLE machines DROP COLUMN scripted`,
 ];
 
 const isSqliteError = (
@@ -233,7 +237,7 @@ const Optional = Schema.NullOr(Schema.String);
 
 const SourceJson = Schema.fromJsonString(
   Schema.Union([
-    Schema.Struct({ kind: Schema.Literal("base") }),
+    Schema.Struct({ kind: Schema.Literal("base"), scripted: Schema.Boolean }),
     Schema.Struct({ kind: Schema.Literal("checkpoint"), name: Schema.String }),
     Schema.Struct({ kind: Schema.Literal("machine"), name: Schema.String }),
   ])
@@ -281,7 +285,6 @@ const MachineFields = Schema.Struct({
   resize: Stored(SizingJson),
   ephemeral: Flag,
   source: SourceJson,
-  scripted: Flag,
   prebuild: Optional,
   host_key: Optional,
   undone_at: Schema.NullOr(Schema.DateTimeUtcFromString),
@@ -362,7 +365,6 @@ const rowOf = (raw: unknown): MachineRow => {
     resize: row.resize ?? undefined,
     ephemeral: row.ephemeral === 1,
     source: row.source,
-    scripted: row.scripted === 1,
     prebuild: row.prebuild ?? undefined,
     hostKey: row.host_key ?? undefined,
     pin: row.pin ?? undefined,
@@ -440,7 +442,6 @@ const machineColumns: Columns<MachinePatch> = {
     "source",
     ({ source }) => (source === undefined ? null : encodeSource(source)),
   ],
-  scripted: ["scripted", ({ scripted }) => flag(scripted)],
   prebuild: ["prebuild", ({ prebuild }) => plain(prebuild)],
   hostKey: ["host_key", ({ hostKey }) => plain(hostKey)],
   pin: ["pin", ({ pin }) => plain(pin)],
@@ -520,10 +521,10 @@ export const open = (
     const insertMachine = db.prepare(
       `INSERT INTO machines (name, instance, created_at, kind, base, profile, cpu, ram_mib,
         disk_gib, host, port, desired, generation, phase, stage, prepared, error, resize, ephemeral,
-        source, scripted, prebuild, host_key, pin, undone_at)
+        source, prebuild, host_key, pin, undone_at)
        VALUES ($name, $instance, $created_at, $kind, $base, $profile, $cpu, $ram_mib, $disk_gib,
         $host, $port, $desired, $generation, $phase, $stage, $prepared, $error, $resize, $ephemeral,
-        $source, $scripted, $prebuild, $host_key, $pin, $undone_at)`
+        $source, $prebuild, $host_key, $pin, $undone_at)`
     );
 
     const deleteUndone = db.prepare(
@@ -724,7 +725,6 @@ export const open = (
             resize: row.resize === undefined ? null : encodeSizing(row.resize),
             ephemeral: flag(row.ephemeral),
             source: encodeSource(row.source),
-            scripted: flag(row.scripted),
             prebuild: row.prebuild ?? null,
             host_key: row.hostKey ?? null,
             pin: row.pin ?? null,

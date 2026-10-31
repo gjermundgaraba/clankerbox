@@ -3,6 +3,7 @@ import path from "node:path";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
+import { Capacity } from "@gjermundgaraba/clankerbox-sdk";
 import {
   mkdir,
   read,
@@ -60,6 +61,36 @@ const setupScript = `#!/bin/sh
 set -eu
 ${loginSetup}echo set-up >"$CLANKERBOX_ROOT/setup-ran"
 `;
+
+const setupRuns = (dir: string) =>
+  Effect.map(
+    read(path.join(dir, "setup-runs")),
+    (text) => text.trim().split("\n").length
+  );
+
+const countedProfile = (dir: string) =>
+  Effect.gen(function* () {
+    const profiles = path.join(dir, "profiles");
+
+    yield* mkdir(profiles);
+    yield* write(
+      path.join(profiles, "web-setup.sh"),
+      `#!/bin/sh
+set -eu
+${loginSetup}echo ran >>"${path.join(dir, "setup-runs")}"
+`
+    );
+    yield* write(
+      path.join(profiles, "web.json"),
+      JSON.stringify({
+        base: "ubuntu",
+        cpu: 1,
+        ramMib: 1024,
+        diskGib: 10,
+        setup: { path: "web-setup.sh", timeoutSeconds: 60 },
+      })
+    );
+  });
 
 const decodeJson = <S extends Schema.Top>(schema: S, text: string) =>
   Schema.decodeEffect(Schema.fromJsonString(schema))(text, {
@@ -587,6 +618,42 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ])
         );
         expect(hosts[0]?.fake.calls).not.toContain("create fast");
+      })
+  );
+
+  it.effect("a make from a prebuild sends no setup", () =>
+    Effect.gen(function* () {
+      const { dir, hosts, run } = yield* setUp();
+
+      yield* countedProfile(dir);
+      yield* run(["prebuild", "--profile", "web"]);
+
+      const restored = yield* run(["create", "fast", "--profile", "web"]);
+
+      expect(restored).toMatchObject({ code: 0, stdout: "fast" });
+      expect(hosts[0]?.fake.calls).toContain("restore fast");
+      expect(yield* setupRuns(dir)).toBe(1);
+    })
+  );
+
+  it.effect(
+    "a create that moves off a full prebuild's host runs its setup on the base it lands on",
+    () =>
+      Effect.gen(function* () {
+        const { dir, hosts, run } = yield* setUp(twoHosts);
+
+        yield* countedProfile(dir);
+        yield* run(["prebuild", "--profile", "web"]);
+        hosts[0]?.fake.failNext("admit", new Capacity({ message: "full" }));
+
+        const moved = yield* run(["create", "fast", "--profile", "web"]);
+        const got = yield* run(["get", "fast", "--json"]);
+
+        expect(moved).toMatchObject({ code: 0, stdout: "fast" });
+        expect(JSON.parse(got.stdout)).not.toHaveProperty("prebuild");
+        expect(hosts[0]?.fake.calls).toContain("admit fast");
+        expect(hosts[1]?.fake.calls).toContain("create fast");
+        expect(yield* setupRuns(dir)).toBe(2);
       })
   );
 

@@ -67,7 +67,7 @@ An operation has an ID, a sequence number and a step, and is recorded with its l
 - A restarted host answers `adopt`: the control plane tells it which machines exist, once per new `boot`, so a runtime can reattach them.
 - To cut a step short, the control plane cancels the operation. Its lease stays held until the host reports the operation done. A stop's command still masks interruption.
 
-Setup scripts travel in the `make` and stay in memory on both sides. The row has a durable `scripted` flag, so a restart knows a script existed and can't be sent again.
+Setup scripts travel in the `make` and stay in memory on both sides. A base source on the row says it is `scripted`, so a restart knows a script existed and can't be sent again. A copy holds what a setup did and has none to run.
 
 `MachineAnswers.tla` checks this, with a control plane crash, a host restart, a partition and lost, repeated or late delivery in the interleavings.
 

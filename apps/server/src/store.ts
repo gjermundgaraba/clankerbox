@@ -25,9 +25,12 @@ export class CannotStart extends Schema.TaggedError<
  */
 export type Stage = "making" | "made" | "undoing" | "undone";
 
-/** Where a machine's disk comes from. Copies stay on their source's host. */
+/**
+ * Where a machine's disk comes from. Copies stay on their source's host, and hold what a setup did,
+ * so only a base can have one to run: `scripted` outlives the setup, which stays in memory.
+ */
 export type Source =
-  | { readonly kind: "base" }
+  | { readonly kind: "base"; readonly scripted: boolean }
   | { readonly kind: "checkpoint"; readonly name: string }
   | { readonly kind: "machine"; readonly name: string };
 
@@ -72,7 +75,6 @@ export interface MachineRow {
   readonly resize: Sizing | undefined;
   readonly ephemeral: boolean;
   readonly source: Source;
-  readonly scripted: boolean;
   readonly prebuild: string | undefined;
   readonly hostKey: string | undefined;
   readonly pin: string | undefined;

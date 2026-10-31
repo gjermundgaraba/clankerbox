@@ -295,7 +295,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           stage: "making",
           phase: "creating",
           prepared: false,
-          scripted: true,
+          source: { kind: "base", scripted: true },
         });
         yield* unsent(
           first.store,
