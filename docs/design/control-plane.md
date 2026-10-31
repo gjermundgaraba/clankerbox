@@ -86,6 +86,10 @@ The client waits. The SDK's methods keep their shape: `client.stopMachine` polls
 
 A chart decides each write. `machine-chart.ts` and `checkpoint-chart.ts` are xstate charts with no `invoke`, timers or actors. `applied` (`chart.ts`) rebuilds a snapshot from the row, takes one event inside the SQLite write and drops the snapshot, as a threaded one retains every step before it. Fibers do what takes time: a loop per resource (`driver.ts`) reads a host, sends a step and polls it, and a prebuild is an Effect sequence in `checkpoints.ts`, with its builds in memory. `MachineAnswers.tla` checks the same chart, through the table `Chart.tla` exports from it.
 
+No resident actor holds a machine. A request has to land in the write that records it, and an actor's `send` returns before its mailbox runs. Its memory would be a second copy of the row, and leases span rows, so the database stays their authority. An actor with no `invoke` does no I/O, so it adds only a mailbox hop. One with an `invoke` grew about 15 KB per cycle in a spike on xstate 6.0.0-alpha.71, while a snapshot rebuilt from the row per write stayed flat at 43 to 48 µs. A prebuild stays an Effect sequence, as it has no row and no state anyone reads between its steps.
+
+Three things to know when changing it. xstate is an alpha pinned exactly, and `Chart.tla` is a golden file, so a bump that changes it changes a transition. A row stores its leaf's path and `platform/sqlite.ts` checks it against the chart, so renaming a leaf refuses older state until `applicationId` moves. The model leaves out resize, join, capacity moves and checkpoints, so those edges rest on the chart tests alone.
+
 ## What the code said before any decision
 
 These findings, at `adcacee`, shaped the work.
