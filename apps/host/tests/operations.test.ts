@@ -1093,23 +1093,26 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     })
   );
 
-  it.effect("a capture copies only a VM booted under the host's pin", () =>
-    Effect.gen(function* () {
-      const host = yield* runner();
+  it.effect(
+    "a capture copies only a VM booted under the host's pin, and says a refusal left nothing",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner();
 
-      yield* finished(host, makes("dev"));
+        yield* finished(host, makes("dev"));
 
-      const report = yield* finished(host, {
-        _tag: "capture",
-        machine: ref("dev"),
-        checkpoint: checkpoint("snap"),
-        pin: "fake 0",
-      });
+        const report = yield* finished(host, {
+          _tag: "capture",
+          machine: ref("dev"),
+          checkpoint: checkpoint("snap"),
+          pin: "fake 0",
+        });
 
-      expect(errorOf(report)).toStrictEqual(["failed", "PinMismatch"]);
-      expect(host.fake.calls).not.toContain("capture snap");
-      expect(host.fake.calls).not.toContain("deleteCheckpoint snap");
-    })
+        expect(errorOf(report)).toStrictEqual(["failed", "PinMismatch"]);
+        expect(host.fake.calls).not.toContain("capture snap");
+        expect(host.fake.calls).not.toContain("deleteCheckpoint snap");
+        expect(report.outcome.cleared).toBe(true);
+      })
   );
 
   it.effect("a capture that fails clears what it left", () =>

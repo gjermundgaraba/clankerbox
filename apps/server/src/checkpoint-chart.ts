@@ -26,9 +26,9 @@ export interface Done {
 export interface NotDone {
   readonly status: "failed" | "cancelled";
   readonly error: HostError;
-  /** When a capture failed, should its host have cleared what it began. */
+  /** When a capture failed, should it have left nothing. */
   readonly at: Done["at"];
-  /** A failed capture's host cleared what it began, so a delete would find nothing. */
+  /** A failed capture left nothing on its host, so a delete would find nothing. */
   readonly cleared: boolean;
 }
 

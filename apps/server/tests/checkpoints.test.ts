@@ -1098,6 +1098,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
         expect(callsTo(host, "capture")).toStrictEqual([]);
         expect(callsTo(host, "fork")).toStrictEqual([]);
+        expect(callsTo(host, "deleteCheckpoint")).toStrictEqual([]);
+        expect(yield* store.findCheckpoint("hot")).toMatchObject({
+          value: { state: "failed" },
+        });
 
         yield* client.deleteMachine({ id: "copy" });
         yield* client.deleteCheckpoint({ id: "hot" });

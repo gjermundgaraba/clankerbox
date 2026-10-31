@@ -477,22 +477,23 @@ export const make = (
         case "capture": {
           const { machine, checkpoint, pin } = step;
 
+          const cleared = Effect.sync(() => {
+            entry.outcome = { ...entry.outcome, cleared: true };
+          });
+
           return Effect.andThen(
-            copyable(machine.name, pin),
-            runtime.capture(machine, checkpoint).pipe(
-              Effect.onExit((exit) =>
-                Exit.isSuccess(exit)
-                  ? Effect.void
-                  : runtime.deleteCheckpoint(checkpoint).pipe(
-                      Effect.andThen(
-                        Effect.sync(() => {
-                          entry.outcome = { ...entry.outcome, cleared: true };
-                        })
-                      ),
-                      Effect.ignore
-                    )
+            Effect.tapError(copyable(machine.name, pin), () => cleared),
+            runtime
+              .capture(machine, checkpoint)
+              .pipe(
+                Effect.onExit((exit) =>
+                  Exit.isSuccess(exit)
+                    ? Effect.void
+                    : runtime
+                        .deleteCheckpoint(checkpoint)
+                        .pipe(Effect.andThen(cleared), Effect.ignore)
+                )
               )
-            )
           );
         }
 

@@ -142,7 +142,7 @@ export const Outcome = Schema.Struct({
   hostKey: Schema.optionalKey(Schema.String),
   sizes: Schema.optionalKey(Schema.Struct(sizes)),
   tailnet: Schema.optionalKey(TailnetStatus),
-  /** A capture that failed and left nothing: its host cleared what it began. */
+  /** A capture that failed and left nothing on its host, so a delete would find nothing. */
   cleared: Schema.optionalKey(Schema.Literal(true)),
 });
 
