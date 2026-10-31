@@ -122,7 +122,8 @@ const newId = (): string =>
 const notFound = (name: string): NotFound =>
   new NotFound({ message: `no machine ${name}`, id: name });
 
-const unmade = (found: MachineRow): NotMade | NotFound =>
+/** Why a machine can't be copied or resized: it may yet be made, or it won't be. */
+export const unmade = (found: MachineRow): NotMade | NotFound =>
   stageOf(found.state) === "making"
     ? new NotMade({
         message: `machine ${found.name} isn't made yet: its create or setup still runs`,
@@ -546,9 +547,8 @@ export const make = (
     const fork = (id: string, name: string, sizing?: Sizing) =>
       Effect.gen(function* () {
         const from = yield* row(id);
-        const stage = stageOf(from.state);
 
-        if (stage !== "made" && stage !== "deleting") {
+        if (stageOf(from.state) !== "made") {
           return yield* unmade(from);
         }
 

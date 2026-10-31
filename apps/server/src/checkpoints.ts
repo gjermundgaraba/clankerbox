@@ -4,7 +4,6 @@ import {
   Conflict,
   Internal,
   NotFound,
-  NotMade,
   NotOffered,
   Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -33,7 +32,7 @@ import { driver, untilRest } from "./driver.ts";
 import type { Heard } from "./driver.ts";
 import { Hosts } from "./hosts.ts";
 import { stageOf } from "./machine-chart.ts";
-import { Machines } from "./machines.ts";
+import { Machines, unmade } from "./machines.ts";
 import { collect, cutShort, poll } from "./operations.ts";
 import { placing } from "./placement.ts";
 import { builderName, nameOf } from "./prebuilds.ts";
@@ -176,21 +175,14 @@ export const make = (settings: {
       Effect.gen(function* () {
         const present = yield* store.findMachine(source);
 
-        if (Option.isNone(present) || present.value.state === "undone") {
+        if (Option.isNone(present)) {
           return yield* noMachine(source);
         }
 
         const machine = present.value;
-        const stage = stageOf(machine.state);
 
-        if (
-          (stage !== "made" && stage !== "deleting") ||
-          machine.port === undefined
-        ) {
-          return yield* new NotMade({
-            message: `machine ${source} isn't made yet: its create or setup still runs`,
-            machine: source,
-          });
+        if (stageOf(machine.state) !== "made" || machine.port === undefined) {
+          return yield* unmade(machine);
         }
 
         const record: CheckpointRow = {

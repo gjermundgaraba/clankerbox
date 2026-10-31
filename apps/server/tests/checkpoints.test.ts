@@ -819,27 +819,39 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a capture queued behind its machine's delete ends failed once the machine has gone",
+    "a capture that begins once its machine has gone ends failed, with no capture on the host",
     () =>
       Effect.gen(function* () {
-        const served = yield* withSource();
-        const { client, host, checkpoints } = served;
-        const { release, entered } = host.fake.holdNext("delete");
+        const planned = yield* plane();
+        const first = yield* planned.start();
+        const host = firstHost(planned);
+        const client = yield* clientOf(first.url);
 
-        yield* served.machines.delete("dev");
-        yield* entered;
+        yield* client.create("dev", request("dev"));
+        yield* client.captureCheckpoint({ machine: "dev", name: "snap" });
 
-        yield* checkpoints.capture("dev", "snap");
+        const record = Option.getOrThrow(
+          yield* first.store.findCheckpoint("snap")
+        );
 
-        const capturing = yield* Effect.forkChild(rested(served, "snap"));
-
-        yield* release;
-
-        expect(yield* Fiber.join(capturing)).toMatchObject({
-          state: "failed",
-          error: { _tag: "NotFound", id: "dev" },
+        yield* first.store.insertCheckpoint({
+          ...record,
+          name: "late",
+          machine: "gone",
+          state: "capturing.due",
         });
-        expect(yield* client.machines).toStrictEqual([]);
+        yield* first.crash;
+        host.fake.calls.length = 0;
+
+        const second = yield* planned.start();
+
+        yield* Effect.addFinalizer(() => second.crash);
+
+        expect(yield* rested(second, "late")).toMatchObject({
+          state: "failed",
+          error: { _tag: "NotFound", id: "gone" },
+        });
+        expect(callsTo(host, "capture")).toStrictEqual([]);
       })
   );
 
@@ -941,6 +953,41 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "NotMade",
           "Conflict",
         ]);
+      })
+  );
+
+  it.effect(
+    "a capture or a fork of a machine being deleted is NotFound, and makes nothing",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* withSource();
+        const { client, host, store } = served;
+        const { entered, release } = host.fake.holdNext("delete");
+
+        const deleting = yield* Effect.forkChild(
+          client.deleteMachine({ id: "dev" })
+        );
+
+        yield* entered;
+
+        const refused = [
+          yield* Effect.flip(
+            client.captureCheckpoint({ machine: "dev", name: "snap" })
+          ),
+          yield* Effect.flip(
+            client.forkMachine({ machine: "dev", name: "copy" })
+          ),
+        ];
+
+        yield* release;
+        yield* Fiber.join(deleting);
+
+        expect(refused.map(({ _tag }) => _tag)).toStrictEqual([
+          "NotFound",
+          "NotFound",
+        ]);
+        expect(yield* store.checkpoints).toStrictEqual([]);
+        expect(yield* machineNames(served)).toStrictEqual([]);
       })
   );
 
