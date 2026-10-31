@@ -182,11 +182,10 @@ const rowsFromACapture = (): readonly CheckpointRow[] => {
   const rows = new Map<string, CheckpointRow>();
   const walking = [rowAt("capturing.due")];
 
-  while (walking.length > 0) {
-    const row = walking.pop();
-    const key = `${row?.state} ${row?.error === undefined}`;
+  for (const row of walking) {
+    const key = `${row.state} ${row.error === undefined}`;
 
-    if (row !== undefined && !rows.has(key)) {
+    if (!rows.has(key)) {
       rows.set(key, row);
       walking.push(
         ...representatives.flatMap((event) => {
