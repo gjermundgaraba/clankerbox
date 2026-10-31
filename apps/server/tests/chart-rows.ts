@@ -1,7 +1,7 @@
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime } from "effect";
 
-import type { Facts, Operation } from "../src/store.ts";
+import type { CheckpointFacts, Facts, Operation } from "../src/store.ts";
 
 /** The failure a report or a read carries. */
 export const failure = new Internal({ message: "krun busy" });
@@ -50,5 +50,27 @@ export const flight = (
   seen: "unknown",
   leases: [],
   to: undefined,
+  ...fields,
+});
+
+/** What the checkpoint chart's tests take a row to hold, but for what each sets. */
+export const checkpointFacts = (
+  fields?: Partial<CheckpointFacts>
+): CheckpointFacts => ({
+  name: "snap",
+  instance: "1",
+  createdAt: DateTime.makeUnsafe(0),
+  machine: "dev",
+  host: "linux",
+  kind: "linux",
+  pin: "pin",
+  port: 2222,
+  base: "ubuntu",
+  profile: undefined,
+  cpu: 1,
+  ramMib: 1024,
+  diskGib: 10,
+  error: undefined,
+  failedAt: undefined,
   ...fields,
 });

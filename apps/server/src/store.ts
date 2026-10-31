@@ -1,5 +1,6 @@
 import type { Step } from "@clankerbox/host-contract";
 import type {
+  Checkpoint,
   Conflict,
   Desired,
   HostError,
@@ -81,15 +82,11 @@ export interface Facts {
   readonly undoneAt: DateTime.Utc | undefined;
 }
 
-/** `discarding` clears what a failed capture left, and reads `failed` to a client. */
-export type CheckpointPhase =
-  | "capturing"
-  | "ready"
-  | "discarding"
-  | "deleting"
-  | "failed";
+/** What a client reads of a checkpoint's leaf. */
+export type ShownPhase = Checkpoint["phase"];
 
-export interface CheckpointRow {
+/** What a checkpoint's row holds but for its leaf. */
+export interface CheckpointFacts {
   readonly name: string;
   readonly instance: string;
   readonly createdAt: DateTime.Utc;
@@ -103,9 +100,20 @@ export interface CheckpointRow {
   readonly cpu: number;
   readonly ramMib: number;
   readonly diskGib: number;
-  readonly phase: CheckpointPhase;
   readonly error: HostError | undefined;
   readonly failedAt: DateTime.Utc | undefined;
+}
+
+/** `discarding` clears what a failed capture left, and reads `failed` to a client. */
+export type CheckpointPhase =
+  | "capturing"
+  | "ready"
+  | "discarding"
+  | "deleting"
+  | "failed";
+
+export interface CheckpointRow extends CheckpointFacts {
+  readonly phase: CheckpointPhase;
 }
 
 export type CheckpointPatch = Partial<
