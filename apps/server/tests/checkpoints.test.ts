@@ -676,7 +676,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
                 state: row.state,
                 failed: row.failedAt !== undefined,
                 calls: [...host.fake.calls],
-                inFlight: yield* served.store.operations,
+                freed: Option.isSome(
+                  yield* Effect.timeoutOption(
+                    client.deleteMachine({ id: "dev" }),
+                    Duration.seconds(10)
+                  )
+                ),
               };
             })
         );
@@ -687,7 +692,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             state: "failed",
             failed: true,
             calls: ["capture snap", "deleteCheckpoint snap"],
-            inFlight: [],
+            freed: true,
           }))
         );
       })

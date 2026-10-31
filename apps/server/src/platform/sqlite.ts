@@ -750,9 +750,6 @@ export const open = (
           insertCheckpoint.run(checkpointColumns(record));
         })
       ),
-      operations: sql("list operations", () =>
-        selectOperations.all().map(operationOf)
-      ).pipe(Effect.withSpan("Store.operations")),
       operationOn: Effect.fn("Store.operationOn")((resource, name) =>
         sql(`read the operation on ${name}`, () => {
           const row = selectOperation.get(resource, name);

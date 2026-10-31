@@ -1,4 +1,5 @@
 import type { Step } from "@clankerbox/host-contract";
+import { NotFound } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   Checkpoint,
   Conflict,
@@ -11,6 +12,7 @@ import type {
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, Schema } from "effect";
 import type { DateTime, Effect, Option } from "effect";
+import { Hex } from "effect/encoding";
 
 import type { Decision } from "./chart.ts";
 import type { CheckpointRow } from "./checkpoint-chart.ts";
@@ -37,6 +39,13 @@ export interface Lease {
   readonly name: string;
   readonly mode: "own" | "share";
 }
+
+/** A new ID for a row's instance or an operation. */
+export const newId = (): string =>
+  Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(16)));
+
+export const notFound = (resource: Lease["resource"], name: string): NotFound =>
+  new NotFound({ message: `no ${resource} ${name}`, id: name });
 
 /** One step on a host. Its row in the store is every lease there is: restarts lose none. */
 export interface Operation {
@@ -155,8 +164,7 @@ export interface Interface {
   readonly insertCheckpoint: (
     row: CheckpointRow
   ) => Effect.Effect<void, Conflict | Internal>;
-  /** Every lease is an operation in flight here. */
-  readonly operations: Effect.Effect<readonly Operation[], Internal>;
+  /** The oldest operation in flight on a resource. Every lease is an operation in flight here. */
   readonly operationOn: (
     resource: Lease["resource"],
     name: string

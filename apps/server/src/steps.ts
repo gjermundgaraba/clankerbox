@@ -29,6 +29,17 @@ const checkpointRefOf = (record: CheckpointRow) => ({
 
 const pinned = (pin: string | undefined) => (pin === undefined ? {} : { pin });
 
+const copyOf = (found: Option.Option<MachineRow>) =>
+  Option.getOrUndefined(
+    Option.flatMapNullishOr(found, (from) => {
+      const machine = refOf(from);
+
+      return machine === undefined
+        ? undefined
+        : { machine, ...pinned(from.pin) };
+    })
+  );
+
 const others = (store: Store, found: MachineRow) =>
   Effect.map(store.machines, (rows) => {
     const onHost = rows.filter(
@@ -60,16 +71,11 @@ const sourceStep = (store: Store, found: MachineRow, held: Setup | undefined) =>
     }
 
     if (source.kind === "machine") {
-      const from = yield* store.findMachine(source.name);
-      const ref = Option.flatMapNullishOr(from, refOf);
+      const from = copyOf(yield* store.findMachine(source.name));
 
-      return Option.isSome(ref) && Option.isSome(from)
-        ? ({
-            _tag: "machine",
-            machine: ref.value,
-            ...pinned(from.value.pin),
-          } as const)
-        : undefined;
+      return from === undefined
+        ? undefined
+        : ({ _tag: "machine", ...from } as const);
     }
 
     const from = yield* store.findCheckpoint(source.name);
@@ -170,15 +176,9 @@ export const checkpointStep = (
       return { _tag: "deleteCheckpoint", checkpoint };
     }
 
-    const source = yield* store.findMachine(record.machine);
-    const ref = Option.flatMapNullishOr(source, refOf);
+    const from = copyOf(yield* store.findMachine(record.machine));
 
-    return Option.isSome(ref) && Option.isSome(source)
-      ? {
-          _tag: "capture",
-          machine: ref.value,
-          checkpoint,
-          ...pinned(source.value.pin),
-        }
-      : undefined;
+    return from === undefined
+      ? undefined
+      : { _tag: "capture", checkpoint, ...from };
   });

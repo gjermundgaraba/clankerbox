@@ -23,7 +23,6 @@ import {
   Result,
 } from "effect";
 import type { Duration, Scope } from "effect";
-import { Hex } from "effect/encoding";
 
 import { applied } from "./chart.ts";
 import { activityOf, checkpointChart, phaseOf } from "./checkpoint-chart.ts";
@@ -37,7 +36,7 @@ import { collect, cutShort, poll } from "./operations.ts";
 import { placing } from "./placement.ts";
 import { builderName, nameOf } from "./prebuilds.ts";
 import { checkpointStep } from "./steps.ts";
-import { Store } from "./store.ts";
+import { newId, notFound, Store } from "./store.ts";
 import type { Operation } from "./store.ts";
 
 export interface Interface {
@@ -66,15 +65,6 @@ export interface Interface {
 export class Checkpoints extends Context.Service<Checkpoints, Interface>()(
   "@clankerbox/server/Checkpoints"
 ) {}
-
-const newId = (): string =>
-  Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(16)));
-
-const notFound = (name: string): NotFound =>
-  new NotFound({ message: `no checkpoint ${name}`, id: name });
-
-const noMachine = (name: string): NotFound =>
-  new NotFound({ message: `no machine ${name}`, id: name });
 
 const shown = (record: CheckpointRow): Checkpoint => ({
   id: record.name,
@@ -122,7 +112,7 @@ export const make = (settings: {
 
     const row = (name: string) =>
       Effect.flatMap(store.findCheckpoint(name), (found) =>
-        Effect.fromOption(found, () => notFound(name))
+        Effect.fromOption(found, () => notFound("checkpoint", name))
       );
 
     const applying = (name: string, event: CheckpointEvent) =>
@@ -133,7 +123,7 @@ export const make = (settings: {
     const lostWhy = (record: CheckpointRow, op: Operation) =>
       Effect.map(store.findMachine(record.machine), (source) =>
         op.kind === "capture" && Option.isNone(source)
-          ? noMachine(record.machine)
+          ? notFound("machine", record.machine)
           : new Internal({
               message: `the ${op.kind} of checkpoint ${record.name} ended before its host reported it`,
             })
@@ -176,7 +166,7 @@ export const make = (settings: {
         const present = yield* store.findMachine(source);
 
         if (Option.isNone(present)) {
-          return yield* noMachine(source);
+          return yield* notFound("machine", source);
         }
 
         const machine = present.value;
@@ -212,7 +202,9 @@ export const make = (settings: {
 
     const remove = (name: string) =>
       Effect.flatMap(applying(name, { type: "delete" }), (answer) =>
-        answer.at === "absent" ? Effect.fail(notFound(name)) : drive(name)
+        answer.at === "absent"
+          ? Effect.fail(notFound("checkpoint", name))
+          : drive(name)
       );
 
     const rests = (name: string) =>

@@ -2,7 +2,6 @@ import type { HostInfo, MachineState, Report } from "@clankerbox/host-contract";
 import {
   Internal,
   isResting,
-  NotFound,
   NotMade,
   NotOffered,
   Unavailable,
@@ -11,6 +10,7 @@ import type {
   CreateRequest,
   Declared,
   Machine,
+  NotFound,
   PrebuildRequest,
   ResizeRequest,
   Setup,
@@ -18,7 +18,6 @@ import type {
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, DateTime, Effect, Layer, Option } from "effect";
 import type { Duration, Scope } from "effect";
-import { Hex } from "effect/encoding";
 
 import { applied } from "./chart.ts";
 import { copied, outgrownBySource } from "./copies.ts";
@@ -49,7 +48,7 @@ import { candidatesFor, placing } from "./placement.ts";
 import type { Candidate } from "./placement.ts";
 import { nameOf } from "./prebuilds.ts";
 import { machineStep, refOf } from "./steps.ts";
-import { Store } from "./store.ts";
+import { newId, notFound, Store } from "./store.ts";
 import type { Operation, Source } from "./store.ts";
 import { checked, due, firstCheck, ticked, unchecked } from "./tailnet.ts";
 import type { TailnetCheck } from "./tailnet.ts";
@@ -116,12 +115,6 @@ interface CreateHeldInMemory {
   readonly untried: readonly Candidate[];
 }
 
-const newId = (): string =>
-  Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(16)));
-
-const notFound = (name: string): NotFound =>
-  new NotFound({ message: `no machine ${name}`, id: name });
-
 /** Why a machine can't be copied or resized: it may yet be made, or it won't be. */
 export const unmade = (found: MachineRow): NotMade | NotFound =>
   stageOf(found.state) === "making"
@@ -129,7 +122,7 @@ export const unmade = (found: MachineRow): NotMade | NotFound =>
         message: `machine ${found.name} isn't made yet: its create or setup still runs`,
         machine: found.name,
       })
-    : notFound(found.name);
+    : notFound("machine", found.name);
 
 export const make = (
   settings: Settings
@@ -144,7 +137,7 @@ export const make = (
 
     const row = (name: string) =>
       Effect.flatMap(store.findMachine(name), (found) =>
-        Effect.fromOption(found, () => notFound(name))
+        Effect.fromOption(found, () => notFound("machine", name))
       );
 
     const applying = (name: string, event: MachineEvent) =>
@@ -283,16 +276,16 @@ export const make = (
               reportedBy(found, op, report, yield* DateTime.now)
             );
 
-            if (!written) {
-              return;
-            }
-
-            if (op.kind === "join") {
+            if (written && op.kind === "join") {
               tailnets.set(
                 name,
                 checked(tailnets.get(name) ?? unchecked, report.outcome.tailnet)
               );
-            } else if (op.kind === "start" && report.status === "done") {
+            } else if (
+              written &&
+              op.kind === "start" &&
+              report.status === "done"
+            ) {
               tailnets.set(name, firstCheck);
             }
 
@@ -311,11 +304,7 @@ export const make = (
               }),
             });
 
-            if (!written) {
-              return;
-            }
-
-            if (op.kind === "resize") {
+            if (written && op.kind === "resize") {
               yield* sizesRead(found);
             }
 
@@ -385,7 +374,7 @@ export const make = (
         const answer = yield* applying(name, event);
 
         if (answer.at !== "written" || answer.next === "removed") {
-          return yield* notFound(name);
+          return yield* notFound("machine", name);
         }
 
         yield* drive(name);
@@ -443,7 +432,7 @@ export const make = (
 
         return moved || stageOf(next.state) === "deleting"
           ? unread(next)
-          : yield* notFound(name);
+          : yield* notFound("machine", name);
       });
 
     const infoOf = (host: string) =>
@@ -568,10 +557,7 @@ export const make = (
         const present = yield* store.findCheckpoint(checkpoint);
 
         if (Option.isNone(present) || present.value.state !== "ready") {
-          return yield* new NotFound({
-            message: `no checkpoint ${checkpoint}`,
-            id: checkpoint,
-          });
+          return yield* notFound("checkpoint", checkpoint);
         }
 
         const record = present.value;
@@ -603,7 +589,9 @@ export const make = (
 
     const remove = (name: string) =>
       Effect.flatMap(applying(name, { type: "delete" }), (answer) =>
-        answer.at === "absent" ? Effect.fail(notFound(name)) : drive(name)
+        answer.at === "absent"
+          ? Effect.fail(notFound("machine", name))
+          : drive(name)
       );
 
     const rests = (name: string) =>

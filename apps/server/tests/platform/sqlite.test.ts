@@ -165,13 +165,13 @@ const begun = (store: Interface, wanted: Omit<Operation, "sequence">) =>
   Effect.gen(function* () {
     yield* beginning(store, wanted);
 
-    const taken = (yield* store.operations).find(({ id }) => id === wanted.id);
+    const taken = yield* store.operationOn(wanted.resource, wanted.name);
 
-    if (taken === undefined) {
+    if (Option.isNone(taken) || taken.value.id !== wanted.id) {
       return yield* Effect.die(`${wanted.id} wasn't begun`);
     }
 
-    return taken;
+    return taken.value;
   });
 
 const found = (store: Interface, name: string) =>
@@ -299,7 +299,7 @@ layer(NodeServices.layer)((it) => {
               yield* store.insertMachine(row("other"));
 
               return [
-                yield* store.operations,
+                yield* store.operationOn("machine", "dev"),
                 yield* beginning(store, operation("dev")),
                 yield* begun(store, operation("other")),
                 yield* store.hostBoot("linux"),
@@ -309,7 +309,7 @@ layer(NodeServices.layer)((it) => {
             })
           );
 
-        expect(operations).toStrictEqual([held]);
+        expect(operations).toStrictEqual(Option.some(held));
         expect(conflict).toStrictEqual({ at: "busy", by: held });
         expect(later.sequence).toBeGreaterThan(held.sequence);
         expect(boot).toStrictEqual(Option.some("boot-1"));
@@ -897,44 +897,38 @@ layer(NodeServices.layer)((it) => {
               })),
             });
 
-            const inFlight = held.flatMap(({ leases }) => leases);
-            const free = step.leases.every((lease) => holds(lease, inFlight));
+            const by = held.find(
+              ({ leases }) =>
+                !step.leases.every((lease) => holds(lease, leases))
+            );
 
-            if (step.subject === "machine") {
-              const answered = yield* store.advance(
-                "machine",
-                "subject",
-                (given) => ({
-                  next: { ...given, cpu: given.cpu + 1 },
-                  begin: wanted,
-                  finish: false,
-                })
-              );
+            const answered =
+              step.subject === "machine"
+                ? yield* store.advance("machine", "subject", (given) => ({
+                    next: { ...given, cpu: given.cpu + 1 },
+                    begin: wanted,
+                    finish: false,
+                  }))
+                : yield* beginningCheckpoint(store, wanted);
 
-              expect(answered.at).toBe(free ? "written" : "busy");
-              cpu += free ? 1 : 0;
+            if (by === undefined) {
+              expect(answered.at).toBe("written");
+              last += 1;
+              cpu += step.subject === "machine" ? 1 : 0;
+              held = [...held, { ...wanted, sequence: last }];
             } else {
-              expect((yield* beginningCheckpoint(store, wanted)).at).toBe(
-                free ? "written" : "busy"
-              );
-            }
-
-            if (free) {
-              const taken = (yield* store.operations).find(
-                ({ id }) => id === wanted.id
-              );
-
-              expect(taken).toStrictEqual({
-                ...wanted,
-                sequence: taken?.sequence,
-              });
-              expect(taken?.sequence).toBeGreaterThan(last);
-              last = taken?.sequence ?? last;
-              held = taken === undefined ? held : [...held, taken];
+              expect(answered).toStrictEqual({ at: "busy", by });
             }
           }
 
-          expect(yield* store.operations).toStrictEqual(held);
+          for (const resource of ["machine", "checkpoint"] as const) {
+            expect(yield* store.operationOn(resource, "subject")).toStrictEqual(
+              Option.fromUndefinedOr(
+                held.find((op) => op.resource === resource)
+              )
+            );
+          }
+
           expect((yield* found(store, "subject")).cpu).toBe(cpu);
         }
       }).pipe(Effect.scoped),
@@ -1008,7 +1002,7 @@ layer(NodeServices.layer)((it) => {
       Effect.gen(function* () {
         const stateDir = yield* stateIn;
 
-        const [taken, refused, after, none, broken, operations, thrown] =
+        const [taken, refused, after, none, broken, devs, others, thrown] =
           yield* withStore(stateDir, (store) =>
             Effect.gen(function* () {
               yield* store.insertMachine(row("dev"));
@@ -1039,7 +1033,8 @@ layer(NodeServices.layer)((it) => {
                     finish: false,
                   }))
                 ),
-                yield* store.operations,
+                yield* store.operationOn("machine", "dev"),
+                yield* store.operationOn("machine", "other"),
                 yield* Effect.flip(
                   store.advance("machine", "other", () => {
                     throw new Error("a chart threw");
@@ -1050,13 +1045,19 @@ layer(NodeServices.layer)((it) => {
           );
 
         expect(taken.at).toBe("written");
-        expect(refused).toStrictEqual({ at: "busy", by: operations[0] });
+        expect(refused).toStrictEqual({
+          at: "busy",
+          by: Option.getOrThrow(devs),
+        });
         expect(after).toStrictEqual(
           row("dev", { state: "made.stepping.starting", pin: "fake 2" })
         );
         expect(none).toStrictEqual({ at: "absent" });
         expect(broken._tag).toBe("Internal");
-        expect(operations.map(({ name }) => name)).toStrictEqual(["dev"]);
+        expect(Option.map(devs, ({ name }) => name)).toStrictEqual(
+          Option.some("dev")
+        );
+        expect(others).toStrictEqual(Option.none());
         expect(thrown.message).toContain("a chart threw");
       })
   );
@@ -1073,7 +1074,7 @@ layer(NodeServices.layer)((it) => {
 
             const start = yield* begun(store, operation("dev"));
 
-            yield* begun(
+            yield* beginning(
               store,
               operation("dev", {
                 kind: "join",
@@ -1110,14 +1111,14 @@ layer(NodeServices.layer)((it) => {
           }));
 
           return [
-            yield* store.operations,
+            yield* store.operationOn("machine", "dev"),
             yield* found(store, "dev"),
             yield* beginning(store, operation("dev")),
           ] as const;
         })
       );
 
-      expect(operations).toStrictEqual([]);
+      expect(operations).toStrictEqual(Option.none());
       expect(after).toStrictEqual(
         row("dev", { port: 10_000, state: "made.observing", prepared: true })
       );
@@ -1144,13 +1145,14 @@ layer(NodeServices.layer)((it) => {
           })
         );
 
-        const operations = yield* withStore(
-          stateDir,
-          (store) => store.operations
+        const resizing = yield* withStore(stateDir, (store) =>
+          store.operationOn("machine", "dev")
         );
 
         expect(left.resize).toBeUndefined();
-        expect(operations.map(({ to }) => to)).toStrictEqual([{ cpu: 2 }]);
+        expect(Option.map(resizing, ({ to }) => to)).toStrictEqual(
+          Option.some({ cpu: 2 })
+        );
       })
   );
 
@@ -1196,14 +1198,22 @@ layer(NodeServices.layer)((it) => {
               return [
                 yield* store.machines,
                 yield* store.checkpoints,
-                yield* store.operations,
+                [
+                  yield* store.operationOn("machine", "dev"),
+                  yield* store.operationOn("machine", "kept"),
+                  yield* store.operationOn("checkpoint", "snap"),
+                ],
               ] as const;
             })
         );
 
         expect(machines).toStrictEqual([row("kept")]);
         expect(checkpoints).toStrictEqual([]);
-        expect(operations).toStrictEqual([]);
+        expect(operations).toStrictEqual([
+          Option.none(),
+          Option.none(),
+          Option.none(),
+        ]);
       })
   );
 
