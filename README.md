@@ -39,7 +39,7 @@ What happens when something fails:
 | A host is unreachable | Its machines read `unknown`. A request on one stays saved, and the wait fails fast with `Unavailable`; it acts when the host is back. A create goes to another host, and only fails if no host could take it. |
 | A host restarts | Its VMs stay up. A step it held ends, and the control plane decides afresh from the VM's state. A create it held is undone, and a capture it held fails and leaves no checkpoint. |
 | A prebuild's host stops answering | The build rides out a fault shorter than a recheck, 30 s, and fails `Unavailable` past that. Its builder goes once the host is back. |
-| A create fails | The VM is deleted, and the row stays `failed` for a day to say why. `delete` clears it, and a create of the name replaces it. |
+| A create fails | The VM is deleted, again at each recheck while that fails, and the row stays `failed` to say why, for a day once the VM is gone. `delete` clears it. A create of the name replaces it once the VM is gone, and answers `Conflict` until then. |
 | A host has no room for a create | The create moves to the next host. |
 
 Machines and checkpoints stay on the host they were made on: forks and restores land beside their source, and machines don't move between hosts yet.

@@ -664,6 +664,34 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     })
   );
 
+  it.effect(
+    "a create of a failed create's name answers Conflict while its VM's delete fails, and replaces the row once the VM is gone",
+    () =>
+      Effect.gen(function* () {
+        const { client, fake, rows } = yield* served({
+          recheck: Duration.millis(200),
+        });
+
+        fake.failNext("create", new Internal({ message: "krun EINVAL" }));
+        fake.failNext("delete", new Internal({ message: "EBUSY" }));
+        yield* Effect.flip(client.create("dev", request("dev")));
+
+        const held = yield* Effect.flip(client.create("dev", request("dev")));
+
+        yield* eventually(rows, ([found]) => found?.state === "undone");
+
+        const again = yield* client.create("dev", request("dev", { cpu: 2 }));
+
+        expect(held._tag).toBe("Conflict");
+        expect([...at(again), again.cpu]).toStrictEqual([
+          "running",
+          "running",
+          "settled",
+          2,
+        ]);
+      })
+  );
+
   it.effect("a failed create's row expires", () =>
     Effect.gen(function* () {
       const { client, fake, rows } = yield* served({
