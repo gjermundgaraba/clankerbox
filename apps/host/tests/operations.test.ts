@@ -1128,6 +1128,48 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       expect(errorOf(report)).toStrictEqual(["failed", "Internal"]);
       expect(host.fake.calls).toContain("deleteCheckpoint snap");
+      expect(report.outcome.cleared).toBe(true);
+    })
+  );
+
+  it.effect("a capture whose clearing fails doesn't say it cleared", () =>
+    Effect.gen(function* () {
+      const host = yield* runner();
+
+      yield* finished(host, makes("dev"));
+      host.fake.failNext("capture", new Internal({ message: "no disk" }));
+      host.fake.failNext(
+        "deleteCheckpoint",
+        new Internal({ message: "EBUSY" })
+      );
+
+      const report = yield* finished(host, {
+        _tag: "capture",
+        machine: ref("dev"),
+        checkpoint: checkpoint("snap"),
+        pin: "fake 1",
+      });
+
+      expect(errorOf(report)).toStrictEqual(["failed", "Internal"]);
+      expect(report.outcome.cleared).toBeUndefined();
+    })
+  );
+
+  it.effect("a capture that ends well leaves nothing to clear", () =>
+    Effect.gen(function* () {
+      const host = yield* runner();
+
+      yield* finished(host, makes("dev"));
+
+      const report = yield* finished(host, {
+        _tag: "capture",
+        machine: ref("dev"),
+        checkpoint: checkpoint("snap"),
+        pin: "fake 1",
+      });
+
+      expect(report.status).toBe("done");
+      expect(report.outcome.cleared).toBeUndefined();
     })
   );
 

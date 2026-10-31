@@ -479,15 +479,20 @@ export const make = (
 
           return Effect.andThen(
             copyable(machine.name, pin),
-            runtime
-              .capture(machine, checkpoint)
-              .pipe(
-                Effect.onExit((exit) =>
-                  Exit.isSuccess(exit)
-                    ? Effect.void
-                    : Effect.ignore(runtime.deleteCheckpoint(checkpoint))
-                )
+            runtime.capture(machine, checkpoint).pipe(
+              Effect.onExit((exit) =>
+                Exit.isSuccess(exit)
+                  ? Effect.void
+                  : runtime.deleteCheckpoint(checkpoint).pipe(
+                      Effect.andThen(
+                        Effect.sync(() => {
+                          entry.outcome = { ...entry.outcome, cleared: true };
+                        })
+                      ),
+                      Effect.ignore
+                    )
               )
+            )
           );
         }
 

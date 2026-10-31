@@ -649,6 +649,51 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a capture refused is deleted once, by its host, with no step of the control plane's",
+    () =>
+      Effect.gen(function* () {
+        const refused = yield* Effect.forEach(
+          ["linux", "mac"] as const,
+          (kind) =>
+            Effect.gen(function* () {
+              const served = yield* withSource(onKind(kind));
+              const { client, host } = served;
+
+              if (kind === "linux") {
+                yield* client.stopMachine({ id: "dev" });
+              }
+
+              host.fake.calls.length = 0;
+
+              const error = yield* Effect.flip(
+                client.captureCheckpoint({ machine: "dev", name: "snap" })
+              );
+
+              const row = yield* rested(served, "snap");
+
+              return {
+                tag: error._tag,
+                state: row.state,
+                failed: row.failedAt !== undefined,
+                calls: [...host.fake.calls],
+                inFlight: yield* served.store.operations,
+              };
+            })
+        );
+
+        expect(refused).toStrictEqual(
+          ["linux", "mac"].map(() => ({
+            tag: "WrongState",
+            state: "failed",
+            failed: true,
+            calls: ["capture snap", "deleteCheckpoint snap"],
+            inFlight: [],
+          }))
+        );
+      })
+  );
+
+  it.effect(
     "a capture under way is no checkpoint yet: a restore of it is NotFound and no list shows it",
     () =>
       Effect.gen(function* () {

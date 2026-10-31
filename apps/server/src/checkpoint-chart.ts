@@ -26,6 +26,10 @@ export interface Done {
 export interface NotDone {
   readonly status: "failed" | "cancelled";
   readonly error: HostError;
+  /** When a capture failed, should its host have cleared what it began. */
+  readonly at: Done["at"];
+  /** A failed capture's host cleared what it began, so a delete would find nothing. */
+  readonly cleared: boolean;
 }
 
 const events = {
@@ -60,13 +64,23 @@ export const checkpoint = setup({
         sent: {
           meta: { phase: "capturing", step: "capture", activity: "follow" },
           on: {
-            reported: ({ event }) =>
-              event.status === "done"
-                ? { target: "#checkpoint.ready" }
+            reported: ({ event }) => {
+              if (event.status === "done") {
+                return { target: "#checkpoint.ready" };
+              }
+
+              const { error, at, cleared } = event;
+
+              return cleared
+                ? {
+                    target: "#checkpoint.failed",
+                    context: { error, failedAt: at },
+                  }
                 : {
                     target: "#checkpoint.discarding.due",
-                    context: { error: event.error },
-                  },
+                    context: { error },
+                  };
+            },
             lost: ({ event }) => ({
               target: "#checkpoint.discarding.due",
               context: { error: event.error },

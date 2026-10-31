@@ -142,6 +142,8 @@ export const Outcome = Schema.Struct({
   hostKey: Schema.optionalKey(Schema.String),
   sizes: Schema.optionalKey(Schema.Struct(sizes)),
   tailnet: Schema.optionalKey(TailnetStatus),
+  /** A capture that failed and left nothing: its host cleared what it began. */
+  cleared: Schema.optionalKey(Schema.Literal(true)),
 });
 
 export type Outcome = typeof Outcome.Type;

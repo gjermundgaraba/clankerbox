@@ -104,11 +104,17 @@ const refOf = (record: CheckpointRow) => ({
 
 const reportedBy = (
   op: Operation,
-  { status, error }: Report,
+  { status, outcome, error }: Report,
   at: DateTime.Utc
 ): CheckpointEvent =>
   status === "failed" || status === "cancelled"
-    ? { type: "reported", status, error: error ?? cutShort(op) }
+    ? {
+        type: "reported",
+        status,
+        error: error ?? cutShort(op),
+        at,
+        cleared: outcome.cleared === true,
+      }
     : { type: "reported", status: "done", at };
 
 export const make = (settings: {

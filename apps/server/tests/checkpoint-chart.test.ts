@@ -70,12 +70,20 @@ const read: CheckpointEvent = { type: "read", boot: "fresh", id: "new" };
 
 const done: CheckpointEvent = { type: "reported", status: "done", at };
 
-const failed: CheckpointEvent = { type: "reported", status: "failed", error };
+const failed: CheckpointEvent = {
+  type: "reported",
+  status: "failed",
+  error,
+  at,
+  cleared: false,
+};
 
 const cancelled: CheckpointEvent = {
   type: "reported",
   status: "cancelled",
   error,
+  at,
+  cleared: false,
 };
 
 const gone: CheckpointEvent = { type: "lost", error };
@@ -429,6 +437,26 @@ describe("a capture", () => {
       rowAt("discarding.due", { error })
     );
   });
+
+  it.each([
+    ["failed", "failed"],
+    ["cut short", "cancelled"],
+  ] as const)(
+    "%s when its host cleared what it began rests failed at once, as a delete would find nothing",
+    (_, status) => {
+      expect(
+        applied(
+          checkpointChart,
+          rowAt("capturing.sent"),
+          { type: "reported", status, error, at, cleared: true },
+          inFlight("capture")
+        )
+      ).toStrictEqual({
+        next: rowAt("failed", { error, failedAt: at }),
+        finish: true,
+      });
+    }
+  );
 
   it("rests failed once what it left has gone, with its own error and when", () => {
     expect(
