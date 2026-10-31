@@ -28,7 +28,7 @@ VMs  <---------- SSH, directly from the client to the host's port
 
 The control plane keeps every machine's row and decides what happens next. It gives a host one whole step at a time (make, start, stop, pause, remove, resize, capture), and the host runs that step to its end whether or not the control plane stays. A host holds nothing a restart of the control plane can lose, and the control plane holds nothing a host's restart can lose.
 
-A mutation answers once the control plane has recorded it, and the client waits by reading the row. Nothing but the wait is lost when a client goes away.
+A mutation answers once the control plane has recorded it, and the client waits by reading the row. Nothing but the wait is lost when a client goes away. Each write of a row runs a statechart inside that write, so a request and what it does to the row can't be pulled apart by a crash.
 
 What happens when something fails:
 
@@ -37,7 +37,8 @@ What happens when something fails:
 | The control plane is down | Running machines keep running. Open SSH sessions stay up. A new `ssh` fails, since it asks the control plane where the machine is. Every other command fails `Unavailable`. A step a host already has runs to its end. |
 | The control plane comes back | It finds each step in flight on its host, and carries on. A create whose setup hadn't reached its host is undone and fails, since a setup is never stored. |
 | A host is unreachable | Its machines read `unknown`. A request on one stays saved, and the wait fails fast with `Unavailable`; it acts when the host is back. A create goes to another host, and only fails if no host could take it. |
-| A host restarts | Its VMs stay up. A step it held ends, and the control plane decides afresh from the VM's state. A create it held is undone. |
+| A host restarts | Its VMs stay up. A step it held ends, and the control plane decides afresh from the VM's state. A create it held is undone, and a capture it held fails and leaves no checkpoint. |
+| A prebuild's host stops answering | The build rides out a fault shorter than a recheck, 30 s, and fails `Unavailable` past that. Its builder goes once the host is back. |
 | A create fails | The VM is deleted, and the row stays `failed` for a day to say why. `delete` clears it, and a create of the name replaces it. |
 | A host has no room for a create | The create moves to the next host. |
 
@@ -201,7 +202,8 @@ clankerbox capacity                        # for an operator: each host's resour
 - On a Mac, macOS restores a VM's state only in the operator's unlocked login session: a `start` of a paused machine while it is locked fails and keeps the saved state (see Deploy).
 - `resize` gives a stopped machine any vCPUs and RAM, and grows a running linux machine's live, needing room for its RAM as a start does; a running mac machine or a paused one is refused, so stop it first. A disk only grows: smolvm grows the guest's filesystem, at once when it runs, and on a Mac the base's Tart guest agent grows APFS at the next boot. A resize waits for a step under way, and keeps what the runtime gave when it fails part way, or when the host stops during it, which the machine's sizes then show; asking for the same sizes again finishes a live grow that failed part way.
 - A create, fork or restore whose copy or setup fails deletes its VM, keeps its row for a day to say why, and answers the error; a delete that fails runs again at the next check. A create that a host had no room for moves to the next host first. Only a `delete` stops a machine being made: a `stop` waits for it to be made, then stops it. A `start` on a running machine runs its preparation again.
-- A request on a machine whose host can't be reached stays saved and fails `Unavailable`, and acts once the host answers.
+- A request on a machine whose host can't be reached stays saved and fails `Unavailable`, and acts once the host answers. A capture on such a machine reads `capturing` until the host answers, so `checkpoint capture` waits that long, or until its `--timeout`.
+- A machine being deleted can't be captured or forked: either answers `NotFound`.
 - A checkpoint is `ready` until its delete begins, and a delete that fails runs again.
 - A prebuild matches the profile, its sizes, its setup, the config's authorized keys, and the host it was built on and its runtime release; any change runs the setup again until a new `prebuild`. Each host keeps its own: a create uses a prebuild held by any host that can take it. Each `prebuild` runs the setup again and replaces the one that matches once it has run, so a setup that installs latest releases picks up today's; creates restore the old one until then. A capture that fails leaves none. Prebuilds that match nothing any more stay until deleted: `checkpoint list` shows them.
 - `ssh` pins the machine's host key and logs in as `admin`.
@@ -280,7 +282,7 @@ VMs run in their own scopes, so restarting the unit leaves them running.
 | The control plane | Each host | its `listen.port` | steps and reads |
 | Clients that run `ssh` | Each host | its `machinePorts` | SSH straight to machines |
 
-Clients never need a host's API port. On a linux host, nothing may listen on a public address: guests can reach those. On macOS with the application firewall on, allow incoming connections for each new `node` binary, which allows them for every program that `node` runs.
+Clients never need a host's API port. The control plane logs one line when a host stops answering, and one when it answers again. On a linux host, nothing may listen on a public address: guests can reach those. On macOS with the application firewall on, allow incoming connections for each new `node` binary, which allows them for every program that `node` runs.
 
 ## SDK
 

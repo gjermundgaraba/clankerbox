@@ -1,6 +1,6 @@
 ---
 name: verify-machine-answers
-description: Model-check, with TLA+ and TLC, that a clankerbox machine request's answer is true under every interleaving of concurrent requests, a control plane crash, a host restart, a partition and lost, repeated or late delivery of operations. Use when a change touches apps/server/src/chart.ts, machine-chart.ts, machines.ts, reconcile.ts, operations.ts, the store's desire, begin or finish, apps/host/src/operations.ts, or the SDK client's wait, before calling it done.
+description: Model-check, with TLA+ and TLC, that a clankerbox machine request's answer is true under every interleaving of concurrent requests, a control plane crash, a host restart, a partition and lost, repeated or late delivery of operations. Use when a change touches apps/server/src/chart.ts, machine-chart.ts, machines.ts, driver.ts, operations.ts, the store's advance, apps/host/src/operations.ts, or the SDK client's wait, before calling it done.
 ---
 
 # Verify machine answers
@@ -33,10 +33,6 @@ abstract event through the real chart, `apps/server/src/machine-chart.ts`, with
 `applied`. So the chart TLC checks is the chart that compiles. A stale table
 fails `apps/server/tests/machine-chart.test.ts`, with no Java. `check.sh` exports
 it first.
-
-Nothing live calls the chart yet. Until the writes move onto it, that test holds
-every event from every leaf to `reconcile.ts` and the store's SQL, and names each
-difference, which is what ties this model to the code that runs.
 
 TLC checks these invariants on every reachable state:
 
@@ -121,8 +117,8 @@ A pass covers this scope, and only it:
   link is cut, though the code also shows it when the runtime can't read one
   machine. That read's fault reaches `Read`, which writes nothing either way.
 - **A step may begin over a cut link.** `Decide` records a make or a delete with
-  the boot it last knew, where `begin` reads the host first and rests. The model
-  is the wider of the two.
+  the boot it last knew, where a loop reads the host first for the boot its `read`
+  event carries, and rests when it can't. The model is the wider of the two.
 
 ## Coverage and sync
 
@@ -134,18 +130,18 @@ for this code:
 | `Row`, `To`, `Chart.tla`         | `apps/server/src/chart.ts` `applied`; `machine-chart.ts`, the whole chart  |
 | `Phase`, `IsStep`                | `machine-chart.ts` `phaseOf`, a leaf's `step`                              |
 | `Wants`                          | `machine-chart.ts` `wants`, for a cut and for a failure                    |
-| `Decide`                         | `machine-chart.ts` `read`; `machines.ts` `advance`, `begin`                |
+| `Decide`                         | `machine-chart.ts` `read`; `machines.ts` `looking`; `store.advance`        |
 | `Create`                         | `apps/server/src/machines.ts` `born`, `store.insertMachine`                |
 | `Request`                        | `machine-chart.ts` `ask`, `delete`; `machines.ts` `asked`, `remove`        |
-| `Read`                           | `machines.ts` `stateOf`                                                    |
+| `Read`                           | `machine-view.ts` `stateOf`                                                |
 | `Send`, `Cut`                    | `apps/server/src/operations.ts` `poll`                                     |
-| `Collect`                        | `machine-chart.ts` `reported`, `lost`; `machines.ts` `follow`, `ended`; `operations.ts` `poll`; `store.finish` |
+| `Collect`                        | `machine-chart.ts` `reported`, `lost`; `machines.ts` `following`; `operations.ts` `poll`, `collect`; `store.advance` |
 | `Deliver`, `Repeat`, `Lose`      | `apps/host/src/operations.ts` `run`, its boot and sequence fence           |
 | `HostStep`, `HostFail`           | `apps/host/src/operations.ts` `perform`, and `picking`, `made` for a make  |
 | `HostCancel`                     | `apps/host/src/operations.ts` `cancel`, `ended`                            |
 | `HostRestart`                    | a new process: `Operations.boot`, empty `entries` and `scopes`             |
 | `Crash`, `Revive`                | a new process: the store stays, `creates` goes; `machines.ts` start-up     |
-| `Shown`                          | `machines.ts` `phaseShown`, in `Machines.get` and `list`                   |
+| `Shown`                          | `machine-view.ts` `phaseShown`, in `Machines.get` and `list`               |
 | `Answer`                         | `packages/sdk/src/client.ts` `machineRest`, `machineGone`, `answerOf`      |
 
 A change to the chart needs no change here: rerun `check.sh`, which exports it.
@@ -209,10 +205,10 @@ full config.
 as `ask` clears it for a start in the write that records the request, and the
 model's VM changes only under a step.
 
-The chart has no generation, and the client's check and `Machine.generation` went
-before it. A write decides from the row as it stands, a request leaves rest in
-that write, and a VM changes only under an operation, so a read from before a
-request is still true of the VM when it is decided. No invariant needed more.
+The chart has no generation. A write decides from the row as it stands, a request
+leaves rest in that write, and a VM changes only under an operation, so a read
+from before a request is still true of the VM when it is decided. No invariant
+needed more.
 
 `Shown` has no such row. A client that reads the stored phase, or that reads
 `waiting` over a failed row, gets a different answer, and no invariant reads the

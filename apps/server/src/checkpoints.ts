@@ -48,7 +48,7 @@ export interface Interface {
   /**
    * Records a capture and answers at once. A checkpoint has no `waiting`, unlike a machine: a
    * capture on a dead host reads `capturing`, so a client's wait polls until its `--timeout`, and
-   * without one for as long as the host stays dead. Known gap, for CH7.
+   * without one for as long as the host stays dead.
    */
   readonly capture: (
     machine: string,

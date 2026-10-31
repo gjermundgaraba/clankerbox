@@ -8,7 +8,7 @@ The goal is that a client talks to one server, IDs carry no host, and adding a h
 
 1. **Actors run on the control plane.** This is the direction, and the redesign may change current rules where a careful design needs it.
 2. **A host runs whole steps, as operations.** "Make `dev`" is the copy and the setup, and preparation is part of `start`. The control plane decides what happens and when.
-3. **Mutations are asynchronous on the server, and waiting is a client concern.** The server records what was asked and answers at once. A reconcile loop does the work.
+3. **Mutations are asynchronous on the server, and waiting is a client concern.** The server records what was asked and answers at once. One loop per resource does the work.
 4. **A failed create keeps its row.** The VM goes, and the row stays, marked failed, until it expires or a new `create` replaces it.
 5. **SSH by name is `ssh dev.cbx`, plus `clankerbox ssh dev`.** The SSH config needs one block, which never changes when a host is added.
 6. **New SSH by name fails while the control plane is down.** Clients keep no cache of endpoints or host keys.
@@ -36,7 +36,7 @@ Everything below this section follows from these.
 | Path | Holds | Runs on |
 | --- | --- | --- |
 | `apps/cli` | Commands, profiles and the SSH config. Still publishes `clankerbox`. | Client machines |
-| `apps/server` | Rows, the reconcile loop, placement, the store, the client routes | The control plane |
+| `apps/server` | Rows, the charts, the loops, placement, the store, the client routes | The control plane |
 | `apps/host` | Runtimes, the operation runner, guest scripts, the host routes | Each host |
 | `packages/sdk` | The client contract and the client. Published. | Imported by the CLI, the provider and the server |
 | `packages/host-contract` | The host contract. Private. | Imported by the server and the host |
@@ -48,8 +48,8 @@ Everything below this section follows from these.
 
 | Control plane | Host |
 | --- | --- |
-| Machine rows and checkpoint records, including `desired`, `generation`, `stage`, `prepared`, `phase`, sizes, host key and pin | VMs, disks, saved RAM and checkpoint files |
-| One loop per machine, `next`, the recheck | The runtimes, `smolvm` and `tart` |
+| Machine rows and checkpoint records, including `desired`, the chart's leaf in `state`, `prepared`, sizes, host key and pin | VMs, disks, saved RAM and checkpoint files |
+| The charts, one loop per machine and checkpoint, the recheck | The runtimes, `smolvm` and `tart` |
 | Operations and their leases, as rows | The operation runner, in memory |
 | Placement, name uniqueness | Admission, from the machines the control plane lists; port choice; guest scripts: setup, preparation and the tailnet check |
 | The client contract and the host contract's caller | The host contract, the tailnet secret |
@@ -58,10 +58,10 @@ A host keeps no database. Each operation carries the refs it needs, and a host's
 
 ### How an operation works
 
-An operation has an ID, a sequence number and a step, and is recorded with its leases in one transaction before it is sent (`store.begin`). The steps are `make`, `start`, `stop`, `pause`, `remove`, `resize`, `capture`, `deleteCheckpoint` and `join`. A create, a fork and a restore are all `make`, from a different source. Reads are plain calls, not operations.
+An operation has an ID, a sequence number and a step, and is recorded with its leases in one transaction before it is sent (`store.advance`). The steps are `make`, `start`, `stop`, `pause`, `remove`, `resize`, `capture`, `deleteCheckpoint` and `join`. A create, a fork and a restore are all `make`, from a different source. Reads are plain calls, not operations.
 
 - A host runs an operation to its end, whether or not its caller stays.
-- A host keeps an operation's report until the control plane collects it. The control plane stores the report first (`apps/server/src/operations.ts` `finish`).
+- A host keeps an operation's report until the control plane collects it. The control plane stores the report first (`store.advance`, then `apps/server/src/operations.ts` `collect`).
 - The same ID sent twice returns the same operation. An operation carries the `boot` it was meant for, and another process refuses it. The sequence comes from one durable counter. A host keeps the latest for each scope in memory, refuses a lower or equal one with `Conflict`, and lets a higher one cut short what runs there.
 - `boot` is random per host process. An ID the host doesn't hold is lost when `boot` differs. When `boot` matches the delivery hasn't come, so it is sent again if it can be built, and otherwise it is lost. A lost `make` goes `undoing`.
 - A restarted host answers `adopt`: the control plane tells it which machines exist, once per new `boot`, so a runtime can reattach them.
@@ -73,18 +73,18 @@ Setup scripts travel in the `make` and stay in memory on both sides. A base sour
 
 ### How a request works
 
-The server records the desire, numbers it with `generation`, and answers with the machine. The write also takes the row out of rest. So a resting `phase` read after that write has seen the request, and a rest is written only at the generation it was decided from. The loop for that machine does the work, and it is the same path after a restart, because the row records the operation in flight.
+The server records the desire and answers with the machine. The write also takes the row out of rest, so a resting `phase` read after that write has seen the request. The loop for that machine does the work, and it is the same path after a restart, because the row records the operation in flight.
 
 The client waits. The SDK's methods keep their shape: `client.stopMachine` polls `getMachine` until `phase` rests, then answers success, or `Superseded` when `desired` has moved on, or the failure the row records. `--no-wait` and `--timeout` stop waiting without changing what happens on the server. The server never answers `Superseded`.
 
-- A machine's `phase` names the step it is in, or rests at `settled`, `failed`, `lost` or `waiting`.
-- `waiting` means a step can't begin because its host can't be reached. The client's wait fails at once with `Unavailable`, `readOnly: false`, and says the request is saved.
+- A machine's `phase` names the step it is in, or rests at `settled`, `failed` or `lost`.
+- `waiting` is read, never stored: a read that finds the VM `unknown` shows it, on any row that hasn't failed. The client's wait fails at once with `Unavailable`, `readOnly: false`, and says the request is saved.
 - A client rides out a control plane outage of about 2 minutes (`outageLimit`).
 - A make that fails, in the copy or the setup, goes `undoing`, deletes the VM and rests `undone`. The row stays as `failed` with state `missing` and its error. Requests other than `get`, `delete` and `create` answer `NotFound`. It expires after `failedRowsLast`, one day.
 - Fork, restore, capture and resize follow the same pattern. A prebuild answers a `Build`, which `getPrebuild` reads, and builds live in memory.
 - Polling is the default. A watch can come later.
 
-The plain loop replaced the statechart. Answers were a large part of why `lifecycle.ts` needed its states. Once they moved to the client, `next` over the row, a read and the operation in flight were enough, so `lifecycle.ts` and `xstate` are gone.
+A chart decides each write. `machine-chart.ts` and `checkpoint-chart.ts` are xstate charts with no `invoke`, timers or actors. `applied` (`chart.ts`) rebuilds a snapshot from the row, takes one event inside the SQLite write and drops the snapshot, as a threaded one retains every step before it. Fibers do what takes time: a loop per resource (`driver.ts`) reads a host, sends a step and polls it, and a prebuild is an Effect sequence in `checkpoints.ts`, with its builds in memory. `MachineAnswers.tla` checks the same chart, through the table `Chart.tla` exports from it.
 
 ## What the code said before any decision
 
@@ -131,8 +131,8 @@ Each duty has exactly one home. "Before" is the code at `adcacee`. "Deleted" is 
 | Read setup scripts and keys | `specRequest` (`profile.ts:111`), `packages/sdk/src/setup.ts` | Client: the request carries them | Nothing |
 | Allocate SSH ports | `pickPort` in `machines.ts:823` | Host: `host/operations.ts`, inside the step, which reports the port | Port uniqueness as a store rule |
 | Mint tailnet keys | `machines.ts:471` `join`, `tailnet.oauthClient` in host config | Host: the `join` step, over `Tailnet` | Nothing. When a join is due is `server/tailnet.ts`. |
-| Move a machine toward what was asked | `lifecycle.ts`, `reconcile.ts`, `machines.ts:1071` | Server: `server/machines.ts`, `server/reconcile.ts` `next` | The host's actors, store, recheck and `lifecycle.ts` |
-| Hold leases | `packages/host/src/leases.ts`, in memory | Server: the `operations` table, `server/platform/sqlite.ts` `begin` | `leases.ts` |
+| Move a machine toward what was asked | `lifecycle.ts`, `reconcile.ts`, `machines.ts:1071` | Server: `server/machine-chart.ts`, `server/driver.ts`, `server/machines.ts` | The host's actors, store, recheck and `lifecycle.ts` |
+| Hold leases | `packages/host/src/leases.ts`, in memory | Server: the `operations` table, `server/platform/sqlite.ts` `advance` | `leases.ts` |
 | Keep rows | `packages/host/src/store.ts`, `platform/sqlite.ts` | Server: `server/store.ts`, `server/platform/sqlite.ts` | The host's database |
 | Pick up what a restart left | `packages/host/src/startup.ts` | Server: each loop's first pass, `server/machines.ts` | `startup.ts` |
 | Clean what only the runtime can see | `packages/host/src/startup.ts` | Host: `Runtime.startup` | `startup.ts` |
@@ -144,7 +144,7 @@ Each duty has exactly one home. "Before" is the code at `adcacee`. "Deleted" is 
 | Global name uniqueness | Finding 3. A create must be refused when any host holds the name. | Server: the primary key, `server/platform/sqlite.ts` |
 | Capacity-aware placement | Finding 1. | Server: `server/machines.ts`. A `Capacity` failure moves the create to the next candidate once its VM is gone. The host's refusal stays the truth, and nothing ambiguous moves a create. The hosts left to try are in memory, with the setup, so a restart ends a move: the create rests failed with `Capacity`. |
 | Host membership and draining | Adding or removing a host had no operation. | Server: `hosts` and `draining` in its config |
-| Answering for an unreachable host | `Unavailable` was client-made (`errors.ts:277`). | Server: a synchronous refusal, 503, never on a row. A step that can't begin rests `waiting`. |
+| Answering for an unreachable host | `Unavailable` was client-made (`errors.ts:277`). | Server: a synchronous refusal, 503, never on a row. A read that can't reach the VM shows `waiting`. |
 | Waiting for a client's request to rest | A wait spans restarts now. | Client: `client.ts` `polled`, `answerOf`. A prebuild's wait for its builder is part of building it, above. |
 | Running a step on a host | The loop and the VM are on different machines. | Host: `host/operations.ts` |
 | Refusing a late or repeated operation | A delivery can arrive after the control plane moved on. | Host: by ID, sequence and `boot`, `host/operations.ts` |
@@ -162,7 +162,7 @@ Kept means the rule holds with its meaning unchanged, even when it moves to the 
 | One actor per machine | Changed | One loop per machine, in one place. A move would keep the same loop. |
 | A later request cuts a step short | Kept | By cancelling the operation. |
 | A step cut short holds its lease until the VM is where the command takes it | Kept | The lease is released when the host reports the operation done, instead of when a local fiber ends. |
-| A request answers from where the machine rests | Changed | The server answers once the store has the desire. The client's wait answers from where the machine rests, and `store.desire` leaves rest in the same write, so `AnswerTrue` holds with no generation in the wait. |
+| A request answers from where the machine rests | Changed | The server answers once the store has the desire. The client's wait answers from where the machine rests, and `store.advance` leaves rest in the same write, so `AnswerTrue` holds with no generation in the wait. |
 | Leases are in memory only, so a host's end drops them with the work | Changed | They are rows now. They survive a restart of the control plane, as the steps they guard do. |
 | A host that starts deletes every machine left unmade | Changed | A restarted control plane reattaches first. It undoes a make only when its operation is lost or failed. Long setups survive a restart. |
 | A machine is made by one step, from what only that request holds | Kept | The script is in memory on both sides and is never stored. A control plane restart can't resend it, so a `make` the host never received ends with the row marked failed. |
@@ -195,7 +195,7 @@ A create whose make reached its host keeps running there. The loop finds it by I
 
 ### Host unreachable from the control plane
 
-The machine reads `unknown`. A step that can't begin rests the row in `waiting`, and a lease stays held if an operation was running. Placement skips the host, and new creates go elsewhere. Lists and reads keep answering, with state `unknown`.
+The machine reads `unknown` and `waiting`, which no row stores, and a lease stays held if an operation was running. Placement skips the host, and new creates go elsewhere. Lists and reads keep answering, with state `unknown`.
 
 A request on such a machine is recorded and answered as usual. The client's wait fails at once and says the request is saved. The last desire applies when the host returns, so a `stop` from yesterday can run today unless a later request replaces it.
 
