@@ -65,9 +65,7 @@ const looked = <R extends { readonly state: string }>(
       }
     }
   }).pipe(
-    Effect.catchTag("Unreachable", (error) =>
-      Effect.as(Effect.logWarning(error.message), "rest" as const)
-    )
+    Effect.catchTag("Unreachable", () => Effect.succeed("rest" as const))
   );
 
 const followed = <R extends { readonly state: string }>(

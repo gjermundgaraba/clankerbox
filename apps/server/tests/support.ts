@@ -127,7 +127,11 @@ export interface Plane {
   ) => Effect.Effect<Started, CannotStart | Internal>;
 }
 
-const started = (settings: ServerSettings, port: number) =>
+const started = (
+  settings: ServerSettings,
+  port: number,
+  logger: Logger.Logger<unknown, unknown> | undefined
+) =>
   Effect.gen(function* () {
     const scope = yield* Scope.make();
 
@@ -136,7 +140,7 @@ const started = (settings: ServerSettings, port: number) =>
         settings,
         NodeHttpServer.layer(createServer, { host: "127.0.0.1", port })
       ).pipe(
-        Layer.provideMerge(Logger.layer([])),
+        Layer.provideMerge(Logger.layer(logger === undefined ? [] : [logger])),
         Layer.provide(NodeHttpClient.layerNodeHttp),
         Layer.provide(NodeServices.layer)
       ),
@@ -177,6 +181,8 @@ export const plane = (options?: {
   readonly runtime?: Parameters<typeof startHost>[1];
   /** Gives every guest tailscaled and tailscale, so a host's tailnet check finds them. */
   readonly tailscaled?: boolean;
+  /** Hears the control plane's log, which goes nowhere without one. */
+  readonly logger?: Logger.Logger<unknown, unknown>;
 }) =>
   Effect.gen(function* () {
     const dir = yield* scratch;
@@ -220,7 +226,7 @@ export const plane = (options?: {
       stateDir,
       hosts,
       settings,
-      start: (port = 0) => started(settings, port),
+      start: (port = 0) => started(settings, port, options?.logger),
     };
 
     return plan;

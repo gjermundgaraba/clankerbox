@@ -345,7 +345,7 @@ describe("a loop", () => {
         hooks.looking = () =>
           Effect.fail(new Unreachable({ host: "linux", message: "down" }));
 
-        yield* silently(drive("dev"));
+        yield* drive("dev");
         yield* settled;
         yield* TestClock.adjust(Duration.minutes(59));
         yield* settled;

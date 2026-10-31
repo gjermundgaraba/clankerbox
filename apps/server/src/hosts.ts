@@ -45,7 +45,10 @@ export interface Interface {
     host: string,
     run: (api: HostApi) => Effect.Effect<A, E>
   ) => Effect.Effect<A, Unreachable>;
-  /** Reads the host, and checks it calls itself what the config says. */
+  /**
+   * Reads the host, and checks it calls itself what the config says. Every look at a host comes
+   * through here, so this logs when it stops answering and when it answers again, and no one else.
+   */
   readonly read: (host: string) => Effect.Effect<HostInfo, Unreachable>;
   /** What the host last said, read or not since. */
   readonly known: (host: string) => HostInfo | undefined;
@@ -70,6 +73,25 @@ export const make = (
     );
 
     const infos = new Map<string, HostInfo>();
+    const unanswered = new Set<string>();
+
+    const answered = (host: string) =>
+      Effect.suspend(() =>
+        unanswered.delete(host)
+          ? Effect.logInfo(`host ${host} answers again`)
+          : Effect.void
+      );
+
+    const unanswering = ({ host, message }: Unreachable) =>
+      Effect.suspend(() => {
+        if (unanswered.has(host)) {
+          return Effect.void;
+        }
+
+        unanswered.add(host);
+
+        return Effect.logWarning(message);
+      });
 
     const call: Interface["call"] = (host, run) =>
       Effect.suspend(() => {
@@ -118,7 +140,10 @@ export const make = (
         infos.set(host, info);
 
         return info;
-      });
+      }).pipe(
+        Effect.tap(() => answered(host)),
+        Effect.tapError(unanswering)
+      );
 
     return {
       members,
