@@ -54,6 +54,9 @@ export interface Operation {
   readonly leases: readonly Lease[];
 }
 
+/** `waiting` is never stored: a read tells it, as it tells the state. */
+export type MachinePhase = Exclude<Phase, "waiting">;
+
 export interface MachineRow {
   readonly name: string;
   readonly instance: string;
@@ -68,7 +71,7 @@ export interface MachineRow {
   readonly port: number | undefined;
   readonly desired: Desired;
   readonly generation: number;
-  readonly phase: Phase;
+  readonly phase: MachinePhase;
   readonly stage: Stage;
   readonly prepared: boolean;
   readonly error: HostError | undefined;
@@ -191,7 +194,7 @@ export interface Interface {
    */
   readonly begin: (
     operation: Omit<Operation, "sequence">,
-    phase: Phase | undefined,
+    phase: MachinePhase | undefined,
     patch: MachinePatch
   ) => Effect.Effect<Option.Option<Operation>, Internal>;
   /** Frees the operation's leases and writes what its report says, in one write. */

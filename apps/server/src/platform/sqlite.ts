@@ -109,6 +109,7 @@ export const migrations: readonly string[] = [
     SET source = json_set(source, '$.scripted', json(CASE scripted WHEN 1 THEN 'true' ELSE 'false' END))
     WHERE json_extract(source, '$.kind') = 'base';
   ALTER TABLE machines DROP COLUMN scripted`,
+  "UPDATE machines SET phase = 'observing' WHERE phase = 'waiting'",
 ];
 
 const isSqliteError = (
@@ -279,7 +280,18 @@ const MachineFields = Schema.Struct({
   port: Schema.NullOr(Schema.Int),
   desired: Desired,
   generation: Schema.Int,
-  phase: Phase,
+  phase: Phase.pick([
+    "observing",
+    "creating",
+    "starting",
+    "stopping",
+    "pausing",
+    "resizing",
+    "deleting",
+    "settled",
+    "failed",
+    "lost",
+  ]),
   stage: Schema.Literals(["making", "made", "undoing", "undone"]),
   prepared: Flag,
   resize: Stored(SizingJson),

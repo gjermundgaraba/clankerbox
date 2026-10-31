@@ -9,6 +9,7 @@ import {
   formatGib,
   formatMib,
   Internal,
+  isResting,
   loginUser,
   NotFound,
   NotMade,
@@ -50,6 +51,7 @@ import { Store } from "./store.ts";
 import type {
   Lease,
   MachinePatch,
+  MachinePhase,
   MachineRow,
   Operation,
   Source,
@@ -108,10 +110,13 @@ export interface Interface {
   readonly capacity: Effect.Effect<CapacityRead, Internal>;
   /** Tells a machine's loop that something it may be waiting on changed. */
   readonly wake: (name: string) => Effect.Effect<void>;
-  /** Waits until a machine rests or is gone, for a prebuild's own steps. */
+  /**
+   * Waits until a machine rests or is gone, for a prebuild's own steps. A machine that can't be read
+   * ends the wait as `Unavailable`, as nothing it would go on to do can begin.
+   */
   readonly rest: (
     name: string
-  ) => Effect.Effect<Option.Option<MachineRow>, Internal>;
+  ) => Effect.Effect<Option.Option<MachineRow>, Internal | Unavailable>;
 }
 
 export class Machines extends Context.Service<Machines, Interface>()(
@@ -151,7 +156,7 @@ type Stepped = keyof typeof stepPhases;
 
 const isStep = (target: Next): target is Stepped => target in stepPhases;
 
-const phaseOfKind: Partial<Record<Operation["kind"], Machine["phase"]>> = {
+const phaseOfKind: Partial<Record<Operation["kind"], MachinePhase>> = {
   make: "creating",
   start: "starting",
   stop: "stopping",
@@ -190,6 +195,15 @@ const refOf = (row: MachineRow): MachineRef | undefined =>
         diskGib: row.diskGib,
         port: row.port,
       };
+
+const stateIn = (
+  found: MachineRow,
+  states: ReadonlyMap<string, MachineState>
+): MachineState =>
+  found.stage === "undone" ? "missing" : (states.get(found.name) ?? "unknown");
+
+const phaseShown = (found: MachineRow, seen: MachineState): Machine["phase"] =>
+  seen === "unknown" && found.phase !== "failed" ? "waiting" : found.phase;
 
 const nextOf = (found: MachineRow, seen: MachineState): Next =>
   nextFrom({ ...found, resizing: found.resize !== undefined }, seen);
@@ -321,12 +335,13 @@ export const make = (
       });
 
     const stateOf = (found: MachineRow) =>
-      Effect.map(
-        readStates([found]),
-        (states): MachineState => states.get(found.name) ?? "unknown"
-      );
+      Effect.map(readStates([found]), (states) => stateIn(found, states));
 
-    const resource = (found: MachineRow, state: MachineState): Machine => {
+    const resource = (
+      found: MachineRow,
+      state: MachineState,
+      phase: Machine["phase"]
+    ): Machine => {
       const address = hosts.known(found.host)?.publishAddress;
       const tailnet = tailnets.get(found.name)?.status;
       const running = state === "running";
@@ -341,7 +356,7 @@ export const make = (
         diskGib: found.diskGib,
         state,
         desired: found.desired,
-        phase: found.phase,
+        phase,
         ...(found.profile === undefined ? {} : { profile: found.profile }),
         ...(found.prebuild === undefined ? {} : { prebuild: found.prebuild }),
         ...(found.error === undefined ? {} : { error: found.error }),
@@ -353,15 +368,11 @@ export const make = (
       };
     };
 
-    const shown = (found: MachineRow) =>
-      Effect.map(readStates([found]), (states) =>
-        resource(
-          found,
-          found.stage === "undone"
-            ? "missing"
-            : (states.get(found.name) ?? "unknown")
-        )
-      );
+    const unread = (found: MachineRow) =>
+      resource(found, "unknown", found.phase);
+
+    const shown = (found: MachineRow, state: MachineState) =>
+      resource(found, state, phaseShown(found, state));
 
     const others = (found: MachineRow) =>
       Effect.map(store.machines, (rows) => {
@@ -508,7 +519,7 @@ export const make = (
       found: MachineRow,
       kind: Operation["kind"],
       seen: MachineState,
-      phase: Machine["phase"] | undefined
+      phase: MachinePhase | undefined
     ) =>
       Effect.gen(function* () {
         const info = yield* hosts.read(found.host);
@@ -536,12 +547,7 @@ export const make = (
         return "again" as const;
       }).pipe(
         Effect.catchTag("Unreachable", (error) =>
-          Effect.logWarning(error.message).pipe(
-            Effect.andThen(
-              store.patch(found.name, found.generation, { phase: "waiting" })
-            ),
-            Effect.as("rest" as const)
-          )
+          Effect.as(Effect.logWarning(error.message), "rest" as const)
         )
       );
 
@@ -671,19 +677,8 @@ export const make = (
           case "running": {
             const { port } = polled.report.outcome;
 
-            const resting =
-              doing !== undefined && found.phase === "waiting"
-                ? { phase: doing }
-                : {};
-
-            if (
-              (port !== undefined && found.port !== port) ||
-              "phase" in resting
-            ) {
-              yield* store.patch(found.name, found.generation, {
-                ...(port === undefined ? {} : { port }),
-                ...resting,
-              });
+            if (port !== undefined && found.port !== port) {
+              yield* store.patch(found.name, found.generation, { port });
             }
 
             return;
@@ -728,13 +723,6 @@ export const make = (
           }
 
           case "unreachable": {
-            if (found.phase !== "waiting" && op.kind !== "join") {
-              yield* Effect.logWarning(polled.error.message);
-              yield* store.patch(found.name, found.generation, {
-                phase: "waiting",
-              });
-            }
-
             yield* Effect.timeoutOption(latch.await, unreachableWait);
           }
         }
@@ -828,6 +816,10 @@ export const make = (
 
         if (isStep(target)) {
           return yield* begin(found, stepPhases[target], seen, target);
+        }
+
+        if (target === "unread") {
+          return "rest" as const;
         }
 
         const rested = yield* store.patch(name, found.generation, {
@@ -929,7 +921,7 @@ export const make = (
         creates.set(name, held);
         yield* driven(name);
 
-        return resource(created, "unknown");
+        return unread(created);
       });
 
     const asked = (name: string, desired: Exclude<Desired, "deleted">) =>
@@ -941,7 +933,7 @@ export const make = (
         yield* wake(name);
 
         return yield* Effect.fromOption(recorded, () => notFound(name));
-      }).pipe(Effect.map((recorded) => resource(recorded, "unknown")));
+      }).pipe(Effect.map(unread));
 
     const placedFor = (base: string) =>
       Effect.gen(function* () {
@@ -1109,10 +1101,7 @@ export const make = (
 
         yield* wake(id);
 
-        return resource(
-          yield* Effect.fromOption(recorded, () => notFound(id)),
-          "unknown"
-        );
+        return unread(yield* Effect.fromOption(recorded, () => notFound(id)));
       });
 
     const remove = (name: string) =>
@@ -1231,11 +1220,19 @@ export const make = (
             return found;
           }
 
-          if (
-            Option.isNone(inFlight) &&
-            ["settled", "failed", "lost", "waiting"].includes(found.value.phase)
-          ) {
-            return found;
+          if (Option.isNone(inFlight)) {
+            const phase = phaseShown(found.value, yield* stateOf(found.value));
+
+            if (phase === "waiting") {
+              return yield* new Unavailable({
+                message: `machine ${name}'s host can't be reached`,
+                readOnly: true,
+              });
+            }
+
+            if (isResting(phase)) {
+              return found;
+            }
           }
 
           yield* Effect.sleep(restPoll);
@@ -1267,16 +1264,13 @@ export const make = (
 
         const states = yield* readStates(rows);
 
-        return rows.map((found) =>
-          resource(
-            found,
-            found.stage === "undone"
-              ? "missing"
-              : (states.get(found.name) ?? "unknown")
-          )
-        );
+        return rows.map((found) => shown(found, stateIn(found, states)));
       }).pipe(Effect.withSpan("Machines.list")),
-      get: Effect.fn("Machines.get")((id) => Effect.flatMap(row(id), shown)),
+      get: Effect.fn("Machines.get")((id) =>
+        Effect.flatMap(row(id), (found) =>
+          Effect.map(stateOf(found), (state) => shown(found, state))
+        )
+      ),
       create: Effect.fn("Machines.create")(create),
       build: Effect.fn("Machines.build")(build),
       start: Effect.fn("Machines.start")((id) => asked(id, "running")),

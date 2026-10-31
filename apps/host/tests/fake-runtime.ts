@@ -646,7 +646,7 @@ export const fakeRuntime = (options: FakeOptions) => {
             Effect.gen(function* () {
               const found = machines.get(machine.name);
 
-              if (found?.state !== "running") {
+              if (found?.state !== "running" && found?.state !== "unknown") {
                 return {
                   output: Stream.make(
                     new TextEncoder().encode(

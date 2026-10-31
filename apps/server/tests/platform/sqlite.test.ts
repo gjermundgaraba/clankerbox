@@ -326,6 +326,31 @@ layer(NodeServices.layer)((it) => {
       })
   );
 
+  it.effect("a database that stored waiting migrates to observing", () =>
+    Effect.gen(function* () {
+      const stateDir = yield* stateIn;
+
+      yield* mkdir(stateDir);
+
+      const old = new DatabaseSync(path.join(stateDir, databaseFile));
+
+      old.exec(migrations[0] ?? "");
+      old.exec(
+        `PRAGMA user_version = 1; PRAGMA application_id = ${applicationId}`
+      );
+      old.exec(
+        `INSERT INTO machines VALUES ('dev', 'i', '2026-10-04T12:00:00.000Z', 'linux', 'ubuntu', NULL,
+          1, 1024, 10, 'linux', NULL, 'running', 1, 'waiting', 'made', 0, NULL, NULL, 0,
+          '{"kind":"base"}', 0, NULL, NULL, NULL, NULL)`
+      );
+      old.close();
+
+      const rows = yield* withStore(stateDir, (store) => store.machines);
+
+      expect(rows.map(({ phase }) => phase)).toStrictEqual(["observing"]);
+    })
+  );
+
   it.effect(
     "a database at version 1 migrates, its base rows' scripted flags moved into their sources",
     () =>

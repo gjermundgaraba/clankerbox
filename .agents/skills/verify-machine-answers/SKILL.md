@@ -43,7 +43,7 @@ invariants on every reachable state:
 
 ```sh
 .agents/skills/verify-machine-answers/scripts/check.sh --quick   # two clients, about 1 min
-.agents/skills/verify-machine-answers/scripts/check.sh           # and every fault with AllAnswered, up to 9 min
+.agents/skills/verify-machine-answers/scripts/check.sh           # and every fault with AllAnswered, up to 11 min
 ```
 
 The script needs Java 11 or later on `PATH` and `curl`. It downloads
@@ -77,10 +77,10 @@ A pass covers this scope, and only it:
 - **`MachineAnswers.cfg`**: one client beside the creator, with one of each
   fault: a step or read that fails, a control plane crash, a partition, a host
   restart and a lost delivery, and nine operations. Every invariant and
-  `AllAnswered` hold over all 9,034,147 distinct states, 5 to 8 minutes.
+  `AllAnswered` hold over all 6,415,733 distinct states, 5 to 10 minutes.
 - **`TwoClients.cfg`**: two clients beside the creator, with a crash and a
   partition and no other fault, and seven operations. Every invariant holds over
-  all 11,175,654 distinct states, about 1 minute. `AllAnswered` is not checked
+  all 9,301,296 distinct states, about 1 minute. `AllAnswered` is not checked
   here.
 - **Both at once is out of reach.** Two clients with every fault passed 152
   million distinct states in about 40 minutes with no violation and its queue
@@ -99,6 +99,12 @@ A pass covers this scope, and only it:
   make with no script.
 - **Only a definite failure moves a row.** The move to another host on
   `Capacity` is out; the model's create has one host.
+- **A client's read fails with the link.** `Shown` is `waiting` only when the
+  link is cut, though the code also shows it when the runtime can't read one
+  machine. That read's fault reaches `Read`, which writes nothing either way.
+- **A step may begin over a cut link.** `Decide` records a make or a delete with
+  the boot it last knew, where `begin` reads the host first and rests. The model
+  is the wider of the two.
 
 ## Coverage and sync
 
@@ -107,19 +113,19 @@ for this code:
 
 | Model                            | Code                                                                     |
 | -------------------------------- | ------------------------------------------------------------------------ |
-| `Next_`, `Decide`                | `apps/server/src/reconcile.ts` `next`; `machines.ts` `advance`           |
+| `Next_`, `Decide`                | `apps/server/src/reconcile.ts` `next`; `machines.ts` `advance`, `begin`  |
 | `Create`                         | `apps/server/src/machines.ts` `born`, `store.insertMachine`              |
 | `Request`                        | `machines.ts` `asked`, `remove`; `store.desire`                          |
 | `Read`                           | `machines.ts` `stateOf`                                                  |
 | `Send`, `Cut`                    | `apps/server/src/operations.ts` `poll`                                   |
 | `Collect`, `Failing`, `Done`     | `machines.ts` `follow`, `ended`; `reconcile.ts` `settled`; `store.finish` |
 | `Lost`                           | `operations.ts` `poll`; `reconcile.ts` `lost`                            |
-| `Stall`, `Unstall`               | `machines.ts` `follow`'s `unreachable` and `running` cases               |
 | `Deliver`, `Repeat`, `Lose`      | `apps/host/src/operations.ts` `run`, its boot and sequence fence         |
 | `HostStep`, `HostFail`           | `apps/host/src/operations.ts` `perform`, and `picking`, `made` for a make |
 | `HostCancel`                     | `apps/host/src/operations.ts` `cancel`, `ended`                          |
 | `HostRestart`                    | a new process: `Operations.boot`, empty `entries` and `scopes`           |
 | `Crash`, `Revive`                | a new process: the store stays, `creates` goes; `machines.ts` start-up     |
+| `Shown`                          | `machines.ts` `phaseShown`, in `Machines.get` and `list`                 |
 | `Answer`                         | `packages/sdk/src/client.ts` `machineRest`, `machineGone`, `answerOf`    |
 
 When a covered function changes, update the matching action so the model still
@@ -158,10 +164,16 @@ Each check was run against a broken copy of the model, TLC run, then reverted.
 | A start's report rests the row settled without a new read    | `RestTrue`         |
 | A make the host never got is never given up                  | deadlock           |
 | A host restart isn't noticed                                 | `AllAnswered`      |
+| A read that fails writes a rest                              | `RestTrue`         |
 
 Removing the client's generation check broke nothing, because `store.desire`
 leaves rest in the write that records the request. That is why the check, and
 `Machine.generation`, are gone.
+
+`Shown` has no such row. A client that reads the stored phase, or that reads
+`waiting` over a failed row, gets a different answer, and no invariant reads the
+difference: both ran clean over both configs. `apps/server/tests/machines.test.ts`
+holds what it shows.
 
 Repeat this kind of break whenever you add an invariant. A check you haven't
 seen fail proves nothing.

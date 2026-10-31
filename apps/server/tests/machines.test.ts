@@ -313,25 +313,37 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a create whose machine can't be read after its make rests waiting, made, and a recheck prepares it",
+    "a create whose machine can't be read after its make reads waiting, unprepared, and a recheck prepares it",
     () =>
       Effect.gen(function* () {
-        const { asking, fake, rests, row } = yield* served({
+        const { asking, fake, machine, rests } = yield* served({
           recheck: Duration.millis(200),
         });
 
-        fake.failNextObserve(new Internal({ message: "tart list exited 1" }));
+        const setup = fake.holdNext("exec");
 
         yield* asking.create("dev", request("dev", { setup: installsStart }));
+        yield* setup.entered;
+        unready(fake, "dev");
+        yield* setup.release;
 
-        const waiting = yield* eventually(
-          row("dev"),
-          ({ phase, stage }) => stage === "made" && phase === "waiting"
+        yield* eventually(
+          machine("dev"),
+          ({ phase, state }) => phase === "waiting" && state === "unknown"
         );
+        yield* Effect.sleep(Duration.millis(300));
+
+        const unread = yield* machine("dev");
+
+        fake.machines.set("dev", {
+          state: "running",
+          root: fake.root("dev") ?? "",
+        });
 
         const settled = yield* rests("dev");
 
-        expect(waiting.prepared).toBe(false);
+        expect(at(unread)).toStrictEqual(["unknown", "running", "waiting"]);
+        expect(unread.hostKey).toBeUndefined();
         expect([at(settled), settled.hostKey === undefined]).toStrictEqual([
           ["running", "running", "settled"],
           false,
@@ -1964,6 +1976,113 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         ]);
         expect(at(stopped)).toStrictEqual(["stopped", "stopped", "settled"]);
         expect(fake.calls).toContain("stop dev");
+      })
+  );
+
+  it.effect(
+    "a settled machine reads waiting as soon as its host is down, and settled once it is back, with no recheck between",
+    () =>
+      Effect.gen(function* () {
+        const { client, host, machine } = yield* served();
+
+        yield* client.create("dev", request("dev"));
+        yield* host.dispose;
+
+        const down = yield* machine("dev");
+        const listed = yield* client.machines;
+
+        yield* restartedHost(host);
+
+        const back = yield* machine("dev");
+
+        expect(at(down)).toStrictEqual(["unknown", "running", "waiting"]);
+        expect(listed.map(at)).toStrictEqual([
+          ["unknown", "running", "waiting"],
+        ]);
+        expect(at(back)).toStrictEqual(["running", "running", "settled"]);
+      })
+  );
+
+  it.effect(
+    "a request on a host that is down answers what it recorded, and a read shows waiting",
+    () =>
+      Effect.gen(function* () {
+        const { asking, client, host, machine } = yield* served();
+
+        yield* client.create("dev", request("dev"));
+        yield* host.dispose;
+
+        const recorded = yield* asking.stopMachine({ id: "dev" });
+        const shown = yield* machine("dev");
+
+        expect(at(recorded)).toStrictEqual(["unknown", "stopped", "observing"]);
+        expect(at(shown)).toStrictEqual(["unknown", "stopped", "waiting"]);
+      })
+  );
+
+  it.effect(
+    "a step whose host goes down reads waiting, and is decided afresh when the host is back",
+    () =>
+      Effect.gen(function* () {
+        const { asking, client, fake, host, machine, rests } = yield* served({
+          recheck: Duration.millis(200),
+        });
+
+        yield* client.create("dev", request("dev"));
+
+        const stop = fake.holdNext("stop");
+
+        yield* asking.stopMachine({ id: "dev" });
+        yield* stop.entered;
+        yield* host.dispose;
+
+        const down = yield* machine("dev");
+
+        yield* restartedHost(host);
+
+        expect(at(down)).toStrictEqual(["unknown", "stopped", "waiting"]);
+        expect(at(yield* rests("dev"))).toStrictEqual([
+          "stopped",
+          "stopped",
+          "settled",
+        ]);
+      })
+  );
+
+  it.effect("a failed machine reads failed on a host that is down", () =>
+    Effect.gen(function* () {
+      const { client, fake, host, machine } = yield* served();
+
+      yield* client.create("dev", request("dev"));
+      fake.failNext("stop", new Internal({ message: "no stop" }));
+
+      const refused = yield* Effect.flip(client.stopMachine({ id: "dev" }));
+
+      yield* host.dispose;
+
+      const down = yield* machine("dev");
+
+      expect(refused._tag).toBe("Internal");
+      expect(at(down)).toStrictEqual(["unknown", "stopped", "failed"]);
+      expect(down.error?._tag).toBe("Internal");
+    })
+  );
+
+  it.effect(
+    "a failed create reads missing and failed on a host that is down",
+    () =>
+      Effect.gen(function* () {
+        const { client, fake, host, machine } = yield* served();
+
+        fake.failNext("create", new Internal({ message: "no disk" }));
+
+        yield* Effect.flip(client.create("dev", request("dev")));
+        yield* host.dispose;
+
+        const down = yield* machine("dev");
+
+        expect(at(down)).toStrictEqual(["missing", "running", "failed"]);
+        expect(down.error?._tag).toBe("Internal");
       })
   );
 

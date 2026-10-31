@@ -4,6 +4,7 @@ import type { Desired, HostError } from "@gjermundgaraba/clankerbox-sdk";
 
 import type { MachineRow, Operation, Stage } from "./store.ts";
 
+/** What a machine does next. `unread` writes nothing: it rests as it is until a read answers. */
 export type Next =
   | "creating"
   | "starting"
@@ -11,7 +12,7 @@ export type Next =
   | "pausing"
   | "resizing"
   | "deleting"
-  | "waiting"
+  | "unread"
   | "settled"
   | "failed"
   | "lost";
@@ -37,7 +38,7 @@ export const next = (decided: Decided, seen: MachineState): Next => {
   }
 
   if (seen === "unknown") {
-    return "waiting";
+    return "unread";
   }
 
   if (seen === "missing") {

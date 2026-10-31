@@ -14,7 +14,7 @@ CONSTANTS Clients, Creator, Desires,
 
 None == "none"
 Everyone == Clients \cup {Creator}
-Resting == {"waiting", "settled", "failed", "lost"}
+Resting == {"settled", "failed", "lost"}
 NoOp == [id |-> 0, kind |-> None, gen |-> 0, boot |-> 0]
 NoRun == [id |-> 0, kind |-> None, status |-> None, pc |-> None]
 Absent == [stage |-> "absent", desired |-> None, gen |-> 0, prepared |-> FALSE,
@@ -58,7 +58,7 @@ Next_(r, seen) ==
   ELSE IF r.stage = "undoing" THEN "deleting"
   ELSE IF r.stage = "undone" THEN "failed"
   ELSE IF r.stage = "making" THEN "creating"
-  ELSE IF seen = "unknown" THEN "waiting"
+  ELSE IF seen = "unknown" THEN "unread"
   ELSE IF seen = "missing" THEN "lost"
   ELSE IF r.desired = "paused"
        THEN IF seen = "running" THEN "pausing" ELSE "settled"
@@ -72,13 +72,6 @@ KindOf(s) ==
     [] s = "stopping" -> "stop"
     [] s = "pausing" -> "pause"
     [] s = "deleting" -> "remove"
-
-PhaseOf(k) ==
-  CASE k = "make" -> "creating"
-    [] k = "start" -> "starting"
-    [] k = "stop" -> "stopping"
-    [] k = "pause" -> "pausing"
-    [] k = "remove" -> "deleting"
 
 (* reconcile.ts cuts: which request stops which step short *)
 Cuts(r) ==
@@ -94,6 +87,10 @@ Matches(d, v) ==
     [] d = "stopped" -> v = "stopped"
     [] d = "paused" -> v \in {"paused", "stopped"}
     [] d = "deleted" -> v = "missing"
+
+(* machines.ts phaseShown: the read that answers state tells waiting; a      *)
+(* client's read goes over the same link as the loop's.                     *)
+Shown == IF ~linked /\ row.phase # "failed" THEN "waiting" ELSE row.phase
 
 Asked(k, d) == \E j \in Everyone \ {k} : cl[j].pc # "idle" /\ cl[j].d = d
 
@@ -154,16 +151,16 @@ Answer(k) ==
   /\ IF row.stage = "absent"
      THEN IF cl[k].d = "deleted" THEN Finish(k, "ok", None)
           ELSE Finish(k, "superseded", "deleted")
-     ELSE /\ row.op.id = 0 \/ row.phase = "waiting"
-          /\ row.phase \in Resting
+     ELSE /\ row.op.id = 0 \/ Shown = "waiting"
+          /\ Shown \in Resting \cup {"waiting"}
           /\ IF cl[k].d = "deleted"
-             THEN Finish(k, IF row.phase = "waiting" THEN "saved" ELSE "error",
+             THEN Finish(k, IF Shown = "waiting" THEN "saved" ELSE "error",
                          None)
              ELSE IF row.desired # cl[k].d
              THEN Finish(k, "superseded", row.desired)
-             ELSE IF row.phase = "waiting" THEN Finish(k, "saved", None)
-             ELSE IF row.phase = "failed" THEN Finish(k, "error", None)
-             ELSE IF row.phase = "lost" THEN Finish(k, "missing", None)
+             ELSE IF Shown = "waiting" THEN Finish(k, "saved", None)
+             ELSE IF Shown = "failed" THEN Finish(k, "error", None)
+             ELSE IF Shown = "lost" THEN Finish(k, "missing", None)
              ELSE Finish(k, "ok", None)
   /\ UNCHANGED <<row, up, script, read, known, linked, net, cut, nextOp>>
   /\ UNCHANGED hostVars /\ UNCHANGED worldVars
@@ -181,12 +178,15 @@ Read ==
   /\ UNCHANGED hostVars /\ UNCHANGED <<crashes, partitions, restarts, drops>>
 
 (* machines.ts advance: rest, or begin the next step. A failed machine rests *)
-(* until the next request; a failed delete runs again at each recheck.       *)
+(* until the next request; a failed delete runs again at each recheck. A     *)
+(* machine it couldn't read writes nothing.                                  *)
 Decide ==
   /\ up /\ row.stage # "absent" /\ row.op.id = 0 /\ read # None
   /\ read' = None
   /\ LET t == Next_(row, read) IN
-     IF row.phase = "failed" /\ row.stage = "made" /\ row.desired # "deleted"
+     IF t = "unread"
+        \/ (row.phase = "failed" /\ row.stage = "made"
+            /\ row.desired # "deleted")
      THEN UNCHANGED <<row, nextOp>>
      ELSE IF t \in Resting
      THEN /\ row' = [row EXCEPT !.phase = t]
@@ -274,22 +274,6 @@ Collect ==
   /\ known' = boot
   /\ UNCHANGED <<up, script, read, linked, net, cut, cl, nextOp>>
   /\ UNCHANGED <<vm, boot, high, applied>> /\ UNCHANGED worldVars
-
-(* machines.ts follow: a host it can't reach rests the row at waiting, with *)
-(* the operation still in flight, and a report from it takes that back.      *)
-Stall ==
-  /\ up /\ ~linked /\ row.stage # "absent" /\ row.op.id # 0
-  /\ row.phase # "waiting"
-  /\ row' = [row EXCEPT !.phase = "waiting"]
-  /\ UNCHANGED <<up, script, read, known, linked, net, cut, cl, nextOp>>
-  /\ UNCHANGED hostVars /\ UNCHANGED worldVars
-
-Unstall ==
-  /\ up /\ linked /\ row.stage # "absent" /\ row.op.id # 0
-  /\ row.phase = "waiting"
-  /\ row' = [row EXCEPT !.phase = PhaseOf(row.op.kind)]
-  /\ UNCHANGED <<up, script, read, known, linked, net, cut, cl, nextOp>>
-  /\ UNCHANGED hostVars /\ UNCHANGED worldVars
 
 (* operations.ts run: the same ID is the same operation, a lower sequence   *)
 (* is refused, and a higher one cuts short what still runs. A delivery dies *)
@@ -457,7 +441,7 @@ Terminated ==
 Next ==
   \/ Create \/ \E k \in Clients : Request(k)
   \/ \E k \in Everyone : Answer(k)
-  \/ Read \/ Decide \/ Send \/ Cut \/ Collect \/ Stall \/ Unstall
+  \/ Read \/ Decide \/ Send \/ Cut \/ Collect
   \/ Deliver \/ Repeat \/ Lose
   \/ HostStep \/ HostFail \/ HostCancel
   \/ Crash \/ Revive \/ Partition \/ Heal \/ HostRestart
@@ -471,7 +455,6 @@ Spec ==
   /\ WF_vars(Read) /\ WF_vars(Decide) /\ WF_vars(Send) /\ WF_vars(Cut)
   /\ WF_vars(Collect) /\ WF_vars(Deliver) /\ WF_vars(HostStep)
   /\ WF_vars(HostCancel) /\ WF_vars(Revive) /\ WF_vars(Heal)
-  /\ WF_vars(Unstall)
 
 -----------------------------------------------------------------------------
 (* A request that answers success finds the VM as it asked. *)

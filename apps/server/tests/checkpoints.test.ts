@@ -30,6 +30,7 @@ import {
   pause,
   plane,
   request,
+  restartedHost,
   running,
 } from "./support.ts";
 import type { Plane, Started } from "./support.ts";
@@ -1614,6 +1615,48 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(yield* served.store.checkpoints).toStrictEqual([]);
         expect(host.fake.calls.at(-1)).toMatch(/^delete prebuilding-/u);
       })
+  );
+
+  it.effect("a prebuild on a dead host ends", () =>
+    Effect.gen(function* () {
+      const served = yield* withClient({ recheck: Duration.millis(200) });
+      const { client, host } = served;
+      const setup = host.fake.holdNext("exec");
+
+      const prebuilt = yield* Effect.forkChild(
+        Effect.flip(
+          client.prebuild(prebuild({ setup: { script: "#!/bin/sh\n" } }))
+        )
+      );
+
+      yield* setup.entered;
+
+      const loopRead = host.fake.holdNextObserve();
+      const restRead = host.fake.holdNextObserve();
+
+      yield* setup.release;
+      yield* loopRead.entered;
+      yield* restRead.entered;
+
+      const dying = yield* Effect.forkChild(host.dispose);
+
+      yield* eventually(
+        client.hosts,
+        ([only]) => only?.state === "unreachable"
+      );
+      yield* loopRead.release;
+      yield* restRead.release;
+      yield* Fiber.join(dying);
+
+      const error = yield* Fiber.join(prebuilt);
+      const checkpoints = yield* served.store.checkpoints;
+
+      yield* restartedHost(host);
+      yield* noMachines(served);
+
+      expect(error).toMatchObject({ _tag: "Unavailable", readOnly: true });
+      expect(checkpoints).toStrictEqual([]);
+    })
   );
 
   it.effect(

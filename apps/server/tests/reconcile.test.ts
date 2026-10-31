@@ -42,7 +42,7 @@ const rests: ReadonlySet<Next> = new Set<Next>([
   "settled",
   "failed",
   "lost",
-  "waiting",
+  "unread",
 ]);
 
 const succeeded = (state: State, step: Next): State => {
@@ -74,7 +74,7 @@ const succeeded = (state: State, step: Next): State => {
     case "settled":
     case "failed":
     case "lost":
-    case "waiting": {
+    case "unread": {
       return state;
     }
   }
@@ -205,7 +205,7 @@ describe("next", () => {
     );
 
     expect(unread.map((state) => [state.seen, decide(state)])).toStrictEqual(
-      unread.map(({ seen }) => [seen, seen === "unknown" ? "waiting" : "lost"])
+      unread.map(({ seen }) => [seen, seen === "unknown" ? "unread" : "lost"])
     );
   });
 
@@ -227,7 +227,7 @@ describe("next", () => {
     ).toStrictEqual([]);
   });
 
-  it("a made machine the runtime no longer has is lost, and one it can't read waits", () => {
+  it("a made machine the runtime no longer has is lost, and one it can't read is left as it is", () => {
     const missing: State = {
       stage: "made",
       desired: "running",
@@ -239,7 +239,7 @@ describe("next", () => {
     expect([
       decide(missing),
       decide({ ...missing, seen: "unknown" }),
-    ]).toStrictEqual(["lost", "waiting"]);
+    ]).toStrictEqual(["lost", "unread"]);
   });
 });
 
