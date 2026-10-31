@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import type { StatementSync } from "node:sqlite";
 
 import { MachineState } from "@clankerbox/host-contract";
 import {
@@ -21,22 +22,17 @@ import {
 } from "effect";
 import type { Scope } from "effect";
 
+import type { Decision } from "../chart.ts";
+import { leaves as checkpointLeaves } from "../checkpoint-chart.ts";
+import type { CheckpointRow } from "../checkpoint-chart.ts";
 import { leaves } from "../machine-chart.ts";
 import type { MachineRow } from "../machine-chart.ts";
 import { CannotStart, Store } from "../store.ts";
-import type {
-  Advanced,
-  CheckpointPatch,
-  CheckpointPhase,
-  CheckpointRow,
-  Interface,
-  Lease,
-  Operation,
-} from "../store.ts";
+import type { Advanced, Interface, Lease, Operation, Rows } from "../store.ts";
 
 export const databaseFile = "server.db";
 
-export const applicationId = 0x63_62_78_74;
+export const applicationId = 0x63_62_78_75;
 
 export const migrations: readonly string[] = [
   `CREATE TABLE machines (
@@ -78,7 +74,7 @@ export const migrations: readonly string[] = [
     cpu INTEGER NOT NULL,
     ram_mib INTEGER NOT NULL,
     disk_gib INTEGER NOT NULL,
-    phase TEXT NOT NULL,
+    state TEXT NOT NULL,
     error TEXT,
     failed_at TEXT
   ) STRICT;
@@ -286,13 +282,7 @@ const CheckpointFields = Schema.Struct({
   ...shared,
   machine: Schema.String,
   port: Schema.Int,
-  phase: Schema.Literals([
-    "capturing",
-    "ready",
-    "discarding",
-    "deleting",
-    "failed",
-  ]),
+  state: Schema.Literals(checkpointLeaves),
   failed_at: Schema.NullOr(Schema.DateTimeUtcFromString),
 });
 
@@ -379,7 +369,7 @@ const checkpointOf = (raw: unknown): CheckpointRow => {
     cpu: row.cpu,
     ramMib: row.ram_mib,
     diskGib: row.disk_gib,
-    phase: row.phase,
+    state: row.state,
     error: row.error ?? undefined,
     failedAt: row.failed_at ?? undefined,
   };
@@ -401,12 +391,6 @@ const time = (value: DateTime.Utc | undefined) =>
   value === undefined ? null : DateTime.formatIso(value);
 
 type Bound = string | number | null;
-
-type Column<P> = readonly [name: string, bound: (patch: P) => Bound];
-
-type Columns<P> = { readonly [K in keyof P]-?: Column<P> };
-
-const plain = (value: string | number | undefined): Bound => value ?? null;
 
 const encodedError = (error: HostError | undefined): Bound =>
   error === undefined ? null : encodeError(error);
@@ -436,25 +420,34 @@ const machineColumns = (row: MachineRow) => ({
   undone_at: time(row.undoneAt),
 });
 
-const checkpointColumns: Columns<CheckpointPatch> = {
-  phase: ["phase", ({ phase }) => plain(phase)],
-  error: ["error", ({ error }) => encodedError(error)],
-  failedAt: ["failed_at", ({ failedAt }) => time(failedAt)],
-};
+const checkpointColumns = (row: CheckpointRow) => ({
+  name: row.name,
+  instance: row.instance,
+  created_at: DateTime.formatIso(row.createdAt),
+  machine: row.machine,
+  host: row.host,
+  kind: row.kind,
+  pin: row.pin ?? null,
+  port: row.port,
+  base: row.base,
+  profile: row.profile ?? null,
+  cpu: row.cpu,
+  ram_mib: row.ramMib,
+  disk_gib: row.diskGib,
+  state: row.state,
+  error: encodedError(row.error),
+  failed_at: time(row.failedAt),
+});
 
-const assignments = <P extends object>(
-  patch: P,
-  columns: Readonly<Record<string, Column<P>>>
-) => {
-  const written = Object.entries(columns).filter(([key]) =>
-    Object.hasOwn(patch, key)
-  );
+interface Table<R> {
+  readonly select: StatementSync;
+  readonly update: StatementSync;
+  readonly remove: StatementSync;
+  readonly decoded: (raw: unknown) => R;
+  readonly columns: (row: R) => Record<string, Bound>;
+}
 
-  return {
-    sets: written.map(([, [name]]) => `${name} = ?`).join(", "),
-    values: written.map(([, [, bound]]) => bound(patch)),
-  };
-};
+type Tables = { readonly [K in Lease["resource"]]: Table<Rows[K]> };
 
 const taken = (resource: Lease["resource"], name: string) =>
   new Conflict({ message: `${resource} ${name} exists`, id: name });
@@ -545,14 +538,22 @@ export const open = (
     );
 
     const deleteFailedCheckpoint = db.prepare(
-      "DELETE FROM checkpoints WHERE name = ? AND phase = 'failed'"
+      "DELETE FROM checkpoints WHERE name = ? AND failed_at IS NOT NULL"
     );
 
     const insertCheckpoint = db.prepare(
       `INSERT INTO checkpoints (name, instance, created_at, machine, host, kind, pin, port, base,
-        profile, cpu, ram_mib, disk_gib, phase, error, failed_at)
+        profile, cpu, ram_mib, disk_gib, state, error, failed_at)
        VALUES ($name, $instance, $created_at, $machine, $host, $kind, $pin, $port, $base,
-        $profile, $cpu, $ram_mib, $disk_gib, $phase, $error, $failed_at)`
+        $profile, $cpu, $ram_mib, $disk_gib, $state, $error, $failed_at)`
+    );
+
+    const updateCheckpoint = db.prepare(
+      `UPDATE checkpoints SET instance = $instance, created_at = $created_at, machine = $machine,
+        host = $host, kind = $kind, pin = $pin, port = $port, base = $base, profile = $profile,
+        cpu = $cpu, ram_mib = $ram_mib, disk_gib = $disk_gib, state = $state, error = $error,
+        failed_at = $failed_at
+       WHERE name = $name`
     );
 
     const deleteCheckpoint = db.prepare(
@@ -560,7 +561,7 @@ export const open = (
     );
 
     const deleteExpiredCheckpoints = db.prepare(
-      "DELETE FROM checkpoints WHERE phase = 'failed' AND failed_at < ?"
+      "DELETE FROM checkpoints WHERE failed_at < ?"
     );
 
     const selectOperations = db.prepare(
@@ -610,20 +611,6 @@ export const open = (
         Effect.fromResult
       );
 
-    const writeCheckpoint = (
-      name: string,
-      patch: CheckpointPatch,
-      from: CheckpointPhase | undefined
-    ) => {
-      const { sets, values } = assignments(patch, checkpointColumns);
-
-      if (sets !== "") {
-        db.prepare(
-          `UPDATE checkpoints SET ${sets} WHERE name = ?${from === undefined ? "" : " AND phase = ?"}`
-        ).run(...values, name, ...(from === undefined ? [] : [from]));
-      }
-    };
-
     const leased = (
       operation: Omit<Operation, "sequence">
     ): Operation | undefined => {
@@ -661,6 +648,70 @@ export const open = (
       return begun;
     };
 
+    const tables: Tables = {
+      machine: {
+        select: selectMachine,
+        update: updateMachine,
+        remove: deleteMachine,
+        decoded: rowOf,
+        columns: machineColumns,
+      },
+      checkpoint: {
+        select: selectCheckpoint,
+        update: updateCheckpoint,
+        remove: deleteCheckpoint,
+        decoded: checkpointOf,
+        columns: checkpointColumns,
+      },
+    };
+
+    const advanced = <R>(
+      resource: Lease["resource"],
+      table: Table<R>,
+      name: string,
+      decide: (row: R, op: Operation | undefined) => Decision<R>
+    ) =>
+      transaction(
+        db,
+        `advance ${resource} ${name}`,
+        (): Result.Result<Advanced<R>, Busy> => {
+          const raw = table.select.get(name);
+
+          if (raw === undefined) {
+            return Result.succeed({ at: "absent" });
+          }
+
+          const row = table.decoded(raw);
+          const stored = selectOperation.get(resource, name);
+          const op = stored === undefined ? undefined : operationOf(stored);
+          const { next, begin, finish } = decide(row, op);
+
+          if (begin !== undefined && leased(begin) === undefined) {
+            return Result.fail(new Busy());
+          }
+
+          if (finish && op !== undefined) {
+            deleteOperation.run(op.id);
+          }
+
+          if (next === "removed") {
+            table.remove.run(name);
+          } else if (next !== row) {
+            table.update.run(table.columns(next));
+          }
+
+          return Result.succeed({
+            at: "written",
+            next,
+            moved: next !== row,
+          });
+        }
+      ).pipe(
+        Effect.catchTag("Busy", () =>
+          Effect.succeed<Advanced<R>>({ at: "busy" })
+        )
+      );
+
     const store: Interface = {
       machines: sql("list machines", () =>
         selectMachines.all().map(rowOf)
@@ -678,48 +729,10 @@ export const open = (
           insertMachine.run(machineColumns(row));
         })
       ),
-      advance: Effect.fn("Store.advance")((resource, name, decide) =>
-        transaction(
-          db,
-          `advance ${resource} ${name}`,
-          (): Result.Result<Advanced<MachineRow>, Busy> => {
-            const raw = selectMachine.get(name);
-
-            if (raw === undefined) {
-              return Result.succeed({ at: "absent" });
-            }
-
-            const row = rowOf(raw);
-            const stored = selectOperation.get(resource, name);
-            const op = stored === undefined ? undefined : operationOf(stored);
-            const { next, begin, finish } = decide(row, op);
-
-            if (begin !== undefined && leased(begin) === undefined) {
-              return Result.fail(new Busy());
-            }
-
-            if (finish && op !== undefined) {
-              deleteOperation.run(op.id);
-            }
-
-            if (next === "removed") {
-              deleteMachine.run(name);
-            } else if (next !== row) {
-              updateMachine.run(machineColumns(next));
-            }
-
-            return Result.succeed({
-              at: "written",
-              next,
-              moved: next !== row,
-            });
-          }
-        ).pipe(
-          Effect.catchTag("Busy", () =>
-            Effect.succeed<Advanced<MachineRow>>({ at: "busy" })
-          )
-        )
-      ),
+      advance: (resource, name, decide) =>
+        advanced(resource, tables[resource], name, decide).pipe(
+          Effect.withSpan("Store.advance")
+        ),
       expire: Effect.fn("Store.expire")((before) =>
         sql("expire failed rows", () => {
           const at = DateTime.formatIso(before);
@@ -743,34 +756,7 @@ export const open = (
       insertCheckpoint: Effect.fn("Store.insertCheckpoint")((record) =>
         inserting("checkpoint", record.name, () => {
           deleteFailedCheckpoint.run(record.name);
-          insertCheckpoint.run({
-            name: record.name,
-            instance: record.instance,
-            created_at: DateTime.formatIso(record.createdAt),
-            machine: record.machine,
-            host: record.host,
-            kind: record.kind,
-            pin: record.pin ?? null,
-            port: record.port,
-            base: record.base,
-            profile: record.profile ?? null,
-            cpu: record.cpu,
-            ram_mib: record.ramMib,
-            disk_gib: record.diskGib,
-            phase: record.phase,
-            error: encodedError(record.error),
-            failed_at: time(record.failedAt),
-          });
-        })
-      ),
-      patchCheckpoint: Effect.fn("Store.patchCheckpoint")((name, patch) =>
-        sql(`write checkpoint ${name}`, () => {
-          writeCheckpoint(name, patch, undefined);
-        })
-      ),
-      removeCheckpoint: Effect.fn("Store.removeCheckpoint")((name) =>
-        sql(`remove checkpoint ${name}`, () => {
-          deleteCheckpoint.run(name);
+          insertCheckpoint.run(checkpointColumns(record));
         })
       ),
       operations: sql("list operations", () =>
@@ -784,38 +770,6 @@ export const open = (
             ? Option.none()
             : Option.some(operationOf(row));
         })
-      ),
-      begin: Effect.fn("Store.begin")((operation) =>
-        transaction(db, `begin a ${operation.kind} of ${operation.name}`, () =>
-          Result.succeed(Option.fromUndefinedOr(leased(operation)))
-        )
-      ),
-      finish: Effect.fn("Store.finish")((operation, finish) =>
-        transaction(
-          db,
-          `finish a ${operation.kind} of ${operation.name}`,
-          () => {
-            deleteOperation.run(operation.id);
-
-            switch (finish.row) {
-              case "checkpoint": {
-                writeCheckpoint(operation.name, finish.patch, finish.from);
-                break;
-              }
-
-              case "checkpoint-removed": {
-                deleteCheckpoint.run(operation.name);
-                break;
-              }
-
-              case "kept": {
-                break;
-              }
-            }
-
-            return Result.void;
-          }
-        )
       ),
       hostBoot: Effect.fn("Store.hostBoot")((host) =>
         sql(`read host ${host}'s boot`, () => {

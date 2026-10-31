@@ -19,6 +19,15 @@ import {
 import { Arbitrary, DateTime, Effect, Option, Result, Schema } from "effect";
 import { expect } from "vite-plus/test";
 
+import { applied } from "../../src/chart.ts";
+import {
+  checkpointChart,
+  leaves as checkpointLeaves,
+} from "../../src/checkpoint-chart.ts";
+import type {
+  CheckpointEvent,
+  CheckpointRow,
+} from "../../src/checkpoint-chart.ts";
 import type { MachineRow } from "../../src/machine-chart.ts";
 import {
   applicationId,
@@ -27,15 +36,10 @@ import {
   open,
   transaction,
 } from "../../src/platform/sqlite.ts";
-import type {
-  CheckpointRow,
-  Interface,
-  Lease,
-  Operation,
-} from "../../src/store.ts";
+import type { Interface, Lease, Operation } from "../../src/store.ts";
 import { applying } from "../support.ts";
 
-const earlierApplicationIds = [0x63_62_78_69, 0x63_62_78_73];
+const earlierApplicationIds = [0x63_62_78_69, 0x63_62_78_73, 0x63_62_78_74];
 
 const withStore = <A, E>(
   stateDir: string,
@@ -97,7 +101,7 @@ const checkpoint = (
   cpu: 1,
   ramMib: 1024,
   diskGib: 10,
-  phase: "capturing",
+  state: "capturing.due",
   error: undefined,
   failedAt: undefined,
   ...fields,
@@ -131,6 +135,21 @@ const beginning = (store: Interface, wanted: Omit<Operation, "sequence">) =>
     begin: wanted,
     finish: false,
   }));
+
+const resting = checkpointLeaves.filter((state) => state !== "failed");
+
+const beginningCheckpoint = (
+  store: Interface,
+  wanted: Omit<Operation, "sequence">
+) =>
+  store.advance("checkpoint", wanted.name, (current) => ({
+    next: current,
+    begin: wanted,
+    finish: false,
+  }));
+
+const finishing = (store: Interface, { resource, name }: Operation) =>
+  store.advance(resource, name, (current) => ({ next: current, finish: true }));
 
 const removing = (store: Interface, name: string) =>
   store.advance("machine", name, () => ({ next: "removed", finish: false }));
@@ -262,7 +281,7 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const stateDir = yield* stateIn;
-        const snap = checkpoint("snap", { phase: "ready" });
+        const snap = checkpoint("snap", { state: "ready" });
 
         const held = yield* withStore(stateDir, (store) =>
           Effect.gen(function* () {
@@ -823,6 +842,26 @@ layer(NodeServices.layer)((it) => {
     })
   );
 
+  it.effect("a checkpoint at a leaf the chart hasn't is no row", () =>
+    Effect.gen(function* () {
+      const stateDir = yield* stateIn;
+
+      const error = yield* withStore(stateDir, (store) =>
+        Effect.gen(function* () {
+          yield* store.insertCheckpoint(
+            // @ts-expect-error a row can't name a leaf the chart hasn't
+            checkpoint("snap", { state: "capturing.nowhere" })
+          );
+
+          return yield* Effect.flip(store.checkpoints);
+        })
+      );
+
+      expect(error._tag).toBe("Internal");
+      expect(error.message).toContain("list checkpoints");
+    })
+  );
+
   it.effect.prop(
     "a begin takes every lease of an operation or none, against what the operations in flight hold, and one refused writes nothing",
     [
@@ -836,6 +875,7 @@ layer(NodeServices.layer)((it) => {
         const store = yield* open({ stateDir: yield* stateIn });
 
         yield* store.insertMachine(row("subject"));
+        yield* store.insertCheckpoint(checkpoint("subject"));
 
         let held: readonly Operation[] = [];
         let cpu = 1;
@@ -846,7 +886,7 @@ layer(NodeServices.layer)((it) => {
             const [oldest, ...rest] = held;
 
             if (oldest !== undefined) {
-              yield* store.finish(oldest, { row: "kept" });
+              yield* finishing(store, oldest);
               held = rest;
             }
           } else {
@@ -876,7 +916,9 @@ layer(NodeServices.layer)((it) => {
               expect(answered.at).toBe(free ? "written" : "busy");
               cpu += free ? 1 : 0;
             } else {
-              expect(Option.isSome(yield* store.begin(wanted))).toBe(free);
+              expect((yield* beginningCheckpoint(store, wanted)).at).toBe(
+                free ? "written" : "busy"
+              );
             }
 
             if (free) {
@@ -914,6 +956,7 @@ layer(NodeServices.layer)((it) => {
               yield* store.insertMachine(row("one"));
               yield* store.insertMachine(row("two"));
               yield* store.insertMachine(row("snap"));
+              yield* store.insertCheckpoint(checkpoint("snap"));
 
               const first = yield* begun(
                 store,
@@ -925,7 +968,8 @@ layer(NodeServices.layer)((it) => {
                 operation("two", { leases: [share("snap")] })
               );
 
-              const refused = yield* store.begin(
+              const refused = yield* beginningCheckpoint(
+                store,
                 operation("snap", {
                   resource: "checkpoint",
                   leases: [own("snap")],
@@ -934,15 +978,16 @@ layer(NodeServices.layer)((it) => {
 
               const beside = yield* beginning(store, operation("snap"));
 
-              yield* store.finish(first, { row: "kept" });
-              yield* store.finish(second, { row: "kept" });
+              yield* finishing(store, first);
+              yield* finishing(store, second);
 
               return [
                 first,
                 second,
                 refused,
                 beside,
-                yield* store.begin(
+                yield* beginningCheckpoint(
+                  store,
                   operation("snap", {
                     resource: "checkpoint",
                     leases: [own("snap")],
@@ -953,9 +998,9 @@ layer(NodeServices.layer)((it) => {
         );
 
         expect([one.name, two.name]).toStrictEqual(["one", "two"]);
-        expect(owner).toStrictEqual(Option.none());
+        expect(owner.at).toBe("busy");
         expect(apart.at).toBe("written");
-        expect(Option.isSome(afterwards)).toBe(true);
+        expect(afterwards.at).toBe("written");
       })
   );
 
@@ -1129,24 +1174,26 @@ layer(NodeServices.layer)((it) => {
 
               const keeping = yield* begun(store, operation("kept"));
 
-              const deleting = Option.getOrThrow(
-                yield* store.begin(
-                  operation("snap", {
-                    resource: "checkpoint",
-                    kind: "deleteCheckpoint",
-                    leases: [
-                      { resource: "checkpoint", name: "snap", mode: "own" },
-                    ],
-                  })
-                )
+              yield* beginningCheckpoint(
+                store,
+                operation("snap", {
+                  resource: "checkpoint",
+                  kind: "deleteCheckpoint",
+                  leases: [
+                    { resource: "checkpoint", name: "snap", mode: "own" },
+                  ],
+                })
               );
 
               yield* store.advance("machine", "dev", () => ({
                 next: "removed",
                 finish: true,
               }));
-              yield* store.finish(keeping, { row: "kept" });
-              yield* store.finish(deleting, { row: "checkpoint-removed" });
+              yield* finishing(store, keeping);
+              yield* store.advance("checkpoint", "snap", () => ({
+                next: "removed",
+                finish: true,
+              }));
 
               return [
                 yield* store.machines,
@@ -1163,39 +1210,36 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a capture's end writes only from capturing, so a delete asked meanwhile stands",
+    "a capture's end is decided from the row as it stands, so a delete asked meanwhile stands",
     () =>
       Effect.gen(function* () {
         const stateDir = yield* stateIn;
 
         const [kept, written] = yield* withStore(stateDir, (store) =>
           Effect.gen(function* () {
-            yield* store.insertCheckpoint(checkpoint("deleted"));
-            yield* store.insertCheckpoint(checkpoint("snap"));
+            const told = (name: string, event: CheckpointEvent) =>
+              store.advance("checkpoint", name, (given, op) =>
+                applied(checkpointChart, given, event, op)
+              );
 
-            const captures = yield* Effect.forEach(
+            yield* Effect.forEach(
               ["deleted", "snap"],
               (name) =>
-                Effect.map(
-                  store.begin(
-                    operation(name, {
-                      resource: "checkpoint",
-                      kind: "capture",
-                      leases: [{ resource: "checkpoint", name, mode: "own" }],
-                    })
-                  ),
-                  Option.getOrThrow
-                )
+                Effect.andThen(
+                  store.insertCheckpoint(checkpoint(name)),
+                  told(name, { type: "read", boot: "boot-1", id: name })
+                ),
+              { discard: true }
             );
 
-            yield* store.patchCheckpoint("deleted", { phase: "deleting" });
+            yield* told("deleted", { type: "delete" });
             yield* Effect.forEach(
-              captures,
-              (op) =>
-                store.finish(op, {
-                  row: "checkpoint",
-                  from: "capturing",
-                  patch: { phase: "ready" },
+              ["deleted", "snap"],
+              (name) =>
+                told(name, {
+                  type: "reported",
+                  status: "done",
+                  at: DateTime.makeUnsafe(0),
                 }),
               { discard: true }
             );
@@ -1207,8 +1251,8 @@ layer(NodeServices.layer)((it) => {
           })
         );
 
-        expect(Option.getOrThrow(kept).phase).toBe("deleting");
-        expect(Option.getOrThrow(written).phase).toBe("ready");
+        expect(Option.getOrThrow(kept).state).toBe("deleting.due");
+        expect(Option.getOrThrow(written).state).toBe("ready");
       })
   );
 
@@ -1225,7 +1269,7 @@ layer(NodeServices.layer)((it) => {
           row(name, { state: "undone", error, undoneAt });
 
         const failedCheckpoint = (name: string, failedAt: DateTime.Utc) =>
-          checkpoint(name, { phase: "failed", error, failedAt });
+          checkpoint(name, { state: "failed", error, failedAt });
 
         const [machines, checkpoints] = yield* withStore(stateDir, (store) =>
           Effect.gen(function* () {
@@ -1235,7 +1279,7 @@ layer(NodeServices.layer)((it) => {
             yield* store.insertCheckpoint(failedCheckpoint("old", earlier));
             yield* store.insertCheckpoint(failedCheckpoint("at", before));
             yield* store.insertCheckpoint(
-              checkpoint("ready", { phase: "ready" })
+              checkpoint("ready", { state: "ready" })
             );
             yield* store.expire(before);
 
@@ -1252,26 +1296,22 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "checkpoint rows round-trip every phase, and only a failed one gives way to a capture",
+    "checkpoint rows round-trip every leaf, and only a failed one gives way to a capture",
     () =>
       Effect.gen(function* () {
         const stateDir = yield* stateIn;
         const failedAt = DateTime.makeUnsafe("2026-10-04T14:00:00Z");
+        const error = new Internal({ message: "ENOSPC" });
 
-        const rows = [
-          checkpoint("capturing", { profile: "small" }),
-          checkpoint("ready", { phase: "ready", pin: undefined, kind: "mac" }),
-          checkpoint("discarding", {
-            phase: "discarding",
-            error: new Internal({ message: "ENOSPC" }),
-          }),
-          checkpoint("deleting", { phase: "deleting" }),
-          checkpoint("failed", {
-            phase: "failed",
-            error: new Internal({ message: "ENOSPC" }),
-            failedAt,
-          }),
-        ];
+        const rows = checkpointLeaves.map((state) =>
+          checkpoint(state, {
+            state,
+            ...(state === "failed" ? { error, failedAt } : {}),
+            ...(state.startsWith("discarding") ? { error } : {}),
+            ...(state === "ready" ? { pin: undefined, kind: "mac" } : {}),
+            ...(state === "capturing.due" ? { profile: "small" } : {}),
+          })
+        );
 
         const [listed, refused, replaced] = yield* withStore(
           stateDir,
@@ -1283,14 +1323,10 @@ layer(NodeServices.layer)((it) => {
 
               const read = yield* store.checkpoints;
 
-              const conflicts = yield* Effect.forEach(
-                ["capturing", "ready", "discarding", "deleting"],
-                (name) =>
-                  Effect.flip(
-                    store.insertCheckpoint(
-                      checkpoint(name, { machine: "other" })
-                    )
-                  )
+              const conflicts = yield* Effect.forEach(resting, (name) =>
+                Effect.flip(
+                  store.insertCheckpoint(checkpoint(name, { machine: "other" }))
+                )
               );
 
               yield* store.insertCheckpoint(
@@ -1309,7 +1345,7 @@ layer(NodeServices.layer)((it) => {
           listed.toSorted((a, b) => a.name.localeCompare(b.name))
         ).toStrictEqual(rows.toSorted((a, b) => a.name.localeCompare(b.name)));
         expect(refused).toStrictEqual(
-          ["capturing", "ready", "discarding", "deleting"].map(
+          resting.map(
             (name) =>
               new Conflict({ message: `checkpoint ${name} exists`, id: name })
           )
@@ -1321,7 +1357,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a checkpoint patch writes only that checkpoint, and clears with undefined",
+    "a checkpoint's advance writes only that checkpoint, and clears with undefined",
     () =>
       Effect.gen(function* () {
         const stateDir = yield* stateIn;
@@ -1334,38 +1370,43 @@ layer(NodeServices.layer)((it) => {
             Effect.gen(function* () {
               yield* store.insertCheckpoint(checkpoint("snap"));
               yield* store.insertCheckpoint(checkpoint("other"));
-              yield* store.patchCheckpoint("snap", {
-                phase: "failed",
-                error,
-                failedAt,
-              });
+              yield* store.advance("checkpoint", "snap", (given) => ({
+                next: { ...given, state: "failed", error, failedAt },
+                finish: false,
+              }));
 
               const first = yield* store.findCheckpoint("snap");
 
-              yield* store.patchCheckpoint("snap", {
-                phase: "deleting",
-                error: undefined,
-                failedAt: undefined,
-              });
-              yield* store.removeCheckpoint("gone");
+              yield* store.advance("checkpoint", "snap", (given) => ({
+                next: {
+                  ...given,
+                  state: "deleting.due",
+                  error: undefined,
+                  failedAt: undefined,
+                },
+                finish: false,
+              }));
 
               return [
                 first,
                 yield* store.findCheckpoint("snap"),
                 yield* store.findCheckpoint("other"),
-                yield* store.findCheckpoint("gone"),
+                yield* store.advance("checkpoint", "gone", () => ({
+                  next: "removed",
+                  finish: false,
+                })),
               ] as const;
             })
         );
 
         expect(failed).toStrictEqual(
-          Option.some(checkpoint("snap", { phase: "failed", error, failedAt }))
+          Option.some(checkpoint("snap", { state: "failed", error, failedAt }))
         );
         expect(cleared).toStrictEqual(
-          Option.some(checkpoint("snap", { phase: "deleting" }))
+          Option.some(checkpoint("snap", { state: "deleting.due" }))
         );
         expect(other).toStrictEqual(Option.some(checkpoint("other")));
-        expect(none).toStrictEqual(Option.none());
+        expect(none).toStrictEqual({ at: "absent" });
       })
   );
 

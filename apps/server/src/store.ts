@@ -13,6 +13,7 @@ import { Context, Schema } from "effect";
 import type { DateTime, Effect, Option } from "effect";
 
 import type { Decision } from "./chart.ts";
+import type { CheckpointRow } from "./checkpoint-chart.ts";
 import type { MachineRow } from "./machine-chart.ts";
 
 export class CannotStart extends Schema.TaggedError<
@@ -104,34 +105,11 @@ export interface CheckpointFacts {
   readonly failedAt: DateTime.Utc | undefined;
 }
 
-/** `discarding` clears what a failed capture left, and reads `failed` to a client. */
-export type CheckpointPhase =
-  | "capturing"
-  | "ready"
-  | "discarding"
-  | "deleting"
-  | "failed";
-
-export interface CheckpointRow extends CheckpointFacts {
-  readonly phase: CheckpointPhase;
+/** A row of each resource, as `advance` reads and writes it. */
+export interface Rows {
+  readonly machine: MachineRow;
+  readonly checkpoint: CheckpointRow;
 }
-
-export type CheckpointPatch = Partial<
-  Pick<CheckpointRow, "phase" | "error" | "failedAt">
->;
-
-/**
- * What a report does to a checkpoint, written with the leases' release. A patch with `from` writes
- * only from that phase, so a capture's end leaves a delete asked since.
- */
-export type Finish =
-  | {
-      readonly row: "checkpoint";
-      readonly patch: CheckpointPatch;
-      readonly from?: CheckpointPhase;
-    }
-  | { readonly row: "checkpoint-removed" }
-  | { readonly row: "kept" };
 
 /**
  * What a write did. `written` also answers a `decide` that changed nothing: then `moved` is false
@@ -161,11 +139,11 @@ export interface Interface {
    * fence. A `begin` takes its leases there, as what owns a resource excludes all else and what
    * shares it excludes an owner, and when one is taken nothing is written.
    */
-  readonly advance: (
-    resource: "machine",
+  readonly advance: <K extends Lease["resource"]>(
+    resource: K,
     name: string,
-    decide: (row: MachineRow, op: Operation | undefined) => Decision<MachineRow>
-  ) => Effect.Effect<Advanced<MachineRow>, Internal>;
+    decide: (row: Rows[K], op: Operation | undefined) => Decision<Rows[K]>
+  ) => Effect.Effect<Advanced<Rows[K]>, Internal>;
   /** Removes the rows of failed creates and captures older than `before`. */
   readonly expire: (before: DateTime.Utc) => Effect.Effect<void, Internal>;
   readonly checkpoints: Effect.Effect<readonly CheckpointRow[], Internal>;
@@ -176,26 +154,12 @@ export interface Interface {
   readonly insertCheckpoint: (
     row: CheckpointRow
   ) => Effect.Effect<void, Conflict | Internal>;
-  readonly patchCheckpoint: (
-    name: string,
-    patch: CheckpointPatch
-  ) => Effect.Effect<void, Internal>;
-  readonly removeCheckpoint: (name: string) => Effect.Effect<void, Internal>;
   /** Every lease is an operation in flight here. */
   readonly operations: Effect.Effect<readonly Operation[], Internal>;
   readonly operationOn: (
     resource: Lease["resource"],
     name: string
   ) => Effect.Effect<Option.Option<Operation>, Internal>;
-  /** A checkpoint's operation, its leases taken in one write. None when a lease is taken. */
-  readonly begin: (
-    operation: Omit<Operation, "sequence">
-  ) => Effect.Effect<Option.Option<Operation>, Internal>;
-  /** Frees a checkpoint's operation and writes what its report says, in one write. */
-  readonly finish: (
-    operation: Operation,
-    finish: Finish
-  ) => Effect.Effect<void, Internal>;
   readonly hostBoot: (
     host: string
   ) => Effect.Effect<Option.Option<string>, Internal>;

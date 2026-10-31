@@ -112,7 +112,7 @@ const rested = (served: Pick<Started, "store">, name: string) =>
     eventually(served.store.findCheckpoint(name), (found) =>
       Option.exists(
         found,
-        ({ phase }) => phase === "ready" || phase === "failed"
+        ({ state }) => state === "ready" || state === "failed"
       )
     ),
     Option.getOrThrow
@@ -505,7 +505,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "WrongState",
           "dev is stopped: start it first",
         ]);
-        expect((yield* rested(served, "cold")).phase).toBe("failed");
+        expect((yield* rested(served, "cold")).state).toBe("failed");
         expect(yield* client.getCheckpoint({ id: "cold" })).toMatchObject({
           phase: "failed",
           error: { _tag: "WrongState" },
@@ -639,7 +639,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(error.message).toBe("ENOTSUP");
         expect(row).toMatchObject({
-          phase: "failed",
+          state: "failed",
           error: { message: "ENOTSUP" },
         });
         expect(row.failedAt).toBeDefined();
@@ -744,12 +744,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           Effect.gen(function* () {
             const row = Option.getOrThrow(yield* store.findCheckpoint("snap"));
 
-            yield* store.removeCheckpoint("snap");
+            yield* store.advance("checkpoint", "snap", () => ({
+              next: "removed",
+              finish: false,
+            }));
             yield* store.insertCheckpoint({
               ...row,
               name: "orphan",
               machine: "gone",
-              phase: "capturing",
+              state: "capturing.due",
               createdAt: yield* DateTime.now,
             });
           })
@@ -763,7 +766,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(source.machine).toBe("dev");
         expect(row).toMatchObject({
-          phase: "failed",
+          state: "failed",
           error: { _tag: "NotFound", id: "gone" },
         });
         expect(firstHost(planned).fake.calls).not.toContain("capture orphan");
@@ -788,7 +791,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* release;
 
         expect(yield* Fiber.join(capturing)).toMatchObject({
-          phase: "failed",
+          state: "failed",
           error: { _tag: "NotFound", id: "dev" },
         });
         expect(yield* client.machines).toStrictEqual([]);
@@ -1031,7 +1034,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const row = yield* rested(served, "snap");
 
         expect(row).toMatchObject({
-          phase: "failed",
+          state: "failed",
           error: { _tag: "Internal" },
         });
         expect(row.error?.message).toContain(
@@ -1061,7 +1064,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* Effect.addFinalizer(() => again.dispose);
 
-        expect((yield* rested(served, "snap")).phase).toBe("ready");
+        expect((yield* rested(served, "snap")).state).toBe("ready");
       })
   );
 
@@ -1087,7 +1090,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* Effect.addFinalizer(() => second.crash);
 
-        expect((yield* rested(second, "snap")).phase).toBe("ready");
+        expect((yield* rested(second, "snap")).state).toBe("ready");
         expect(callsTo(host, "capture")).toStrictEqual(["capture snap"]);
       })
   );
@@ -1111,7 +1114,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
               ...row,
               name: "next",
               instance: "cafe0001cafe0001cafe0001cafe0001",
-              phase: "capturing",
+              state: "capturing.due",
             });
           })
         ).pipe(Effect.provide(NodeServices.layer));
@@ -1120,7 +1123,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* Effect.addFinalizer(() => second.crash);
 
-        expect(yield* rested(second, "next")).toMatchObject({ phase: "ready" });
+        expect(yield* rested(second, "next")).toMatchObject({ state: "ready" });
       })
   );
 
@@ -1252,7 +1255,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(error.message).toBe("ENOTSUP");
         expect(row).toMatchObject({
-          phase: "failed",
+          state: "failed",
           error: { message: "ENOTSUP" },
         });
         expect(callsTo(host, "deleteCheckpoint").length).toBeGreaterThanOrEqual(

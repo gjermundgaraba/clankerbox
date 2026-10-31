@@ -1,4 +1,4 @@
-import type { Step } from "@clankerbox/host-contract";
+import type { Report, Step } from "@clankerbox/host-contract";
 import {
   checkpointKinds,
   Conflict,
@@ -12,7 +12,6 @@ import type {
   Build,
   Checkpoint,
   Declared,
-  HostError,
   PrebuildRequest,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
@@ -28,20 +27,30 @@ import {
 import type { Scope } from "effect";
 import { Hex } from "effect/encoding";
 
+import { applied } from "./chart.ts";
+import { activityOf, checkpointChart, phaseOf } from "./checkpoint-chart.ts";
+import type { CheckpointEvent, CheckpointRow } from "./checkpoint-chart.ts";
+import { driver } from "./driver.ts";
+import type { Heard } from "./driver.ts";
 import { Hosts } from "./hosts.ts";
 import { stageOf } from "./machine-chart.ts";
 import { Machines } from "./machines.ts";
-import { Operations } from "./operations.ts";
+import { cutShort, Operations } from "./operations.ts";
 import { placing } from "./placement.ts";
 import { builderName, nameOf } from "./prebuilds.ts";
 import { Store } from "./store.ts";
-import type { CheckpointRow, Finish, Operation } from "./store.ts";
+import type { Operation } from "./store.ts";
 
 export interface Interface {
   readonly list: Effect.Effect<readonly Checkpoint[], Internal>;
   readonly get: (
     id: string
   ) => Effect.Effect<Checkpoint, Declared<"getCheckpoint">>;
+  /**
+   * Records a capture and answers at once. A checkpoint has no `waiting`, unlike a machine: a
+   * capture on a dead host reads `capturing`, so a client's wait polls to its limit. Known gap, for
+   * CH7.
+   */
   readonly capture: (
     machine: string,
     name: string
@@ -58,8 +67,6 @@ export interface Interface {
 export class Checkpoints extends Context.Service<Checkpoints, Interface>()(
   "@clankerbox/server/Checkpoints"
 ) {}
-
-const retryWait = Duration.millis(100);
 
 const restPoll = Duration.millis(100);
 
@@ -81,7 +88,7 @@ const shown = (record: CheckpointRow): Checkpoint => ({
   cpu: record.cpu,
   ramMib: record.ramMib,
   diskGib: record.diskGib,
-  phase: record.phase === "discarding" ? "failed" : record.phase,
+  phase: phaseOf(record.state),
   ...(record.profile === undefined ? {} : { profile: record.profile }),
   ...(record.error === undefined ? {} : { error: record.error }),
 });
@@ -95,11 +102,14 @@ const refOf = (record: CheckpointRow) => ({
   port: record.port,
 });
 
-const failed = (error: HostError) =>
-  Effect.map(DateTime.now, (failedAt): Finish => ({
-    row: "checkpoint",
-    patch: { phase: "failed", error, failedAt },
-  }));
+const reportedBy = (
+  op: Operation,
+  { status, error }: Report,
+  at: DateTime.Utc
+): CheckpointEvent =>
+  status === "failed" || status === "cancelled"
+    ? { type: "reported", status, error: error ?? cutShort(op) }
+    : { type: "reported", status: "done", at };
 
 export const make = (settings: {
   readonly recheck: Duration.Duration;
@@ -116,12 +126,15 @@ export const make = (settings: {
     const scope = yield* Effect.scope;
 
     const builds = new Map<string, Build>();
-    const driven = new Set<string>();
-    const asked = new Set<string>();
 
     const row = (name: string) =>
       Effect.flatMap(store.findCheckpoint(name), (found) =>
         Effect.fromOption(found, () => notFound(name))
+      );
+
+    const applying = (name: string, event: CheckpointEvent) =>
+      store.advance("checkpoint", name, (found, op) =>
+        applied(checkpointChart, found, event, op)
       );
 
     const stepOf = (
@@ -150,77 +163,6 @@ export const make = (settings: {
         };
       });
 
-    const begin = (record: CheckpointRow, kind: Operation["kind"]) =>
-      Effect.gen(function* () {
-        const info = yield* hosts.read(record.host);
-
-        const begun = yield* store.begin({
-          id: newId(),
-          kind,
-          resource: "checkpoint",
-          name: record.name,
-          host: record.host,
-          boot: info.boot,
-          seen: "unknown",
-          to: undefined,
-          leases:
-            kind === "capture"
-              ? [
-                  {
-                    resource: "machine",
-                    name: record.machine,
-                    mode: "share",
-                  },
-                  { resource: "checkpoint", name: record.name, mode: "own" },
-                ]
-              : [{ resource: "checkpoint", name: record.name, mode: "own" }],
-        });
-
-        if (Option.isNone(begun)) {
-          yield* Effect.sleep(retryWait);
-        }
-      }).pipe(
-        Effect.catchTag("Unreachable", (error) =>
-          Effect.andThen(
-            Effect.logWarning(error.message),
-            Effect.sleep(settings.recheck)
-          )
-        )
-      );
-
-    const settle = (
-      name: string,
-      op: Operation,
-      error: HostError | undefined
-    ): Effect.Effect<Finish, Internal> =>
-      Effect.gen(function* () {
-        if (op.kind === "capture") {
-          return {
-            row: "checkpoint",
-            from: "capturing",
-            patch:
-              error === undefined
-                ? { phase: "ready", error: undefined }
-                : { phase: "discarding", error },
-          };
-        }
-
-        const latest = Option.getOrUndefined(yield* store.findCheckpoint(name));
-
-        const discarded =
-          latest?.phase === "discarding" ? latest.error : undefined;
-
-        if (error !== undefined) {
-          return discarded === undefined
-            ? { row: "checkpoint", patch: { error } }
-            : { row: "kept" };
-        }
-
-        return discarded === undefined
-          ? { row: "checkpoint-removed" }
-          : yield* failed(discarded);
-      });
-
     const lostWhy = (record: CheckpointRow, op: Operation) =>
       Effect.map(store.findMachine(record.machine), (source) =>
         op.kind === "capture" && Option.isNone(source)
@@ -230,107 +172,34 @@ export const make = (settings: {
             })
       );
 
-    const work = (name: string) =>
+    const following = (record: CheckpointRow, op: Operation, heard: Heard) =>
       Effect.gen(function* () {
-        for (;;) {
-          const present = yield* store.findCheckpoint(name);
-
-          if (Option.isNone(present)) {
-            return;
-          }
-
-          const record = present.value;
-          const inFlight = yield* store.operationOn("checkpoint", name);
-
-          if (Option.isNone(inFlight)) {
-            if (record.phase === "capturing") {
-              yield* begin(record, "capture");
-            } else if (
-              record.phase === "deleting" ||
-              record.phase === "discarding"
-            ) {
-              yield* begin(record, "deleteCheckpoint");
-            } else {
-              return;
-            }
-
-            continue;
-          }
-
-          const op = inFlight.value;
-
-          const polled = yield* operations.poll(op, {
-            cut: false,
-            step: stepOf(record, op),
-          });
-
-          switch (polled.at) {
-            case "ended": {
-              yield* operations.finish(
-                op,
-                yield* settle(name, op, polled.report.error)
-              );
-
-              if (polled.report.error !== undefined && op.kind !== "capture") {
-                yield* Effect.sleep(settings.recheck);
-              }
-
-              break;
-            }
-
-            case "lost": {
-              yield* operations.finish(
-                op,
-                yield* settle(name, op, yield* lostWhy(record, op))
-              );
-              break;
-            }
-
-            case "unreachable": {
-              yield* Effect.sleep(settings.recheck);
-              break;
-            }
-
-            case "running": {
-              break;
-            }
-          }
-        }
-      }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logError(
-            `checkpoint ${name}'s work failed, and runs again at the next start:\n${Cause.pretty(cause)}`
-          )
-        )
-      );
-
-    const drive = (name: string) =>
-      work(name).pipe(
-        Effect.repeat({
-          while: () => {
-            if (asked.delete(name)) {
-              return true;
-            }
-
-            driven.delete(name);
-
-            return false;
-          },
-        })
-      );
-
-    const driving = (name: string) =>
-      Effect.suspend(() => {
-        if (driven.has(name)) {
-          asked.add(name);
-
-          return Effect.void;
+        if (heard.at === "running") {
+          return;
         }
 
-        driven.add(name);
-
-        return Effect.asVoid(Effect.forkIn(drive(name), scope));
+        yield* applying(
+          record.name,
+          heard.at === "ended"
+            ? reportedBy(op, heard.report, yield* DateTime.now)
+            : { type: "lost", error: yield* lostWhy(record, op) }
+        );
+        yield* operations.collect(op);
       });
+
+    const drive = yield* driver(settings.recheck, {
+      kind: "checkpoint",
+      find: store.findCheckpoint,
+      operationOn: (name) => store.operationOn("checkpoint", name),
+      activityOf,
+      looking: (record) =>
+        Effect.flatMap(hosts.read(record.host), ({ boot }) =>
+          applying(record.name, { type: "read", boot, id: newId() })
+        ),
+      polling: (record, op) =>
+        operations.poll(op, { cut: false, step: stepOf(record, op) }),
+      following,
+    });
 
     const capturing = (source: string, name: string) =>
       Effect.gen(function* () {
@@ -367,31 +236,21 @@ export const make = (settings: {
           cpu: machine.cpu,
           ramMib: machine.ramMib,
           diskGib: machine.diskGib,
-          phase: "capturing",
+          state: "capturing.due",
           error: undefined,
           failedAt: undefined,
         };
 
         yield* store.insertCheckpoint(record);
-        yield* driving(name);
+        yield* drive(name);
 
         return shown(record);
       });
 
     const remove = (name: string) =>
-      Effect.gen(function* () {
-        const record = yield* row(name);
-
-        if (record.phase === "failed") {
-          return yield* store.removeCheckpoint(name);
-        }
-
-        yield* store.patchCheckpoint(name, {
-          phase: "deleting",
-          error: undefined,
-        });
-        yield* driving(name);
-      });
+      Effect.flatMap(applying(name, { type: "delete" }), (answer) =>
+        answer.at === "absent" ? Effect.fail(notFound(name)) : drive(name)
+      );
 
     const rested = (name: string) =>
       Effect.gen(function* () {
@@ -400,8 +259,7 @@ export const make = (settings: {
 
           if (
             Option.isNone(found) ||
-            found.value.phase === "ready" ||
-            found.value.phase === "failed"
+            activityOf(found.value.state) === "none"
           ) {
             return found;
           }
@@ -517,15 +375,13 @@ export const make = (settings: {
       });
 
     for (const record of yield* store.checkpoints) {
-      if (record.phase !== "ready" && record.phase !== "failed") {
-        yield* driving(record.name);
-      }
+      yield* drive(record.name);
     }
 
     return {
       list: Effect.map(store.checkpoints, (records) =>
         records.flatMap((record) =>
-          record.phase === "ready" ? [shown(record)] : []
+          record.state === "ready" ? [shown(record)] : []
         )
       ).pipe(Effect.withSpan("Checkpoints.list")),
       get: Effect.fn("Checkpoints.get")((id) => Effect.map(row(id), shown)),

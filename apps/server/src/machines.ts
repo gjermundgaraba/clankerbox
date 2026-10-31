@@ -53,7 +53,7 @@ import {
   wants,
 } from "./machine-chart.ts";
 import type { MachineEvent, MachineRow, Move, Wish } from "./machine-chart.ts";
-import { Operations } from "./operations.ts";
+import { cutShort, Operations } from "./operations.ts";
 import { placing, preferring } from "./placement.ts";
 import { nameOf } from "./prebuilds.ts";
 import { Store } from "./store.ts";
@@ -186,9 +186,6 @@ const phaseShown = (
 };
 
 const pinned = (pin: string | undefined) => (pin === undefined ? {} : { pin });
-
-const cutShort = ({ kind, name }: Operation) =>
-  new Internal({ message: `the ${kind} of ${name} ended on its host` });
 
 const copied = (
   name: string,
@@ -360,7 +357,7 @@ export const make = (
 
         const from = yield* store.findCheckpoint(source.name);
 
-        return Option.isSome(from) && from.value.phase === "ready"
+        return Option.isSome(from) && from.value.state === "ready"
           ? ({
               _tag: "checkpoint",
               checkpoint: {
@@ -789,7 +786,7 @@ export const make = (
             const prebuilt = yield* nameOf(request, host);
             const found = yield* store.findCheckpoint(prebuilt);
 
-            if (Option.isSome(found) && found.value.phase === "ready") {
+            if (Option.isSome(found) && found.value.state === "ready") {
               prebuilds.set(host.id, prebuilt);
             }
           }
@@ -884,7 +881,7 @@ export const make = (
       Effect.gen(function* () {
         const present = yield* store.findCheckpoint(checkpoint);
 
-        if (Option.isNone(present) || present.value.phase !== "ready") {
+        if (Option.isNone(present) || present.value.state !== "ready") {
           return yield* new NotFound({
             message: `no checkpoint ${checkpoint}`,
             id: checkpoint,

@@ -1,11 +1,10 @@
 import type { Report, Step } from "@clankerbox/host-contract";
-import type { Internal } from "@gjermundgaraba/clankerbox-sdk";
+import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, Effect, Layer } from "effect";
 
 import { Hosts } from "./hosts.ts";
 import type { Unreachable } from "./hosts.ts";
-import { Store } from "./store.ts";
-import type { Finish, Operation } from "./store.ts";
+import type { Operation } from "./store.ts";
 
 /** Where a step stands, as far as a look at its host can tell. */
 export type Polled =
@@ -30,11 +29,6 @@ export interface Interface {
   ) => Effect.Effect<Polled, Internal>;
   /** Lets the host forget a report once it is stored. */
   readonly collect: (op: Operation) => Effect.Effect<void>;
-  /** Stores a checkpoint's report, then lets the host forget it. */
-  readonly finish: (
-    op: Operation,
-    finish: Finish
-  ) => Effect.Effect<void, Internal>;
 }
 
 export class Operations extends Context.Service<Operations, Interface>()(
@@ -43,9 +37,12 @@ export class Operations extends Context.Service<Operations, Interface>()(
 
 const scopeOf = (op: Operation) => `${op.resource} ${op.name}`;
 
-export const make: Effect.Effect<Interface, never, Store | Hosts> = Effect.gen(
+/** What a step cut short says, as its host doesn't. */
+export const cutShort = ({ kind, name }: Operation) =>
+  new Internal({ message: `the ${kind} of ${name} ended on its host` });
+
+export const make: Effect.Effect<Interface, never, Hosts> = Effect.gen(
   function* () {
-    const store = yield* Store;
     const hosts = yield* Hosts;
 
     const poll: Interface["poll"] = (op, { cut, step }) =>
@@ -100,12 +97,11 @@ export const make: Effect.Effect<Interface, never, Store | Hosts> = Effect.gen(
         hosts.call(op.host, (api) => api.collectOperation({ id: op.id }))
       );
 
-    const finish: Interface["finish"] = (op, finished) =>
-      Effect.andThen(store.finish(op, finished), collect(op));
-
-    return { poll, collect, finish } satisfies Interface;
+    return { poll, collect } satisfies Interface;
   }
 );
 
-export const layer: Layer.Layer<Operations, never, Store | Hosts> =
-  Layer.effect(Operations, make);
+export const layer: Layer.Layer<Operations, never, Hosts> = Layer.effect(
+  Operations,
+  make
+);
