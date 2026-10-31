@@ -2,7 +2,7 @@
 
 A machine's lifecycle moves from a hand-written loop and independent row fields into one xstate 6 chart, and clients see the same API. The maintainer gets one reducer in place of seven, and a model that imports the chart.
 
-The rule is that a chart is a pure function run inside the SQLite write, and no snapshot outlives that write. Hosts keep operations. No resident actor holds a machine, as a request must land in the write that records it (Appendix B). A prebuild, short-lived and in memory, may be the one actor, which CH7 settles.
+The rule is that a chart is a pure function run inside the SQLite write, and no snapshot outlives that write. Hosts keep operations. No resident actor holds a machine, as a request must land in the write that records it (Appendix B). A prebuild, short-lived and in memory, stays an Effect sequence, as CH7 settled.
 
 The units run in order from CH1 to CH7, and CH1 to CH3 stand alone if you stop there.
 
@@ -16,14 +16,18 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 ## Program checklist
 
+One agent ran this program, so a box still open is one that didn't run as written. No owner was spawned, no audit tick was armed and no swarm ran. The ten lanes ran as one pass at the end, in `/tmp/ch7-evidence/`, beside five live runs at CH5 and `kill-host` at CH2, and CH7's was the one perf probe. The operator waived the review gates for one report at the end. CH7 changed `apps/host` and the host contract on the operator's order, past the file boundary below.
+
+One agent ran this program, so a box still open is one that didn't run as written. No owner was spawned, no audit tick was armed and no swarm ran. The ten lanes ran as one pass at the end, in `/tmp/ch7-evidence/`, beside five live runs at CH5 and `kill-host` at CH2, and CH7's was the one perf probe. The operator waived the review gates for one report at the end. CH7 changed `apps/host` and the host contract on the operator's order, past the file boundary below.
+
 ### Arm the program
 
-- [ ] State the protocol and this plan to the operator, then stop. Start execution only on the operator's explicit go.
-- [ ] Decisions D1, D2 and D3 in Appendix B are made. The operator gave the go, with churn and compatibility no concern.
+- [x] State the protocol and this plan to the operator, then stop. Start execution only on the operator's explicit go.
+- [x] Decisions D1, D2 and D3 in Appendix B are made. The operator gave the go, with churn and compatibility no concern.
 - [ ] Read these at program start. pstack ships locally, so `git show origin/main:<path>` applies only to this repo's files.
   - [ ] `git show origin/main:.github/workflows/ci.yml`
   - [ ] The local `skills/poteto-mode/playbooks/autopilot-stack.md` and `skills/swarm/SKILL.md`
-  - [ ] The repo's `verify-clankerbox` and `verify-machine-answers` skills, and the `effect` skill before any Effect code
+  - [x] The repo's `verify-clankerbox` and `verify-machine-answers` skills, and the `effect` skill before any Effect code
 - [ ] On the operator's go, arm the audit tick as `/loop 1h` with the tick prompt below. Never leave the cadence to memory.
 - [ ] Use this tick prompt, verbatim. "Re-read the execution playbook. Audit the operation against it and fix drift in this tick. Probe every active lane and judge progress by side effects only. Stand down a stuck lane and dispatch its replacement now. Then post a short status message to the operator in chat only when the audit found a tracked change that no earlier status message reported. Name every such change and nothing else. If the audit found none, end the turn with no reply text. Either way, log this tick's row in your decision trail."
 - [ ] On the operator's hold or stand-down, send every owner a zero-writes order at once.
@@ -31,27 +35,27 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 ### Spawn owners
 
 - [ ] Spawn one owner per unit, fresh, with this plan and the prior unit's report.
-- [ ] Follow this dependency graph. It is a straight line, CH1 to CH7, each on the one before it.
+- [x] Follow this dependency graph. It is a straight line, CH1 to CH7, each on the one before it.
 - [ ] Hold the file boundaries. Only CH4 onward touches `apps/server/src/*chart*`. No unit touches `apps/host`, `packages/sdk` or `apps/cli/src`.
 - [ ] Hold the review gate. CH2, CH3 and CH5 change what a client reads. They wait for the operator's review.
 
 ### PR mechanics, for every PR
 
-- [ ] Commit on `machine-actors` with plain `git commit`. Leave `reports/`, `research_notes/` and `.claude/` out. Push only when asked.
+- [x] Commit on `machine-actors` with plain `git commit`. Leave `reports/`, `research_notes/` and `.claude/` out. Push only when asked.
 - [ ] Run `/deslop` before each commit and `/no-comments` before review, where the session offers them.
-- [ ] Prove formatting from a clean clone, as bare `vp check` stops on `reports/`.
+- [x] Prove formatting from a clean clone, as bare `vp check` stops on `reports/`.
 
 ### Verdict and merge, for every PR
 
 - [ ] A full swarm runs once at each unit's head, with one gates lane, the ten live lanes, the perf lane, and two audit lanes that read the diff and distrust the unit's report.
 - [ ] A finding blocks if it breaks a You see box, an invariant in `SKILL.md` or the bar in Close the program. A failure on trunk behaviour in the regression lane is recorded against trunk.
-- [ ] The operator lands the branch. Nothing merges to `main` without them.
+- [x] The operator lands the branch. Nothing merges to `main` without them.
 
 ### Boot recipe, for every live lane
 
 - [ ] `git checkout <head SHA>` in a worktree, then `vp install`.
-- [ ] Run `RUN=$(.agents/skills/verify-clankerbox/scripts/launch.sh)` with the lane's arguments. Wait for it to print the run directory.
-- [ ] Drive only `cb.sh` and `fault.sh`. Read `evidence/` and never the database.
+- [x] Run `RUN=$(.agents/skills/verify-clankerbox/scripts/launch.sh)` with the lane's arguments. Wait for it to print the run directory.
+- [x] Drive only `cb.sh` and `fault.sh`. Read `evidence/` and never the database.
 - [ ] Save each transcript to `/tmp/swarm-<unit>/worker-<n>/` and run `cleanup.sh`.
 
 ## Run a setup only on a make from a base (CH1)
@@ -60,26 +64,26 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 **Files.**
 
-- [ ] Edit `apps/server/src/store.ts`.
-- [ ] Edit `apps/server/src/machines.ts`.
-- [ ] Edit `apps/server/src/platform/sqlite.ts`.
-- [ ] Edit `apps/server/tests/crash.test.ts`.
-- [ ] Edit `apps/cli/tests/stack.test.ts`.
+- [x] Edit `apps/server/src/store.ts`.
+- [x] Edit `apps/server/src/machines.ts`.
+- [x] Edit `apps/server/src/platform/sqlite.ts`.
+- [x] Edit `apps/server/tests/crash.test.ts`.
+- [x] Edit `apps/cli/tests/stack.test.ts`.
 
 **Build.**
 
-- [ ] Move `scripted` into `Source` as `{ kind: "base"; scripted: boolean }`, so a scripted copy can't be written.
-- [ ] Send `setup` in `stepOf` only when `source.kind === "base"`. This fixes the regression `bcf4bcc` brought, where a prebuilt create runs its setup again.
-- [ ] Drop the `scripted` column by adding a migration. Editing the first one leaves a live database unmigrated, as `sqlite.ts` returns early when the version matches.
+- [x] Move `scripted` into `Source` as `{ kind: "base"; scripted: boolean }`, so a scripted copy can't be written.
+- [x] Send `setup` in `stepOf` only when `source.kind === "base"`. This fixes the regression `bcf4bcc` brought, where a prebuilt create runs its setup again.
+- [x] Drop the `scripted` column by adding a migration. Editing the first one leaves a live database unmigrated, as `sqlite.ts` returns early when the version matches.
 
 **You see.**
 
-- [ ] `create fast --profile web` after a prebuild leaves `recipe-ran` absent. It reappears today (measured, see Appendix A).
+- [x] `create fast --profile web` after a prebuild leaves `recipe-ran` absent. It reappears today (measured, see Appendix A).
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Add "a make from a prebuild sends no setup" to `apps/cli/tests/stack.test.ts`, failing first. Run `vp test apps/cli/tests/stack.test.ts`.
-- [ ] Run `vp test apps/server` and `.agents/skills/verify-machine-answers/scripts/check.sh --quick`.
+- [x] Add "a make from a prebuild sends no setup" to `apps/cli/tests/stack.test.ts`, failing first. Run `vp test apps/cli/tests/stack.test.ts`.
+- [x] Run `vp test apps/server` and `.agents/skills/verify-machine-answers/scripts/check.sh --quick`.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `inherit-parent` at the PR head, per the boot recipe.
 
@@ -106,7 +110,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 **Merge.**
 
 - [ ] Root's clean verdict at the exact head SHA.
-- [ ] The commit sits on `machine-actors`, and the operator lands the branch.
+- [x] The commit sits on `machine-actors`, and the operator lands the branch.
 
 ## Read waiting and stop storing it (CH2)
 
@@ -114,27 +118,27 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 **Files.**
 
-- [ ] Edit `apps/server/src/machines.ts`.
-- [ ] Edit `apps/server/src/reconcile.ts`.
-- [ ] Edit `apps/server/src/store.ts`.
-- [ ] Edit `.agents/skills/verify-machine-answers/model/MachineAnswers.tla`.
-- [ ] Edit `.agents/skills/verify-machine-answers/SKILL.md`.
+- [x] Edit `apps/server/src/machines.ts`.
+- [x] Edit `apps/server/src/reconcile.ts`.
+- [x] Edit `apps/server/src/store.ts`.
+- [x] Edit `.agents/skills/verify-machine-answers/model/MachineAnswers.tla`.
+- [x] Edit `.agents/skills/verify-machine-answers/SKILL.md`.
 
 **Build.**
 
-- [ ] Add `phaseShown(row, seen)` in `machines.ts`. A failed read shows `waiting` unless the phase is `failed`.
-- [ ] Remove every write of `phase: "waiting"`, with the `waiting` answer of `next`.
-- [ ] Make `rest` at `machines.ts:1229` answer on a failed read as it does on a stored `waiting`, or a prebuild on a dead host polls forever.
-- [ ] Delete `Stall` and `Unstall` from the model.
+- [x] Add `phaseShown(row, seen)` in `machines.ts`. A failed read shows `waiting` unless the phase is `failed`.
+- [x] Remove every write of `phase: "waiting"`, with the `waiting` answer of `next`.
+- [x] Make `rest` at `machines.ts:1229` answer on a failed read as it does on a stored `waiting`, or a prebuild on a dead host polls forever.
+- [x] Delete `Stall` and `Unstall` from the model.
 
 **You see.**
 
-- [ ] A `settled` machine on a dead host reads `waiting` as soon as its read fails, not at the next recheck. Decision D2 owns that.
+- [x] A `settled` machine on a dead host reads `waiting` as soon as its read fails, not at the next recheck. Decision D2 owns that.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Rewrite the row read at `machines.test.ts:329` over `getMachine`, and add "a prebuild on a dead host ends". Run `vp test apps/server`.
-- [ ] Run `check.sh` in full. It passes with `AllAnswered`. This is the first run with only `Stall` and `Unstall` gone, as the probe also dropped `generation`.
+- [x] Rewrite the row read at `machines.test.ts:329` over `getMachine`, and add "a prebuild on a dead host ends". Run `vp test apps/server`.
+- [x] Run `check.sh` in full. It passes with `AllAnswered`. This is the first run with only `Stall` and `Unstall` gone, as the probe also dropped `generation`.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `inherit-parent` at the PR head, per the boot recipe.
 
@@ -144,7 +148,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 - [ ] Lane 4. Copies. Drive the checkpoint, fork and restore row. Save `CH2-copies.txt`. Pass when `checkpoint get snap --json` has `machine` and `kind`, and `copy` and `twin` settle.
 - [ ] Lane 5. Resize. Drive the resize and capacity row. Save `CH2-resize.txt`. Pass when each refusal has its tag and `capacity` counts no stopped machine.
 - [ ] Lane 6. Moves. Run `launch.sh linux 2048 2` and create 2G twice, then a third. Save `CH2-moves.txt`. Pass when two settle one per host and the third rests failed with `Capacity`.
-- [ ] Lane 7. A dead host. Run `fault.sh "$RUN" kill-host linux-2` on a two-host run. Save `CH2-host-down.txt`. Pass when a machine there reads `state` `unknown` and `phase` `waiting`, and a create lands on `linux-1`.
+- [x] Lane 7. A dead host. Run `fault.sh "$RUN" kill-host linux-2` on a two-host run. Save `CH2-host-down.txt`. Pass when a machine there reads `state` `unknown` and `phase` `waiting`, and a create lands on `linux-1`.
 - [ ] Lane 8. A dead control plane. Create `slow` with `--no-wait`, wait for `$RUN/setup-began`, `fault.sh` `kill-server`, `setup-go`, `start-server`. Save `CH2-crash.txt`. Pass when the machine ends `settled` with one `create` in `runtime-calls.txt`.
 - [ ] Lane 9. A mac run. Run `launch.sh mac` and drive create, stop, capture, restore and delete. Save `CH2-mac.txt`. Pass when a capture of a running machine is refused and the rest settle.
 - [ ] Lane 10. A superseded request. Start `stop dev` with `--no-wait` while `slow` holds a step, then `start dev`. Save `CH2-superseded.txt`. Pass when the first wait answers `Superseded` and `get --json` agrees.
@@ -165,7 +169,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 **Merge.**
 
 - [ ] Root's clean verdict at the exact head SHA.
-- [ ] The commit sits on `machine-actors`, and the operator lands the branch.
+- [x] The commit sits on `machine-actors`, and the operator lands the branch.
 
 ## Decide a late report by what is wanted now (CH3)
 
@@ -173,28 +177,28 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 **Files.**
 
-- [ ] Edit `apps/server/src/reconcile.ts`.
-- [ ] Edit `apps/server/src/machines.ts`.
-- [ ] Edit `apps/server/src/store.ts`.
-- [ ] Edit `apps/server/src/platform/sqlite.ts`.
-- [ ] Edit `.agents/skills/verify-machine-answers/model/MachineAnswers.tla`.
+- [x] Edit `apps/server/src/reconcile.ts`.
+- [x] Edit `apps/server/src/machines.ts`.
+- [x] Edit `apps/server/src/store.ts`.
+- [x] Edit `apps/server/src/platform/sqlite.ts`.
+- [x] Edit `.agents/skills/verify-machine-answers/model/MachineAnswers.tla`.
 
 **Build.**
 
-- [ ] Add `wants(kind, desired)` in `reconcile.ts`. It replaces `cuts` and `askedSince`.
-- [ ] Move a resize's target to `Operation.to` at `begin`, so a later resize needs no generation.
-- [ ] Keep a failing step from swallowing a request that left `desired` alone. A step other than a resize that fails with a resize owed rests `observing`, so the resize runs and its waiter isn't answered with the step's failure.
-- [ ] Add a test for the case in Appendix C of a request that goes A, B, A during a step.
-- [ ] `generation` stays until CH5, which removes it with the writes that need it.
+- [x] Add `wants(kind, desired)` in `reconcile.ts`. It replaces `cuts` and `askedSince`.
+- [x] Move a resize's target to `Operation.to` at `begin`, so a later resize needs no generation.
+- [x] Keep a failing step from swallowing a request that left `desired` alone. A step other than a resize that fails with a resize owed rests `observing`, so the resize runs and its waiter isn't answered with the step's failure.
+- [x] Add a test for the case in Appendix C of a request that goes A, B, A during a step.
+- [x] `generation` stays until CH5, which removes it with the writes that need it.
 
 **You see.**
 
-- [ ] A repeated `stop` during a failing `stop` answers the failure instead of trying once more. Decision D3 owns that.
+- [x] A repeated `stop` during a failing `stop` answers the failure instead of trying once more. Decision D3 owns that.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Add "a resize asked during a failing stop still runs" to `machines.test.ts`, failing first. Run `vp test apps/server`.
-- [ ] Run `check.sh` in full, and each break in `SKILL.md`, which fails its invariant.
+- [x] Add "a resize asked during a failing stop still runs" to `machines.test.ts`, failing first. Run `vp test apps/server`.
+- [x] Run `check.sh` in full, and each break in `SKILL.md`, which fails its invariant.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `inherit-parent` at the PR head, per the boot recipe.
 
@@ -225,7 +229,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 **Merge.**
 
 - [ ] Root's clean verdict at the exact head SHA.
-- [ ] The commit sits on `machine-actors`, and the operator lands the branch.
+- [x] The commit sits on `machine-actors`, and the operator lands the branch.
 
 ## Write the chart and make the model import it (CH4)
 
@@ -233,33 +237,33 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 **Files.**
 
-- [ ] Edit `pnpm-workspace.yaml`, pinning `xstate` at `6.0.0-alpha.71` and `@xstate/effect` at `1.0.0-alpha.10`, with `minimumReleaseAgeExclude`.
-- [ ] Edit `apps/server/package.json`.
-- [ ] Create `apps/server/src/chart.ts`.
-- [ ] Create `apps/server/src/machine-chart.ts`.
-- [ ] Create `apps/server/tests/machine-chart.test.ts`.
-- [ ] Create `.agents/skills/verify-machine-answers/scripts/export-chart.ts`.
-- [ ] Create `.agents/skills/verify-machine-answers/model/Chart.tla`.
-- [ ] Edit `.agents/skills/verify-machine-answers/model/MachineAnswers.tla`.
-- [ ] Edit `oxlint.config.ts`.
+- [x] Edit `pnpm-workspace.yaml`, pinning `xstate` at `6.0.0-alpha.71` and `@xstate/effect` at `1.0.0-alpha.10`, with `minimumReleaseAgeExclude`. `@xstate/effect` was dropped with CH7's actor.
+- [x] Edit `apps/server/package.json`.
+- [x] Create `apps/server/src/chart.ts`.
+- [x] Create `apps/server/src/machine-chart.ts`.
+- [x] Create `apps/server/tests/machine-chart.test.ts`.
+- [x] Create `.agents/skills/verify-machine-answers/scripts/export-chart.ts`.
+- [x] Create `.agents/skills/verify-machine-answers/model/Chart.tla`.
+- [x] Edit `.agents/skills/verify-machine-answers/model/MachineAnswers.tla`.
+- [x] Edit `oxlint.config.ts`.
 
 **Build.**
 
-- [ ] Write the 21 leaf chart from the table in `research_notes/Machine charts/candidate-1.md` section 5, with `meta` of `{ phase, step, activity }` on each leaf. `chart.sketch.mjs` is a start and no more, as it has no `resize` edge, no `sized`, no `event.move` and no `undoneAt`, and its `resizing` never clears `resize`.
-- [ ] Record a make's `port` on every report edge, `deleting.draining` included, or `others` drops it and two VMs on a host can take one port.
-- [ ] Add `applied`, which turns a row and event into a `Decision` through `resolveState` and `transition`. No snapshot outlives the call.
-- [ ] Export the chart's row writes to `Chart.tla`, and write `row' = Row(row, event, op)` in the model.
-- [ ] Fence `chart.ts` and `*-chart.ts` to `xstate` and each other, with no `Date`, `Math.random`, `crypto` or `Effect`.
-- [ ] Nothing live calls the chart yet.
+- [x] Write the 21 leaf chart from the table in `research_notes/Machine charts/candidate-1.md` section 5, with `meta` of `{ phase, step, activity }` on each leaf. `chart.sketch.mjs` is a start and no more, as it has no `resize` edge, no `sized`, no `event.move` and no `undoneAt`, and its `resizing` never clears `resize`.
+- [x] Record a make's `port` on every report edge, `deleting.draining` included, or `others` drops it and two VMs on a host can take one port.
+- [x] Add `applied`, which turns a row and event into a `Decision` through `resolveState` and `transition`. No snapshot outlives the call.
+- [x] Export the chart's row writes to `Chart.tla`, and write `row' = Row(row, event, op)` in the model.
+- [x] Fence `chart.ts` and `*-chart.ts` to `xstate` and each other, with no `Date`, `Math.random`, `crypto` or `Effect`.
+- [x] Nothing live calls the chart yet.
 
 **You see.**
 
-- [ ] TLC passes over the table generated from the chart, as it did in the probe at 12,250,270 distinct states (measured). The server's behaviour doesn't change.
+- [x] TLC passes over the table generated from the chart, as it did in the probe at 12,250,270 distinct states (measured). The server's behaviour doesn't change.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Add to `machine-chart.test.ts` the 320 input table against `next`, every event from every leaf against `settled`, `lost` and the store's SQL, every leaf reached through `getAdjacencyMap`, no `ask` or `delete` from a rest ending in a rest, a stale `Chart.tla`, a throw reaching the caller, and a flat heap over 100,000 writes. Run `vp test apps/server/tests/machine-chart.test.ts`.
-- [ ] Run `check.sh` in full. Each break mutates the chart, re-exports, and fails its invariant.
+- [x] Add to `machine-chart.test.ts` the 320 input table against `next`, every event from every leaf against `settled`, `lost` and the store's SQL, every leaf reached through `getAdjacencyMap`, no `ask` or `delete` from a rest ending in a rest, a stale `Chart.tla`, a throw reaching the caller, and a flat heap over 100,000 writes. Run `vp test apps/server/tests/machine-chart.test.ts`.
+- [x] Run `check.sh` in full. Each break mutates the chart, re-exports, and fails its invariant.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `inherit-parent` at the PR head, per the boot recipe.
 
@@ -286,7 +290,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 **Merge.**
 
 - [ ] Root's clean verdict at the exact head SHA.
-- [ ] The commit sits on `machine-actors`, and the operator lands the branch.
+- [x] The commit sits on `machine-actors`, and the operator lands the branch.
 
 ## Put every machine write through the chart (CH5)
 
@@ -294,30 +298,30 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 **Files.**
 
-- [ ] Edit `apps/server/src/platform/sqlite.ts`.
-- [ ] Edit `apps/server/src/store.ts`.
-- [ ] Edit `apps/server/src/machines.ts`.
-- [ ] Delete `apps/server/src/reconcile.ts`.
-- [ ] Edit `apps/server/tests/support.ts`.
-- [ ] Edit `apps/server/tests/crash.test.ts`.
+- [x] Edit `apps/server/src/platform/sqlite.ts`.
+- [x] Edit `apps/server/src/store.ts`.
+- [x] Edit `apps/server/src/machines.ts`.
+- [x] Delete `apps/server/src/reconcile.ts`.
+- [x] Edit `apps/server/tests/support.ts`.
+- [x] Edit `apps/server/tests/crash.test.ts`.
 
 **Build.**
 
-- [ ] Replace `stage` and `phase` with one `state` column holding the leaf path, in a new migration, and add `store.advance(resource, name, decide)`. The store stays ignorant of leaf names.
-- [ ] Narrow `desired` to three values. `deleted` is the `deleting` region, and the wire `desired` derives.
-- [ ] Run requests and the loop's writes through `store.advance` and `applied`. The loop's shape stays. `read` carries `boot` from a fresh `hosts.read`, as a `hosts.known` boot goes stale and `poll` then calls each new step lost.
-- [ ] Keep the homes in `candidate-1.md` section 6 for the tailnet checks, the Capacity move, the sizes read after a lost resize, `creates`, `tick`, `adopted` and expiry.
-- [ ] Delete `reconcile.ts`, `Stage`, `Finish`, `next`, `settled`, `lost`, `holds`, `stepPhases`, `phaseOfKind`, `released`, and `generation` from `MachineRow` and `Operation`.
+- [x] Replace `stage` and `phase` with one `state` column holding the leaf path, in a new migration, and add `store.advance(resource, name, decide)`. The store stays ignorant of leaf names.
+- [x] Narrow `desired` to three values. `deleted` is the `deleting` region, and the wire `desired` derives.
+- [x] Run requests and the loop's writes through `store.advance` and `applied`. The loop's shape stays. `read` carries `boot` from a fresh `hosts.read`, as a `hosts.known` boot goes stale and `poll` then calls each new step lost.
+- [x] Keep the homes in `candidate-1.md` section 6 for the tailnet checks, the Capacity move, the sizes read after a lost resize, `creates`, `tick`, `adopted` and expiry.
+- [x] Delete `reconcile.ts`, `Stage`, `Finish`, `next`, `settled`, `lost`, `holds`, `stepPhases`, `phaseOfKind`, `released`, and `generation` from `MachineRow` and `Operation`.
 
 **You see.**
 
-- [ ] A delete during a step reads `deleting` at once, not the step's phase. Every other read matches lane 1.
+- [x] A delete during a step reads `deleting` at once, not the step's phase. Every other read matches lane 1.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Run `vp test apps/server`. Add `phaseOf(row)` to `support.ts` for the 18 row readers, and rewrite the `generation` helper at `machines.test.ts:92`.
-- [ ] Open a v1 database from a copy of a fresh `control-plane` run. It migrates, or refuses with `CannotStart`. Lane 1 runs on fresh directories and can't see this.
-- [ ] Run `crash.test.ts` alone. All 15 cases keep their statements.
+- [x] Run `vp test apps/server`. Add `phaseOf(row)` to `support.ts` for the 18 row readers, and rewrite the `generation` helper at `machines.test.ts:92`.
+- [x] Open a v1 database from a copy of a fresh `control-plane` run. It migrates, or refuses with `CannotStart`. Lane 1 runs on fresh directories and can't see this.
+- [x] Run `crash.test.ts` alone. All 15 cases keep their statements.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `inherit-parent` at the PR head, per the boot recipe.
 
@@ -348,7 +352,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 **Merge.**
 
 - [ ] Root's clean verdict at the exact head SHA.
-- [ ] The commit sits on `machine-actors`, and the operator lands the branch.
+- [x] The commit sits on `machine-actors`, and the operator lands the branch.
 
 ## Give checkpoints the same chart and one driver (CH6)
 
@@ -356,27 +360,27 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 
 **Files.**
 
-- [ ] Create `apps/server/src/checkpoint-chart.ts`.
-- [ ] Create `apps/server/src/driver.ts`.
-- [ ] Edit `apps/server/src/checkpoints.ts`.
-- [ ] Edit `apps/server/src/machines.ts`.
-- [ ] Edit `apps/server/src/store.ts`.
-- [ ] Edit `apps/server/src/platform/sqlite.ts`.
+- [x] Create `apps/server/src/checkpoint-chart.ts`.
+- [x] Create `apps/server/src/driver.ts`.
+- [x] Edit `apps/server/src/checkpoints.ts`.
+- [x] Edit `apps/server/src/machines.ts`.
+- [x] Edit `apps/server/src/store.ts`.
+- [x] Edit `apps/server/src/platform/sqlite.ts`.
 
 **Build.**
 
-- [ ] Port the checkpoint tree in `research_notes/Machine charts/candidate-1.md` section 5.
-- [ ] Replace `looped`, `drive`, `driven` and the checkpoint's `work`, `driving` and `asked` with one `driver.ts`, where `activityOf(state)` picks the turn.
-- [ ] Delete `CheckpointPhase`, `CheckpointPatch` and `patchCheckpoint`.
+- [x] Port the checkpoint tree in `research_notes/Machine charts/candidate-1.md` section 5.
+- [x] Replace `looped`, `drive`, `driven` and the checkpoint's `work`, `driving` and `asked` with one `driver.ts`, where `activityOf(state)` picks the turn.
+- [x] Delete `CheckpointPhase`, `CheckpointPatch` and `patchCheckpoint`.
 
 **You see.**
 
-- [ ] A capture that loses its host, and one deleted mid-capture, end as they do today. `from` and the re-read are gone.
+- [x] A capture that loses its host, and one deleted mid-capture, end as they do today. `from` and the re-read are gone.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Run `vp test apps/server/tests/checkpoints.test.ts`. All 52 keep their statements.
-- [ ] Add the lost wake case from `1b8f35a`, which has no deterministic test, to `driver.test.ts`.
+- [x] Run `vp test apps/server/tests/checkpoints.test.ts`. All 52 keep their statements.
+- [x] Add the lost wake case from `1b8f35a`, which has no deterministic test, to `driver.test.ts`.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `inherit-parent` at the PR head, per the boot recipe.
 
@@ -403,69 +407,71 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 **Merge.**
 
 - [ ] Root's clean verdict at the exact head SHA.
-- [ ] The commit sits on `machine-actors`, and the operator lands the branch.
+- [x] The commit sits on `machine-actors`, and the operator lands the branch.
 
-## Run a prebuild as an actor and bring the docs up (CH7)
+## Close the gaps and bring the docs up (CH7)
+
+**Dropped.** The operator kept a prebuild as an Effect sequence, `building` in `checkpoints.ts`, so the actor, `@xstate/effect` and the boxes that ask for them stay open. Nine gaps found in review took their place, `e448f40` to `1ceab6e`. One of them refuses a capture of a machine being deleted, which replaced the test of a capture queued behind that delete.
 
 **Depends on.** CH6.
 
 **Files.**
 
 - [ ] Edit `apps/server/src/prebuilds.ts`.
-- [ ] Edit `apps/server/src/checkpoints.ts`.
+- [x] Edit `apps/server/src/checkpoints.ts`.
 - [ ] Edit `oxlint.config.ts`.
-- [ ] Edit `AGENTS.md`.
-- [ ] Edit `README.md`.
-- [ ] Edit `docs/design/control-plane.md`.
-- [ ] Edit `.agents/skills/verify-machine-answers/SKILL.md`.
+- [x] Edit `AGENTS.md`.
+- [x] Edit `README.md`.
+- [x] Edit `docs/design/control-plane.md`.
+- [x] Edit `.agents/skills/verify-machine-answers/SKILL.md`.
 
 **Build.**
 
 - [ ] Port the build tree in `research_notes/Machine charts/candidate-1.md` section 5 on `setupEffect`, started as `Effect.forkIn(Effect.scoped(create then join), scope)`.
 - [ ] Make each invoke total through `Effect.matchCause`, and have the spawner read `Effect.exit`, so a dead actor reads `failed` and its builder goes.
 - [ ] Keep the setup in a `Map` in `Checkpoints`, never in input or context.
-- [ ] Rewrite the row, step and lease bullets in `AGENTS.md`, and `control-plane.md`'s statement that the plain loop replaced the chart.
+- [x] Rewrite the row, step and lease bullets in `AGENTS.md`, and `control-plane.md`'s statement that the plain loop replaced the chart.
 
 **You see.**
 
-- [ ] `prebuild --profile web` and `getPrebuild` read as they do today, and a killed builder is deleted at restart.
+- [x] `prebuild --profile web` and `getPrebuild` read as they do today, and a killed builder is deleted at restart.
 
 **Verify, unit.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
 - [ ] Add each build path to `checkpoints.test.ts`, and a transition throw reading `failed`. Run `vp test apps/server`.
-- [ ] From a clean clone, run `vp check`, `vp test`, `vp run ready` and `check.sh` in full.
+- [x] From a clean clone, run `vp check`, `vp test`, `vp run ready` and `check.sh` in full.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on `inherit-parent` at the PR head, per the boot recipe.
 
-- [ ] Lane 1. Regression lane against trunk. Run create, pause, stop, start and delete on `control-plane` at `1072a08` and at head, through the `features/README.md` row. Save `CH7-lifecycle.txt`. Pass when each read of `state`, `desired` and `phase` matches between the two, or differs only as this unit's You see names.
-- [ ] Lane 2. Setup and failure. Drive the setup, host key and failing setup rows, then replace the failed row. Save `CH7-setup.txt`. Pass when `bad` reads `phase` `failed`, `state` `missing` with its error, and a create of the name replaces it.
-- [ ] Lane 3. Prebuilds. Drive `prebuild --profile web`, delete `$RUN/recipe-ran`, then `create fast --profile web`. Save `CH7-prebuild.txt`. Pass when `runtime-calls.txt` has `restore fast` and `recipe-ran` stays absent.
-- [ ] Lane 4. Copies. Drive the checkpoint, fork and restore row. Save `CH7-copies.txt`. Pass when `checkpoint get snap --json` has `machine` and `kind`, and `copy` and `twin` settle.
-- [ ] Lane 5. Resize. Drive the resize and capacity row. Save `CH7-resize.txt`. Pass when each refusal has its tag and `capacity` counts no stopped machine.
-- [ ] Lane 6. Moves. Run `launch.sh linux 2048 2` and create 2G twice, then a third. Save `CH7-moves.txt`. Pass when two settle one per host and the third rests failed with `Capacity`.
-- [ ] Lane 7. A dead host. Run `fault.sh "$RUN" kill-host linux-2` on a two-host run. Save `CH7-host-down.txt`. Pass when a machine there reads `state` `unknown` and `phase` `waiting`, and a create lands on `linux-1`.
-- [ ] Lane 8. A dead control plane. Create `slow` with `--no-wait`, wait for `$RUN/setup-began`, `fault.sh` `kill-server`, `setup-go`, `start-server`. Save `CH7-crash.txt`. Pass when the machine ends `settled` with one `create` in `runtime-calls.txt`.
-- [ ] Lane 9. A mac run. Run `launch.sh mac` and drive create, stop, capture, restore and delete. Save `CH7-mac.txt`. Pass when a capture of a running machine is refused and the rest settle.
-- [ ] Lane 10. A superseded request. Start `stop dev` with `--no-wait` while `slow` holds a step, then `start dev`. Save `CH7-superseded.txt`. Pass when the first wait answers `Superseded` and `get --json` agrees.
+- [x] Lane 1. Regression lane against trunk. Run create, pause, stop, start and delete on `control-plane` at `1072a08` and at head, through the `features/README.md` row. Save `CH7-lifecycle.txt`. Pass when each read of `state`, `desired` and `phase` matches between the two, or differs only as this unit's You see names.
+- [x] Lane 2. Setup and failure. Drive the setup, host key and failing setup rows, then replace the failed row. Save `CH7-setup.txt`. Pass when `bad` reads `phase` `failed`, `state` `missing` with its error, and a create of the name replaces it.
+- [x] Lane 3. Prebuilds. Drive `prebuild --profile web`, delete `$RUN/recipe-ran`, then `create fast --profile web`. Save `CH7-prebuild.txt`. Pass when `runtime-calls.txt` has `restore fast` and `recipe-ran` stays absent.
+- [x] Lane 4. Copies. Drive the checkpoint, fork and restore row. Save `CH7-copies.txt`. Pass when `checkpoint get snap --json` has `machine` and `kind`, and `copy` and `twin` settle.
+- [x] Lane 5. Resize. Drive the resize and capacity row. Save `CH7-resize.txt`. Pass when each refusal has its tag and `capacity` counts no stopped machine.
+- [x] Lane 6. Moves. Run `launch.sh linux 2048 2` and create 2G twice, then a third. Save `CH7-moves.txt`. Pass when two settle one per host and the third rests failed with `Capacity`.
+- [x] Lane 7. A dead host. Run `fault.sh "$RUN" kill-host linux-2` on a two-host run. Save `CH7-host-down.txt`. Pass when a machine there reads `state` `unknown` and `phase` `waiting`, and a create lands on `linux-1`.
+- [x] Lane 8. A dead control plane. Create `slow` with `--no-wait`, wait for `$RUN/setup-began`, `fault.sh` `kill-server`, `setup-go`, `start-server`. Save `CH7-crash.txt`. Pass when the machine ends `settled` with one `create` in `runtime-calls.txt`.
+- [x] Lane 9. A mac run. Run `launch.sh mac` and drive create, stop, capture, restore and delete. Save `CH7-mac.txt`. Pass when a capture of a running machine is refused and the rest settle.
+- [x] Lane 10. A superseded request. Start `stop dev` with `--no-wait` while `slow` holds a step, then `start dev`. Save `CH7-superseded.txt`. Pass when the first wait answers `Superseded` and `get --json` agrees.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 
-- [ ] Metric. Wall time of `prebuild --profile web` on the fake runtime.
-- [ ] Probe. Ten runs each of trunk and head, interleaved.
-- [ ] Baseline. Record the trunk median first.
-- [ ] Rule. A median more than 20 percent slower fails.
+- [x] Metric. Wall time of `prebuild --profile web` on the fake runtime.
+- [x] Probe. Ten runs each of trunk and head, interleaved.
+- [x] Baseline. Record the trunk median first.
+- [x] Rule. A median more than 20 percent slower fails.
 
 **Review gate.** None. CH7 is not review-gated.
 
 **Merge.**
 
 - [ ] Root's clean verdict at the exact head SHA.
-- [ ] The commit sits on `machine-actors`, and the operator lands the branch.
+- [x] The commit sits on `machine-actors`, and the operator lands the branch.
 
 ## Close the program
 
 - [ ] Every box above is checked with its evidence.
-- [ ] `vp check`, `vp test` and `vp run ready` pass from a clean clone, `check.sh` passes in full, and the fault run ends as Faults says.
+- [x] `vp check`, `vp test` and `vp run ready` pass from a clean clone, `check.sh` passes in full, and the fault run ends as Faults says.
 - [ ] Reply to the operator with the report the execution playbook names.
 
 ## Appendix A. Prototype evidence
@@ -522,7 +528,7 @@ From candidate 2, the plan takes reachability through `getAdjacencyMap` and the 
 - CH4. A threaded snapshot is the leak. `advance` takes a row, so it can't be threaded, and the heap test watches it.
 - CH5. Leaf names enter the database, so renaming a leaf is a migration.
 - CH5. `read` adds one host read per machine per recheck, as it carries `boot` and `pin`.
-- CH7. A throw in a build transition kills its actor, so the spawner's `Effect.exit` is required.
+- CH7. A throw in a build transition kills its actor, so the spawner's `Effect.exit` is required. Moot, as no actor was built. Moot, as no actor was built.
 - All. The 209 server tests that read no row should survive, which is inferred until CH5 runs.
 
 ## Appendix D. Links and reading list
