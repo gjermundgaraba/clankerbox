@@ -1156,8 +1156,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* resuming.entered;
         yield* applying(store, "dev", { type: "ask", desired: "running" });
-        yield* applying(store, "dev", { type: "ask", desired: "stopped" });
-        yield* machines.wake("dev");
+        yield* machines.stop("dev");
         yield* pause;
         yield* resuming.release;
 

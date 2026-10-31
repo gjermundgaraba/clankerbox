@@ -34,7 +34,6 @@ import {
   DateTime,
   Duration,
   Effect,
-  Latch,
   Layer,
   Option,
 } from "effect";
@@ -42,6 +41,8 @@ import type { Scope } from "effect";
 import { Hex } from "effect/encoding";
 
 import { applied } from "./chart.ts";
+import { driver } from "./driver.ts";
+import type { Heard } from "./driver.ts";
 import { Hosts } from "./hosts.ts";
 import {
   activityOf,
@@ -109,8 +110,6 @@ export interface Interface {
     sizing?: Sizing
   ) => Effect.Effect<Machine, Declared<"restoreMachine">>;
   readonly capacity: Effect.Effect<CapacityRead, Internal>;
-  /** Tells a machine's loop that something it may be waiting on changed. */
-  readonly wake: (name: string) => Effect.Effect<void>;
   /**
    * Waits until a machine rests or is gone, for a prebuild's own steps. A machine that can't be read
    * ends the wait as `Unavailable`, as nothing it would go on to do can begin.
@@ -134,10 +133,6 @@ interface Candidate {
   readonly source: Source;
   readonly prebuild: string | undefined;
 }
-
-const busyWait = Duration.millis(100);
-
-const unreachableWait = Duration.seconds(1);
 
 const restPoll = Duration.millis(100);
 
@@ -243,14 +238,8 @@ export const make = (
     const operations = yield* Operations;
     const scope = yield* Effect.scope;
 
-    const wakes = new Map<string, Latch.Latch>();
     const creates = new Map<string, CreateHeldInMemory>();
     const tailnets = new Map<string, TailnetCheck>();
-
-    const wake = (name: string) =>
-      Effect.sync(() => {
-        wakes.get(name)?.openUnsafe();
-      });
 
     const row = (name: string) =>
       Effect.flatMap(store.findMachine(name), (found) =>
@@ -261,17 +250,6 @@ export const make = (
       store.advance("machine", name, (found, op) =>
         applied(machineChart, found, event, op)
       );
-
-    const recorded = (name: string, event: MachineEvent) =>
-      Effect.gen(function* () {
-        const answer = yield* applying(name, event);
-
-        yield* wake(name);
-
-        return answer.at === "written" && answer.next !== "removed"
-          ? { next: answer.next, moved: answer.moved }
-          : yield* notFound(name);
-      });
 
     const readStates = (rows: readonly MachineRow[]) =>
       Effect.gen(function* () {
@@ -551,12 +529,6 @@ export const make = (
         return true;
       });
 
-    const collected = (op: Operation) =>
-      Effect.andThen(
-        operations.collect(op),
-        Effect.forEach(op.leases, ({ name }) => wake(name), { discard: true })
-      );
-
     const sizesRead = (found: MachineRow) => {
       const ref = refOf(found);
 
@@ -577,25 +549,13 @@ export const make = (
             );
     };
 
-    const following = (found: MachineRow, op: Operation, latch: Latch.Latch) =>
+    const following = (found: MachineRow, op: Operation, heard: Heard) =>
       Effect.gen(function* () {
         const { name } = found;
 
-        const polled = yield* Effect.raceFirst(
-          operations.poll(op, {
-            cut: !wants(op.kind, desiredOf(found)),
-            step: stepOf(found, op),
-          }),
-          Effect.as(latch.await, { at: "woken" } as const)
-        );
-
-        switch (polled.at) {
-          case "woken": {
-            return;
-          }
-
+        switch (heard.at) {
           case "running": {
-            const { port } = polled.report.outcome;
+            const { port } = heard.report.outcome;
 
             if (port !== undefined && found.port !== port) {
               yield* applying(name, { type: "ran", port });
@@ -605,7 +565,7 @@ export const make = (
           }
 
           case "ended": {
-            const { report } = polled;
+            const { report } = heard;
 
             const written = yield* stored(
               name,
@@ -625,7 +585,7 @@ export const make = (
               tailnets.set(name, firstCheck);
             }
 
-            return yield* collected(op);
+            return yield* operations.collect(op);
           }
 
           case "lost": {
@@ -648,11 +608,7 @@ export const make = (
               yield* sizesRead(found);
             }
 
-            return yield* collected(op);
-          }
-
-          case "unreachable": {
-            yield* Effect.timeoutOption(latch.await, unreachableWait);
+            return yield* operations.collect(op);
           }
         }
       });
@@ -690,9 +646,7 @@ export const make = (
             : undefined;
 
         if (refused !== undefined) {
-          yield* applying(name, { type: "refused", error: refused });
-
-          return "again" as const;
+          return yield* applying(name, { type: "refused", error: refused });
         }
 
         const seen =
@@ -711,122 +665,43 @@ export const make = (
             seen === "running" && !found.ephemeral && due(check) && info.joins,
         });
 
-        switch (answer.at) {
-          case "absent": {
-            return "gone" as const;
-          }
-
-          case "busy": {
-            yield* Effect.sleep(busyWait);
-
-            return "again" as const;
-          }
-
-          case "written": {
-            if (
-              answer.next !== "removed" &&
-              answer.next.state === "made.settled"
-            ) {
-              tailnets.set(name, ticked(check));
-            }
-
-            return answer.moved ? ("again" as const) : ("rest" as const);
-          }
+        if (
+          answer.at === "written" &&
+          answer.next !== "removed" &&
+          answer.next.state === "made.settled"
+        ) {
+          tailnets.set(name, ticked(check));
         }
-      }).pipe(
-        Effect.catchTag("Unreachable", (error) =>
-          Effect.as(Effect.logWarning(error.message), "rest" as const)
-        )
-      );
 
-    const turn = (name: string, latch: Latch.Latch, rechecked: boolean) =>
+        return answer;
+      });
+
+    const drive = yield* driver(settings.recheck, {
+      kind: "machine",
+      find: store.findMachine,
+      operationOn: (name) => store.operationOn("machine", name),
+      activityOf,
+      looking,
+      polling: (found, op) =>
+        operations.poll(op, {
+          cut: !wants(op.kind, desiredOf(found)),
+          step: stepOf(found, op),
+        }),
+      following,
+    });
+
+    const recorded = (name: string, event: MachineEvent) =>
       Effect.gen(function* () {
-        const present = yield* store.findMachine(name);
+        const answer = yield* applying(name, event);
 
-        if (Option.isNone(present) || present.value.state === "undone") {
-          return "gone" as const;
+        if (answer.at !== "written" || answer.next === "removed") {
+          return yield* notFound(name);
         }
 
-        const found = present.value;
+        yield* drive(name);
 
-        switch (activityOf(found.state)) {
-          case "read": {
-            return yield* looking(found);
-          }
-
-          case "follow": {
-            const op = yield* Effect.fromOption(
-              yield* store.operationOn("machine", name),
-              () =>
-                new Internal({
-                  message: `machine ${name} is at ${found.state} with no operation`,
-                })
-            );
-
-            yield* following(found, op, latch);
-
-            return "again" as const;
-          }
-
-          case "recheck": {
-            return rechecked ? yield* looking(found) : ("rest" as const);
-          }
-
-          case "none": {
-            return "rest" as const;
-          }
-        }
+        return { next: answer.next, moved: answer.moved };
       });
-
-    const looped = (name: string, latch: Latch.Latch) =>
-      Effect.gen(function* () {
-        let rechecked = true;
-
-        for (;;) {
-          yield* latch.close;
-
-          const at = yield* turn(name, latch, rechecked).pipe(
-            Effect.catchCause((cause) =>
-              Effect.as(
-                Effect.logError(
-                  `machine ${name}'s loop failed, and runs again at the next recheck:\n${Cause.pretty(cause)}`
-                ),
-                "rest" as const
-              )
-            )
-          );
-
-          if (at === "gone") {
-            return;
-          }
-
-          rechecked = false;
-
-          if (at === "rest") {
-            rechecked = Option.isNone(
-              yield* Effect.timeoutOption(latch.await, settings.recheck)
-            );
-          }
-        }
-      });
-
-    const drive = (name: string) =>
-      Effect.flatMap(Latch.make(false), (latch) => {
-        wakes.set(name, latch);
-
-        return looped(name, latch).pipe(
-          Effect.ensuring(
-            Effect.sync(() => {
-              if (wakes.get(name) === latch) {
-                wakes.delete(name);
-              }
-            })
-          )
-        );
-      });
-
-    const driven = (name: string) =>
-      Effect.asVoid(Effect.forkIn(drive(name), scope));
 
     const born = (
       name: string,
@@ -864,7 +739,7 @@ export const make = (
 
         yield* store.insertMachine(created);
         creates.set(name, held);
-        yield* driven(name);
+        yield* drive(name);
 
         return unread(created);
       });
@@ -1056,7 +931,7 @@ export const make = (
 
     const remove = (name: string) =>
       Effect.flatMap(applying(name, { type: "delete" }), (answer) =>
-        answer.at === "absent" ? Effect.fail(notFound(name)) : wake(name)
+        answer.at === "absent" ? Effect.fail(notFound(name)) : drive(name)
       );
 
     const capacity = Effect.gen(function* () {
@@ -1188,9 +1063,7 @@ export const make = (
         yield* applying(found.name, { type: "delete" });
       }
 
-      if (found.state !== "undone") {
-        yield* driven(found.name);
-      }
+      yield* drive(found.name);
     }
 
     yield* Effect.forkIn(
@@ -1223,7 +1096,6 @@ export const make = (
       fork: Effect.fn("Machines.fork")(fork),
       restore: Effect.fn("Machines.restore")(restore),
       capacity: capacity.pipe(Effect.withSpan("Machines.capacity")),
-      wake,
       rest,
     } satisfies Interface;
   });

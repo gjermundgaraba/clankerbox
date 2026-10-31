@@ -270,11 +270,6 @@ export const make = (settings: {
                 op,
                 yield* settle(name, op, polled.report.error)
               );
-              yield* Effect.forEach(
-                op.leases.filter((lease) => lease.resource === "machine"),
-                (lease) => machines.wake(lease.name),
-                { discard: true }
-              );
 
               if (polled.report.error !== undefined && op.kind !== "capture") {
                 yield* Effect.sleep(settings.recheck);

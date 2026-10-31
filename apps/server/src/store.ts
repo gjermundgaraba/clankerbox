@@ -137,10 +137,10 @@ export type Finish =
  * What a write did. `written` also answers a `decide` that changed nothing: then `moved` is false
  * and `next` the row as it stands. `busy` is a lease that refused the operation, and wrote nothing.
  */
-export type Advanced =
+export type Advanced<R> =
   | {
       readonly at: "written";
-      readonly next: MachineRow | "removed";
+      readonly next: R | "removed";
       readonly moved: boolean;
     }
   | { readonly at: "absent" }
@@ -165,7 +165,7 @@ export interface Interface {
     resource: "machine",
     name: string,
     decide: (row: MachineRow, op: Operation | undefined) => Decision<MachineRow>
-  ) => Effect.Effect<Advanced, Internal>;
+  ) => Effect.Effect<Advanced<MachineRow>, Internal>;
   /** Removes the rows of failed creates and captures older than `before`. */
   readonly expire: (before: DateTime.Utc) => Effect.Effect<void, Internal>;
   readonly checkpoints: Effect.Effect<readonly CheckpointRow[], Internal>;

@@ -682,7 +682,7 @@ export const open = (
         transaction(
           db,
           `advance ${resource} ${name}`,
-          (): Result.Result<Advanced, Busy> => {
+          (): Result.Result<Advanced<MachineRow>, Busy> => {
             const raw = selectMachine.get(name);
 
             if (raw === undefined) {
@@ -716,7 +716,7 @@ export const open = (
           }
         ).pipe(
           Effect.catchTag("Busy", () =>
-            Effect.succeed<Advanced>({ at: "busy" })
+            Effect.succeed<Advanced<MachineRow>>({ at: "busy" })
           )
         )
       ),

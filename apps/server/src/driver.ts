@@ -1,0 +1,214 @@
+import { Internal } from "@gjermundgaraba/clankerbox-sdk";
+import { Cause, Duration, Effect, Latch, Option } from "effect";
+import type { Scope } from "effect";
+
+import type { Activity } from "./chart.ts";
+import type { Unreachable } from "./hosts.ts";
+import type { Polled } from "./operations.ts";
+import type { Advanced, Lease, Operation } from "./store.ts";
+
+const busyWait = Duration.millis(100);
+
+const unreachableWait = Duration.seconds(1);
+
+/** What a look at an operation found that its resource acts on. */
+export type Heard = Exclude<Polled, { readonly at: "unreachable" }>;
+
+type Turned = "again" | "rest" | "over";
+
+export interface Resource<R extends { readonly state: string }> {
+  readonly kind: Lease["resource"];
+  readonly find: (name: string) => Effect.Effect<Option.Option<R>, Internal>;
+  readonly operationOn: (
+    name: string
+  ) => Effect.Effect<Option.Option<Operation>, Internal>;
+  readonly activityOf: (state: R["state"]) => Activity;
+  /** Reads what the chart's `read` needs, and writes it. */
+  readonly looking: (
+    row: R
+  ) => Effect.Effect<Advanced<R>, Internal | Unreachable>;
+  /** One look at the row's operation, which a wake cuts short, so it must store nothing. */
+  readonly polling: (row: R, op: Operation) => Effect.Effect<Polled, Internal>;
+  /** Stores what a look found, which no wake cuts short, so a stored report is always collected. */
+  readonly following: (
+    row: R,
+    op: Operation,
+    heard: Heard
+  ) => Effect.Effect<void, Internal>;
+}
+
+const looked = <R extends { readonly state: string }>(
+  resource: Resource<R>,
+  found: R
+) =>
+  Effect.gen(function* () {
+    const answer = yield* resource.looking(found);
+
+    switch (answer.at) {
+      case "absent": {
+        return "over" as const;
+      }
+
+      case "busy": {
+        yield* Effect.sleep(busyWait);
+
+        return "again" as const;
+      }
+
+      case "written": {
+        return answer.moved ? ("again" as const) : ("rest" as const);
+      }
+    }
+  }).pipe(
+    Effect.catchTag("Unreachable", (error) =>
+      Effect.as(Effect.logWarning(error.message), "rest" as const)
+    )
+  );
+
+const followed = <R extends { readonly state: string }>(
+  resource: Resource<R>,
+  name: string,
+  found: R,
+  latch: Latch.Latch
+) =>
+  Effect.gen(function* () {
+    const op = yield* Effect.fromOption(
+      yield* resource.operationOn(name),
+      () =>
+        new Internal({
+          message: `${resource.kind} ${name} is at ${found.state} with no operation`,
+        })
+    );
+
+    const polled = yield* Effect.raceFirst(
+      resource.polling(found, op),
+      Effect.as(latch.await, { at: "woken" } as const)
+    );
+
+    switch (polled.at) {
+      case "woken": {
+        return;
+      }
+
+      case "unreachable": {
+        yield* Effect.timeoutOption(latch.await, unreachableWait);
+
+        return;
+      }
+
+      case "running":
+      case "ended":
+      case "lost": {
+        yield* resource.following(found, op, polled);
+      }
+    }
+  });
+
+const turn = <R extends { readonly state: string }>(
+  resource: Resource<R>,
+  name: string,
+  latch: Latch.Latch,
+  rechecked: boolean
+): Effect.Effect<Turned, Internal> =>
+  Effect.gen(function* () {
+    const present = yield* resource.find(name);
+
+    if (Option.isNone(present)) {
+      return "over" as const;
+    }
+
+    const found = present.value;
+
+    switch (resource.activityOf(found.state)) {
+      case "read": {
+        return yield* looked(resource, found);
+      }
+
+      case "follow": {
+        yield* followed(resource, name, found, latch);
+
+        return "again" as const;
+      }
+
+      case "recheck": {
+        return rechecked ? yield* looked(resource, found) : ("rest" as const);
+      }
+
+      case "none": {
+        return "over" as const;
+      }
+    }
+  });
+
+/**
+ * The loops of one resource, at most one per name, each moving its row a whole step at a time. The
+ * activity of its leaf picks each turn. The answer starts a name's loop, or wakes the one running.
+ * A write always comes before its wake, and a turn reads after the latch closes, so a wake is seen
+ * by the turn it lands in or by the next. A loop ends only when no wake landed in its last turn.
+ */
+export const driver = <R extends { readonly state: string }>(
+  recheck: Duration.Duration,
+  resource: Resource<R>
+): Effect.Effect<(name: string) => Effect.Effect<void>, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const scope = yield* Effect.scope;
+    const wakes = new Map<string, Latch.Latch>();
+
+    const leaving = (name: string, latch: Latch.Latch) =>
+      Effect.sync(() => {
+        const woken = latch.closeUnsafe();
+
+        if (!woken) {
+          wakes.delete(name);
+        }
+
+        return !woken;
+      });
+
+    const looped = (name: string, latch: Latch.Latch) =>
+      Effect.gen(function* () {
+        let rechecked = true;
+
+        for (;;) {
+          yield* latch.close;
+
+          const at = yield* turn(resource, name, latch, rechecked).pipe(
+            Effect.catchCause((cause) =>
+              Effect.as(
+                Effect.logError(
+                  `${resource.kind} ${name}'s loop failed, and runs again at the next recheck:\n${Cause.pretty(cause)}`
+                ),
+                "rest" as const
+              )
+            )
+          );
+
+          rechecked = false;
+
+          if (at === "rest") {
+            rechecked = Option.isNone(
+              yield* Effect.timeoutOption(latch.await, recheck)
+            );
+          } else if (at === "over" && (yield* leaving(name, latch))) {
+            return;
+          }
+        }
+      });
+
+    return (name) =>
+      Effect.suspend(() => {
+        const running = wakes.get(name);
+
+        if (running !== undefined) {
+          running.openUnsafe();
+
+          return Effect.void;
+        }
+
+        const latch = Latch.makeUnsafe(false);
+
+        wakes.set(name, latch);
+
+        return Effect.asVoid(Effect.forkIn(looped(name, latch), scope));
+      });
+  });
