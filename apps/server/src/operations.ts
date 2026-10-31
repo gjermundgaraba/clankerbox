@@ -28,7 +28,9 @@ export interface Interface {
       readonly step: Effect.Effect<Step | undefined, Internal>;
     }
   ) => Effect.Effect<Polled, Internal>;
-  /** Stores the report, then lets the host forget it. */
+  /** Lets the host forget a report once it is stored. */
+  readonly collect: (op: Operation) => Effect.Effect<void>;
+  /** Stores a checkpoint's report, then lets the host forget it. */
   readonly finish: (
     op: Operation,
     finish: Finish
@@ -93,15 +95,15 @@ export const make: Effect.Effect<Interface, never, Store | Hosts> = Effect.gen(
         )
       );
 
-    const finish: Interface["finish"] = (op, finished) =>
-      Effect.andThen(
-        store.finish(op, finished),
-        Effect.ignore(
-          hosts.call(op.host, (api) => api.collectOperation({ id: op.id }))
-        )
+    const collect: Interface["collect"] = (op) =>
+      Effect.ignore(
+        hosts.call(op.host, (api) => api.collectOperation({ id: op.id }))
       );
 
-    return { poll, finish } satisfies Interface;
+    const finish: Interface["finish"] = (op, finished) =>
+      Effect.andThen(store.finish(op, finished), collect(op));
+
+    return { poll, collect, finish } satisfies Interface;
   }
 );
 

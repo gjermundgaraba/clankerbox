@@ -1,16 +1,11 @@
 import { readFileSync } from "node:fs";
-import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 
 import { MachineState } from "@clankerbox/host-contract";
 import type { Report } from "@clankerbox/host-contract";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import { Desired, Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { DateTime, Effect, Option } from "effect";
 import { setup, transition, types } from "xstate";
 import type { SnapshotFrom } from "xstate";
 import { adjacencyMapToArray, getAdjacencyMap } from "xstate/graph";
@@ -26,25 +21,16 @@ import {
   machineChart,
   metaOf,
   phaseOf,
+  stageOf,
   wants,
 } from "../src/machine-chart.ts";
 import type {
-  Facts,
   Leaf,
   MachineEvent,
-  Row,
+  MachineRow,
   Wish,
 } from "../src/machine-chart.ts";
-import { open } from "../src/platform/sqlite.ts";
-import { lost, next as nextOf, settled } from "../src/reconcile.ts";
-import type { Next, Patch } from "../src/reconcile.ts";
-import type {
-  Interface,
-  MachinePhase,
-  MachineRow,
-  Operation,
-  Stage,
-} from "../src/store.ts";
+import type { Facts, MachinePhase, Operation } from "../src/store.ts";
 import { facts, failure as error, flight, when as at } from "./chart-rows.ts";
 
 const wishes: readonly Wish[] = ["running", "stopped", "paused"];
@@ -59,7 +45,7 @@ const cut = new Internal({ message: "the make of dev ended on its host" });
 
 const sizes = { cpu: 2, ramMib: 2048, diskGib: 20 };
 
-const rowAt = (state: Leaf, fields?: Partial<Facts>): Row => ({
+const rowAt = (state: Leaf, fields?: Partial<Facts>): MachineRow => ({
   ...facts(fields),
   state,
 });
@@ -74,20 +60,24 @@ const onHost = (state: Leaf, kind?: Operation["kind"]) => {
   return flight(step === "any" ? (kind ?? "stop") : step);
 };
 
-const go = (row: Row, event: MachineEvent, kind?: Operation["kind"]) =>
+const go = (row: MachineRow, event: MachineEvent, kind?: Operation["kind"]) =>
   applied(machineChart, row, event, onHost(row.state, kind));
 
-const leafOf = (row: Row, event: MachineEvent, kind?: Operation["kind"]) => {
+const leafOf = (
+  row: MachineRow,
+  event: MachineEvent,
+  kind?: Operation["kind"]
+) => {
   const { next: after } = go(row, event, kind);
 
   return after === "removed" ? "removed" : after.state;
 };
 
 const after = (
-  row: Row,
+  row: MachineRow,
   event: MachineEvent,
   kind?: Operation["kind"]
-): Row => {
+): MachineRow => {
   const { next: moved } = go(row, event, kind);
 
   if (moved === "removed") {
@@ -148,8 +138,10 @@ const removal: MachineEvent = { type: "delete" };
 
 const resizing: MachineEvent = { type: "resize", sizing: { cpu: 3 } };
 
+type Top = "making" | "made" | "undoing" | "undone";
+
 interface Input {
-  readonly stage: Stage;
+  readonly stage: Top;
   readonly desired: Desired;
   readonly prepared: boolean;
   readonly resizing: boolean;
@@ -214,52 +206,72 @@ const askedOf = ({ desired }: Input) => desired !== "deleted";
 
 const readable = ({ seen }: Input) => seen !== "unknown" && seen !== "missing";
 
-const answered = (from: Leaf, want: Next): Leaf => {
-  switch (want) {
-    case "deleting": {
-      if (from === "undone") {
-        return from;
-      }
+type Readable = Exclude<MachineState, "unknown" | "missing">;
 
-      return from.startsWith("undoing.") ? "undoing.sent" : "deleting.sent";
-    }
+const stepped = {
+  start: "made.stepping.starting",
+  stop: "made.stepping.stopping",
+  pause: "made.stepping.pausing",
+} as const;
 
-    case "failed": {
-      return "undone";
-    }
+const settles = "made.settled";
 
-    case "settled": {
-      return "made.settled";
-    }
+const resting = [settles, settles] as const;
 
-    case "lost": {
-      return "made.lost";
-    }
+const decisions: Readonly<
+  Record<Wish, Readonly<Record<Readable, readonly [Leaf, Leaf]>>>
+> = {
+  running: {
+    running: [stepped.start, settles],
+    stopped: [stepped.start, stepped.start],
+    paused: [stepped.start, stepped.start],
+  },
+  stopped: {
+    running: [stepped.stop, stepped.stop],
+    stopped: resting,
+    paused: [stepped.stop, stepped.stop],
+  },
+  paused: {
+    running: [stepped.pause, stepped.pause],
+    stopped: resting,
+    paused: resting,
+  },
+};
 
-    case "unread": {
-      return from;
-    }
+const sentFrom: Partial<Record<Leaf, Leaf>> = {
+  "making.due": "making.sent",
+  "undoing.due": "undoing.sent",
+  "undoing.held": "undoing.sent",
+  "deleting.due": "deleting.sent",
+  "deleting.held": "deleting.sent",
+};
 
-    case "creating": {
-      return "making.sent";
-    }
+const decidedBy = (from: Leaf, input: Input, joins: boolean): Leaf => {
+  const { seen, prepared, resizing: owing } = input;
+  const sent = sentFrom[from];
 
-    case "starting": {
-      return "made.stepping.starting";
-    }
-
-    case "stopping": {
-      return "made.stepping.stopping";
-    }
-
-    case "pausing": {
-      return "made.stepping.pausing";
-    }
-
-    case "resizing": {
-      return "made.stepping.resizing";
-    }
+  if (sent !== undefined) {
+    return sent;
   }
+
+  if (from === "undone" || seen === "unknown") {
+    return from;
+  }
+
+  if (seen === "missing") {
+    return "made.lost";
+  }
+
+  if (owing) {
+    return "made.stepping.resizing";
+  }
+
+  const wish = input.desired === "deleted" ? "running" : input.desired;
+  const leaf = decisions[wish][seen][prepared ? 1 : 0];
+
+  return joins && leaf === settles && seen === "running"
+    ? "made.stepping.joining.sent"
+    : leaf;
 };
 
 const vmAfter: Partial<Record<Leaf, MachineState>> = {
@@ -292,43 +304,23 @@ describe("a read", () => {
     expect(inputs).toHaveLength(4 * 4 * 2 * 2 * 5);
   });
 
-  it("decides as next does, from every leaf a read is sent to, joining only where it would settle", () => {
+  it("decides as its table says, from every leaf a read is sent to, joining only where it would settle", () => {
     const table = inputs.flatMap((input) =>
       inputLeaves(input).flatMap((from) =>
-        flags.map((joins) => {
-          const row = inputRow(input, from);
-
-          const seen =
-            input.stage === "made" && input.desired !== "deleted"
-              ? input.seen
-              : "unknown";
-
-          const decided = answered(
-            from,
-            nextOf(
-              { ...input, desired: desiredOf(row), stage: input.stage },
-              seen
-            )
-          );
-
-          return {
-            from,
-            input,
-            joins,
-            chart: leafOf(row, read(seen, joins)),
-            today:
-              joins && decided === "made.settled" && seen === "running"
-                ? "made.stepping.joining.sent"
-                : decided,
-          };
-        })
+        flags.map((joins) => ({
+          from,
+          input,
+          joins,
+          chart: leafOf(inputRow(input, from), read(input.seen, joins)),
+          decided: decidedBy(from, input, joins),
+        }))
       )
     );
 
     expect(table).toHaveLength(1120);
-    expect(table.filter(({ chart, today }) => chart !== today)).toStrictEqual(
-      []
-    );
+    expect(
+      table.filter(({ chart, decided }) => chart !== decided)
+    ).toStrictEqual([]);
   });
 
   it("a machine asked to be deleted is deleted, whatever else holds", () => {
@@ -853,77 +845,135 @@ describe("a request", () => {
   });
 });
 
-const projection: Readonly<
-  Record<Leaf, readonly [Stage | undefined, MachinePhase]>
-> = {
-  "making.due": ["making", "observing"],
-  "making.sent": ["making", "creating"],
-  "made.observing": ["made", "observing"],
-  "made.settled": ["made", "settled"],
-  "made.lost": ["made", "lost"],
-  "made.failed": ["made", "failed"],
-  "made.stepping.starting": ["made", "starting"],
-  "made.stepping.stopping": ["made", "stopping"],
-  "made.stepping.pausing": ["made", "pausing"],
-  "made.stepping.resizing": ["made", "resizing"],
-  "made.stepping.joining.sent": ["made", "settled"],
-  "made.stepping.joining.asked": ["made", "observing"],
-  "undoing.due": ["undoing", "observing"],
-  "undoing.sent": ["undoing", "deleting"],
-  "undoing.held": ["undoing", "failed"],
-  undone: ["undone", "failed"],
-  "deleting.draining": [undefined, "deleting"],
-  "deleting.due": [undefined, "observing"],
-  "deleting.sent": [undefined, "deleting"],
-  "deleting.held": [undefined, "failed"],
+const phases: Readonly<Record<Leaf, MachinePhase>> = {
+  "making.due": "observing",
+  "making.sent": "creating",
+  "made.observing": "observing",
+  "made.settled": "settled",
+  "made.lost": "lost",
+  "made.failed": "failed",
+  "made.stepping.starting": "starting",
+  "made.stepping.stopping": "stopping",
+  "made.stepping.pausing": "pausing",
+  "made.stepping.resizing": "resizing",
+  "made.stepping.joining.sent": "settled",
+  "made.stepping.joining.asked": "observing",
+  "undoing.due": "observing",
+  "undoing.sent": "deleting",
+  "undoing.held": "failed",
+  undone: "failed",
+  "deleting.draining": "deleting",
+  "deleting.due": "observing",
+  "deleting.sent": "deleting",
+  "deleting.held": "failed",
 };
 
-const phaseOfKind: Partial<Record<Operation["kind"], MachinePhase>> = {
-  make: "creating",
-  start: "starting",
-  stop: "stopping",
-  pause: "pausing",
-  resize: "resizing",
-  remove: "deleting",
+const edgesEvents = [
+  ["ask", ask("stopped")],
+  ["resize", resizing],
+  ["delete", removal],
+  ["refused", { type: "refused", error }],
+  ["ran", { type: "ran", port: 2222 }],
+  ["done", done],
+  ["failed", failed],
+  ["cancelled", cancelled],
+  ["lost", gone],
+] as const satisfies ReadonlyArray<readonly [string, MachineEvent]>;
+
+type Edge = (typeof edgesEvents)[number][0];
+
+type Edges = Readonly<Partial<Record<Edge, Leaf | "removed">>>;
+
+const madeAtRest = {
+  ask: "made.observing",
+  resize: "made.observing",
+  delete: "deleting.due",
+} as const;
+
+const stepTo = (leaf: Leaf) =>
+  ({
+    ask: leaf,
+    resize: leaf,
+    delete: "deleting.draining",
+    done: "made.observing",
+    failed: "made.failed",
+    cancelled: "made.observing",
+    lost: "made.observing",
+  }) as const;
+
+const edges: Readonly<Record<Leaf, Edges>> = {
+  "making.due": {
+    ask: "making.due",
+    delete: "deleting.due",
+    refused: "undoing.due",
+  },
+  "making.sent": {
+    ask: "making.sent",
+    delete: "deleting.draining",
+    ran: "making.sent",
+    done: "made.observing",
+    failed: "undoing.due",
+    cancelled: "undoing.due",
+    lost: "undoing.due",
+  },
+  "made.observing": madeAtRest,
+  "made.settled": madeAtRest,
+  "made.lost": madeAtRest,
+  "made.failed": madeAtRest,
+  "made.stepping.starting": stepTo("made.stepping.starting"),
+  "made.stepping.stopping": stepTo("made.stepping.stopping"),
+  "made.stepping.pausing": stepTo("made.stepping.pausing"),
+  "made.stepping.resizing": stepTo("made.stepping.resizing"),
+  "made.stepping.joining.sent": {
+    ask: "made.stepping.joining.asked",
+    resize: "made.stepping.joining.asked",
+    delete: "deleting.draining",
+    done: "made.settled",
+    failed: "made.settled",
+    cancelled: "made.settled",
+    lost: "made.settled",
+  },
+  "made.stepping.joining.asked": {
+    ask: "made.stepping.joining.asked",
+    resize: "made.stepping.joining.asked",
+    delete: "deleting.draining",
+    done: "made.observing",
+    failed: "made.observing",
+    cancelled: "made.observing",
+    lost: "made.observing",
+  },
+  "undoing.due": { delete: "deleting.due" },
+  "undoing.sent": {
+    delete: "deleting.sent",
+    done: "undone",
+    failed: "undoing.held",
+    cancelled: "undoing.due",
+    lost: "undoing.due",
+  },
+  "undoing.held": { delete: "deleting.due" },
+  undone: { delete: "removed" },
+  "deleting.draining": {
+    delete: "deleting.draining",
+    ran: "deleting.draining",
+    done: "deleting.due",
+    failed: "deleting.due",
+    cancelled: "deleting.due",
+    lost: "deleting.due",
+  },
+  "deleting.due": { delete: "deleting.due" },
+  "deleting.sent": {
+    delete: "deleting.sent",
+    done: "removed",
+    failed: "deleting.held",
+    cancelled: "deleting.due",
+    lost: "deleting.due",
+  },
+  "deleting.held": { delete: "deleting.due" },
 };
 
-const kindOfNext: Partial<Record<Next, Operation["kind"]>> = {
-  creating: "make",
-  starting: "start",
-  stopping: "stop",
-  pausing: "pause",
-  resizing: "resize",
-  deleting: "remove",
-};
-
-interface Fixture {
-  readonly state: Leaf;
-  readonly stage: Stage;
-  readonly op: Operation | undefined;
-  readonly row: Row;
-  readonly today: MachineRow;
-}
-
-interface Walked extends Fixture {
-  readonly name: string;
-  readonly event: MachineEvent;
-  readonly was: MachineRow | "removed";
-  readonly begins?: Pick<Operation, "kind" | "seen" | "to"> | undefined;
-  readonly finishes: boolean;
-}
-
-const stagesOf = (state: Leaf, kind: Operation["kind"] | undefined) => {
-  const [stage] = projection[state];
-
-  if (stage !== undefined) {
-    return [stage];
-  }
-
-  if (state === "deleting.draining") {
-    return [kind === "make" ? ("making" as const) : ("made" as const)];
-  }
-
-  return ["making", "made", "undoing"] as const;
+const wished: Partial<Record<Leaf, Wish>> = {
+  "made.stepping.stopping": "stopped",
+  "made.stepping.pausing": "paused",
 };
 
 const kindsOf = (state: Leaf) => {
@@ -934,533 +984,186 @@ const kindsOf = (state: Leaf) => {
     : [step];
 };
 
-const fixtures: readonly Fixture[] = leaves.flatMap((state) =>
-  (state.startsWith("deleting.") ? (["running"] as const) : wishes).flatMap(
-    (desired) =>
-      flags.flatMap((prepared) =>
-        flags.flatMap((erred) =>
-          flags.flatMap((owing) =>
-            kindsOf(state).flatMap((kind) =>
-              stagesOf(state, kind).map((stage) => {
-                const row = rowAt(state, {
-                  desired,
-                  prepared,
-                  error: erred ? earlier : undefined,
-                  resize: owing ? { cpu: 3 } : undefined,
-                  port: stage === "making" ? undefined : 2000,
-                });
-
-                return {
-                  state,
-                  stage,
-                  op: kind === undefined ? undefined : flight(kind),
-                  row,
-                  today: {
-                    ...row,
-                    stage,
-                    desired: desiredOf(row),
-                    generation: 1,
-                    phase:
-                      state === "deleting.draining"
-                        ? (phaseOfKind[kind ?? "join"] ?? "observing")
-                        : projection[state][1],
-                  },
-                };
-              })
-            )
-          )
+const fixtures = leaves.flatMap((state) =>
+  wishes.flatMap((desired) =>
+    flags.flatMap((prepared) =>
+      flags.flatMap((erred) =>
+        flags.flatMap((owing) =>
+          kindsOf(state).map((kind) => ({
+            row: rowAt(state, {
+              desired,
+              prepared,
+              error: erred ? earlier : undefined,
+              resize: owing ? { cpu: 3 } : undefined,
+              port: 2000,
+            }),
+            op: kind === undefined ? undefined : flight(kind),
+          }))
         )
       )
+    )
   )
 );
 
-const outcomes: Partial<Record<Operation["kind"], Report["outcome"]>> = {
-  make: { port: 2222 },
-  start: { hostKey: "key" },
-  resize: { sizes },
-};
-
-const ended = (
-  { today: row, op }: Fixture,
-  patch: Patch | "removed"
-): MachineRow | "removed" => {
-  if (patch === "removed") {
-    return patch;
-  }
-
-  if (op?.kind === "join") {
-    return row;
-  }
-
-  return patch.stage === "undone"
-    ? { ...row, ...patch, undoneAt: at }
-    : { ...row, ...patch };
-};
-
-const reportWalks = (fixture: Fixture): readonly Walked[] => {
-  const { op, today: row } = fixture;
-
-  if (op === undefined) {
-    return [];
-  }
-
-  const outcome = outcomes[op.kind] ?? {};
-
-  const reports = (["done", "failed", "cancelled"] as const).map((status) => {
-    const sent: Report = {
-      id: "op",
-      boot: "boot",
-      status,
-      outcome,
-      ...(status === "failed" ? { error } : {}),
-    };
-
-    return {
-      ...fixture,
-      name: `reported ${status}`,
-      event: report(status, outcome, status === "failed" ? error : cut),
-      was: ended(fixture, settled(row, op, sent)),
-      finishes: true,
-    };
-  });
-
-  return [
-    ...reports,
-    {
-      ...fixture,
-      name: "lost",
-      event: gone,
-      was: ended(fixture, lost(op, error)),
-      finishes: true,
-    },
-    ...(op.kind === "make"
-      ? [
-          {
-            ...fixture,
-            name: "ran",
-            event: { type: "ran", port: 2222 } as const,
-            was: { ...row, port: 2222 },
-            finishes: false,
-          },
-        ]
-      : []),
-  ];
-};
-
-const lookWalks = (fixture: Fixture): readonly Walked[] => {
-  const { op, today: row } = fixture;
-
-  if (op !== undefined) {
-    return [];
-  }
-
-  return seens.flatMap((seen) =>
-    flags.map((joins): Walked => {
-      const looked =
-        row.stage === "made" && row.desired !== "deleted" ? seen : "unknown";
-
-      const resting =
-        row.stage === "undone" ||
-        (row.phase === "failed" &&
-          row.stage === "made" &&
-          row.desired !== "deleted");
-
-      const target = resting
-        ? "unread"
-        : nextOf({ ...row, resizing: row.resize !== undefined }, looked);
-
-      const kind = kindOfNext[target];
-
-      const common = {
-        ...fixture,
-        name: `read ${seen} joining ${joins}`,
-        event: read(looked, joins),
-        finishes: false,
-      };
-
-      if (kind !== undefined) {
-        return {
-          ...common,
-          begins: {
-            kind,
-            seen: looked,
-            to: kind === "resize" ? row.resize : undefined,
-          },
-          was: {
-            ...row,
-            phase: phaseOfKind[kind] ?? row.phase,
-            ...(kind === "resize" ? { resize: undefined } : {}),
-            ...(kind === "start" && looked === "stopped"
-              ? { pin: "new pin" }
-              : {}),
-          },
-        };
-      }
-
-      return {
-        ...common,
-        ...(target === "settled" && joins && looked === "running"
-          ? { begins: { kind: "join", seen: looked, to: undefined } }
-          : {}),
-        was:
-          target === "settled" || target === "lost"
-            ? { ...row, phase: target }
-            : row,
-      };
-    })
-  );
-};
-
-const quietWalks = (fixture: Fixture): readonly Walked[] => {
-  const { state, today: row } = fixture;
-
-  return [
-    {
-      ...fixture,
-      name: "refused",
-      event: { type: "refused", error },
-      was:
-        state === "making.due"
-          ? { ...row, stage: "undoing", error, phase: "observing" }
-          : row,
-      finishes: false,
-    },
-    {
-      ...fixture,
-      name: "sized",
-      event: { type: "sized", sizing: { cpu: 4 } },
-      was: { ...row, cpu: 4 },
-      finishes: false,
-    },
-    ...(state === "undoing.sent"
-      ? [
-          {
-            ...fixture,
-            name: "reported done past a host's capacity",
-            event: {
-              type: "reported",
-              status: "done",
-              outcome: {},
-              at,
-              move: {
-                host: "other",
-                kind: "mac",
-                pin: "other pin",
-                source: { kind: "base", scripted: false },
-                prebuild: "built",
-              },
-            } as const,
-            was: {
-              ...row,
-              stage: "making",
-              phase: "observing",
-              host: "other",
-              kind: "mac",
-              pin: "other pin",
-              source: { kind: "base", scripted: false },
-              prebuild: "built",
-              error: undefined,
-              port: undefined,
-            } as const,
-            finishes: true,
-          },
-        ]
-      : []),
-  ];
-};
-
-const notOnHost = (fixture: Fixture): readonly Walked[] => {
-  const { op, today: row } = fixture;
-
-  const ignored = (name: string, event: MachineEvent): Walked => ({
-    ...fixture,
-    name,
-    event,
-    was: row,
-    finishes: false,
-  });
-
-  return [
-    ...(op === undefined
-      ? [
-          ignored("reported done of nothing", done),
-          ignored("reported failed of nothing", failed),
-          ignored("reported cancelled of nothing", cancelled),
-          ignored("lost of nothing", gone),
-        ]
-      : seens.map((seen) =>
-          ignored(`read ${seen} with a step in flight`, read(seen))
-        )),
-    ...(metaOf(fixture.state).step === "any" || op?.kind === "make"
-      ? []
-      : [ignored("ran of no make", { type: "ran", port: 2222 })]),
-  ];
-};
-
-const requestWalks = (store: Interface, fixture: Fixture, tag: number) =>
-  Effect.gen(function* () {
-    const { today: row } = fixture;
-
-    const written = (
-      name: string,
-      write: (
-        stored: string
-      ) => Effect.Effect<Option.Option<MachineRow>, Internal>
-    ) =>
-      Effect.gen(function* () {
-        const unique = `${name}-${tag}`;
-
-        yield* store.insertMachine({ ...row, name: unique, host: unique });
-
-        return {
-          ...Option.getOrThrow(yield* write(unique)),
-          host: row.host,
-        };
-      });
-
-    const notFailedCreate = row.stage === "making" || row.stage === "made";
-
-    const asks = yield* Effect.forEach(wishes, (desired) =>
-      Effect.map(
-        notFailedCreate
-          ? written(`ask-${desired}`, (name) => store.desire(name, desired))
-          : Effect.succeed(row),
-        (was): Walked => ({
-          ...fixture,
-          name: `ask ${desired}`,
-          event: ask(desired),
-          was,
-          finishes: false,
-        })
-      )
-    );
-
-    const deletion: Walked = {
-      ...fixture,
-      name: "delete",
-      event: removal,
-      was:
-        row.stage === "undone"
-          ? "removed"
-          : yield* written("delete", (name) => store.desire(name, "deleted")),
-      finishes: false,
-    };
-
-    const sizing: Walked = {
-      ...fixture,
-      name: "resize",
-      event: resizing,
-      was:
-        row.stage === "made"
-          ? yield* written("resize", (name) => store.resize(name, { cpu: 3 }))
-          : row,
-      finishes: false,
-    };
-
-    return [...asks, deletion, sizing];
-  });
-
-const visible = (row: MachineRow | "removed") =>
-  row === "removed"
-    ? row
-    : {
-        ...row,
-        name: "dev",
-        createdAt: DateTime.makeUnsafe(0),
-        generation: 1,
-        state: undefined,
-        stage: row.desired === "deleted" ? undefined : row.stage,
-      };
-
-const shownByChart = ({ row, event, op, stage }: Walked) => {
-  const { next, begin, finish } = applied(machineChart, row, event, op);
-
-  return {
-    row: visible(
-      next === "removed"
-        ? next
-        : {
-            ...next,
-            desired: desiredOf(next),
-            stage: projection[next.state][0] ?? stage,
-            phase: projection[next.state][1],
-            generation: 1,
-          }
-    ),
-    begins:
-      begin === undefined
-        ? undefined
-        : { kind: begin.kind, seen: begin.seen, to: begin.to },
-    finish,
-  };
-};
-
-const asksOrResizes = ({ type }: MachineEvent) =>
-  type === "ask" || type === "resize";
-
-const isRequest = (event: MachineEvent) =>
-  asksOrResizes(event) || event.type === "delete";
-
-interface Difference {
-  readonly says: string;
-  readonly of: (walked: Walked) => boolean;
-  readonly shows: (walked: Walked, row: MachineRow) => MachineRow;
-}
-
-const differences: readonly Difference[] = [
-  {
-    says: "a request after a delete writes nothing: no error goes, no resize is owed, and a held delete waits for its recheck",
-    of: ({ state, event }) =>
-      state.startsWith("deleting.") && asksOrResizes(event),
-    shows: ({ today }) => today,
-  },
-  {
-    says: "a request during a step keeps reading the step, which read observing until the loop's next turn",
-    of: ({ op, event }) => op !== undefined && isRequest(event),
-    shows: ({ op }, row) => ({
-      ...row,
-      phase:
-        row.phase === "observing"
-          ? (phaseOfKind[op?.kind ?? "join"] ?? "observing")
-          : row.phase,
-    }),
-  },
-  {
-    says: "a delete during a step reads deleting at once, not the step's phase",
-    of: ({ state, op, event }) =>
-      (state === "deleting.draining" || event.type === "delete") &&
-      op !== undefined &&
-      op.kind !== "remove" &&
-      event.type !== "reported" &&
-      event.type !== "lost",
-    shows: (_, row) => ({ ...row, phase: "deleting" }),
-  },
-  {
-    says: "a report's facts stay however its step ended: a failed make's port, a failed start's host key, a cancelled resize's sizes",
-    of: ({ event }) => event.type === "reported" && event.status !== "done",
-    shows: ({ event }, row) => {
-      const {
-        port,
-        hostKey,
-        sizes: sized,
-      } = event.type === "reported" ? event.outcome : {};
-
-      return {
-        ...row,
-        ...(port === undefined ? {} : { port }),
-        ...(hostKey === undefined ? {} : { hostKey }),
-        ...sized,
-      };
-    },
-  },
-  {
-    says: "a step that fails under a delete goes on to the delete at once and keeps its error, also a resize, which rested failed until a recheck",
-    of: ({ state, event }) =>
-      state === "deleting.draining" &&
-      event.type === "reported" &&
-      event.status === "failed",
-    shows: (_, row) => ({ ...row, phase: "observing", error }),
-  },
-  {
-    says: "a make lost under a delete goes on to the delete with no error to show",
-    of: ({ state, op, event }) =>
-      state === "deleting.draining" &&
-      event.type === "lost" &&
-      op?.kind === "make",
-    shows: ({ row: { error: kept } }, row) => ({ ...row, error: kept }),
-  },
-  {
-    says: "a delete that fails says why, also of a failed create, whose make's error the delete cleared",
-    of: ({ state, stage, event }) =>
-      state === "deleting.sent" &&
-      stage === "undoing" &&
-      event.type === "reported" &&
-      event.status === "failed",
-    shows: (_, row) => ({ ...row, error }),
-  },
-  {
-    says: "under a delete a report leaves prepared alone, which nothing reads again",
-    of: ({ state, event }) =>
-      state === "deleting.draining" && event.type === "reported",
-    shows: ({ row: { prepared } }, row) => ({ ...row, prepared }),
-  },
+type Write = [
+  says: string,
+  row: MachineRow,
+  event: MachineEvent,
+  writes: Partial<MachineRow>,
+  kind?: Operation["kind"],
 ];
 
-const expectedOf = (step: Walked, fired: Set<string>) => {
-  let row = step.was;
+const prepared = { prepared: true };
 
-  for (const { says, of, shows } of differences) {
-    if (row !== "removed" && of(step)) {
-      const shown = shows(step, row);
-
-      if (!isDeepStrictEqual(shown, row)) {
-        fired.add(says);
-      }
-
-      row = shown;
-    }
-  }
-
-  return row;
-};
-
-it.effect(
-  "every event from every leaf does what settled, lost, the store's SQL and the loop do, but for the differences named here",
-  () =>
-    Effect.gen(function* () {
-      const stateDir = path.join(yield* scratch, "state");
-
-      const walked = yield* Effect.scoped(
-        Effect.gen(function* () {
-          const store = yield* open({ stateDir });
-
-          const requests = yield* Effect.forEach(fixtures, (fixture, tag) =>
-            requestWalks(store, fixture, tag)
-          );
-
-          return [
-            ...requests.flat(),
-            ...fixtures.flatMap(reportWalks),
-            ...fixtures.flatMap(lookWalks),
-            ...fixtures.flatMap(quietWalks),
-            ...fixtures.flatMap(notOnHost),
-          ];
-        })
-      );
-
-      const fired = new Set<string>();
-
-      const mismatches = walked.flatMap((step) => {
-        const chart = shownByChart(step);
-
-        const today = {
-          row: visible(expectedOf(step, fired)),
-          begins: step.begins,
-          finish: step.finishes,
-        };
-
-        return isDeepStrictEqual(chart, today)
-          ? []
-          : [
-              {
-                on: step.name,
-                at: step.state,
-                op: step.op?.kind,
-                chart,
-                today,
-              },
-            ];
-      });
-
-      expect(fixtures.length).toBeGreaterThan(leaves.length);
-      expect(walked).toHaveLength(9752);
-      expect(mismatches.slice(0, 3)).toStrictEqual([]);
-      expect(differences.filter(({ says }) => !fired.has(says))).toStrictEqual(
-        []
-      );
-    }).pipe(Effect.provide(NodeServices.layer)),
-  { timeout: 120_000 }
-);
+const factsWritten: readonly Write[] = [
+  [
+    "a make done tells its port, and its machine is still to prepare",
+    rowAt("making.sent", prepared),
+    report("done", { port: 2222 }),
+    { state: "made.observing", prepared: false, port: 2222 },
+  ],
+  [
+    "a start done prepares its machine and tells its host key",
+    rowAt("made.stepping.starting"),
+    report("done", { hostKey: "key" }),
+    { state: "made.observing", prepared: true, hostKey: "key" },
+  ],
+  [
+    "a stop done leaves the machine to prepare again",
+    rowAt("made.stepping.stopping", { desired: "stopped", ...prepared }),
+    done,
+    { state: "made.observing", prepared: false },
+  ],
+  [
+    "a pause done leaves the machine to prepare again",
+    rowAt("made.stepping.pausing", { desired: "paused", ...prepared }),
+    done,
+    { state: "made.observing", prepared: false },
+  ],
+  [
+    "a resize done tells its sizes, and leaves the machine prepared",
+    rowAt("made.stepping.resizing", prepared),
+    report("done", { sizes }),
+    { state: "made.observing", ...sizes },
+  ],
+  [
+    "a join's report writes nothing but the rest, whatever it said",
+    rowAt("made.stepping.joining.sent", prepared),
+    failed,
+    { state: "made.settled" },
+  ],
+  [
+    "a make that fails says why, and keeps the port it told",
+    rowAt("making.sent"),
+    report("failed", { port: 2222 }),
+    { state: "undoing.due", error, port: 2222 },
+  ],
+  [
+    "a make cut short says it was",
+    rowAt("making.sent"),
+    report("cancelled", {}, cut),
+    { state: "undoing.due", error: cut },
+  ],
+  [
+    "a make lost says why",
+    rowAt("making.sent"),
+    gone,
+    { state: "undoing.due", error },
+  ],
+  [
+    "a start that fails keeps the host key it told",
+    rowAt("made.stepping.starting"),
+    report("failed", { hostKey: "key" }),
+    { state: "made.failed", error, hostKey: "key" },
+  ],
+  [
+    "a resize cut short keeps the sizes it told",
+    rowAt("made.stepping.resizing"),
+    report("cancelled", { sizes }),
+    { state: "made.observing", ...sizes },
+  ],
+  [
+    "a step lost is decided afresh, and says nothing",
+    rowAt("made.stepping.starting"),
+    gone,
+    { state: "made.observing" },
+  ],
+  [
+    "a remove of a failed create that fails keeps the make's error",
+    rowAt("undoing.sent", { error: earlier }),
+    failed,
+    { state: "undoing.held" },
+  ],
+  [
+    "a delete that fails says why, also of a failed create, whose error the delete cleared",
+    rowAt("deleting.sent"),
+    failed,
+    { state: "deleting.held", error },
+  ],
+  [
+    "a step that fails under a delete goes on to the delete at once and keeps its error, also a resize",
+    rowAt("deleting.draining", prepared),
+    report("failed", { sizes }),
+    { state: "deleting.due", error, ...sizes },
+    "resize",
+  ],
+  [
+    "a make lost under a delete goes on to the delete with no error to show",
+    rowAt("deleting.draining"),
+    gone,
+    { state: "deleting.due" },
+    "make",
+  ],
+  [
+    "under a delete a report leaves prepared alone, which nothing reads again",
+    rowAt("deleting.draining", prepared),
+    done,
+    { state: "deleting.due" },
+    "stop",
+  ],
+  [
+    "a wish to run leaves the machine to prepare, and clears what failed",
+    rowAt("made.failed", { error: earlier, ...prepared }),
+    ask("running"),
+    { state: "made.observing", prepared: false, error: undefined },
+  ],
+  [
+    "any other wish keeps what is prepared",
+    rowAt("made.failed", { error: earlier, ...prepared }),
+    ask("stopped"),
+    { state: "made.observing", desired: "stopped", error: undefined },
+  ],
+  [
+    "a resize is owed, and clears what failed",
+    rowAt("made.failed", { error: earlier, ...prepared }),
+    resizing,
+    { state: "made.observing", resize: { cpu: 3 }, error: undefined },
+  ],
+  [
+    "a request during a step keeps reading the step",
+    rowAt("made.stepping.starting", prepared),
+    ask("stopped"),
+    { desired: "stopped" },
+  ],
+  [
+    "a delete during a step reads deleting at once",
+    rowAt("made.stepping.stopping", { desired: "stopped", error: earlier }),
+    removal,
+    { state: "deleting.draining", error: undefined },
+  ],
+  [
+    "a make the source's sizes refuse says why",
+    rowAt("making.due"),
+    { type: "refused", error },
+    { state: "undoing.due", error },
+  ],
+  [
+    "a read of a stopped machine that starts it takes the host's pin",
+    rowAt("made.observing"),
+    read("stopped"),
+    { state: "made.stepping.starting", pin: "new pin" },
+  ],
+];
 
 const representatives: readonly MachineEvent[] = [
   ...wishes.map(ask),
@@ -1496,6 +1199,151 @@ const writes = (count: number) => {
 };
 
 describe("the chart", () => {
+  it("in every walk a transition's only effect is ending an actor no row has, as the row goes, and a leaf that doesn't take an event hands back the snapshot it was given, which is how applied tells", () => {
+    const steps = fixtures.flatMap(({ row, op }) =>
+      representatives.map((event) => {
+        let effects: readonly unknown[] = [];
+        let same = false;
+
+        const { next } = applied(
+          {
+            ...machineChart,
+            transition: (before, sent) => {
+              const [moved, ...rest] = machineChart.transition(before, sent);
+
+              effects = rest.flat();
+              same = moved === before;
+
+              return [moved, ...rest];
+            },
+          },
+          row,
+          event,
+          op
+        );
+
+        return { event: event.type, effects, same, next, row };
+      })
+    );
+
+    const ending: readonly unknown[] = [
+      expect.objectContaining({ type: "@xstate.terminate" }),
+    ];
+
+    expect(steps.length).toBeGreaterThan(10_000);
+    expect(steps.some(({ next }) => next === "removed")).toBe(true);
+    expect(steps.map(({ effects }) => effects)).toStrictEqual(
+      steps.map(({ next }) => (next === "removed" ? ending : []))
+    );
+    expect(steps.filter(({ same }) => same).length).toBeGreaterThan(1000);
+    expect(
+      steps.filter(({ same, next, row }) => same !== (next === row))
+    ).toStrictEqual([]);
+  });
+
+  it("takes every event from every leaf where its table says, and writes nothing for one the table doesn't name", () => {
+    const table = leaves.flatMap((state) => {
+      const row = rowAt(state, { desired: wished[state] ?? "running" });
+
+      return edgesEvents.map(([edge, event]) => {
+        const { next } = go(row, event);
+
+        return {
+          state,
+          edge,
+          chart: next === row ? undefined : leafOf(row, event),
+          named: edges[state][edge],
+        };
+      });
+    });
+
+    expect(table).toHaveLength(leaves.length * 9);
+    expect(table.filter(({ chart, named }) => chart !== named)).toStrictEqual(
+      []
+    );
+  });
+
+  it("takes the sizes a read gives on every leaf, and writes nothing else", () => {
+    expect(
+      leaves.filter((state) => {
+        const row = rowAt(state);
+
+        const { next, begin, finish } = go(row, {
+          type: "sized",
+          sizing: { cpu: 4 },
+        });
+
+        return (
+          next === "removed" ||
+          next.state !== state ||
+          next.cpu !== 4 ||
+          begin !== undefined ||
+          finish
+        );
+      })
+    ).toStrictEqual([]);
+  });
+
+  it.each(factsWritten)("%s", (_, row, event, written, kind) => {
+    expect(after(row, event, kind)).toStrictEqual({ ...row, ...written });
+  });
+
+  it("past a host's capacity, a create takes the next host, and a remove with none to go to rests undone", () => {
+    const row = rowAt("undoing.sent", {
+      error: earlier,
+      port: 2000,
+      prepared: true,
+    });
+
+    const move = {
+      host: "other",
+      kind: "mac",
+      pin: "other pin",
+      source: { kind: "base", scripted: false },
+      prebuild: "built",
+    } as const;
+
+    expect(
+      after(row, { type: "reported", status: "done", outcome: {}, at, move })
+    ).toStrictEqual({
+      ...row,
+      ...move,
+      state: "making.due",
+      error: undefined,
+      port: undefined,
+    });
+    expect(after(row, done)).toStrictEqual({
+      ...row,
+      state: "undone",
+      undoneAt: at,
+    });
+  });
+
+  it("begins an operation entering a leaf with a step, finishes it leaving one, and takes what a resize is owed to it", () => {
+    const wrong = fixtures.flatMap(({ row, op }) =>
+      representatives.flatMap((event) => {
+        const { next, begin, finish } = applied(machineChart, row, event, op);
+        const moved = next !== row;
+        const step = next === "removed" ? undefined : metaOf(next.state).step;
+
+        const right =
+          op === undefined
+            ? !finish &&
+              (moved && step !== undefined
+                ? begin?.kind === step &&
+                  event.type === "read" &&
+                  begin.seen === event.seen &&
+                  begin.to === (step === "resize" ? row.resize : undefined)
+                : begin === undefined)
+            : begin === undefined && finish === (moved && step === undefined);
+
+        return right ? [] : [[row.state, event.type, op?.kind]];
+      })
+    );
+
+    expect(wrong).toStrictEqual([]);
+  });
+
   it("reaches every leaf, with these events from a create", () => {
     const adjacency = getAdjacencyMap(machine, {
       input: facts(),
@@ -1512,15 +1360,19 @@ describe("the chart", () => {
     expect(reached.some(({ status }) => status === "done")).toBe(true);
   });
 
-  it("every leaf shows the phase its projection names", () => {
+  it("every leaf shows the phase the table names, and its stage is the top of its path", () => {
     expect(
-      leaves.filter((state) => phaseOf(state) !== projection[state][1])
+      leaves.filter(
+        (state) =>
+          phaseOf(state) !== phases[state] ||
+          stageOf(state) !== state.split(".")[0]
+      )
     ).toStrictEqual([]);
   });
 
-  it("has a leaf for each row the projection names, and no other", () => {
+  it("has a leaf for each row the table names, and no other", () => {
     expect([...leaves].toSorted()).toStrictEqual(
-      Object.keys(projection).toSorted()
+      Object.keys(phases).toSorted()
     );
     expect(
       leavesOf(machine).filter((leaf) => !leaves.some((row) => row === leaf))

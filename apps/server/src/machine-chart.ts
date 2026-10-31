@@ -3,33 +3,27 @@ import type { InferEvents, SnapshotFrom } from "xstate";
 
 import { leavesOf } from "./chart.ts";
 import type { Activity, Chart, LeafMeta, PathOf } from "./chart.ts";
-import type { Lease, MachinePhase, MachineRow, Operation } from "./store.ts";
+import type { Facts, Lease, MachinePhase, Operation } from "./store.ts";
 
 /** What a machine can be asked to be. A delete is the `deleting` region, with no edge out of it. */
-export type Wish = Exclude<MachineRow["desired"], "deleted">;
+export type Wish = Facts["desired"];
 
-/** A machine's row but for its leaf: the facts no leaf can tell, and the chart's context. */
-export type Facts = Omit<
-  MachineRow,
-  "stage" | "phase" | "generation" | "desired"
-> & { readonly desired: Wish };
+/** What a client reads as `desired`, and what `wants` decides by. */
+export type Asked = Wish | "deleted";
 
-type HostError = NonNullable<MachineRow["error"]>;
+type HostError = NonNullable<Facts["error"]>;
 
-type Sizing = NonNullable<MachineRow["resize"]>;
+type Sizing = NonNullable<Facts["resize"]>;
 
 /** What a step leaves that only its host can tell. */
 export interface Outcome {
   readonly port?: number;
   readonly hostKey?: string;
-  readonly sizes?: Pick<MachineRow, "cpu" | "ramMib" | "diskGib">;
+  readonly sizes?: Pick<Facts, "cpu" | "ramMib" | "diskGib">;
 }
 
 /** Where a failed create goes next, past a host that hadn't the capacity. */
-export type Move = Pick<
-  MachineRow,
-  "host" | "kind" | "pin" | "source" | "prebuild"
->;
+export type Move = Pick<Facts, "host" | "kind" | "pin" | "source" | "prebuild">;
 
 export interface Read {
   readonly seen: Operation["seen"];
@@ -49,7 +43,7 @@ export interface Done {
   readonly status: "done";
   readonly outcome: Outcome;
   /** When a failed create's VM went, should this end its undoing. */
-  readonly at: NonNullable<MachineRow["undoneAt"]>;
+  readonly at: NonNullable<Facts["undoneAt"]>;
   readonly move?: Move;
 }
 
@@ -80,10 +74,7 @@ interface On<T extends MachineEvent["type"]> {
 }
 
 /** Whether a wish still wants a step of `kind`. Under `deleting`, the wire's `deleted` is the wish. */
-export const wants = (
-  kind: Operation["kind"],
-  desired: MachineRow["desired"]
-): boolean => {
+export const wants = (kind: Operation["kind"], desired: Asked): boolean => {
   switch (kind) {
     case "make": {
       return desired !== "deleted";
@@ -456,8 +447,8 @@ export type Leaf = Exclude<
   "gone"
 >;
 
-/** A machine's row: the facts, and the one leaf that holds its stage and phase. */
-export type Row = Facts & { readonly state: Leaf };
+/** A machine's row: the facts, and the one leaf that holds how far it is and what it does. */
+export type MachineRow = Facts & { readonly state: Leaf };
 
 const isLeaf = (path: string): path is Leaf => path !== "gone";
 
@@ -477,14 +468,23 @@ export const phaseOf = (state: Leaf): MachinePhase => metaOf(state).phase;
 
 export const activityOf = (state: Leaf): Activity => metaOf(state).activity;
 
+const stages = ["making", "made", "undoing", "undone", "deleting"] as const;
+
+/** A leaf's top region, which is how far a machine is. `gone` isn't one, as no row holds it. */
+export const stageOf = (state: Leaf): (typeof stages)[number] =>
+  stages.find((stage) => state.startsWith(stage)) ?? "undone";
+
 /** The wire's `desired`, which a client reads and `wants` decides by. */
 export const desiredOf = ({
   state,
   desired,
-}: Pick<Row, "state" | "desired">): MachineRow["desired"] =>
+}: Pick<MachineRow, "state" | "desired">): Asked =>
   state.startsWith("deleting.") ? "deleted" : desired;
 
-const leasesOf = (row: Row, kind: Operation["kind"]): readonly Lease[] => {
+const leasesOf = (
+  row: MachineRow,
+  kind: Operation["kind"]
+): readonly Lease[] => {
   const self: Lease = {
     resource: "machine",
     name: row.name,

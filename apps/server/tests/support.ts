@@ -20,13 +20,24 @@ import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { Context, Duration, Effect, Exit, Layer, Logger, Scope } from "effect";
 import { HttpServer } from "effect/http";
 
+import { applied } from "../src/chart.ts";
 import * as Checkpoints from "../src/checkpoints.ts";
 import { serverLayer } from "../src/composition/server.ts";
+import {
+  machineChart,
+  phaseOf as phaseOfLeaf,
+  stageOf as stageOfLeaf,
+} from "../src/machine-chart.ts";
+import type { MachineEvent, MachineRow } from "../src/machine-chart.ts";
 import * as Machines from "../src/machines.ts";
 import { defaultFailedRowsLast } from "../src/settings.ts";
 import type { ServerSettings } from "../src/settings.ts";
 import { Store } from "../src/store.ts";
-import type { CannotStart, Interface as StoreInterface } from "../src/store.ts";
+import type {
+  CannotStart,
+  Facts,
+  Interface as StoreInterface,
+} from "../src/store.ts";
 
 export {
   eventually,
@@ -69,6 +80,33 @@ export const at = ({ state, desired, phase }: Machine) => [
   desired,
   phase,
 ];
+
+export const phaseOf = ({ state }: Pick<MachineRow, "state">) =>
+  phaseOfLeaf(state);
+
+export const stageOf = ({ state }: Pick<MachineRow, "state">) =>
+  stageOfLeaf(state);
+
+/** One event through the chart, as the loop writes it, with no loop told. */
+export const applying = (
+  store: StoreInterface,
+  name: string,
+  event: MachineEvent
+) =>
+  store.advance("machine", name, (row, op) =>
+    applied(machineChart, row, event, op)
+  );
+
+/** Facts no event sets, as a VM that booted under an older pin leaves them. */
+export const patched = (
+  store: StoreInterface,
+  name: string,
+  facts: Partial<Facts>
+) =>
+  store.advance("machine", name, (row) => ({
+    next: { ...row, ...facts },
+    finish: false,
+  }));
 
 export interface Started {
   readonly url: string;

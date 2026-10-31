@@ -13,7 +13,7 @@ import {
 import type {
   Leaf,
   MachineEvent,
-  Row,
+  MachineRow,
   Wish,
 } from "../../../../apps/server/src/machine-chart.ts";
 import type { Operation } from "../../../../apps/server/src/store.ts";
@@ -77,7 +77,7 @@ const entry = (
   name: string,
   event: MachineEvent
 ): string | undefined => {
-  const row: Row = {
+  const row: MachineRow = {
     ...facts({ desired: wish, prepared, error: failed ? error : undefined }),
     state,
   };

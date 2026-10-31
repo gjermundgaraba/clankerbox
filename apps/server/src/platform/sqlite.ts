@@ -7,10 +7,10 @@ import {
   HostError,
   Internal,
   Kind,
-  Phase,
   Sizing,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
+  Data,
   DateTime,
   Effect,
   FileSystem,
@@ -21,21 +21,22 @@ import {
 } from "effect";
 import type { Scope } from "effect";
 
+import { leaves } from "../machine-chart.ts";
+import type { MachineRow } from "../machine-chart.ts";
 import { CannotStart, Store } from "../store.ts";
 import type {
+  Advanced,
   CheckpointPatch,
   CheckpointPhase,
   CheckpointRow,
   Interface,
   Lease,
-  MachinePatch,
-  MachineRow,
   Operation,
 } from "../store.ts";
 
 export const databaseFile = "server.db";
 
-export const applicationId = 0x63_62_78_73;
+export const applicationId = 0x63_62_78_74;
 
 export const migrations: readonly string[] = [
   `CREATE TABLE machines (
@@ -51,15 +52,12 @@ export const migrations: readonly string[] = [
     host TEXT NOT NULL,
     port INTEGER,
     desired TEXT NOT NULL,
-    generation INTEGER NOT NULL,
-    phase TEXT NOT NULL,
-    stage TEXT NOT NULL,
+    state TEXT NOT NULL,
     prepared INTEGER NOT NULL,
     error TEXT,
     resize TEXT,
     ephemeral INTEGER NOT NULL,
     source TEXT NOT NULL,
-    scripted INTEGER NOT NULL,
     prebuild TEXT,
     host_key TEXT,
     pin TEXT,
@@ -92,9 +90,9 @@ export const migrations: readonly string[] = [
     host TEXT NOT NULL,
     boot TEXT NOT NULL,
     sequence INTEGER NOT NULL,
-    generation INTEGER NOT NULL,
     seen TEXT NOT NULL,
-    leases TEXT NOT NULL
+    leases TEXT NOT NULL,
+    "to" TEXT
   ) STRICT;
   CREATE TABLE hosts (
     id TEXT PRIMARY KEY,
@@ -105,12 +103,6 @@ export const migrations: readonly string[] = [
     last INTEGER NOT NULL
   ) STRICT;
   INSERT INTO sequence (one, last) VALUES (1, 0)`,
-  `UPDATE machines
-    SET source = json_set(source, '$.scripted', json(CASE scripted WHEN 1 THEN 'true' ELSE 'false' END))
-    WHERE json_extract(source, '$.kind') = 'base';
-  ALTER TABLE machines DROP COLUMN scripted`,
-  "UPDATE machines SET phase = 'observing' WHERE phase = 'waiting'",
-  'ALTER TABLE operations ADD COLUMN "to" TEXT',
 ];
 
 const isSqliteError = (
@@ -279,21 +271,8 @@ const shared = {
 const MachineFields = Schema.Struct({
   ...shared,
   port: Schema.NullOr(Schema.Int),
-  desired: Desired,
-  generation: Schema.Int,
-  phase: Phase.pick([
-    "observing",
-    "creating",
-    "starting",
-    "stopping",
-    "pausing",
-    "resizing",
-    "deleting",
-    "settled",
-    "failed",
-    "lost",
-  ]),
-  stage: Schema.Literals(["making", "made", "undoing", "undone"]),
+  desired: Desired.pick(["running", "stopped", "paused"]),
+  state: Schema.Literals(leaves),
   prepared: Flag,
   resize: Stored(SizingJson),
   ephemeral: Flag,
@@ -335,7 +314,6 @@ const OperationFields = Schema.Struct({
   host: Schema.String,
   boot: Schema.String,
   sequence: Schema.Int,
-  generation: Schema.Int,
   seen: MachineState,
   leases: LeasesJson,
   to: Stored(SizingJson),
@@ -371,9 +349,7 @@ const rowOf = (raw: unknown): MachineRow => {
     host: row.host,
     port: row.port ?? undefined,
     desired: row.desired,
-    generation: row.generation,
-    phase: row.phase,
-    stage: row.stage,
+    state: row.state,
     prepared: row.prepared === 1,
     error: row.error ?? undefined,
     resize: row.resize ?? undefined,
@@ -435,36 +411,30 @@ const plain = (value: string | number | undefined): Bound => value ?? null;
 const encodedError = (error: HostError | undefined): Bound =>
   error === undefined ? null : encodeError(error);
 
-const machineColumns: Columns<MachinePatch> = {
-  instance: ["instance", ({ instance }) => plain(instance)],
-  kind: ["kind", ({ kind }) => plain(kind)],
-  base: ["base", ({ base }) => plain(base)],
-  profile: ["profile", ({ profile }) => plain(profile)],
-  cpu: ["cpu", ({ cpu }) => plain(cpu)],
-  ramMib: ["ram_mib", ({ ramMib }) => plain(ramMib)],
-  diskGib: ["disk_gib", ({ diskGib }) => plain(diskGib)],
-  host: ["host", ({ host }) => plain(host)],
-  port: ["port", ({ port }) => plain(port)],
-  desired: ["desired", ({ desired }) => plain(desired)],
-  generation: ["generation", ({ generation }) => plain(generation)],
-  phase: ["phase", ({ phase }) => plain(phase)],
-  stage: ["stage", ({ stage }) => plain(stage)],
-  prepared: ["prepared", ({ prepared }) => flag(prepared)],
-  error: ["error", ({ error }) => encodedError(error)],
-  resize: [
-    "resize",
-    ({ resize }) => (resize === undefined ? null : encodeSizing(resize)),
-  ],
-  ephemeral: ["ephemeral", ({ ephemeral }) => flag(ephemeral)],
-  source: [
-    "source",
-    ({ source }) => (source === undefined ? null : encodeSource(source)),
-  ],
-  prebuild: ["prebuild", ({ prebuild }) => plain(prebuild)],
-  hostKey: ["host_key", ({ hostKey }) => plain(hostKey)],
-  pin: ["pin", ({ pin }) => plain(pin)],
-  undoneAt: ["undone_at", ({ undoneAt }) => time(undoneAt)],
-};
+const machineColumns = (row: MachineRow) => ({
+  name: row.name,
+  instance: row.instance,
+  created_at: DateTime.formatIso(row.createdAt),
+  kind: row.kind,
+  base: row.base,
+  profile: row.profile ?? null,
+  cpu: row.cpu,
+  ram_mib: row.ramMib,
+  disk_gib: row.diskGib,
+  host: row.host,
+  port: row.port ?? null,
+  desired: row.desired,
+  state: row.state,
+  prepared: flag(row.prepared),
+  error: encodedError(row.error),
+  resize: row.resize === undefined ? null : encodeSizing(row.resize),
+  ephemeral: flag(row.ephemeral),
+  source: encodeSource(row.source),
+  prebuild: row.prebuild ?? null,
+  host_key: row.hostKey ?? null,
+  pin: row.pin ?? null,
+  undone_at: time(row.undoneAt),
+});
 
 const checkpointColumns: Columns<CheckpointPatch> = {
   phase: ["phase", ({ phase }) => plain(phase)],
@@ -493,6 +463,8 @@ const conflicting = (wanted: Lease, held: Lease): boolean =>
   wanted.resource === held.resource &&
   wanted.name === held.name &&
   (wanted.mode === "own" || held.mode === "own");
+
+class Busy extends Data.TaggedError("Busy") {}
 
 export interface Owner {
   readonly stateDir: string;
@@ -538,42 +510,30 @@ export const open = (
 
     const insertMachine = db.prepare(
       `INSERT INTO machines (name, instance, created_at, kind, base, profile, cpu, ram_mib,
-        disk_gib, host, port, desired, generation, phase, stage, prepared, error, resize, ephemeral,
-        source, prebuild, host_key, pin, undone_at)
+        disk_gib, host, port, desired, state, prepared, error, resize, ephemeral, source, prebuild,
+        host_key, pin, undone_at)
        VALUES ($name, $instance, $created_at, $kind, $base, $profile, $cpu, $ram_mib, $disk_gib,
-        $host, $port, $desired, $generation, $phase, $stage, $prepared, $error, $resize, $ephemeral,
-        $source, $prebuild, $host_key, $pin, $undone_at)`
+        $host, $port, $desired, $state, $prepared, $error, $resize, $ephemeral, $source, $prebuild,
+        $host_key, $pin, $undone_at)`
+    );
+
+    const updateMachine = db.prepare(
+      `UPDATE machines SET instance = $instance, created_at = $created_at, kind = $kind,
+        base = $base, profile = $profile, cpu = $cpu, ram_mib = $ram_mib, disk_gib = $disk_gib,
+        host = $host, port = $port, desired = $desired, state = $state, prepared = $prepared,
+        error = $error, resize = $resize, ephemeral = $ephemeral, source = $source,
+        prebuild = $prebuild, host_key = $host_key, pin = $pin, undone_at = $undone_at
+       WHERE name = $name`
     );
 
     const deleteUndone = db.prepare(
-      "DELETE FROM machines WHERE name = ? AND stage = 'undone'"
-    );
-
-    const updateDesire = db.prepare(
-      `UPDATE machines SET
-        desired = CASE WHEN desired = 'deleted' THEN desired ELSE $desired END,
-        prepared = CASE WHEN $desired = 'running' THEN 0 ELSE prepared END,
-        generation = generation + 1,
-        phase = 'observing',
-        error = NULL
-       WHERE name = $name AND stage != 'undone'
-       RETURNING *`
-    );
-
-    const updateResize = db.prepare(
-      `UPDATE machines SET
-        resize = $resize,
-        generation = generation + 1,
-        phase = 'observing',
-        error = NULL
-       WHERE name = $name AND stage != 'undone'
-       RETURNING *`
+      "DELETE FROM machines WHERE name = ? AND undone_at IS NOT NULL"
     );
 
     const deleteMachine = db.prepare("DELETE FROM machines WHERE name = ?");
 
     const deleteExpired = db.prepare(
-      "DELETE FROM machines WHERE stage = 'undone' AND undone_at < ?"
+      "DELETE FROM machines WHERE undone_at < ?"
     );
 
     const selectCheckpoints = db.prepare(
@@ -612,10 +572,8 @@ export const open = (
     );
 
     const insertOperation = db.prepare(
-      `INSERT INTO operations (id, kind, resource, name, host, boot, sequence, generation, seen,
-        leases, "to")
-       VALUES ($id, $kind, $resource, $name, $host, $boot, $sequence, $generation, $seen, $leases,
-        $to)`
+      `INSERT INTO operations (id, kind, resource, name, host, boot, sequence, seen, leases, "to")
+       VALUES ($id, $kind, $resource, $name, $host, $boot, $sequence, $seen, $leases, $to)`
     );
 
     const deleteOperation = db.prepare("DELETE FROM operations WHERE id = ?");
@@ -652,25 +610,6 @@ export const open = (
         Effect.fromResult
       );
 
-    const writeMachine = (
-      name: string,
-      patch: MachinePatch,
-      guard: number | undefined
-    ): boolean => {
-      const { sets, values } = assignments(patch, machineColumns);
-
-      const where =
-        guard === undefined ? "name = ?" : "name = ? AND generation = ?";
-
-      const { changes } = db
-        .prepare(
-          `UPDATE machines SET ${sets === "" ? "generation = generation" : sets} WHERE ${where}`
-        )
-        .run(...values, name, ...(guard === undefined ? [] : [guard]));
-
-      return Number(changes) > 0;
-    };
-
     const writeCheckpoint = (
       name: string,
       patch: CheckpointPatch,
@@ -685,28 +624,41 @@ export const open = (
       }
     };
 
-    const released = (
-      name: string,
-      generation: number,
-      patch: MachinePatch
-    ): void => {
-      const raw = selectMachine.get(name);
+    const leased = (
+      operation: Omit<Operation, "sequence">
+    ): Operation | undefined => {
+      const held = selectOperations
+        .all()
+        .flatMap((row) => operationOf(row).leases);
 
-      if (raw === undefined) {
-        return;
+      if (
+        operation.leases.some((wanted) =>
+          held.some((lease) => conflicting(wanted, lease))
+        )
+      ) {
+        return undefined;
       }
 
-      const row = rowOf(raw);
+      const { last } = Schema.decodeUnknownSync(
+        Schema.Struct({ last: Schema.Int })
+      )(raiseSequence.get());
 
-      if (patch.stage === "undone" && row.desired === "deleted") {
-        deleteMachine.run(name);
-      } else if (row.generation === generation || patch.stage === "undone") {
-        writeMachine(name, patch, undefined);
-      } else {
-        const { phase: _phase, error: _error, ...kept } = patch;
+      const begun: Operation = { ...operation, sequence: last };
 
-        writeMachine(name, { ...kept, phase: "observing" }, undefined);
-      }
+      insertOperation.run({
+        id: begun.id,
+        kind: begun.kind,
+        resource: begun.resource,
+        name: begun.name,
+        host: begun.host,
+        boot: begun.boot,
+        sequence: begun.sequence,
+        seen: begun.seen,
+        leases: encodeLeases(begun.leases),
+        to: begun.to === undefined ? null : encodeSizing(begun.to),
+      });
+
+      return begun;
     };
 
     const store: Interface = {
@@ -723,55 +675,50 @@ export const open = (
       insertMachine: Effect.fn("Store.insertMachine")((row) =>
         inserting("machine", row.name, () => {
           deleteUndone.run(row.name);
-          insertMachine.run({
-            name: row.name,
-            instance: row.instance,
-            created_at: DateTime.formatIso(row.createdAt),
-            kind: row.kind,
-            base: row.base,
-            profile: row.profile ?? null,
-            cpu: row.cpu,
-            ram_mib: row.ramMib,
-            disk_gib: row.diskGib,
-            host: row.host,
-            port: row.port ?? null,
-            desired: row.desired,
-            generation: row.generation,
-            phase: row.phase,
-            stage: row.stage,
-            prepared: flag(row.prepared),
-            error: encodedError(row.error),
-            resize: row.resize === undefined ? null : encodeSizing(row.resize),
-            ephemeral: flag(row.ephemeral),
-            source: encodeSource(row.source),
-            prebuild: row.prebuild ?? null,
-            host_key: row.hostKey ?? null,
-            pin: row.pin ?? null,
-            undone_at: time(row.undoneAt),
-          });
+          insertMachine.run(machineColumns(row));
         })
       ),
-      desire: Effect.fn("Store.desire")((name, desired) =>
-        sql(`record what ${name} should be`, () => {
-          const row = updateDesire.get({ name, desired });
+      advance: Effect.fn("Store.advance")((resource, name, decide) =>
+        transaction(
+          db,
+          `advance ${resource} ${name}`,
+          (): Result.Result<Advanced, Busy> => {
+            const raw = selectMachine.get(name);
 
-          return row === undefined ? Option.none() : Option.some(rowOf(row));
-        })
-      ),
-      resize: Effect.fn("Store.resize")((name, sizing) =>
-        sql(`record a resize of ${name}`, () => {
-          const row = updateResize.get({ name, resize: encodeSizing(sizing) });
+            if (raw === undefined) {
+              return Result.succeed({ at: "absent" });
+            }
 
-          return row === undefined ? Option.none() : Option.some(rowOf(row));
-        })
-      ),
-      patch: Effect.fn("Store.patch")((name, generation, patch) =>
-        sql(`write ${name}`, () => writeMachine(name, patch, generation))
-      ),
-      removeMachine: Effect.fn("Store.removeMachine")((name) =>
-        sql(`remove machine ${name}`, () => {
-          deleteMachine.run(name);
-        })
+            const row = rowOf(raw);
+            const stored = selectOperation.get(resource, name);
+            const op = stored === undefined ? undefined : operationOf(stored);
+            const { next, begin, finish } = decide(row, op);
+
+            if (begin !== undefined && leased(begin) === undefined) {
+              return Result.fail(new Busy());
+            }
+
+            if (finish && op !== undefined) {
+              deleteOperation.run(op.id);
+            }
+
+            if (next === "removed") {
+              deleteMachine.run(name);
+            } else if (next !== row) {
+              updateMachine.run(machineColumns(next));
+            }
+
+            return Result.succeed({
+              at: "written",
+              next,
+              moved: next !== row,
+            });
+          }
+        ).pipe(
+          Effect.catchTag("Busy", () =>
+            Effect.succeed<Advanced>({ at: "busy" })
+          )
+        )
       ),
       expire: Effect.fn("Store.expire")((before) =>
         sql("expire failed rows", () => {
@@ -838,56 +785,9 @@ export const open = (
             : Option.some(operationOf(row));
         })
       ),
-      begin: Effect.fn("Store.begin")((operation, phase, patch) =>
-        transaction(
-          db,
-          `begin a ${operation.kind} of ${operation.name}`,
-          () => {
-            const held = selectOperations
-              .all()
-              .flatMap((row) => operationOf(row).leases);
-
-            if (
-              operation.leases.some((wanted) =>
-                held.some((lease) => conflicting(wanted, lease))
-              )
-            ) {
-              return Result.succeed(Option.none<Operation>());
-            }
-
-            if (
-              operation.resource === "machine" &&
-              !writeMachine(
-                operation.name,
-                { ...patch, ...(phase === undefined ? {} : { phase }) },
-                operation.generation
-              )
-            ) {
-              return Result.succeed(Option.none<Operation>());
-            }
-
-            const { last } = Schema.decodeUnknownSync(
-              Schema.Struct({ last: Schema.Int })
-            )(raiseSequence.get());
-
-            const begun: Operation = { ...operation, sequence: last };
-
-            insertOperation.run({
-              id: begun.id,
-              kind: begun.kind,
-              resource: begun.resource,
-              name: begun.name,
-              host: begun.host,
-              boot: begun.boot,
-              sequence: begun.sequence,
-              generation: begun.generation,
-              seen: begun.seen,
-              leases: encodeLeases(begun.leases),
-              to: begun.to === undefined ? null : encodeSizing(begun.to),
-            });
-
-            return Result.succeed(Option.some(begun));
-          }
+      begin: Effect.fn("Store.begin")((operation) =>
+        transaction(db, `begin a ${operation.kind} of ${operation.name}`, () =>
+          Result.succeed(Option.fromUndefinedOr(leased(operation)))
         )
       ),
       finish: Effect.fn("Store.finish")((operation, finish) =>
@@ -898,18 +798,8 @@ export const open = (
             deleteOperation.run(operation.id);
 
             switch (finish.row) {
-              case "patch": {
-                released(operation.name, finish.generation, finish.patch);
-                break;
-              }
-
               case "checkpoint": {
                 writeCheckpoint(operation.name, finish.patch, finish.from);
-                break;
-              }
-
-              case "removed": {
-                deleteMachine.run(operation.name);
                 break;
               }
 

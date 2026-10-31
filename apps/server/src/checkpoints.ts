@@ -29,6 +29,7 @@ import type { Scope } from "effect";
 import { Hex } from "effect/encoding";
 
 import { Hosts } from "./hosts.ts";
+import { stageOf } from "./machine-chart.ts";
 import { Machines } from "./machines.ts";
 import { Operations } from "./operations.ts";
 import { placing } from "./placement.ts";
@@ -153,32 +154,27 @@ export const make = (settings: {
       Effect.gen(function* () {
         const info = yield* hosts.read(record.host);
 
-        const begun = yield* store.begin(
-          {
-            id: newId(),
-            kind,
-            resource: "checkpoint",
-            name: record.name,
-            host: record.host,
-            boot: info.boot,
-            generation: 0,
-            seen: "unknown",
-            to: undefined,
-            leases:
-              kind === "capture"
-                ? [
-                    {
-                      resource: "machine",
-                      name: record.machine,
-                      mode: "share",
-                    },
-                    { resource: "checkpoint", name: record.name, mode: "own" },
-                  ]
-                : [{ resource: "checkpoint", name: record.name, mode: "own" }],
-          },
-          undefined,
-          {}
-        );
+        const begun = yield* store.begin({
+          id: newId(),
+          kind,
+          resource: "checkpoint",
+          name: record.name,
+          host: record.host,
+          boot: info.boot,
+          seen: "unknown",
+          to: undefined,
+          leases:
+            kind === "capture"
+              ? [
+                  {
+                    resource: "machine",
+                    name: record.machine,
+                    mode: "share",
+                  },
+                  { resource: "checkpoint", name: record.name, mode: "own" },
+                ]
+              : [{ resource: "checkpoint", name: record.name, mode: "own" }],
+        });
 
         if (Option.isNone(begun)) {
           yield* Effect.sleep(retryWait);
@@ -345,13 +341,17 @@ export const make = (settings: {
       Effect.gen(function* () {
         const present = yield* store.findMachine(source);
 
-        if (Option.isNone(present) || present.value.stage === "undone") {
+        if (Option.isNone(present) || present.value.state === "undone") {
           return yield* noMachine(source);
         }
 
         const machine = present.value;
+        const stage = stageOf(machine.state);
 
-        if (machine.stage !== "made" || machine.port === undefined) {
+        if (
+          (stage !== "made" && stage !== "deleting") ||
+          machine.port === undefined
+        ) {
           return yield* new NotMade({
             message: `machine ${source} isn't made yet: its create or setup still runs`,
             machine: source,

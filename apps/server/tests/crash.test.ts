@@ -1,18 +1,20 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import type { Sizing } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Option } from "effect";
 import { expect } from "vite-plus/test";
 
 import {
+  applying,
   at,
   clientOf,
   eventually,
   pause,
+  phaseOf,
   plane,
   request,
   restartedHost,
   running,
+  stageOf,
 } from "./support.ts";
 import type { Started } from "./support.ts";
 
@@ -36,7 +38,7 @@ const killedPlane = (options?: Parameters<typeof plane>[0]) =>
         client: yield* clientOf(second.url),
         rests: (name: string) =>
           eventually(second.store.findMachine(name), (found) =>
-            Option.exists(found, ({ phase }) => phase === "settled")
+            Option.exists(found, (row) => phaseOf(row) === "settled")
           ),
         gone: (name: string) =>
           eventually(second.store.findMachine(name), Option.isNone),
@@ -46,37 +48,20 @@ const killedPlane = (options?: Parameters<typeof plane>[0]) =>
     return { planned, first, client, asking, fake, restart };
   });
 
-const phases = {
-  make: "creating",
-  stop: "stopping",
-  resize: "resizing",
-} as const;
-
 const unsent = (
   store: Started["store"],
-  host: string,
   boot: string,
   name: string,
-  kind: "make" | "stop" | "resize",
-  generation: number,
-  to?: Sizing
+  seen: "running" | "unknown"
 ) =>
-  store.begin(
-    {
-      id: `unsent-${name}`,
-      kind,
-      resource: "machine",
-      name,
-      host,
-      boot,
-      generation,
-      seen: kind === "make" ? "unknown" : "running",
-      leases: [{ resource: "machine", name, mode: "own" }],
-      to,
-    },
-    phases[kind],
-    {}
-  );
+  applying(store, name, {
+    type: "read",
+    seen,
+    boot,
+    pin: undefined,
+    id: `unsent-${name}`,
+    joins: false,
+  });
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
@@ -121,10 +106,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const row = yield* eventually(
           second.store.findMachine("dev"),
-          (found) => Option.exists(found, ({ phase }) => phase === "settled")
+          (found) => Option.exists(found, (rest) => phaseOf(rest) === "settled")
         );
 
-        expect(Option.getOrThrow(row).stage).toBe("made");
+        expect(stageOf(Option.getOrThrow(row))).toBe("made");
       })
   );
 
@@ -193,7 +178,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const found = Option.getOrThrow(yield* second.rests("dev"));
 
-        expect([found.stage, found.prepared]).toStrictEqual(["made", true]);
+        expect([stageOf(found), found.prepared]).toStrictEqual(["made", true]);
       })
   );
 
@@ -260,18 +245,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* client.create("dev", request("dev"));
         fake.calls.length = 0;
 
-        const asked = Option.getOrThrow(
-          yield* first.store.desire("dev", "stopped")
-        );
-
-        yield* unsent(
-          first.store,
-          host!.id,
-          host!.operations.boot,
-          "dev",
-          "stop",
-          asked.generation
-        );
+        yield* applying(first.store, "dev", {
+          type: "ask",
+          desired: "stopped",
+        });
+        yield* unsent(first.store, host!.operations.boot, "dev", "running");
 
         const second = yield* restart;
 
@@ -293,18 +271,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* client.stopMachine({ id: "dev" });
         fake.calls.length = 0;
 
-        const asked = Option.getOrThrow(yield* first.store.findMachine("dev"));
-
-        yield* unsent(
-          first.store,
-          host!.id,
-          host!.operations.boot,
-          "dev",
-          "resize",
-          asked.generation,
-          { cpu: 2, diskGib: 20 }
-        );
-        yield* first.store.resize("dev", { cpu: 3 });
+        yield* applying(first.store, "dev", {
+          type: "resize",
+          sizing: { cpu: 2, diskGib: 20 },
+        });
+        yield* unsent(first.store, host!.operations.boot, "dev", "running");
+        yield* applying(first.store, "dev", {
+          type: "resize",
+          sizing: { cpu: 3 },
+        });
 
         const second = yield* restart;
         const rest = Option.getOrThrow(yield* second.rests("dev"));
@@ -366,19 +341,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           name: "dev",
           instance: "unsent",
           port: undefined,
-          stage: "making",
-          phase: "creating",
+          state: "making.due",
           prepared: false,
           source: { kind: "base", scripted: true },
         });
-        yield* unsent(
-          first.store,
-          host!.id,
-          host!.operations.boot,
-          "dev",
-          "make",
-          template.generation
-        );
+        yield* unsent(first.store, host!.operations.boot, "dev", "unknown");
 
         const second = yield* restart;
 
@@ -414,18 +381,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           name: "dev",
           instance: "unsent",
           port: undefined,
-          stage: "making",
-          phase: "creating",
+          state: "making.due",
           prepared: false,
         });
-        yield* unsent(
-          first.store,
-          host!.id,
-          host!.operations.boot,
-          "dev",
-          "make",
-          template.generation
-        );
+        yield* unsent(first.store, host!.operations.boot, "dev", "unknown");
 
         const second = yield* restart;
 

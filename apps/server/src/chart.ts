@@ -5,7 +5,7 @@ import type { Operation } from "./store.ts";
 /** What a resource's write does: its next row, and the operation it begins or finishes. */
 export interface Decision<R> {
   readonly next: R | "removed";
-  readonly begin?: Omit<Operation, "sequence" | "generation">;
+  readonly begin?: Omit<Operation, "sequence">;
   readonly finish: boolean;
 }
 

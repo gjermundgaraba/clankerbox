@@ -1,8 +1,7 @@
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime } from "effect";
 
-import type { Facts } from "../src/machine-chart.ts";
-import type { Operation } from "../src/store.ts";
+import type { Facts, Operation } from "../src/store.ts";
 
 /** The failure a report or a read carries. */
 export const failure = new Internal({ message: "krun busy" });
@@ -48,7 +47,6 @@ export const flight = (
   host: "linux",
   boot: "boot",
   sequence: 1,
-  generation: 1,
   seen: "unknown",
   leases: [],
   to: undefined,

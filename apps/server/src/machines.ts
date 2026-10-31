@@ -2,6 +2,7 @@ import type {
   HostInfo,
   MachineRef,
   MachineState,
+  Report,
   Step,
 } from "@clankerbox/host-contract";
 import {
@@ -20,7 +21,6 @@ import {
 import type {
   CreateRequest,
   Declared,
-  Desired,
   Machine,
   PrebuildRequest,
   ResizeRequest,
@@ -41,21 +41,22 @@ import {
 import type { Scope } from "effect";
 import { Hex } from "effect/encoding";
 
+import { applied } from "./chart.ts";
 import { Hosts } from "./hosts.ts";
+import {
+  activityOf,
+  desiredOf,
+  machineChart,
+  phaseOf,
+  stageOf,
+  wants,
+} from "./machine-chart.ts";
+import type { MachineEvent, MachineRow, Move, Wish } from "./machine-chart.ts";
 import { Operations } from "./operations.ts";
 import { placing, preferring } from "./placement.ts";
 import { nameOf } from "./prebuilds.ts";
-import { holds, lost, next as nextFrom, settled, wants } from "./reconcile.ts";
-import type { Next, Patch } from "./reconcile.ts";
 import { Store } from "./store.ts";
-import type {
-  Lease,
-  MachinePatch,
-  MachinePhase,
-  MachineRow,
-  Operation,
-  Source,
-} from "./store.ts";
+import type { Operation, Source } from "./store.ts";
 import { checked, due, firstCheck, ticked, unchecked } from "./tailnet.ts";
 import type { TailnetCheck } from "./tailnet.ts";
 
@@ -143,28 +144,6 @@ const restPoll = Duration.millis(100);
 const newId = (): string =>
   Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(16)));
 
-const stepPhases = {
-  creating: "make",
-  starting: "start",
-  stopping: "stop",
-  pausing: "pause",
-  resizing: "resize",
-  deleting: "remove",
-} as const satisfies Partial<Record<Next, Operation["kind"]>>;
-
-type Stepped = keyof typeof stepPhases;
-
-const isStep = (target: Next): target is Stepped => target in stepPhases;
-
-const phaseOfKind: Partial<Record<Operation["kind"], MachinePhase>> = {
-  make: "creating",
-  start: "starting",
-  stop: "stopping",
-  pause: "pausing",
-  resize: "resizing",
-  remove: "deleting",
-};
-
 const notFound = (name: string): NotFound =>
   new NotFound({ message: `no machine ${name}`, id: name });
 
@@ -200,51 +179,21 @@ const stateIn = (
   found: MachineRow,
   states: ReadonlyMap<string, MachineState>
 ): MachineState =>
-  found.stage === "undone" ? "missing" : (states.get(found.name) ?? "unknown");
+  found.state === "undone" ? "missing" : (states.get(found.name) ?? "unknown");
 
-const phaseShown = (found: MachineRow, seen: MachineState): Machine["phase"] =>
-  seen === "unknown" && found.phase !== "failed" ? "waiting" : found.phase;
+const phaseShown = (
+  found: MachineRow,
+  seen: MachineState
+): Machine["phase"] => {
+  const phase = phaseOf(found.state);
 
-const nextOf = (found: MachineRow, seen: MachineState): Next =>
-  nextFrom({ ...found, resizing: found.resize !== undefined }, seen);
+  return seen === "unknown" && phase !== "failed" ? "waiting" : phase;
+};
 
 const pinned = (pin: string | undefined) => (pin === undefined ? {} : { pin });
 
-const atBegin = (
-  kind: Operation["kind"],
-  seen: MachineState,
-  pin: string | undefined
-): MachinePatch => {
-  if (kind === "resize") {
-    return { resize: undefined };
-  }
-
-  return kind === "start" && seen === "stopped" ? { pin } : {};
-};
-
-const leasesOf = (
-  found: MachineRow,
-  kind: Operation["kind"]
-): readonly Lease[] => {
-  const self: Lease = {
-    resource: "machine",
-    name: found.name,
-    mode: kind === "join" ? "share" : "own",
-  };
-
-  if (kind !== "make" || found.source.kind === "base") {
-    return [self];
-  }
-
-  return [
-    self,
-    {
-      resource: found.source.kind,
-      name: found.source.name,
-      mode: "share",
-    },
-  ];
-};
+const cutShort = ({ kind, name }: Operation) =>
+  new Internal({ message: `the ${kind} of ${name} ended on its host` });
 
 const copied = (
   name: string,
@@ -273,15 +222,13 @@ const copied = (
     return spec;
   });
 
-const made = (found: MachineRow) =>
-  found.stage === "made"
-    ? Effect.void
-    : Effect.fail(
-        new NotMade({
-          message: `machine ${found.name} isn't made yet: its create or setup still runs`,
-          machine: found.name,
-        })
-      );
+const unmade = (found: MachineRow): NotMade | NotFound =>
+  stageOf(found.state) === "making"
+    ? new NotMade({
+        message: `machine ${found.name} isn't made yet: its create or setup still runs`,
+        machine: found.name,
+      })
+    : notFound(found.name);
 
 export const make = (
   settings: Settings
@@ -310,18 +257,26 @@ export const make = (
         Effect.fromOption(found, () => notFound(name))
       );
 
-    const notFailedCreate = (name: string) =>
-      row(name).pipe(
-        Effect.filterOrFail(
-          ({ stage }) => stage === "making" || stage === "made",
-          () => notFound(name)
-        )
+    const applying = (name: string, event: MachineEvent) =>
+      store.advance("machine", name, (found, op) =>
+        applied(machineChart, found, event, op)
       );
+
+    const recorded = (name: string, event: MachineEvent) =>
+      Effect.gen(function* () {
+        const answer = yield* applying(name, event);
+
+        yield* wake(name);
+
+        return answer.at === "written" && answer.next !== "removed"
+          ? { next: answer.next, moved: answer.moved }
+          : yield* notFound(name);
+      });
 
     const readStates = (rows: readonly MachineRow[]) =>
       Effect.gen(function* () {
         const groups = Map.groupBy(
-          rows.filter(({ stage }) => stage !== "undone"),
+          rows.filter(({ state }) => state !== "undone"),
           ({ host }) => host
         );
 
@@ -367,7 +322,7 @@ export const make = (
         ramMib: found.ramMib,
         diskGib: found.diskGib,
         state,
-        desired: found.desired,
+        desired: desiredOf(found),
         phase,
         ...(found.profile === undefined ? {} : { profile: found.profile }),
         ...(found.prebuild === undefined ? {} : { prebuild: found.prebuild }),
@@ -381,7 +336,7 @@ export const make = (
     };
 
     const unread = (found: MachineRow) =>
-      resource(found, "unknown", found.phase);
+      resource(found, "unknown", phaseOf(found.state));
 
     const shown = (found: MachineRow, state: MachineState) =>
       resource(found, state, phaseShown(found, state));
@@ -527,120 +482,79 @@ export const make = (
         }
       });
 
-    const begin = (
-      found: MachineRow,
-      kind: Operation["kind"],
-      seen: MachineState,
-      phase: MachinePhase | undefined
-    ) =>
-      Effect.gen(function* () {
-        const info = yield* hosts.read(found.host);
-
-        const begun = yield* store.begin(
-          {
-            id: newId(),
-            kind,
-            resource: "machine",
-            name: found.name,
-            host: found.host,
-            boot: info.boot,
-            generation: found.generation,
-            seen,
-            leases: leasesOf(found, kind),
-            to: kind === "resize" ? found.resize : undefined,
-          },
-          phase,
-          atBegin(kind, seen, info.pin)
-        );
-
-        if (Option.isNone(begun)) {
-          yield* Effect.sleep(busyWait);
-        }
-
-        return "again" as const;
-      }).pipe(
-        Effect.catchTag("Unreachable", (error) =>
-          Effect.as(Effect.logWarning(error.message), "rest" as const)
-        )
-      );
-
-    const movedPastCapacity = (found: MachineRow): MachinePatch | undefined => {
-      const held = creates.get(found.name);
-      const [candidate, ...untried] = held?.untried ?? [];
+    const movedPastCapacity = (found: MachineRow): Move | undefined => {
+      const [candidate] = creates.get(found.name)?.untried ?? [];
       const info = hosts.known(candidate?.host ?? "");
 
-      if (
-        held === undefined ||
-        candidate === undefined ||
+      return candidate === undefined ||
         info === undefined ||
         found.error?._tag !== "Capacity"
-      ) {
-        return undefined;
+        ? undefined
+        : {
+            host: candidate.host,
+            kind: info.kind,
+            pin: info.pin,
+            source: candidate.source,
+            prebuild: candidate.prebuild,
+          };
+    };
+
+    const reportedBy = (
+      found: MachineRow,
+      op: Operation,
+      { status, outcome, error }: Report,
+      at: DateTime.Utc
+    ): MachineEvent => {
+      if (status === "failed" || status === "cancelled") {
+        return {
+          type: "reported",
+          status,
+          outcome,
+          error: error ?? cutShort(op),
+        };
       }
 
-      creates.set(found.name, { setup: held.setup, untried });
+      const move = op.kind === "remove" ? movedPastCapacity(found) : undefined;
 
       return {
-        stage: "making",
-        host: candidate.host,
-        kind: info.kind,
-        pin: info.pin,
-        source: candidate.source,
-        prebuild: candidate.prebuild,
-        error: undefined,
-        port: undefined,
-        phase: "observing",
+        type: "reported",
+        status: "done",
+        outcome,
+        at,
+        ...(move === undefined ? {} : { move }),
       };
     };
 
-    const ended = (
-      found: MachineRow,
-      op: Operation,
-      patch: Patch | "removed"
-    ) =>
+    const stored = (name: string, event: MachineEvent) =>
       Effect.gen(function* () {
-        if (patch === "removed") {
-          creates.delete(found.name);
-          tailnets.delete(found.name);
+        const answer = yield* applying(name, event);
 
-          return yield* operations.finish(op, { row: "removed" });
+        if (answer.at !== "written") {
+          return false;
         }
 
-        if (op.kind === "join") {
-          return yield* operations.finish(op, { row: "kept" });
-        }
+        const { next } = answer;
+        const held = creates.get(name);
 
-        if (patch.stage === "undone") {
-          const moved = movedPastCapacity(found);
-
-          if (moved === undefined) {
-            creates.delete(found.name);
-          }
-
-          return yield* operations.finish(op, {
-            row: "patch",
-            generation: found.generation,
-            patch: moved ?? { ...patch, undoneAt: yield* DateTime.now },
+        if (next === "removed") {
+          creates.delete(name);
+          tailnets.delete(name);
+        } else if (next.state === "making.due" && held !== undefined) {
+          creates.set(name, {
+            setup: held.setup,
+            untried: held.untried.slice(1),
           });
+        } else if (next.state === "undone" || stageOf(next.state) === "made") {
+          creates.delete(name);
         }
 
-        if (patch.stage === "made" && creates.has(found.name)) {
-          creates.delete(found.name);
-        }
+        return true;
+      });
 
-        if (op.kind === "start" && patch.prepared === true) {
-          tailnets.set(found.name, firstCheck);
-        }
-
-        yield* operations.finish(op, {
-          row: "patch",
-          generation: found.generation,
-          patch,
-        });
-      }).pipe(
-        Effect.andThen(
-          Effect.forEach(op.leases, ({ name }) => wake(name), { discard: true })
-        )
+    const collected = (op: Operation) =>
+      Effect.andThen(
+        operations.collect(op),
+        Effect.forEach(op.leases, ({ name }) => wake(name), { discard: true })
       );
 
     const sizesRead = (found: MachineRow) => {
@@ -651,13 +565,10 @@ export const make = (
         : hosts
             .call(found.host, (api) => api.readSizes({ machine: ref }))
             .pipe(
-              Effect.flatMap((read) =>
-                store.patch(found.name, found.generation, {
-                  cpu: read.cpu ?? found.cpu,
-                  ramMib: read.ramMib ?? found.ramMib,
-                  diskGib: read.diskGib ?? found.diskGib,
-                })
+              Effect.flatMap((sizing) =>
+                applying(found.name, { type: "sized", sizing })
               ),
+              Effect.asVoid,
               Effect.catchTag("Unreachable", (error) =>
                 Effect.logWarning(
                   `couldn't read the sizes of ${found.name}, so it keeps those it has: ${error.message}`
@@ -666,17 +577,13 @@ export const make = (
             );
     };
 
-    const follow = (found: MachineRow, op: Operation, latch: Latch.Latch) =>
+    const following = (found: MachineRow, op: Operation, latch: Latch.Latch) =>
       Effect.gen(function* () {
-        const doing = phaseOfKind[op.kind];
-
-        if (doing !== undefined && found.phase === "observing") {
-          yield* store.patch(found.name, found.generation, { phase: doing });
-        }
+        const { name } = found;
 
         const polled = yield* Effect.raceFirst(
           operations.poll(op, {
-            cut: !wants(op.kind, found.desired),
+            cut: !wants(op.kind, desiredOf(found)),
             step: stepOf(found, op),
           }),
           Effect.as(latch.await, { at: "woken" } as const)
@@ -691,71 +598,63 @@ export const make = (
             const { port } = polled.report.outcome;
 
             if (port !== undefined && found.port !== port) {
-              yield* store.patch(found.name, found.generation, { port });
+              yield* applying(name, { type: "ran", port });
             }
 
             return;
           }
 
           case "ended": {
-            if (op.kind === "join") {
-              tailnets.set(
-                found.name,
-                checked(
-                  tailnets.get(found.name) ?? unchecked,
-                  polled.report.outcome.tailnet
-                )
-              );
+            const { report } = polled;
+
+            const written = yield* stored(
+              name,
+              reportedBy(found, op, report, yield* DateTime.now)
+            );
+
+            if (!written) {
+              return;
             }
 
-            return yield* ended(found, op, settled(found, op, polled.report));
+            if (op.kind === "join") {
+              tailnets.set(
+                name,
+                checked(tailnets.get(name) ?? unchecked, report.outcome.tailnet)
+              );
+            } else if (op.kind === "start" && report.status === "done") {
+              tailnets.set(name, firstCheck);
+            }
+
+            return yield* collected(op);
           }
 
           case "lost": {
             yield* Effect.logWarning(
-              `machine ${found.name}'s ${op.kind} is gone from host ${op.host}`
+              `machine ${name}'s ${op.kind} is gone from host ${op.host}`
             );
 
-            yield* ended(
-              found,
-              op,
-              lost(
-                op,
-                new Internal({
-                  message: `the ${op.kind} of machine ${found.name} ended before its host reported it: its host restarted, or the setup left with a restart of the control plane`,
-                })
-              )
-            );
+            const written = yield* stored(name, {
+              type: "lost",
+              error: new Internal({
+                message: `the ${op.kind} of machine ${name} ended before its host reported it: its host restarted, or the setup left with a restart of the control plane`,
+              }),
+            });
+
+            if (!written) {
+              return;
+            }
 
             if (op.kind === "resize") {
               yield* sizesRead(found);
             }
 
-            return;
+            return yield* collected(op);
           }
 
           case "unreachable": {
             yield* Effect.timeoutOption(latch.await, unreachableWait);
           }
         }
-      });
-
-    const joining = (found: MachineRow, seen: MachineState) =>
-      Effect.gen(function* () {
-        const check = tailnets.get(found.name) ?? firstCheck;
-
-        if (
-          seen !== "running" ||
-          found.ephemeral ||
-          !due(check) ||
-          hosts.known(found.host)?.joins !== true
-        ) {
-          tailnets.set(found.name, ticked(check));
-
-          return "rest" as const;
-        }
-
-        return yield* begin(found, "join", seen, undefined);
       });
 
     const outgrownBySource = (found: MachineRow) =>
@@ -781,76 +680,112 @@ export const make = (
             );
       });
 
-    const advance = (name: string, latch: Latch.Latch, rechecked: boolean) =>
+    const looking = (found: MachineRow) =>
+      Effect.gen(function* () {
+        const { name } = found;
+
+        const refused =
+          found.state === "making.due"
+            ? yield* outgrownBySource(found)
+            : undefined;
+
+        if (refused !== undefined) {
+          yield* applying(name, { type: "refused", error: refused });
+
+          return "again" as const;
+        }
+
+        const seen =
+          stageOf(found.state) === "made" ? yield* stateOf(found) : "unknown";
+
+        const info = yield* hosts.read(found.host);
+        const check = tailnets.get(name) ?? firstCheck;
+
+        const answer = yield* applying(name, {
+          type: "read",
+          seen,
+          boot: info.boot,
+          pin: info.pin,
+          id: newId(),
+          joins:
+            seen === "running" && !found.ephemeral && due(check) && info.joins,
+        });
+
+        switch (answer.at) {
+          case "absent": {
+            return "gone" as const;
+          }
+
+          case "busy": {
+            yield* Effect.sleep(busyWait);
+
+            return "again" as const;
+          }
+
+          case "written": {
+            if (
+              answer.next !== "removed" &&
+              answer.next.state === "made.settled"
+            ) {
+              tailnets.set(name, ticked(check));
+            }
+
+            return answer.moved ? ("again" as const) : ("rest" as const);
+          }
+        }
+      }).pipe(
+        Effect.catchTag("Unreachable", (error) =>
+          Effect.as(Effect.logWarning(error.message), "rest" as const)
+        )
+      );
+
+    const turn = (name: string, latch: Latch.Latch, rechecked: boolean) =>
       Effect.gen(function* () {
         const present = yield* store.findMachine(name);
 
-        if (Option.isNone(present)) {
+        if (Option.isNone(present) || present.value.state === "undone") {
           return "gone" as const;
         }
 
         const found = present.value;
-        const inFlight = yield* store.operationOn("machine", name);
 
-        if (Option.isSome(inFlight)) {
-          yield* follow(found, inFlight.value, latch);
+        switch (activityOf(found.state)) {
+          case "read": {
+            return yield* looking(found);
+          }
 
-          return "again" as const;
+          case "follow": {
+            const op = yield* Effect.fromOption(
+              yield* store.operationOn("machine", name),
+              () =>
+                new Internal({
+                  message: `machine ${name} is at ${found.state} with no operation`,
+                })
+            );
+
+            yield* following(found, op, latch);
+
+            return "again" as const;
+          }
+
+          case "recheck": {
+            return rechecked ? yield* looking(found) : ("rest" as const);
+          }
+
+          case "none": {
+            return "rest" as const;
+          }
         }
-
-        if (found.stage === "undone") {
-          return "gone" as const;
-        }
-
-        if (holds(found) || (found.phase === "failed" && !rechecked)) {
-          return "rest" as const;
-        }
-
-        const seen =
-          found.stage === "made" && found.desired !== "deleted"
-            ? yield* stateOf(found)
-            : "unknown";
-
-        const target = nextOf(found, seen);
-
-        const refused =
-          target === "creating" ? yield* outgrownBySource(found) : undefined;
-
-        if (refused !== undefined) {
-          yield* store.patch(name, found.generation, {
-            stage: "undoing",
-            error: refused,
-            phase: "observing",
-          });
-
-          return "again" as const;
-        }
-
-        if (isStep(target)) {
-          return yield* begin(found, stepPhases[target], seen, target);
-        }
-
-        if (target === "unread") {
-          return "rest" as const;
-        }
-
-        const rested = yield* store.patch(name, found.generation, {
-          phase: target,
-        });
-
-        return rested && target === "settled"
-          ? yield* joining(found, seen)
-          : ("rest" as const);
       });
 
     const looped = (name: string, latch: Latch.Latch) =>
       Effect.gen(function* () {
-        let rechecked = false;
+        let rechecked = true;
 
         for (;;) {
           yield* latch.close;
 
-          const at = yield* advance(name, latch, rechecked).pipe(
+          const at = yield* turn(name, latch, rechecked).pipe(
             Effect.catchCause((cause) =>
               Effect.as(
                 Effect.logError(
@@ -915,9 +850,7 @@ export const make = (
           host: placed.host,
           port: undefined,
           desired: "running",
-          generation: 1,
-          phase: "observing",
-          stage: "making",
+          state: "making.due",
           prepared: false,
           error: undefined,
           resize: undefined,
@@ -936,16 +869,17 @@ export const make = (
         return unread(created);
       });
 
-    const asked = (name: string, desired: Exclude<Desired, "deleted">) =>
+    const asked = (name: string, desired: Wish) =>
       Effect.gen(function* () {
-        yield* notFailedCreate(name);
+        const { next, moved } = yield* recorded(name, {
+          type: "ask",
+          desired,
+        });
 
-        const recorded = yield* store.desire(name, desired);
-
-        yield* wake(name);
-
-        return yield* Effect.fromOption(recorded, () => notFound(name));
-      }).pipe(Effect.map(unread));
+        return moved || stageOf(next.state) === "deleting"
+          ? unread(next)
+          : yield* notFound(name);
+      });
 
     const placedFor = (base: string) =>
       Effect.gen(function* () {
@@ -1042,9 +976,12 @@ export const make = (
 
     const fork = (id: string, name: string, sizing?: Sizing) =>
       Effect.gen(function* () {
-        const from = yield* notFailedCreate(id);
+        const from = yield* row(id);
+        const stage = stageOf(from.state);
 
-        yield* made(from);
+        if (stage !== "made" && stage !== "deleting") {
+          return yield* unmade(from);
+        }
 
         const info = yield* hosts
           .read(from.host)
@@ -1107,26 +1044,20 @@ export const make = (
       Effect.gen(function* () {
         const { id, ...sizing } = request;
 
-        yield* made(yield* notFailedCreate(id));
+        const { next, moved } = yield* recorded(id, {
+          type: "resize",
+          sizing,
+        });
 
-        const recorded = yield* store.resize(id, sizing);
-
-        yield* wake(id);
-
-        return unread(yield* Effect.fromOption(recorded, () => notFound(id)));
+        return moved || stageOf(next.state) === "deleting"
+          ? unread(next)
+          : yield* unmade(next);
       });
 
     const remove = (name: string) =>
-      Effect.gen(function* () {
-        const found = yield* row(name);
-
-        if (found.stage === "undone") {
-          return yield* store.removeMachine(name);
-        }
-
-        yield* store.desire(name, "deleted");
-        yield* wake(name);
-      });
+      Effect.flatMap(applying(name, { type: "delete" }), (answer) =>
+        answer.at === "absent" ? Effect.fail(notFound(name)) : wake(name)
+      );
 
     const capacity = Effect.gen(function* () {
       const reached = yield* hosts.reachAll;
@@ -1182,7 +1113,7 @@ export const make = (
           api.adoptMachines({
             machines: rows.flatMap((found) => {
               const ref =
-                found.host === host && found.stage === "made"
+                found.host === host && stageOf(found.state) === "made"
                   ? refOf(found)
                   : undefined;
 
@@ -1226,13 +1157,12 @@ export const make = (
       Effect.gen(function* () {
         for (;;) {
           const found = yield* store.findMachine(name);
-          const inFlight = yield* store.operationOn("machine", name);
 
           if (Option.isNone(found)) {
             return found;
           }
 
-          if (Option.isNone(inFlight)) {
+          if (activityOf(found.value.state) !== "follow") {
             const phase = phaseShown(found.value, yield* stateOf(found.value));
 
             if (phase === "waiting") {
@@ -1254,11 +1184,11 @@ export const make = (
     yield* tick;
 
     for (const found of yield* store.machines) {
-      if (found.ephemeral && found.desired !== "deleted") {
-        yield* store.desire(found.name, "deleted");
+      if (found.ephemeral) {
+        yield* applying(found.name, { type: "delete" });
       }
 
-      if (found.stage !== "undone") {
+      if (found.state !== "undone") {
         yield* driven(found.name);
       }
     }

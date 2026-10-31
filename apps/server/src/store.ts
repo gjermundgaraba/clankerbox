@@ -11,19 +11,15 @@ import type {
 import { Context, Schema } from "effect";
 import type { DateTime, Effect, Option } from "effect";
 
+import type { Decision } from "./chart.ts";
+import type { MachineRow } from "./machine-chart.ts";
+
 export class CannotStart extends Schema.TaggedError<
   CannotStart,
   { readonly brand: unique symbol }
 >()("CannotStart", {
   message: Schema.String,
 }) {}
-
-/**
- * How far a machine is made: `making` until its make is done, `undoing` while a failed make's VM
- * goes, and `undone` once it has, when the row rests to tell why until it expires or a create of
- * its name replaces it.
- */
-export type Stage = "making" | "made" | "undoing" | "undone";
 
 /**
  * Where a machine's disk comes from. Copies stay on their source's host, and hold what a setup did,
@@ -49,7 +45,6 @@ export interface Operation {
   readonly host: string;
   readonly boot: string;
   readonly sequence: number;
-  readonly generation: number;
   readonly seen: "running" | "stopped" | "paused" | "missing" | "unknown";
   readonly leases: readonly Lease[];
   /** What a resize gives, which left the row when the step began. */
@@ -59,7 +54,8 @@ export interface Operation {
 /** `waiting` is never stored: a read tells it, as it tells the state. */
 export type MachinePhase = Exclude<Phase, "waiting">;
 
-export interface MachineRow {
+/** What a machine's row holds but for its leaf: what no leaf can tell, and its chart's context. */
+export interface Facts {
   readonly name: string;
   readonly instance: string;
   readonly createdAt: DateTime.Utc;
@@ -71,10 +67,8 @@ export interface MachineRow {
   readonly diskGib: number;
   readonly host: string;
   readonly port: number | undefined;
-  readonly desired: Desired;
-  readonly generation: number;
-  readonly phase: MachinePhase;
-  readonly stage: Stage;
+  /** What was asked. A delete is the `deleting` region, so the wire's `deleted` is no wish. */
+  readonly desired: Exclude<Desired, "deleted">;
   readonly prepared: boolean;
   readonly error: HostError | undefined;
   /** The resize still owed. One that runs is on its operation. */
@@ -114,32 +108,35 @@ export interface CheckpointRow {
   readonly failedAt: DateTime.Utc | undefined;
 }
 
-export type MachinePatch = Partial<Omit<MachineRow, "name" | "createdAt">>;
-
 export type CheckpointPatch = Partial<
   Pick<CheckpointRow, "phase" | "error" | "failedAt">
 >;
 
 /**
- * What a report does to its resource, written with the leases' release. A `patch` from before a
- * later request keeps what the step did and drops what it said of the request, so the row is
- * decided afresh: `generation` is the one it was worked out at. A checkpoint's patch with `from`
- * writes only from that phase, so a capture's end leaves a delete asked since.
+ * What a report does to a checkpoint, written with the leases' release. A patch with `from` writes
+ * only from that phase, so a capture's end leaves a delete asked since.
  */
 export type Finish =
-  | {
-      readonly row: "patch";
-      readonly generation: number;
-      readonly patch: MachinePatch;
-    }
   | {
       readonly row: "checkpoint";
       readonly patch: CheckpointPatch;
       readonly from?: CheckpointPhase;
     }
-  | { readonly row: "removed" }
   | { readonly row: "checkpoint-removed" }
   | { readonly row: "kept" };
+
+/**
+ * What a write did. `written` also answers a `decide` that changed nothing: then `moved` is false
+ * and `next` the row as it stands. `busy` is a lease that refused the operation, and wrote nothing.
+ */
+export type Advanced =
+  | {
+      readonly at: "written";
+      readonly next: MachineRow | "removed";
+      readonly moved: boolean;
+    }
+  | { readonly at: "absent" }
+  | { readonly at: "busy" };
 
 export interface Interface {
   readonly machines: Effect.Effect<readonly MachineRow[], Internal>;
@@ -151,24 +148,16 @@ export interface Interface {
     row: MachineRow
   ) => Effect.Effect<void, Conflict | Internal>;
   /**
-   * Records what was asked: the generation rises, the row stops resting and its error goes, all in
-   * one write. `deleted` stays deleted.
+   * One write of a resource's row, decided inside it: `decide` reads the row and its operation in
+   * the transaction that writes what it answers, so nothing can come between, and no write needs a
+   * fence. A `begin` takes its leases there, as what owns a resource excludes all else and what
+   * shares it excludes an owner, and when one is taken nothing is written.
    */
-  readonly desire: (
+  readonly advance: (
+    resource: "machine",
     name: string,
-    desired: Desired
-  ) => Effect.Effect<Option.Option<MachineRow>, Internal>;
-  readonly resize: (
-    name: string,
-    sizing: Sizing
-  ) => Effect.Effect<Option.Option<MachineRow>, Internal>;
-  /** Writes a rest or a patch only at `generation`, so a later request is never overwritten. */
-  readonly patch: (
-    name: string,
-    generation: number,
-    patch: MachinePatch
-  ) => Effect.Effect<boolean, Internal>;
-  readonly removeMachine: (name: string) => Effect.Effect<void, Internal>;
+    decide: (row: MachineRow, op: Operation | undefined) => Decision<MachineRow>
+  ) => Effect.Effect<Advanced, Internal>;
   /** Removes the rows of failed creates and captures older than `before`. */
   readonly expire: (before: DateTime.Utc) => Effect.Effect<void, Internal>;
   readonly checkpoints: Effect.Effect<readonly CheckpointRow[], Internal>;
@@ -190,17 +179,11 @@ export interface Interface {
     resource: Lease["resource"],
     name: string
   ) => Effect.Effect<Option.Option<Operation>, Internal>;
-  /**
-   * Takes the leases and records the operation in one write, with the row's phase for a machine.
-   * None when a lease is taken, as what owns a resource excludes all else and what shares it
-   * excludes an owner, or when a machine's row has moved past `generation` since.
-   */
+  /** A checkpoint's operation, its leases taken in one write. None when a lease is taken. */
   readonly begin: (
-    operation: Omit<Operation, "sequence">,
-    phase: MachinePhase | undefined,
-    patch: MachinePatch
+    operation: Omit<Operation, "sequence">
   ) => Effect.Effect<Option.Option<Operation>, Internal>;
-  /** Frees the operation's leases and writes what its report says, in one write. */
+  /** Frees a checkpoint's operation and writes what its report says, in one write. */
   readonly finish: (
     operation: Operation,
     finish: Finish

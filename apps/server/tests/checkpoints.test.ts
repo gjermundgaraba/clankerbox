@@ -27,6 +27,7 @@ import {
   at,
   clientOf,
   eventually,
+  patched,
   pause,
   plane,
   request,
@@ -385,7 +386,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
           const started = yield* client.startMachine({ id: name });
 
-          expect(row).toMatchObject({ stage: "made", phase: "failed" });
+          expect(row.state).toBe("made.failed");
           expect(at(started)).toStrictEqual(["running", "running", "settled"]);
           expect(callsTo(host, "exec")).toStrictEqual([`exec ${name}`]);
         }
@@ -981,11 +982,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const { client, host, store } = yield* withSource();
 
-        const { generation } = Option.getOrThrow(
-          yield* store.findMachine("dev")
-        );
-
-        yield* store.patch("dev", generation, { pin: "fake 0" });
+        yield* patched(store, "dev", { pin: "fake 0" });
 
         const refused = [
           yield* Effect.flip(

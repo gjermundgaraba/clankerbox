@@ -18,14 +18,17 @@ import { Duration, Effect, Fiber, Option, Result } from "effect";
 import { expect } from "vite-plus/test";
 
 import {
+  applying,
   at,
   clientOf,
   eventually,
   loginSetup,
+  patched,
   pause,
   request,
   restartedHost,
   running,
+  stageOf,
 } from "./support.ts";
 
 const theirs =
@@ -89,12 +92,12 @@ const served = (options?: Parameters<typeof running>[0]) =>
       machine,
       row,
       rows: plane.store.machines,
-      generation: (name: string) =>
-        Effect.map(row(name), ({ generation }) => generation),
       bootedUnder: (name: string, pin: string | undefined) =>
-        Effect.flatMap(row(name), ({ generation }) =>
-          plane.store.patch(name, generation, { pin })
-        ),
+        patched(plane.store, name, { pin }),
+      beforeNextAsk: (name: string) =>
+        patched(plane.store, name, { prepared: true }),
+      afterNextAsk: (name: string) =>
+        eventually(row(name), ({ prepared }) => !prepared),
       pins: Effect.map(plane.store.machines, (all) =>
         all.map(({ pin }) => pin)
       ),
@@ -707,7 +710,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* entered;
         yield* release;
 
-        yield* eventually(row("dev"), ({ stage }) => stage === "undone");
+        yield* eventually(row("dev"), ({ state }) => state === "undone");
 
         expect(fake.calls).toContain("delete dev");
       })
@@ -1060,30 +1063,31 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a second request for what a step already works toward lets the step finish, and both answer",
     () =>
       Effect.gen(function* () {
-        const { client, fake, generation } = yield* served();
+        const { afterNextAsk, beforeNextAsk, client, fake } = yield* served();
 
         yield* client.create("dev", request("dev"));
         yield* client.stopMachine({ id: "dev" });
         fake.calls.length = 0;
 
-        const asked = yield* generation("dev");
         const booting = fake.holdNext("admit");
 
-        const starts = yield* Effect.forkChild(
-          Effect.all(
-            [
-              client.startMachine({ id: "dev" }),
-              client.startMachine({ id: "dev" }),
-            ],
-            { concurrency: "unbounded" }
-          )
+        const first = yield* Effect.forkChild(
+          client.startMachine({ id: "dev" })
         );
 
         yield* booting.entered;
-        yield* eventually(generation("dev"), (now) => now === asked + 2);
+        yield* beforeNextAsk("dev");
+
+        const second = yield* Effect.forkChild(
+          client.startMachine({ id: "dev" })
+        );
+
+        yield* afterNextAsk("dev");
         yield* booting.release;
 
-        expect((yield* Fiber.join(starts)).map(at)).toStrictEqual([
+        const answers = [yield* Fiber.join(first), yield* Fiber.join(second)];
+
+        expect(answers.map(at)).toStrictEqual([
           ["running", "running", "settled"],
           ["running", "running", "settled"],
         ]);
@@ -1099,13 +1103,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a request repeated while a step runs that then fails answers the failure, with no more tries",
     () =>
       Effect.gen(function* () {
-        const { client, fake, generation } = yield* served();
+        const { afterNextAsk, beforeNextAsk, client, fake } = yield* served();
 
         yield* client.create("dev", request("dev"));
         yield* client.stopMachine({ id: "dev" });
         fake.calls.length = 0;
 
-        const asked = yield* generation("dev");
         const booting = fake.holdNext("admit");
 
         fake.failNext("start", new Internal({ message: "crun create failed" }));
@@ -1115,12 +1118,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
 
         yield* booting.entered;
+        yield* beforeNextAsk("dev");
 
         const second = yield* Effect.forkChild(
           Effect.flip(client.startMachine({ id: "dev" }))
         );
 
-        yield* eventually(generation("dev"), (now) => now === asked + 2);
+        yield* afterNextAsk("dev");
         yield* booting.release;
 
         const failure = yield* Fiber.join(second);
@@ -1136,14 +1140,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a wish that goes stopped, running, stopped during a stop that fails reads as asked, and answers the failure",
     () =>
       Effect.gen(function* () {
-        const { client, fake, generation, machine, machines, store } =
-          yield* served();
+        const { client, fake, machine, machines, store } = yield* served();
 
         yield* client.create("dev", request("dev"));
         yield* client.pauseMachine({ id: "dev" });
         fake.calls.length = 0;
 
-        const asked = yield* generation("dev");
         const resuming = fake.holdNext("admit");
 
         fake.failNext("stop", new Internal({ message: "guest didn't flush" }));
@@ -1153,8 +1155,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
 
         yield* resuming.entered;
-        yield* store.desire("dev", "running");
-        yield* store.desire("dev", "stopped");
+        yield* applying(store, "dev", { type: "ask", desired: "running" });
+        yield* applying(store, "dev", { type: "ask", desired: "stopped" });
         yield* machines.wake("dev");
         yield* pause;
         yield* resuming.release;
@@ -1162,7 +1164,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const failure = yield* Fiber.join(stop);
         const rest = yield* machine("dev");
 
-        expect(yield* generation("dev")).toBe(asked + 3);
         expect(failure.message).toBe("guest didn't flush");
         expect(at(rest)).toStrictEqual(["paused", "stopped", "failed"]);
         expect(rest.error?.message).toBe("guest didn't flush");
@@ -1523,7 +1524,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         "ScriptFailed",
       ]);
       expect([got.state, got.phase]).toStrictEqual(["missing", "failed"]);
-      expect((yield* row("dev")).stage).toBe("undone");
+      expect(stageOf(yield* row("dev"))).toBe("undone");
       expect(fake.calls.slice(-2)).toStrictEqual(["exec dev", "delete dev"]);
       expect(fake.machines.size).toBe(0);
     })
@@ -1549,7 +1550,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(refusal(left)).toStrictEqual(["failed", "ScriptFailed"]);
         expect(fake.machines.size).toBe(1);
 
-        yield* eventually(row("dev"), ({ stage }) => stage === "undone");
+        yield* eventually(row("dev"), ({ state }) => state === "undone");
 
         expect(fake.machines.size).toBe(0);
         expect(refusal(yield* machine("dev"))).toStrictEqual([
@@ -1656,7 +1657,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(taken.phase).toBe("creating");
         expect(superseded).toMatchObject({ _tag: "Superseded", by: "stopped" });
         expect(at(stopped)).toStrictEqual(["stopped", "stopped", "settled"]);
-        expect((yield* row("dev")).stage).toBe("made");
+        expect(stageOf(yield* row("dev"))).toBe("made");
       })
   );
 
@@ -1672,7 +1673,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* client.restoreMachine({ checkpoint: "snap", name: "restored" });
 
         expect(
-          (yield* rows).map(({ name, stage }) => [name, stage])
+          (yield* rows).map((found) => [found.name, stageOf(found)])
         ).toStrictEqual([
           ["dev", "made"],
           ["forked", "made"],
@@ -1691,7 +1692,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const error = yield* Effect.flip(client.create("dev", request("dev")));
         const failed = yield* machine("dev");
-        const { stage } = yield* row("dev");
+        const stage = stageOf(yield* row("dev"));
 
         fake.calls.length = 0;
 

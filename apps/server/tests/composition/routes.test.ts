@@ -324,7 +324,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const row = yield* eventually(
           store.machines,
-          ([machine]) => machine?.phase === "settled"
+          ([machine]) => machine?.state === "made.settled"
         );
 
         const calls = [...hosts[0]!.fake.calls];
@@ -469,10 +469,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const [row] = yield* eventually(
           store.machines,
-          ([machine]) => machine?.phase === "settled"
+          ([machine]) => machine?.state === "made.settled"
         );
 
-        expect(row?.stage).toBe("made");
+        expect(row?.state).toBe("made.settled");
         expect(host!.fake.calls).toContain("exec dev");
       })
   );
