@@ -178,6 +178,29 @@ const fixtures = leaves.flatMap((state) => {
   );
 });
 
+const rowsFromACapture = (): readonly CheckpointRow[] => {
+  const rows = new Map<string, CheckpointRow>();
+  const walking = [rowAt("capturing.due")];
+
+  while (walking.length > 0) {
+    const row = walking.pop();
+    const key = `${row?.state} ${row?.error === undefined}`;
+
+    if (row !== undefined && !rows.has(key)) {
+      rows.set(key, row);
+      walking.push(
+        ...representatives.flatMap((event) => {
+          const { next } = go(row, event);
+
+          return next === "removed" ? [] : [next];
+        })
+      );
+    }
+  }
+
+  return [...rows.values()];
+};
+
 describe("the chart", () => {
   it("takes every event from every leaf where its table says, and writes nothing for one the table doesn't name", () => {
     const table = leaves.flatMap((state) => {
@@ -409,6 +432,23 @@ describe("a delete", () => {
     expect(held).toStrictEqual(rowAt("deleting.held", { error }));
     expect(after(held, read)).toStrictEqual(rowAt("deleting.sent", { error }));
     expect(activityOf(held.state)).toBe("recheck");
+  });
+
+  it("asked again while a held delete tries once more drops that delete's error, or a prebuild waiting on it would end there", () => {
+    const stale = rowsFromACapture().filter(
+      ({ state, error: left }) =>
+        state.startsWith("deleting.") &&
+        state !== "deleting.held" &&
+        left !== undefined
+    );
+
+    expect(stale.map(({ state }) => state).toSorted()).toStrictEqual([
+      "deleting.due",
+      "deleting.sent",
+    ]);
+    expect(stale.map((row) => after(row, removal))).toStrictEqual(
+      stale.map(({ state }) => rowAt(state))
+    );
   });
 
   it("of a failed row takes the row at once, with nothing to run", () => {
