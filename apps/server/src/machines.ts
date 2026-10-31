@@ -1,22 +1,11 @@
-import type {
-  HostInfo,
-  MachineRef,
-  MachineState,
-  Report,
-  Step,
-} from "@clankerbox/host-contract";
+import type { HostInfo, MachineState, Report } from "@clankerbox/host-contract";
 import {
-  checkpointKinds,
-  formatGib,
-  formatMib,
   Internal,
   isResting,
-  loginUser,
   NotFound,
   NotMade,
   NotOffered,
   Unavailable,
-  Unsizable,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   CreateRequest,
@@ -26,23 +15,18 @@ import type {
   ResizeRequest,
   Setup,
   Sizing,
-  Usage,
 } from "@gjermundgaraba/clankerbox-sdk";
-import {
-  Cause,
-  Context,
-  DateTime,
-  Duration,
-  Effect,
-  Layer,
-  Option,
-} from "effect";
+import { Context, DateTime, Duration, Effect, Layer, Option } from "effect";
 import type { Scope } from "effect";
 import { Hex } from "effect/encoding";
 
 import { applied } from "./chart.ts";
+import { copied, outgrownBySource } from "./copies.ts";
+import type { Spec } from "./copies.ts";
 import { driver } from "./driver.ts";
 import type { Heard } from "./driver.ts";
+import { capacity, recheckHosts } from "./fleet.ts";
+import type { CapacityRead } from "./fleet.ts";
 import { Hosts } from "./hosts.ts";
 import {
   activityOf,
@@ -53,9 +37,18 @@ import {
   wants,
 } from "./machine-chart.ts";
 import type { MachineEvent, MachineRow, Move, Wish } from "./machine-chart.ts";
+import {
+  machineOf,
+  phaseShown,
+  readStates,
+  stateIn,
+  stateOf,
+} from "./machine-view.ts";
 import { collect, cutShort, poll } from "./operations.ts";
-import { placing, preferring } from "./placement.ts";
+import { candidatesFor, placing } from "./placement.ts";
+import type { Candidate } from "./placement.ts";
 import { nameOf } from "./prebuilds.ts";
+import { machineStep, refOf } from "./steps.ts";
 import { Store } from "./store.ts";
 import type { Operation, Source } from "./store.ts";
 import { checked, due, firstCheck, ticked, unchecked } from "./tailnet.ts";
@@ -65,11 +58,6 @@ export interface Settings {
   readonly recheck: Duration.Duration;
   /** How long a failed create's row stays to tell why. */
   readonly failedRowsLast: Duration.Duration;
-}
-
-export interface CapacityRead {
-  readonly usage: readonly Usage[];
-  readonly unreachable: readonly string[];
 }
 
 export interface Interface {
@@ -128,12 +116,6 @@ interface CreateHeldInMemory {
   readonly untried: readonly Candidate[];
 }
 
-interface Candidate {
-  readonly host: string;
-  readonly source: Source;
-  readonly prebuild: string | undefined;
-}
-
 const restPoll = Duration.millis(100);
 
 const newId = (): string =>
@@ -141,78 +123,6 @@ const newId = (): string =>
 
 const notFound = (name: string): NotFound =>
   new NotFound({ message: `no machine ${name}`, id: name });
-
-interface Spec {
-  readonly base: string;
-  readonly profile?: string | undefined;
-  readonly cpu: number;
-  readonly ramMib: number;
-  readonly diskGib: number;
-}
-
-const sizedBy = (from: Spec, sizing: Sizing | undefined): Spec => ({
-  base: from.base,
-  profile: from.profile,
-  cpu: sizing?.cpu ?? from.cpu,
-  ramMib: sizing?.ramMib ?? from.ramMib,
-  diskGib: sizing?.diskGib ?? from.diskGib,
-});
-
-const refOf = (row: MachineRow): MachineRef | undefined =>
-  row.port === undefined
-    ? undefined
-    : {
-        name: row.name,
-        instance: row.instance,
-        cpu: row.cpu,
-        ramMib: row.ramMib,
-        diskGib: row.diskGib,
-        port: row.port,
-      };
-
-const stateIn = (
-  found: MachineRow,
-  states: ReadonlyMap<string, MachineState>
-): MachineState =>
-  found.state === "undone" ? "missing" : (states.get(found.name) ?? "unknown");
-
-const phaseShown = (
-  found: MachineRow,
-  seen: MachineState
-): Machine["phase"] => {
-  const phase = phaseOf(found.state);
-
-  return seen === "unknown" && phase !== "failed" ? "waiting" : phase;
-};
-
-const pinned = (pin: string | undefined) => (pin === undefined ? {} : { pin });
-
-const copied = (
-  name: string,
-  from: Spec,
-  sizing: Sizing | undefined,
-  kind: Machine["kind"]
-) =>
-  Effect.gen(function* () {
-    const spec = sizedBy(from, sizing);
-
-    if (spec.diskGib < from.diskGib) {
-      return yield* new Unsizable({
-        message: `machine ${name}'s disk of ${formatGib(spec.diskGib)} is below its source's ${formatGib(from.diskGib)}, and a disk only grows`,
-      });
-    }
-
-    if (
-      checkpointKinds[kind] === "ram" &&
-      (spec.cpu < from.cpu || spec.ramMib < from.ramMib)
-    ) {
-      return yield* new Unsizable({
-        message: `a ${kind} copy holds its source's RAM, so machine ${name}'s vCPUs and RAM only grow from the source's ${from.cpu} vCPUs and ${formatMib(from.ramMib)}`,
-      });
-    }
-
-    return spec;
-  });
 
 const unmade = (found: MachineRow): NotMade | NotFound =>
   stageOf(found.state) === "making"
@@ -243,214 +153,24 @@ export const make = (
         applied(machineChart, found, event, op)
       );
 
-    const readStates = (rows: readonly MachineRow[]) =>
-      Effect.gen(function* () {
-        const groups = Map.groupBy(
-          rows.filter(({ state }) => state !== "undone"),
-          ({ host }) => host
-        );
-
-        const answers = yield* Effect.forEach(
-          [...groups],
-          ([host, onHost]) =>
-            hosts
-              .call(host, (api) =>
-                api.readMachines({
-                  machines: onHost.map(({ name, instance }) => ({
-                    name,
-                    instance,
-                  })),
-                })
-              )
-              .pipe(Effect.orElseSucceed(() => [])),
-          { concurrency: "unbounded" }
-        );
-
-        return new Map<string, MachineState>(
-          answers.flat().map(({ name, state }) => [name, state])
-        );
-      });
-
-    const stateOf = (found: MachineRow) =>
-      Effect.map(readStates([found]), (states) => stateIn(found, states));
-
     const resource = (
       found: MachineRow,
       state: MachineState,
       phase: Machine["phase"]
-    ): Machine => {
-      const address = hosts.known(found.host)?.publishAddress;
-      const tailnet = tailnets.get(found.name)?.status;
-      const running = state === "running";
-
-      return {
-        id: found.name,
-        kind: found.kind,
-        createdAt: found.createdAt,
-        base: found.base,
-        cpu: found.cpu,
-        ramMib: found.ramMib,
-        diskGib: found.diskGib,
+    ) =>
+      machineOf(
+        found,
         state,
-        desired: desiredOf(found),
         phase,
-        ...(found.profile === undefined ? {} : { profile: found.profile }),
-        ...(found.prebuild === undefined ? {} : { prebuild: found.prebuild }),
-        ...(found.error === undefined ? {} : { error: found.error }),
-        ...(running && found.port !== undefined && address !== undefined
-          ? { ssh: { user: loginUser, host: address, port: found.port } }
-          : {}),
-        ...(found.hostKey === undefined ? {} : { hostKey: found.hostKey }),
-        ...(running && tailnet !== undefined ? { tailnet } : {}),
-      };
-    };
+        hosts.known(found.host)?.publishAddress,
+        tailnets.get(found.name)?.status
+      );
 
     const unread = (found: MachineRow) =>
       resource(found, "unknown", phaseOf(found.state));
 
     const shown = (found: MachineRow, state: MachineState) =>
       resource(found, state, phaseShown(found, state));
-
-    const others = (found: MachineRow) =>
-      Effect.map(store.machines, (rows) => {
-        const onHost = rows.filter(
-          ({ host, name }) => host === found.host && name !== found.name
-        );
-
-        return {
-          machines: onHost.flatMap((other) => {
-            const ref = refOf(other);
-
-            return ref === undefined ? [] : [ref];
-          }),
-          ports: onHost.flatMap(({ port }) =>
-            port === undefined ? [] : [port]
-          ),
-        };
-      });
-
-    const sourceStep = (found: MachineRow) =>
-      Effect.gen(function* () {
-        const { source } = found;
-
-        if (source.kind === "base") {
-          return { _tag: "base", base: found.base } as const;
-        }
-
-        if (source.kind === "machine") {
-          const from = yield* store.findMachine(source.name);
-          const ref = Option.flatMapNullishOr(from, refOf);
-
-          return Option.isSome(ref) && Option.isSome(from)
-            ? ({
-                _tag: "machine",
-                machine: ref.value,
-                ...pinned(from.value.pin),
-              } as const)
-            : undefined;
-        }
-
-        const from = yield* store.findCheckpoint(source.name);
-
-        return Option.isSome(from) && from.value.state === "ready"
-          ? ({
-              _tag: "checkpoint",
-              checkpoint: {
-                name: from.value.name,
-                instance: from.value.instance,
-                cpu: from.value.cpu,
-                ramMib: from.value.ramMib,
-                diskGib: from.value.diskGib,
-                port: from.value.port,
-              },
-              ...pinned(from.value.pin),
-            } as const)
-          : undefined;
-      });
-
-    const stepOf = (
-      found: MachineRow,
-      op: Operation
-    ): Effect.Effect<Step | undefined, Internal> =>
-      Effect.gen(function* () {
-        const ref = refOf(found);
-        const { name, instance } = found;
-        const { machines, ports } = yield* others(found);
-
-        if (op.kind === "remove") {
-          return { _tag: "remove", machine: { name, instance } };
-        }
-
-        if (op.kind === "make") {
-          const scripted =
-            found.source.kind === "base" && found.source.scripted;
-
-          const setup = scripted ? creates.get(name)?.setup : undefined;
-          const source = yield* sourceStep(found);
-
-          if (source === undefined || (scripted && setup === undefined)) {
-            return undefined;
-          }
-
-          return {
-            _tag: "make",
-            machine: {
-              name,
-              instance,
-              cpu: found.cpu,
-              ramMib: found.ramMib,
-              diskGib: found.diskGib,
-            },
-            source,
-            ...(setup === undefined ? {} : { setup }),
-            ports,
-            machines,
-          };
-        }
-
-        if (ref === undefined) {
-          return undefined;
-        }
-
-        switch (op.kind) {
-          case "start":
-          case "stop": {
-            return {
-              _tag: op.kind,
-              machine: ref,
-              seen: op.seen,
-              ...pinned(found.pin),
-              machines,
-            };
-          }
-
-          case "pause": {
-            return { _tag: "pause", machine: ref, ...pinned(found.pin) };
-          }
-
-          case "resize": {
-            return {
-              _tag: "resize",
-              machine: ref,
-              to: op.to ?? {},
-              machines,
-            };
-          }
-
-          case "join": {
-            return {
-              _tag: "join",
-              machine: ref,
-              hostname: `cbx-${name}`,
-            };
-          }
-
-          case "capture":
-          case "deleteCheckpoint": {
-            return undefined;
-          }
-        }
-      });
 
     const movedPastCapacity = (found: MachineRow): Move | undefined => {
       const [candidate] = creates.get(found.name)?.untried ?? [];
@@ -494,6 +214,9 @@ export const make = (
         ...(move === undefined ? {} : { move }),
       };
     };
+
+    const stepOf = (found: MachineRow, op: Operation) =>
+      machineStep(store, found, op, creates.get(found.name)?.setup);
 
     const stored = (name: string, event: MachineEvent) =>
       Effect.gen(function* () {
@@ -605,36 +328,13 @@ export const make = (
         }
       });
 
-    const outgrownBySource = (found: MachineRow) =>
-      Effect.gen(function* () {
-        const { source } = found;
-
-        if (source.kind === "base") {
-          return undefined;
-        }
-
-        const from: Option.Option<Spec> =
-          source.kind === "machine"
-            ? yield* store.findMachine(source.name)
-            : yield* store.findCheckpoint(source.name);
-
-        return Option.isNone(from)
-          ? undefined
-          : yield* copied(found.name, from.value, found, found.kind).pipe(
-              Effect.match({
-                onFailure: (refusal) => refusal,
-                onSuccess: () => undefined,
-              })
-            );
-      });
-
     const looking = (found: MachineRow) =>
       Effect.gen(function* () {
         const { name } = found;
 
         const refused =
           found.state === "making.due"
-            ? yield* outgrownBySource(found)
+            ? yield* outgrownBySource(store, found)
             : undefined;
 
         if (refused !== undefined) {
@@ -642,7 +342,9 @@ export const make = (
         }
 
         const seen =
-          stageOf(found.state) === "made" ? yield* stateOf(found) : "unknown";
+          stageOf(found.state) === "made"
+            ? yield* stateOf(hosts, found)
+            : "unknown";
 
         const info = yield* hosts.read(found.host);
         const check = tailnets.get(name) ?? firstCheck;
@@ -748,6 +450,27 @@ export const make = (
           : yield* notFound(name);
       });
 
+    const infoOf = (host: string) =>
+      hosts
+        .read(host)
+        .pipe(
+          Effect.mapError(
+            ({ message }) => new Unavailable({ message, readOnly: true })
+          )
+        );
+
+    const copy = (
+      name: string,
+      spec: Spec,
+      info: HostInfo,
+      host: string,
+      source: Source
+    ) =>
+      born(name, spec, { host, source, prebuild: undefined }, info, false, {
+        setup: undefined,
+        untried: [],
+      });
+
     const placedFor = (base: string) =>
       Effect.gen(function* () {
         const placed = placing(yield* hosts.reachAll, base);
@@ -787,22 +510,12 @@ export const make = (
           }
         }
 
-        const candidates = preferring(placed, new Set(prebuilds.keys())).map(
-          ({ id }): Candidate => {
-            const prebuilt = prebuilds.get(id);
-
-            return {
-              host: id,
-              source:
-                prebuilt === undefined
-                  ? { kind: "base", scripted: setup !== undefined }
-                  : { kind: "checkpoint", name: prebuilt },
-              prebuild: prebuilt,
-            };
-          }
+        const [first, ...untried] = candidatesFor(
+          placed,
+          prebuilds,
+          setup !== undefined
         );
 
-        const [first, ...untried] = candidates;
         const info = hosts.known(first?.host ?? "");
 
         if (first === undefined || info === undefined) {
@@ -819,13 +532,7 @@ export const make = (
 
     const build: Interface["build"] = (name, request, host) =>
       Effect.gen(function* () {
-        const info = yield* hosts
-          .read(host)
-          .pipe(
-            Effect.mapError(
-              ({ message }) => new Unavailable({ message, readOnly: true })
-            )
-          );
+        const info = yield* infoOf(host);
 
         yield* born(
           name,
@@ -850,25 +557,14 @@ export const make = (
           return yield* unmade(from);
         }
 
-        const info = yield* hosts
-          .read(from.host)
-          .pipe(
-            Effect.mapError(
-              ({ message }) => new Unavailable({ message, readOnly: true })
-            )
-          );
+        const info = yield* infoOf(from.host);
 
-        return yield* born(
+        return yield* copy(
           name,
           yield* copied(name, from, sizing, from.kind),
-          {
-            host: from.host,
-            source: { kind: "machine", name: id },
-            prebuild: undefined,
-          },
           info,
-          false,
-          { setup: undefined, untried: [] }
+          from.host,
+          { kind: "machine", name: id }
         );
       });
 
@@ -885,25 +581,14 @@ export const make = (
 
         const record = present.value;
 
-        const info = yield* hosts
-          .read(record.host)
-          .pipe(
-            Effect.mapError(
-              ({ message }) => new Unavailable({ message, readOnly: true })
-            )
-          );
+        const info = yield* infoOf(record.host);
 
-        return yield* born(
+        return yield* copy(
           name,
           yield* copied(name, record, sizing, info.kind),
-          {
-            host: record.host,
-            source: { kind: "checkpoint", name: checkpoint },
-            prebuild: undefined,
-          },
           info,
-          false,
-          { setup: undefined, untried: [] }
+          record.host,
+          { kind: "checkpoint", name: checkpoint }
         );
       });
 
@@ -926,100 +611,6 @@ export const make = (
         answer.at === "absent" ? Effect.fail(notFound(name)) : drive(name)
       );
 
-    const capacity = Effect.gen(function* () {
-      const reached = yield* hosts.reachAll;
-      const rows = yield* store.machines;
-      const unreachable: string[] = [];
-
-      const usage = yield* Effect.forEach(
-        reached,
-        ({ member }) =>
-          hosts
-            .call(member.id, (api) =>
-              api.readCapacity({
-                machines: rows.flatMap((found) => {
-                  const ref =
-                    found.host === member.id ? refOf(found) : undefined;
-
-                  return ref === undefined ? [] : [ref];
-                }),
-              })
-            )
-            .pipe(
-              Effect.map((readings) =>
-                readings.map((reading): Usage => ({
-                  host: member.id,
-                  ...reading,
-                }))
-              ),
-              Effect.catchTag("Unreachable", () =>
-                Effect.sync((): Usage[] => {
-                  unreachable.push(member.id);
-
-                  return [];
-                })
-              )
-            ),
-        { concurrency: "unbounded" }
-      );
-
-      return { usage: usage.flat(), unreachable };
-    });
-
-    const adopted = (host: string, boot: string) =>
-      Effect.gen(function* () {
-        const known = yield* store.hostBoot(host);
-
-        if (Option.contains(known, boot)) {
-          return;
-        }
-
-        const rows = yield* store.machines;
-
-        yield* hosts.call(host, (api) =>
-          api.adoptMachines({
-            machines: rows.flatMap((found) => {
-              const ref =
-                found.host === host && stageOf(found.state) === "made"
-                  ? refOf(found)
-                  : undefined;
-
-              return ref === undefined ? [] : [ref];
-            }),
-          })
-        );
-
-        yield* store.recordBoot(host, boot);
-      });
-
-    const tick = Effect.gen(function* () {
-      const reached = yield* hosts.reachAll;
-
-      yield* Effect.forEach(
-        reached,
-        ({ member, info }) =>
-          info === undefined
-            ? Effect.void
-            : adopted(member.id, info.boot).pipe(
-                Effect.catchTag("Unreachable", (error) =>
-                  Effect.logWarning(error.message)
-                )
-              ),
-        { discard: true }
-      );
-
-      const before = DateTime.subtractDuration(
-        yield* DateTime.now,
-        settings.failedRowsLast
-      );
-
-      yield* store.expire(before);
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logError(`the recheck failed:\n${Cause.pretty(cause)}`)
-      )
-    );
-
     const rest = (name: string) =>
       Effect.gen(function* () {
         for (;;) {
@@ -1030,7 +621,10 @@ export const make = (
           }
 
           if (activityOf(found.value.state) !== "follow") {
-            const phase = phaseShown(found.value, yield* stateOf(found.value));
+            const phase = phaseShown(
+              found.value,
+              yield* stateOf(hosts, found.value)
+            );
 
             if (phase === "waiting") {
               return yield* new Unavailable({
@@ -1047,6 +641,8 @@ export const make = (
           yield* Effect.sleep(restPoll);
         }
       });
+
+    const tick = recheckHosts(store, hosts, settings.failedRowsLast);
 
     yield* tick;
 
@@ -1069,13 +665,13 @@ export const make = (
           ({ ephemeral }) => !ephemeral
         );
 
-        const states = yield* readStates(rows);
+        const states = yield* readStates(hosts, rows);
 
         return rows.map((found) => shown(found, stateIn(found, states)));
       }).pipe(Effect.withSpan("Machines.list")),
       get: Effect.fn("Machines.get")((id) =>
         Effect.flatMap(row(id), (found) =>
-          Effect.map(stateOf(found), (state) => shown(found, state))
+          Effect.map(stateOf(hosts, found), (state) => shown(found, state))
         )
       ),
       create: Effect.fn("Machines.create")(create),
@@ -1087,7 +683,9 @@ export const make = (
       delete: Effect.fn("Machines.delete")(remove),
       fork: Effect.fn("Machines.fork")(fork),
       restore: Effect.fn("Machines.restore")(restore),
-      capacity: capacity.pipe(Effect.withSpan("Machines.capacity")),
+      capacity: capacity(store, hosts).pipe(
+        Effect.withSpan("Machines.capacity")
+      ),
       rest,
     } satisfies Interface;
   });

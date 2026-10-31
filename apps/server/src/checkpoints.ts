@@ -1,4 +1,4 @@
-import type { Report, Step } from "@clankerbox/host-contract";
+import type { Report } from "@clankerbox/host-contract";
 import {
   checkpointKinds,
   Conflict,
@@ -38,6 +38,7 @@ import { Machines } from "./machines.ts";
 import { collect, cutShort, poll } from "./operations.ts";
 import { placing } from "./placement.ts";
 import { builderName, nameOf } from "./prebuilds.ts";
+import { checkpointStep } from "./steps.ts";
 import { Store } from "./store.ts";
 import type { Operation } from "./store.ts";
 
@@ -93,15 +94,6 @@ const shown = (record: CheckpointRow): Checkpoint => ({
   ...(record.error === undefined ? {} : { error: record.error }),
 });
 
-const refOf = (record: CheckpointRow) => ({
-  name: record.name,
-  instance: record.instance,
-  cpu: record.cpu,
-  ramMib: record.ramMib,
-  diskGib: record.diskGib,
-  port: record.port,
-});
-
 const reportedBy = (
   op: Operation,
   { status, outcome, error }: Report,
@@ -142,32 +134,6 @@ export const make = (settings: {
         applied(checkpointChart, found, event, op)
       );
 
-    const stepOf = (
-      record: CheckpointRow,
-      op: Operation
-    ): Effect.Effect<Step | undefined, Internal> =>
-      Effect.gen(function* () {
-        if (op.kind === "deleteCheckpoint") {
-          return { _tag: "deleteCheckpoint", checkpoint: refOf(record) };
-        }
-
-        const source = yield* store.findMachine(record.machine);
-
-        if (Option.isNone(source) || source.value.port === undefined) {
-          return undefined;
-        }
-
-        const { name, instance, cpu, ramMib, diskGib, port, pin } =
-          source.value;
-
-        return {
-          _tag: "capture",
-          machine: { name, instance, cpu, ramMib, diskGib, port },
-          checkpoint: refOf(record),
-          ...(pin === undefined ? {} : { pin }),
-        };
-      });
-
     const lostWhy = (record: CheckpointRow, op: Operation) =>
       Effect.map(store.findMachine(record.machine), (source) =>
         op.kind === "capture" && Option.isNone(source)
@@ -202,7 +168,10 @@ export const make = (settings: {
           applying(record.name, { type: "read", boot, id: newId() })
         ),
       polling: (record, op) =>
-        poll(hosts, op, { cut: false, step: stepOf(record, op) }),
+        poll(hosts, op, {
+          cut: false,
+          step: checkpointStep(store, record, op),
+        }),
       following,
     });
 

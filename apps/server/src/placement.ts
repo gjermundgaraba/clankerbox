@@ -2,6 +2,7 @@ import type { HostInfo } from "@clankerbox/host-contract";
 import { offered, offers } from "@gjermundgaraba/clankerbox-sdk";
 
 import type { Reached } from "./hosts.ts";
+import type { Source } from "./store.ts";
 
 export interface Placed {
   /** The hosts to try, in order. A later one is tried only after a definite `Capacity`. */
@@ -42,3 +43,28 @@ export const preferring = (
   ...hosts.filter(({ id }) => holding.has(id)),
   ...hosts.filter(({ id }) => !holding.has(id)),
 ];
+
+export interface Candidate {
+  readonly host: string;
+  readonly source: Source;
+  readonly prebuild: string | undefined;
+}
+
+/** Where a create may go, in order, and what each host would make it from. */
+export const candidatesFor = (
+  hosts: readonly HostInfo[],
+  prebuilds: ReadonlyMap<string, string>,
+  scripted: boolean
+): readonly Candidate[] =>
+  preferring(hosts, new Set(prebuilds.keys())).map(({ id }) => {
+    const prebuilt = prebuilds.get(id);
+
+    return {
+      host: id,
+      source:
+        prebuilt === undefined
+          ? { kind: "base", scripted }
+          : { kind: "checkpoint", name: prebuilt },
+      prebuild: prebuilt,
+    };
+  });
