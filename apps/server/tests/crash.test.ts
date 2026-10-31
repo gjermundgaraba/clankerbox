@@ -3,6 +3,8 @@ import { layer } from "@effect/vitest";
 import { Duration, Effect, Option } from "effect";
 import { expect } from "vite-plus/test";
 
+import { applied } from "../src/chart.ts";
+import { checkpointChart } from "../src/checkpoint-chart.ts";
 import {
   applying,
   at,
@@ -391,6 +393,59 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* second.rests("dev");
 
         expect(fake.calls).toContain("create dev");
+      })
+  );
+
+  it.effect(
+    "a restore recorded but never sent copies its checkpoint, though a delete of the checkpoint came between",
+    () =>
+      Effect.gen(function* () {
+        const { client, first, fake, planned, restart } = yield* killedPlane();
+        const [host] = planned.hosts;
+
+        yield* client.create("dev", request("dev"));
+        yield* client.captureCheckpoint({ machine: "dev", name: "snap" });
+        fake.calls.length = 0;
+
+        const template = Option.getOrThrow(
+          yield* first.store.findMachine("dev")
+        );
+
+        yield* first.store.insertMachine({
+          ...template,
+          name: "copy",
+          instance: "unsent",
+          port: undefined,
+          state: "making.due",
+          prepared: false,
+          hostKey: undefined,
+          source: { kind: "checkpoint", name: "snap" },
+        });
+        yield* unsent(first.store, host!.operations.boot, "copy", "unknown");
+        yield* first.store.advance("checkpoint", "snap", (row, op) =>
+          applied(checkpointChart, row, { type: "delete" }, op)
+        );
+
+        const second = yield* restart;
+
+        const copy = yield* eventually(
+          second.client.getMachine({ id: "copy" }),
+          ({ phase }) => ["settled", "failed"].includes(phase)
+        );
+
+        yield* eventually(second.store.findCheckpoint("snap"), Option.isNone);
+
+        expect([...at(copy), copy.error]).toStrictEqual([
+          "running",
+          "running",
+          "settled",
+          undefined,
+        ]);
+        expect(
+          fake.calls.filter((call) =>
+            ["restore copy", "deleteCheckpoint snap"].includes(call)
+          )
+        ).toStrictEqual(["restore copy", "deleteCheckpoint snap"]);
       })
   );
 

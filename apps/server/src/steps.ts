@@ -74,7 +74,7 @@ const sourceStep = (store: Store, found: MachineRow, held: Setup | undefined) =>
 
     const from = yield* store.findCheckpoint(source.name);
 
-    return Option.isSome(from) && from.value.state === "ready"
+    return Option.isSome(from)
       ? ({
           _tag: "checkpoint",
           checkpoint: checkpointRefOf(from.value),
