@@ -25,7 +25,7 @@ if [ ! -r "$jar" ]; then
 fi
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/verify-machine-answers.XXXXXX")
-cp "$model/Chart.tla" "$model/MachineAnswers.tla" "$model/MachineAnswers.cfg" "$model/TwoClients.cfg" "$work/"
+cp "$model/Chart.tla" "$model/MachineAnswers.tla" "$model/MachineAnswers.cfg" "$model/TwoClients.cfg" "$model/ThreeClients.cfg" "$work/"
 
 cd "$work"
 status=0
@@ -40,6 +40,9 @@ check() {
 check TwoClients.cfg
 if [ "$status" -eq 0 ] && [ "${1:-}" != --quick ]; then
   check MachineAnswers.cfg
+fi
+if [ "$status" -eq 0 ] && [ "${1:-}" != --quick ]; then
+  check ThreeClients.cfg
 fi
 if [ "$status" -eq 0 ]; then
   rm -rf "$work"

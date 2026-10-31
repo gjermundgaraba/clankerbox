@@ -96,6 +96,11 @@ A pass covers this scope, and only it:
   partition and no other fault, and seven operations. Every invariant holds over
   all 8,745,554 distinct states, about 1 minute. `AllAnswered` is not checked
   here.
+- **`ThreeClients.cfg`**: three clients beside the creator, with no fault, and
+  five operations. Every invariant holds over all 9,050,801 distinct states,
+  about 90 seconds. It is the one config where two cuts let a stale request
+  land, which an answer of `lost` for a cut step never delivered breaks in 14
+  seconds.
 - **Both at once is out of reach.** Two clients with every fault passed 152
   million distinct states in about 40 minutes with no violation and its queue
   still growing, and was stopped. That is evidence, not a proof.
