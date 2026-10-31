@@ -17,7 +17,7 @@ import type {
   Sizing,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, DateTime, Effect, Layer, Option } from "effect";
-import type { Scope, Duration } from "effect";
+import type { Duration, Scope } from "effect";
 import { Hex } from "effect/encoding";
 
 import { applied } from "./chart.ts";

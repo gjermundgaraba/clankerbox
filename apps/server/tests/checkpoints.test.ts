@@ -1760,6 +1760,32 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a prebuild ends when its host dies in the middle of a capture",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* withClient({ recheck: Duration.millis(200) });
+        const { client, host } = served;
+        const capture = host.fake.holdNext("capture");
+
+        const prebuilt = yield* Effect.forkChild(
+          Effect.flip(
+            client.prebuild(prebuild({ setup: { script: "#!/bin/sh\n" } }))
+          )
+        );
+
+        yield* capture.entered;
+        yield* host.dispose;
+
+        const error = yield* Fiber.join(prebuilt);
+
+        yield* restartedHost(host);
+        yield* noMachines(served);
+
+        expect(error).toMatchObject({ _tag: "Unavailable", readOnly: true });
+      })
+  );
+
+  it.effect(
     "a builder a control plane's restart left behind is deleted by the next one, and its prebuild reads NotFound",
     () =>
       Effect.gen(function* () {

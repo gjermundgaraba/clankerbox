@@ -18,19 +18,18 @@ import {
   Cause,
   Context,
   DateTime,
-  Duration,
   Effect,
   Layer,
   Option,
   Result,
 } from "effect";
-import type { Scope } from "effect";
+import type { Duration, Scope } from "effect";
 import { Hex } from "effect/encoding";
 
 import { applied } from "./chart.ts";
 import { activityOf, checkpointChart, phaseOf } from "./checkpoint-chart.ts";
 import type { CheckpointEvent, CheckpointRow } from "./checkpoint-chart.ts";
-import { driver } from "./driver.ts";
+import { driver, untilRest } from "./driver.ts";
 import type { Heard } from "./driver.ts";
 import { Hosts } from "./hosts.ts";
 import { stageOf } from "./machine-chart.ts";
@@ -68,8 +67,6 @@ export interface Interface {
 export class Checkpoints extends Context.Service<Checkpoints, Interface>()(
   "@clankerbox/server/Checkpoints"
 ) {}
-
-const restPoll = Duration.millis(100);
 
 const newId = (): string =>
   Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(16)));
@@ -226,25 +223,36 @@ export const make = (settings: {
         answer.at === "absent" ? Effect.fail(notFound(name)) : drive(name)
       );
 
-    const rested = (name: string) =>
+    const rests = (name: string) =>
       Effect.gen(function* () {
-        for (;;) {
-          const found = yield* store.findCheckpoint(name);
+        const found = yield* store.findCheckpoint(name);
 
-          if (
-            Option.isNone(found) ||
-            activityOf(found.value.state) === "none"
-          ) {
-            return found;
-          }
-
-          if (found.value.error !== undefined) {
-            return yield* found.value.error;
-          }
-
-          yield* Effect.sleep(restPoll);
+        if (Option.isNone(found)) {
+          return true;
         }
+
+        const { error, host, state } = found.value;
+
+        if (error !== undefined) {
+          return yield* error;
+        }
+
+        if (activityOf(state) === "none") {
+          return true;
+        }
+
+        yield* hosts
+          .read(host)
+          .pipe(
+            Effect.mapError(
+              ({ message }) => new Unavailable({ message, readOnly: true })
+            )
+          );
+
+        return false;
       });
+
+    const rested = (name: string) => untilRest(settings.recheck, rests(name));
 
     const building = (name: string, request: PrebuildRequest, host: string) =>
       Effect.gen(function* () {
@@ -293,12 +301,7 @@ export const make = (settings: {
           }
 
           yield* capturing(builder, name);
-
-          const captured = yield* rested(name);
-
-          if (Option.isSome(captured) && captured.value.error !== undefined) {
-            return yield* captured.value.error;
-          }
+          yield* rested(name);
         }).pipe(Effect.ensuring(deleted));
 
         builds.set(name, { id: name, phase: "built" });
