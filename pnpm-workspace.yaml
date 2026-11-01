@@ -15,7 +15,7 @@ catalog:
   "@effect/tsgo": 0.63.0
   "@effect/vitest": 4.1.1
   "@gjermundgaraba/effect-actions": 0.26.1
-  "@types/node": 26.6.5
+  "@types/node": 26.6.6
   effect: 4.1.1
   sandbox-agent: 0.5.3
   typescript: 7.0.2
