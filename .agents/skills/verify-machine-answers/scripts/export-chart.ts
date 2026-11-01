@@ -1,5 +1,3 @@
-/// <reference types="node" />
-
 import { writeFileSync } from "node:fs";
 
 import { applied } from "../../../../apps/server/src/chart.ts";
@@ -8,15 +6,20 @@ import {
   leaves,
   machineChart,
   metaOf,
+  stageOf,
   wants,
 } from "../../../../apps/server/src/machine-chart.ts";
 import type {
   Leaf,
   MachineEvent,
   MachineRow,
+  Stage,
   Wish,
 } from "../../../../apps/server/src/machine-chart.ts";
-import type { Operation } from "../../../../apps/server/src/store.ts";
+import type {
+  MachinePhase,
+  Operation,
+} from "../../../../apps/server/src/store.ts";
 import {
   facts,
   failure,
@@ -35,6 +38,20 @@ const kinds = [
 ] as const satisfies ReadonlyArray<Operation["kind"]>;
 
 const error = failure;
+
+const resting = [
+  "settled",
+  "failed",
+  "lost",
+] as const satisfies readonly MachinePhase[];
+
+const failedCreate = ["undoing", "undone"] as const satisfies readonly Stage[];
+
+const undone = "undone" satisfies Leaf;
+
+const failedLeaves = leaves.filter((leaf) =>
+  failedCreate.some((stage) => stage === stageOf(leaf))
+);
 
 const events: ReadonlyArray<readonly [string, MachineEvent]> = [
   ["ask:running", { type: "ask", desired: "running" }],
@@ -129,13 +146,15 @@ const entries = (): readonly string[] =>
     )
   );
 
+const set = (values: readonly string[]) => `{${values.map(string).join(", ")}}`;
+
 const table = (rows: ReadonlyArray<readonly [string, string]>) =>
   rows.map(([key, value]) => `${string(key)} :> ${value}`).join(" @@\n  ");
 
 const wanted = (kind: Operation["kind"]) =>
-  `{${[...wishes, "deleted" as const]
-    .flatMap((desired) => (wants(kind, desired) ? [string(desired)] : []))
-    .join(", ")}}`;
+  set(
+    [...wishes, "deleted" as const].filter((desired) => wants(kind, desired))
+  );
 
 /** `Chart.tla`: every write of the real chart that changes a row, over what the model holds of one. */
 export const chartModule = (): string => `---------------------------- MODULE Chart ----------------------------
@@ -164,6 +183,14 @@ StepOf ==
 
 Wanted ==
   ${table(kinds.map((kind) => [kind, wanted(kind)]))}
+
+(* The phases a client's wait ends on, but waiting, which only a read shows *)
+Resting == ${set(resting)}
+
+(* The leaves of a create that failed, where only a delete finds a machine *)
+FailedCreate == ${set(failedLeaves)}
+
+Undone == ${string(undone)}
 =============================================================================
 `;
 

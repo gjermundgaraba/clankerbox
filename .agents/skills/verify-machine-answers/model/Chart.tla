@@ -1413,4 +1413,12 @@ Wanted ==
   "stop" :> {"stopped"} @@
   "pause" :> {"paused"} @@
   "remove" :> {"running", "stopped", "paused", "deleted"}
+
+(* The phases a client's wait ends on, but waiting, which only a read shows *)
+Resting == {"settled", "failed", "lost"}
+
+(* The leaves of a create that failed, where only a delete finds a machine *)
+FailedCreate == {"undoing.due", "undoing.sent", "undoing.held", "undone"}
+
+Undone == "undone"
 =============================================================================

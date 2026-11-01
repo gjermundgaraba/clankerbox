@@ -32,7 +32,9 @@ a table `scripts/export-chart.ts` generates by walking every leaf, wish, flag an
 abstract event through the real chart, `apps/server/src/machine-chart.ts`, with
 `applied`. So the chart TLC checks is the chart that compiles. A stale table
 fails `apps/server/tests/machine-chart.test.ts`, with no Java. `check.sh` exports
-it first.
+it first. The export also gives the model the chart's words it reads by name:
+`Resting`, the phases a wait ends on; `FailedCreate`, the leaves of a failed
+create; and `Undone`. A rename of one fails `vp check` on `export-chart.ts`.
 
 TLC checks these invariants on every reachable state:
 
@@ -55,15 +57,17 @@ TLC checks these invariants on every reachable state:
 vpx .agents/skills/verify-machine-answers/scripts/breaks.ts      # every break below, or those named
 ```
 
-The script needs Java 11 or later on `PATH` and `curl`. It downloads
+`check.sh` and `breaks.ts` run TLC through `scripts/tlc.sh`, which holds its
+flags. It needs Java 11 or later on `PATH` and `curl`, and downloads
 `tla2tools.jar` v1.8.0 to `~/.cache/clankerbox-tla/` and keeps it there. That
 tag is a rolling prerelease that TLA+'s CI rebuilds from master on every push,
 so a machine runs the build it first fetched; delete the jar to take the latest.
-Each run copies `model/` into a fresh directory under `$TMPDIR` and runs TLC there,
-so parallel runs never share files and `model/` stays clean. It prints TLC's
-verdict for each config. A pass deletes the directory. Any other result keeps
-it and prints the paths of `tlc.out`, the full output, and of `trace.json`, the
-counterexample, when there is one; delete it once you have read them.
+Each `check.sh` run copies `model/` into a fresh directory under `$TMPDIR` and
+runs TLC there, so parallel runs never share files and `model/` stays clean. It
+prints TLC's verdict and distinct state count for each config. A pass deletes
+the directory. Any other result keeps it and prints the paths of `tlc.out`, the
+full output, and of `trace.json`, the counterexample, when there is one; delete
+it once you have read them.
 
 Exit 0 is a pass, 12 a violated invariant, 13 a violated `AllAnswered`, and 11
 a deadlock: a row no action can move. Anything else means the model or the
@@ -91,19 +95,20 @@ A pass covers this scope, and only it:
 - **`MachineAnswers.cfg`**: one client beside the creator, with one of each
   fault: a step or read that fails, a control plane crash, a partition, a host
   restart and a lost delivery, and nine operations. Every invariant and
-  `AllAnswered` hold over all 6,361,549 distinct states, about 5 minutes.
+  `AllAnswered` hold over every reachable state. A run takes about 5 minutes.
 - **`TwoClients.cfg`**: two clients beside the creator, with a crash and a
   partition and no other fault, and seven operations. Every invariant holds over
-  all 8,745,554 distinct states, about 1 minute. `AllAnswered` is not checked
-  here.
+  every reachable state. A run takes about 1 minute. `AllAnswered` is not
+  checked here.
 - **`ThreeClients.cfg`**: three clients beside the creator, with no fault, and
-  five operations. Every invariant holds over all 9,050,801 distinct states,
-  about 90 seconds. It is the one config where two cuts let a stale request
-  land, which an answer of `lost` for a cut step never delivered breaks in 14
-  seconds.
-- **Both at once is out of reach.** Two clients with every fault passed 152
-  million distinct states in about 40 minutes with no violation and its queue
-  still growing, and was stopped. That is evidence, not a proof.
+  five operations. Every invariant holds over every reachable state. A run
+  takes about 90 seconds. It is the one config where two cuts let a stale
+  request land, which an answer of `lost` for a cut step never delivered breaks
+  within seconds.
+- **Both at once is out of reach.** When last tried, two clients with every
+  fault ran for about 40 minutes, past 150 million distinct states, with no
+  violation and its queue still growing, and was stopped. That is evidence, not
+  a proof.
 - **The setup script is lost with the control plane's memory**, as in the code.
   A make not yet delivered when the process dies is undone.
 - **The runtime changes the VM only in steps**, each change atomic. A step cut

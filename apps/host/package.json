@@ -16,9 +16,6 @@
   ],
   "type": "module",
   "exports": {
-    ".": "./src/composition/host.ts",
-    "./config": "./src/composition/config.ts",
-    "./runtimes": "./src/composition/runtimes.ts",
     "./testing": "./tests/support.ts"
   },
   "publishConfig": {

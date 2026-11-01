@@ -15,7 +15,6 @@ CONSTANTS Clients, Creator, Desires,
 
 None == "none"
 Everyone == Clients \cup {Creator}
-Resting == {"settled", "failed", "lost"}
 NoOp == [id |-> 0, kind |-> None, boot |-> 0]
 NoRun == [id |-> 0, kind |-> None, status |-> None, pc |-> None]
 Absent == [state |-> "absent", desired |-> None, prepared |-> FALSE, err |-> FALSE,
@@ -78,18 +77,16 @@ IsStep(s) == s # "gone" /\ StepOf[s] # "none"
 (* machine-chart.ts wants: which steps what is asked now still wants *)
 Wants(r) == r.desired \in Wanted[r.op.kind]
 
-(* the client's wait, in client.ts *)
+(* What a success answer promises of the VM, for each request *)
 Matches(d, v) ==
   CASE d = "running" -> v = "running"
     [] d = "stopped" -> v = "stopped"
     [] d = "paused" -> v \in {"paused", "stopped"}
     [] d = "deleted" -> v = "missing"
 
-(* machines.ts phaseShown: the read that answers state tells waiting; a      *)
-(* client's read goes over the same link as the loop's.                     *)
+(* machine-view.ts phaseShown: a read that can't reach the VM shows         *)
+(* waiting; a client's read goes over the same link as the loop's.          *)
 Shown == IF ~linked /\ Phase(row) # "failed" THEN "waiting" ELSE Phase(row)
-
-FailedCreate == {"undoing.due", "undoing.sent", "undoing.held", "undone"}
 
 Asked(k, d) == \E j \in Everyone \ {k} : cl[j].pc # "idle" /\ cl[j].d = d
 
@@ -97,7 +94,7 @@ Finish(k, res, by) ==
   cl' = [cl EXCEPT ![k] = [@ EXCEPT !.pc = "done", !.res = res, !.by = by,
                                     !.vmAt = vm, !.other = Asked(k, by)]]
 
-(* sqlite.ts insertMachine, from machines.ts create *)
+(* machines.ts born, through store.insertMachine *)
 Create ==
   /\ up /\ row.state = "absent" /\ cl[Creator].pc = "idle"
   /\ row' = [state |-> "making.due", desired |-> "running", prepared |-> FALSE,
@@ -107,9 +104,9 @@ Create ==
   /\ UNCHANGED <<up, read, known, linked, net, cut, nextOp>>
   /\ UNCHANGED hostVars /\ UNCHANGED worldVars
 
-(* machines.ts request, through the chart's ask and delete: a failed create *)
-(* has no machine to ask for, its row goes with a delete, and a delete has  *)
-(* no way back.                                                             *)
+(* machines.ts asked and remove, through the chart's ask and delete: a      *)
+(* failed create has no machine to ask for, its row goes with a delete, and *)
+(* a delete has no way back.                                                *)
 Request(k) ==
   /\ up /\ cl[k].pc = "idle"
   /\ \E d \in Desires :
@@ -122,7 +119,7 @@ Request(k) ==
        THEN /\ cl' = [cl EXCEPT ![k] = [@ EXCEPT !.pc = "done", !.d = d,
                                                  !.res = "notfound"]]
             /\ UNCHANGED row
-       ELSE IF row.state = "undone"
+       ELSE IF row.state = Undone
        THEN /\ row' = Row(row, e, NoOp)
             /\ cl' = [cl EXCEPT ![k] = [@ EXCEPT !.pc = "done", !.d = d,
                                                  !.res = "ok",
@@ -138,7 +135,8 @@ Request(k) ==
   /\ UNCHANGED <<up, script, read, known, linked, net, cut, nextOp>>
   /\ UNCHANGED hostVars /\ UNCHANGED worldVars
 
-(* client.ts wait: a poll of getMachine that finds a rest, or no row *)
+(* client.ts machineRest and machineGone: a poll of getMachine that finds a *)
+(* rest, or no row, and answerOf, what the rest says of the request         *)
 Answer(k) ==
   /\ up /\ cl[k].pc = "wait"
   /\ IF row.state = "absent"
@@ -158,8 +156,9 @@ Answer(k) ==
   /\ UNCHANGED <<row, up, script, read, known, linked, net, cut, nextOp>>
   /\ UNCHANGED hostVars /\ UNCHANGED worldVars
 
-(* machines.ts advance: read the VM, with no operation in flight. A read    *)
-(* over the link also teaches the control plane the host's boot.             *)
+(* machines.ts looking, through machine-view.ts stateOf: read the VM, with  *)
+(* no operation in flight. A read over the link also teaches the control    *)
+(* plane the host's boot.                                                   *)
 Read ==
   /\ up /\ row.state # "absent" /\ row.op.id = 0 /\ read = None
   /\ \E v \in (IF linked THEN {vm} ELSE {"unknown"})
@@ -170,10 +169,11 @@ Read ==
   /\ UNCHANGED <<row, up, script, linked, net, cut, cl, nextOp>>
   /\ UNCHANGED hostVars /\ UNCHANGED <<crashes, partitions, restarts, drops>>
 
-(* machines.ts advance: the chart decides from the read: a rest, the next    *)
-(* step, or no write, as for a failed machine, which rests until the next   *)
-(* request, or a read that failed. A failed delete runs again at each       *)
-(* recheck. A write into a leaf with a step begins its operation.           *)
+(* machines.ts looking, through store.advance: the chart's read event       *)
+(* decides a rest, the next step, or no write, as for a failed machine,     *)
+(* which rests until the next request, or a read that failed. A failed      *)
+(* delete runs again at each recheck. A write into a leaf with a step       *)
+(* begins its operation.                                                    *)
 Decide ==
   /\ up /\ row.state # "absent" /\ row.op.id = 0 /\ read # None
   /\ read' = None
@@ -189,7 +189,8 @@ Decide ==
   /\ UNCHANGED <<up, script, known, linked, net, cut, cl>>
   /\ UNCHANGED hostVars /\ UNCHANGED worldVars
 
-(* machines.ts send: an operation carries the setup only from memory *)
+(* operations.ts poll, with steps.ts machineStep: an operation carries the *)
+(* setup only from memory.                                                  *)
 CanSend(r) == r.op.kind # "make" \/ script
 
 Delivery(r) == [id |-> r.op.id, kind |-> r.op.kind, boot |-> r.op.boot]
@@ -203,7 +204,7 @@ Send ==
   /\ UNCHANGED <<row, up, script, read, known, linked, cut, cl, nextOp>>
   /\ UNCHANGED hostVars /\ UNCHANGED worldVars
 
-(* machines.ts cancel, when a later request cuts the step short *)
+(* operations.ts poll, cut when a later request no longer wants the step *)
 Cut ==
   /\ up /\ linked /\ row.state # "absent" /\ row.op.id # 0 /\ ~Wants(row)
   /\ row.op.id \notin cut
@@ -214,7 +215,8 @@ Cut ==
 (* An operation whose host holds no report of it has restarted since it was *)
 (* sent, or never had it, with no setup left to send it again. A make is    *)
 (* undone, and the remove's higher sequence fences it should it still come. *)
-(* machines.ts follow: collect the report by ID *)
+(* machines.ts following, after operations.ts poll: store the report by    *)
+(* ID, then operations.ts collect.                                          *)
 Collect ==
   /\ up /\ linked /\ row.state # "absent" /\ row.op.id # 0
   /\ LET id == row.op.id
@@ -236,9 +238,9 @@ Collect ==
   /\ UNCHANGED <<up, script, read, linked, net, cut, cl, nextOp>>
   /\ UNCHANGED <<vm, boot, high, applied>> /\ UNCHANGED worldVars
 
-(* operations.ts run: the same ID is the same operation, a lower sequence   *)
-(* is refused, and a higher one cuts short what still runs. A delivery dies *)
-(* with the host process it was sent to.                                    *)
+(* The host's operations.ts run: the same ID is the same operation, a lower *)
+(* sequence is refused, and a higher one cuts short what still runs. A      *)
+(* delivery dies with the host process it was sent to.                      *)
 Deliver ==
   /\ linked
   /\ \E m \in net :
@@ -273,7 +275,7 @@ Lose ==
 
 Ran(id) == applied' = [applied EXCEPT ![id] = @ + 1]
 
-(* operations.ts perform: each step of each kind, on the runtime *)
+(* The host's operations.ts perform: each step of each kind, on the runtime *)
 HostStep ==
   /\ runs.id # 0 /\ runs.status = "running"
   /\ LET k == runs.kind IN
@@ -323,7 +325,8 @@ HostFail ==
                  applied, cl, nextOp>>
   /\ UNCHANGED <<crashes, partitions, restarts, drops>>
 
-(* operations.ts cancel: it stops the step between its runtime calls *)
+(* The host's operations.ts cancel: it stops the step between its runtime  *)
+(* calls.                                                                   *)
 HostCancel ==
   /\ runs.id # 0 /\ runs.status = "running" /\ runs.id \in cut
   /\ runs' = [runs EXCEPT !.status = "cancelled"]
@@ -435,7 +438,7 @@ RestTrue ==
 
 (* A failed create, once undone, and a deleted machine leave no VM, however *)
 (* late an old delivery arrives.                                            *)
-NoOrphan == row.state = "absent" \/ row.state = "undone" => vm = "missing"
+NoOrphan == row.state = "absent" \/ row.state = Undone => vm = "missing"
 
 (* Duplicate delivery runs an operation once. *)
 OnceOnly == \A i \in 1..MaxOps : applied[i] <= 1
