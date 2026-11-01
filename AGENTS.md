@@ -198,7 +198,7 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
   machine moves it toward what was asked a whole step at a time, and a later
   request cuts a step short. A request takes the row out of rest in the write
   that records it, so a resting `phase` read after it has seen it. A client waits
-  by reading, and works out `Superseded` from what it reads.
+  by reading, and works out `Superseded` from what it reads. A wait follows the machine it asked by `createdAt`, reads on through `waiting` as through an outage of the control plane, and ends `Unavailable`, the request saved, once either has lasted two minutes.
 - **A step is a whole operation on a host.** The write that enters a leaf with a
   `step` records an operation in the store with its leases, and the loop then
   sends it. The host runs it to its end whether or not the caller stays, and
@@ -223,7 +223,7 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
   `undoing`, deletes the VM, again at each recheck while that fails, and rests
   `undone` with its error for `failedRowsLast`. A delete clears it at once and a
   create of the name replaces it. A `Capacity` failure moves the create to the
-  next host instead, once its VM is gone; nothing ambiguous ever moves one.
+  next host instead, once its VM is gone, while the control plane that took the create runs; after a restart it rests `undone`. Nothing ambiguous ever moves one.
 - **A start starts the machine, also when it runs already, or resumes it when it
   is paused, and prepares it.** A pause saves a running machine and stops its
   VM, leaving a stopped one stopped, and stops one the runtime can't save: a VM
@@ -241,7 +241,7 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
   `oxlint.config.ts`): a server or host domain file imports only its siblings,
   `effect`, `effect/encoding`, the SDK and the host contract; `chart.ts` and
   `*-chart.ts` import only `xstate`, each other and the store's types, and
-  `fence/no-impure` keeps `Date`, `Math.random`, `crypto` and `Effect` out of
+  `fence/no-impure` keeps `Date`, `Math.random` and `crypto` out of
   them; `apps/server/src/hosts.ts` alone calls a host; the server's `composition/` and `main.ts` never load the
   host package; the server's only adapter is the `Store`, and a host's adapters
   can't import `node:sqlite`; a host adapter imports domain files, its own

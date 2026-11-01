@@ -127,12 +127,8 @@ const breaks: readonly Break[] = [
     file: chart,
     edits: [
       [
-        `            target: "due",
-            context: {
-              ...told(context, event),`,
-        `            target: "sent",
-            context: {
-              ...told(context, event),`,
+        `({ target: "due", context: told(context, event) }) as const`,
+        `({ target: "sent", context: told(context, event) }) as const`,
       ],
     ],
     violated: "OpIsState",

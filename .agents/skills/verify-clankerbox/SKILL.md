@@ -93,6 +93,9 @@ launch a new run. A control plane that is down answers `Unavailable`, exit 1.
 `fault.sh <run> start-server` starts it again on the same port and state.
 `fault.sh <run> kill-host <id>` kills a host, and `fault.sh <run> start-host <id>`
 starts it again on the same port under a new `boot`.
+`fault.sh <run> freeze-host <id>` sends `STOP` to a host, so every call to it
+times out while it keeps its machines and steps, and `fault.sh <run> thaw-host
+<id>` sends `CONT`.
 `fault.sh <run> hold-capture <id>` makes a host hold its next capture until it
 dies, as the fake's captures are too quick for a kill to catch one.
 `fault.sh <run> setup-go` lets the `slow` profile's setup finish. Each is written
