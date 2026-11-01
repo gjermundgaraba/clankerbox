@@ -778,7 +778,7 @@ describe("client", () => {
           expect(
             Duration.isGreaterThanOrEqualTo(elapsed, Duration.minutes(2))
           ).toBe(true);
-          expect(Duration.isLessThan(elapsed, Duration.minutes(4))).toBe(true);
+          expect(Duration.isLessThan(elapsed, Duration.minutes(3))).toBe(true);
         })
     );
 
@@ -1298,7 +1298,7 @@ describe("client", () => {
           expect(
             Duration.isGreaterThanOrEqualTo(elapsed, Duration.minutes(2))
           ).toBe(true);
-          expect(Duration.isLessThan(elapsed, Duration.minutes(4))).toBe(true);
+          expect(Duration.isLessThan(elapsed, Duration.minutes(3))).toBe(true);
         })
     );
 

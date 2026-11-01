@@ -471,7 +471,9 @@ export const make = (
         Effect.retry({
           while: ({ _tag }) => _tag === "Unavailable",
           schedule: Schedule.spaced(pollEvery).pipe(
-            Schedule.upTo({ duration: outageLimit })
+            Schedule.while(
+              ({ elapsed }) => elapsed < Duration.toMillis(outageLimit)
+            )
           ),
         }),
         Effect.catchTag("Unavailable", ({ message }) =>
