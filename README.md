@@ -287,7 +287,9 @@ Clients never need a host's API port. The control plane logs one line when a hos
 
 ## SDK
 
-`@gjermundgaraba/clankerbox-sdk` holds the API's schemas, errors and the client. SDK 1.2.3 talks to a control plane of release 1.2.x, which refuses other releases. `effect` and `@effect/platform-node` (`~4.0.5`) are peer dependencies.
+The next release requires Effect and `@effect/platform-node` `~4.1.1` and `@gjermundgaraba/effect-actions` `^0.26.0` for the SDK and Sandbox Agent provider. Upgrade these peers together; the earlier Effect 4.0 and effect-actions 0.23 ranges are no longer supported.
+
+`@gjermundgaraba/clankerbox-sdk` holds the API's schemas, errors and the client. SDK 1.2.3 talks to a control plane of release 1.2.x, which refuses other releases. `effect` and `@effect/platform-node` (`~4.1.1`) are peer dependencies.
 
 ```ts
 import * as NodeServices from "@effect/platform-node/NodeServices";

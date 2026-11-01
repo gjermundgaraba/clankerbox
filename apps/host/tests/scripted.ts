@@ -1,4 +1,4 @@
-import { Effect, Layer, Sink, Stream } from "effect";
+import { Effect, Layer, Redacted, Sink, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 export interface Call {
@@ -34,7 +34,9 @@ export const scripted = (reply: (call: Call) => Reply | undefined) => {
 
       const call: Call = {
         file: command.command,
-        args: command.args,
+        args: command.args.map((arg) =>
+          Redacted.isRedacted(arg) ? Redacted.value(arg) : arg
+        ),
         env: command.options.env,
         stdin,
       };

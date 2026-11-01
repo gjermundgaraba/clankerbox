@@ -20,6 +20,7 @@ import {
   Layer,
   PlatformError,
   Predicate,
+  Redacted,
   Sink,
   Stdio,
   Stream,
@@ -47,15 +48,17 @@ interface Spawned {
 const fakeSsh = (code: number) =>
   fakeSpawner(code, (command) =>
     Effect.sync((): Spawned => {
-      const option = command.args.find((arg) =>
-        arg.startsWith("UserKnownHostsFile=")
+      const args = command.args.map((arg) =>
+        Redacted.isRedacted(arg) ? Redacted.value(arg) : arg
       );
+
+      const option = args.find((arg) => arg.startsWith("UserKnownHostsFile="));
 
       const knownHostsFile = option?.slice("UserKnownHostsFile=".length) ?? "";
 
       return {
         command: command.command,
-        args: command.args,
+        args,
         knownHosts: readFileSync(knownHostsFile, "utf-8"),
         knownHostsFile,
       };
