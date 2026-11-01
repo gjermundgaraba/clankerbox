@@ -4,8 +4,6 @@ import {
   Conflict,
   Internal,
   NotFound,
-  NotOffered,
-  Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   Build,
@@ -29,7 +27,7 @@ import { activityOf, checkpointChart, phaseOf } from "./checkpoint-chart.ts";
 import type { CheckpointEvent, CheckpointRow } from "./checkpoint-chart.ts";
 import { driver, untilRest } from "./driver.ts";
 import type { Heard } from "./driver.ts";
-import { Hosts } from "./hosts.ts";
+import { answering, Hosts } from "./hosts.ts";
 import { stageOf } from "./machine-chart.ts";
 import { Machines, unmade } from "./machines.ts";
 import { collect, cutShort, poll } from "./operations.ts";
@@ -225,13 +223,7 @@ export const make = (settings: {
           return true;
         }
 
-        yield* hosts
-          .read(host)
-          .pipe(
-            Effect.mapError(
-              ({ message }) => new Unavailable({ message, readOnly: true })
-            )
-          );
+        yield* answering(hosts, host);
 
         return false;
       });
@@ -307,16 +299,9 @@ export const make = (settings: {
 
     const prebuild = (request: PrebuildRequest) =>
       Effect.gen(function* () {
-        const placed = placing(yield* hosts.reachAll, request.base);
-        const [host] = placed.hosts;
-
-        if (host === undefined) {
-          const message = `no host offers base ${request.base}: ${placed.misses.join("; ")}`;
-
-          return yield* placed.noReply
-            ? new Unavailable({ message, readOnly: true })
-            : new NotOffered({ message, base: request.base });
-        }
+        const [host] = yield* Effect.fromResult(
+          placing(yield* hosts.reachAll, request.base)
+        );
 
         const name = yield* nameOf(request, host);
 

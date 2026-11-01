@@ -3,10 +3,11 @@ import type { HostInfo } from "@clankerbox/host-contract";
 import {
   HostError,
   readTimeout,
+  Unavailable,
   version,
   versionHeader,
 } from "@gjermundgaraba/clankerbox-sdk";
-import type { Internal } from "@gjermundgaraba/clankerbox-sdk";
+import type { Host, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Context, Data, Effect, Layer, Schema } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
@@ -62,6 +63,37 @@ export interface Interface {
 export class Hosts extends Context.Service<Hosts, Interface>()(
   "@clankerbox/server/Hosts"
 ) {}
+
+/** What an operator reads of a host: what it reports, or why it couldn't be read. */
+export const listed = ({ member, info, problem }: Reached): Host =>
+  info === undefined
+    ? {
+        id: member.id,
+        state: "unreachable",
+        bases: [],
+        ...(problem === undefined ? {} : { problem }),
+      }
+    : {
+        id: member.id,
+        state: member.draining ? "draining" : "up",
+        kind: info.kind,
+        version: info.version,
+        runtimeVersion: info.runtimeVersion,
+        bases: info.bases,
+      };
+
+/** Reads a host for a caller to whom a host that doesn't answer is a read that may yet succeed. */
+export const answering = (
+  hosts: Interface,
+  host: string
+): Effect.Effect<HostInfo, Unavailable> =>
+  hosts
+    .read(host)
+    .pipe(
+      Effect.mapError(
+        ({ message }) => new Unavailable({ message, readOnly: true })
+      )
+    );
 
 const describe = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);

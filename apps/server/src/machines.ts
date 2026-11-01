@@ -3,7 +3,6 @@ import {
   Internal,
   isResting,
   NotMade,
-  NotOffered,
   Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
@@ -26,7 +25,7 @@ import { driver, untilRest } from "./driver.ts";
 import type { Heard } from "./driver.ts";
 import { capacity, recheckHosts } from "./fleet.ts";
 import type { CapacityRead } from "./fleet.ts";
-import { Hosts } from "./hosts.ts";
+import { answering, Hosts } from "./hosts.ts";
 import {
   activityOf,
   desiredOf,
@@ -422,15 +421,6 @@ export const make = (
           : yield* notFound("machine", name);
       });
 
-    const infoOf = (host: string) =>
-      hosts
-        .read(host)
-        .pipe(
-          Effect.mapError(
-            ({ message }) => new Unavailable({ message, readOnly: true })
-          )
-        );
-
     const copy = (
       name: string,
       spec: Spec,
@@ -443,31 +433,13 @@ export const make = (
         untried: [],
       });
 
-    const placedFor = (base: string) =>
-      Effect.gen(function* () {
-        const placed = placing(yield* hosts.reachAll, base);
-
-        if (placed.hosts.length === 0) {
-          const reasons = placed.misses.join("; ");
-
-          return yield* placed.noReply
-            ? new Unavailable({
-                message: `no host answered that can take base ${base}: ${reasons}`,
-                readOnly: true,
-              })
-            : new NotOffered({
-                message: `no host offers base ${base}: ${reasons}`,
-                base,
-              });
-        }
-
-        return placed.hosts;
-      });
-
     const create = (request: CreateRequest) =>
       Effect.gen(function* () {
         const { id: name, setup, fresh } = request;
-        const placed = yield* placedFor(request.base);
+
+        const placed = yield* Effect.fromResult(
+          placing(yield* hosts.reachAll, request.base)
+        );
 
         const prebuilds = new Map<string, string>();
 
@@ -504,7 +476,7 @@ export const make = (
 
     const build: Interface["build"] = (name, request, host) =>
       Effect.gen(function* () {
-        const info = yield* infoOf(host);
+        const info = yield* answering(hosts, host);
 
         yield* born(
           name,
@@ -528,7 +500,7 @@ export const make = (
           return yield* unmade(from);
         }
 
-        const info = yield* infoOf(from.host);
+        const info = yield* answering(hosts, from.host);
 
         return yield* copy(
           name,
@@ -549,7 +521,7 @@ export const make = (
 
         const record = present.value;
 
-        const info = yield* infoOf(record.host);
+        const info = yield* answering(hosts, record.host);
 
         return yield* copy(
           name,

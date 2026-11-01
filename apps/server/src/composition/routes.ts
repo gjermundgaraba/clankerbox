@@ -4,7 +4,7 @@ import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Effect, Layer } from "effect";
 
 import { Checkpoints } from "../checkpoints.ts";
-import { Hosts } from "../hosts.ts";
+import { Hosts, listed } from "../hosts.ts";
 import { Machines } from "../machines.ts";
 
 const app = Action.implement(
@@ -35,27 +35,7 @@ const app = Action.implement(
       prebuildCheckpoint: checkpoints.prebuild,
       getPrebuild: ({ id }) => checkpoints.build(id),
       listHosts: () =>
-        Effect.map(hosts.reachAll, (reached) =>
-          reached.map(({ member, info, problem }) =>
-            info === undefined
-              ? {
-                  id: member.id,
-                  state: "unreachable" as const,
-                  bases: [],
-                  ...(problem === undefined ? {} : { problem }),
-                }
-              : {
-                  id: member.id,
-                  state: member.draining
-                    ? ("draining" as const)
-                    : ("up" as const),
-                  kind: info.kind,
-                  version: info.version,
-                  runtimeVersion: info.runtimeVersion,
-                  bases: info.bases,
-                }
-          )
-        ),
+        Effect.map(hosts.reachAll, (reached) => reached.map(listed)),
       getCapacity: () => machines.capacity,
     };
   })

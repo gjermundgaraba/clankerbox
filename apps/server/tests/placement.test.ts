@@ -2,7 +2,7 @@ import type { HostInfo } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, layer } from "@effect/vitest";
 import { Capacity, Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Option } from "effect";
+import { Effect, Option, Result } from "effect";
 
 import type { Reached } from "../src/hosts.ts";
 import { placing, preferring } from "../src/placement.ts";
@@ -39,6 +39,12 @@ const silent = (id: string): Reached => ({
 
 const ids = (hosts: readonly HostInfo[]) => hosts.map(({ id }) => id);
 
+const placed = (reached: readonly Reached[], base = "ubuntu") =>
+  ids(Result.getOrThrow(placing(reached, base)));
+
+const refusal = (reached: readonly Reached[], base: string) =>
+  Result.getOrThrow(Result.flip(placing(reached, base)));
+
 const hostOf = (
   served: {
     readonly store: Effect.Success<ReturnType<typeof running>>["store"];
@@ -55,31 +61,32 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   describe("placing", () => {
     it.effect("offers the hosts of a base in config order", () =>
       Effect.sync(() => {
-        expect(
-          ids(placing([up("b"), up("a"), up("c"), up("d")], "ubuntu").hosts)
-        ).toStrictEqual(["b", "a", "c", "d"]);
+        expect(placed([up("b"), up("a"), up("c"), up("d")])).toStrictEqual([
+          "b",
+          "a",
+          "c",
+          "d",
+        ]);
       })
     );
 
     it.effect(
-      "skips a draining host, saying why, as a create that fits elsewhere still lands",
+      "skips a draining host, and says so when none other offers the base",
       () =>
         Effect.sync(() => {
-          const placed = placing([draining("a"), up("b")], "ubuntu");
-
-          expect(ids(placed.hosts)).toStrictEqual(["b"]);
-          expect(placed.misses).toStrictEqual(["a is draining"]);
-          expect(placed.noReply).toBe(false);
+          expect(placed([draining("a"), up("b")])).toStrictEqual(["b"]);
+          expect(refusal([draining("a")], "ubuntu")).toMatchObject({
+            _tag: "NotOffered",
+            message: "no host offers base ubuntu: a is draining",
+          });
         })
     );
 
     it.effect("a linux host takes an image reference no base names", () =>
       Effect.sync(() => {
-        const reference = "registry.example/team/orb:latest";
-
-        expect(ids(placing([up("a"), up("b")], reference).hosts)).toStrictEqual(
-          ["a", "b"]
-        );
+        expect(
+          placed([up("a"), up("b")], "registry.example/team/orb:latest")
+        ).toStrictEqual(["a", "b"]);
       })
     );
 
@@ -87,16 +94,17 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       "tells a host that doesn't offer a base from one that gave no reply",
       () =>
         Effect.sync(() => {
-          const offersOther = placing([up("a", ["debian"])], "fedora");
-          const noReply = placing([up("a", ["debian"]), silent("b")], "fedora");
+          const offersOther = refusal([up("a", ["debian"])], "fedora");
+          const noReply = refusal([up("a", ["debian"]), silent("b")], "fedora");
 
-          expect([offersOther.hosts, offersOther.noReply]).toStrictEqual([
-            [],
-            false,
-          ]);
-          expect(offersOther.misses[0]).toContain("debian");
-          expect([noReply.hosts, noReply.noReply]).toStrictEqual([[], true]);
-          expect(noReply.misses[1]).toContain("connection refused");
+          expect(offersOther._tag).toBe("NotOffered");
+          expect(offersOther.message).toContain("a offers debian");
+          expect(noReply).toMatchObject({
+            _tag: "Unavailable",
+            readOnly: true,
+          });
+          expect(noReply.message).toContain("no host answered");
+          expect(noReply.message).toContain("b failed: connection refused");
         })
     );
 
@@ -104,10 +112,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       "a host with no reply is left out, though others still take the create",
       () =>
         Effect.sync(() => {
-          const placed = placing([silent("a"), up("b")], "ubuntu");
-
-          expect(ids(placed.hosts)).toStrictEqual(["b"]);
-          expect(placed.noReply).toBe(true);
+          expect(placed([silent("a"), up("b")])).toStrictEqual(["b"]);
         })
     );
   });

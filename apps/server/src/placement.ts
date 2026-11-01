@@ -1,20 +1,27 @@
 import type { HostInfo } from "@clankerbox/host-contract";
-import { offered, offers } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  NotOffered,
+  offered,
+  offers,
+  Unavailable,
+} from "@gjermundgaraba/clankerbox-sdk";
+import { Array as Arr, Result } from "effect";
 
 import type { Reached } from "./hosts.ts";
 import type { Source } from "./store.ts";
 
-export interface Placed {
-  /** The hosts to try, in order. A later one is tried only after a definite `Capacity`. */
-  readonly hosts: readonly HostInfo[];
-  /** Why each host that was passed over was. */
-  readonly misses: readonly string[];
-  /** A host gave no reply, so a host that can't be read might have offered the base. */
-  readonly noReply: boolean;
-}
-
-/** The hosts that can take a create of `base`, in config order. */
-export const placing = (reached: readonly Reached[], base: string): Placed => {
+/**
+ * The hosts that can take a create of `base`, in config order, to try in turn: a later one only
+ * after a definite `Capacity`. With none, a host that gave no reply might have offered the base, so
+ * that is `Unavailable`, and `NotOffered` otherwise, each saying why each host was passed over.
+ */
+export const placing = (
+  reached: readonly Reached[],
+  base: string
+): Result.Result<
+  Arr.NonEmptyReadonlyArray<HostInfo>,
+  NotOffered | Unavailable
+> => {
   const hosts: HostInfo[] = [];
   const misses: string[] = [];
   let noReply = false;
@@ -32,7 +39,23 @@ export const placing = (reached: readonly Reached[], base: string): Placed => {
     }
   }
 
-  return { hosts, misses, noReply };
+  if (Arr.isReadonlyArrayNonEmpty(hosts)) {
+    return Result.succeed(hosts);
+  }
+
+  const reasons = misses.join("; ");
+
+  return Result.fail(
+    noReply
+      ? new Unavailable({
+          message: `no host answered that can take base ${base}: ${reasons}`,
+          readOnly: true,
+        })
+      : new NotOffered({
+          message: `no host offers base ${base}: ${reasons}`,
+          base,
+        })
+  );
 };
 
 /** Prefers the hosts `holding` a prebuild, which keeps config order otherwise. */

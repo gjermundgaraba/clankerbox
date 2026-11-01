@@ -1505,6 +1505,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(refused._tag).toBe("NotOffered");
         expect(unread._tag).toBe("Unavailable");
+        expect(unread.message).toContain("no host answered");
       })
   );
 
