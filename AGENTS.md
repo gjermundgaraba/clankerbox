@@ -270,4 +270,4 @@ Lint comes from `@clanker-stuff/oxlint-config` through `config()` in `oxlint.con
 
 npm dependencies move by hand through the pnpm catalog in `pnpm-workspace.yaml`; Dependabot keeps only the SHA-pinned actions in `.github/workflows` current. Registry releases wait a day (`minimumReleaseAge`), except what `minimumReleaseAgeExclude` lists (the toolchain, Effect, xstate and our own scopes), so their bumps land the day they publish.
 
-`xstate` is pinned to one alpha, on the server alone, and sits on the write path. `.agents/skills/verify-machine-answers/model/Chart.tla` is the golden file for a bump: a chart that decides differently changes it.
+`xstate` is pinned to one alpha, on the server alone, and sits on the write path. For a bump, `.agents/skills/verify-machine-answers/model/Chart.tla` is the golden file of what the model holds of a row: a chart that decides differently there changes it. The table leaves out the join, the pin, a resize and the events the model doesn't send, as the skill's bounds say; `apps/server/tests/machine-chart.test.ts` holds those.
