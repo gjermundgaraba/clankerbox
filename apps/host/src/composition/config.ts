@@ -4,6 +4,7 @@ import {
   HostId,
   Invalid,
   isImageReference,
+  Port,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Kind } from "@gjermundgaraba/clankerbox-sdk";
 import { Address } from "@gjermundgaraba/clankerbox-sdk/node";
@@ -14,10 +15,6 @@ import { SmolvmSettings } from "../platform/smolvm.ts";
 import { TailnetSettings } from "../platform/tailscale.ts";
 import { TartSettings } from "../platform/tart/tart.ts";
 import type { HostSettings } from "../settings.ts";
-
-const Port = Schema.Int.check(
-  Schema.isBetween({ minimum: 1, maximum: 65_535 })
-);
 
 const MachinePorts = Schema.Struct({ first: Port, last: Port }).check(
   Schema.makeFilter(({ first, last }) => {

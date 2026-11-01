@@ -3,16 +3,13 @@ import {
   describeIssues,
   HostId,
   Invalid,
+  Port,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Address } from "@gjermundgaraba/clankerbox-sdk/node";
 import { Effect, FileSystem, Path, Schema } from "effect";
 
 import { defaultFailedRowsLast, defaultRecheck } from "../settings.ts";
 import type { ServerSettings } from "../settings.ts";
-
-const Port = Schema.Int.check(
-  Schema.isBetween({ minimum: 1, maximum: 65_535 })
-);
 
 const ServerConfigFile = Schema.Struct({
   listen: Schema.Struct({ address: Address, port: Port }),

@@ -6,6 +6,7 @@ import {
   Kind,
   Machine,
   Name,
+  Port,
   Reading,
   Setup,
   Sizing,
@@ -16,10 +17,6 @@ import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Schema } from "effect";
 
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
-
-const Port = Schema.Int.check(
-  Schema.isBetween({ minimum: 1, maximum: 65_535 })
-);
 
 const sizes = { cpu: Size, ramMib: Size, diskGib: Size };
 
@@ -50,14 +47,10 @@ export const Native = Schema.Struct({
 
 export type Native = typeof Native.Type;
 
-export const CheckpointRef = Schema.Struct({
-  name: Name,
-  instance: Schema.String,
-  ...sizes,
-  port: Port,
-});
+/** A checkpoint as a runtime knows it, by the fields of the machine it holds. */
+export const CheckpointRef = MachineRef;
 
-export type CheckpointRef = typeof CheckpointRef.Type;
+export type CheckpointRef = MachineRef;
 
 export const MachineState = Machine.fields.state;
 

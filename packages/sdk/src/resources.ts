@@ -48,9 +48,14 @@ export type Phase = typeof Phase.Type;
 export const isResting = (phase: Phase): boolean =>
   phase === "settled" || phase === "failed" || phase === "lost";
 
+/** A TCP port. */
+export const Port = Schema.Int.check(
+  Schema.isBetween({ minimum: 1, maximum: 65_535 })
+);
+
 export const SshEndpoint = Schema.Struct({
   host: Schema.String,
-  port: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_535 })),
+  port: Port,
 });
 
 export type SshEndpoint = typeof SshEndpoint.Type;
