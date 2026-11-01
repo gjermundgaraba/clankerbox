@@ -1643,15 +1643,18 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           runtime: { logger: heard },
         }).pipe(Effect.provideService(References.MinimumLogLevel, "All"));
 
+        const kept = "kept-6f1c";
+        const broken = "broken-6f1c";
+
         yield* client.create(
-          "dev",
-          request("dev", { setup: { script, timeoutSeconds: 30 } })
+          kept,
+          request(kept, { setup: { script, timeoutSeconds: 30 } })
         );
 
         const failed = yield* Effect.flip(
           client.create(
-            "bad",
-            request("bad", {
+            broken,
+            request(broken, {
               setup: { script: `${script}exit 3\n`, timeoutSeconds: 30 },
             })
           )
@@ -1659,11 +1662,17 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const files = yield* readDirectory(stateDir);
 
-        const holding = yield* Effect.filter(files, (file) =>
-          Effect.map(readBytes(path.join(stateDir, file)), (bytes) =>
-            new TextDecoder("latin1").decode(bytes).includes(secret)
-          )
+        const texts = yield* Effect.forEach(files, (file) =>
+          Effect.map(readBytes(path.join(stateDir, file)), (bytes) => ({
+            file,
+            text: new TextDecoder("latin1").decode(bytes),
+          }))
         );
+
+        const holding = (wanted: string) =>
+          texts
+            .filter(({ text }) => text.includes(wanted))
+            .map(({ file }) => file);
 
         expect(failed._tag).toBe("ScriptFailed");
         expect(files).toContain("server.db");
@@ -1673,7 +1682,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(logged.filter((line) => line.includes(secret))).toStrictEqual(
           []
         );
-        expect(holding).toStrictEqual([]);
+        expect(holding(kept)).not.toStrictEqual([]);
+        expect(holding(broken)).not.toStrictEqual([]);
+        expect(holding(secret)).toStrictEqual([]);
       })
   );
 
