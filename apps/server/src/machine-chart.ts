@@ -220,7 +220,10 @@ export const machine = setup({
         due: {
           meta: { phase: "observing", activity: "read" },
           on: {
-            read: { target: "sent" },
+            read: ({ event }) => ({
+              target: "sent",
+              context: { pin: event.pin },
+            }),
             refused: ({ event }) => ({
               target: "#machine.undoing.due",
               context: { error: event.error },
@@ -372,13 +375,7 @@ export const machine = setup({
       {
         ran: ({ event }: On<"ran">) => ({ context: { port: event.port } }),
         reported: ({ context, event }: On<"reported">) =>
-          ({
-            target: "due",
-            context: {
-              ...told(context, event),
-              ...(event.status === "failed" ? { error: event.error } : {}),
-            },
-          }) as const,
+          ({ target: "due", context: told(context, event) }) as const,
       }
     ),
     gone: { type: "final" },

@@ -675,6 +675,39 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
+  it.effect(
+    "a delete that lands during a step that fails answers deleted, as the failure isn't the delete's",
+    () =>
+      Effect.gen(function* () {
+        const { asking, client, fake, row } = yield* served();
+
+        yield* client.create("dev", request("dev"));
+
+        fake.failNext(
+          "resize",
+          new Internal({ message: "the disk didn't grow" })
+        );
+
+        const { entered, release } = fake.holdNext("sizes");
+
+        yield* asking.resizeMachine({ id: "dev", diskGib: 20 });
+        yield* entered;
+
+        const deleting = yield* Effect.forkChild(
+          client.deleteMachine({ id: "dev" })
+        );
+
+        yield* eventually(
+          row("dev"),
+          ({ state }) => state === "deleting.draining"
+        );
+        yield* release;
+
+        expect(yield* Fiber.join(deleting)).toBe("deleted");
+        expect(fake.machines.has("dev")).toBe(false);
+      })
+  );
+
   it.effect("a create of a failed create's name replaces its row", () =>
     Effect.gen(function* () {
       const { client, fake } = yield* served();

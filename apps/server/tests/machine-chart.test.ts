@@ -607,7 +607,7 @@ describe("a report", () => {
     ]).toStrictEqual(["deleting.draining", 3333, 2222, 2222]);
   });
 
-  it("a delete keeps all a step's report tells, and its failure", () => {
+  it("a delete keeps all a step's report tells but its failure, which isn't the delete's", () => {
     expect([
       after(
         rowAt("deleting.draining"),
@@ -615,7 +615,10 @@ describe("a report", () => {
         "start"
       ).hostKey,
       after(rowAt("deleting.draining"), report("failed", { sizes }), "resize"),
-    ]).toMatchObject(["key", { state: "deleting.due", error, ...sizes }]);
+    ]).toMatchObject([
+      "key",
+      { state: "deleting.due", error: undefined, ...sizes },
+    ]);
   });
 
   it("the last remove of a failed create rests undone with when, or moves it past a host's capacity", () => {
@@ -704,6 +707,10 @@ describe("what a write begins and finishes", () => {
       after(rowAt("made.observing", { desired: "stopped" }), read("running"))
         .pin,
     ]).toStrictEqual(["new pin", "pin", "pin"]);
+  });
+
+  it("a make takes the pin of the host it is sent to, which its VM boots under", () => {
+    expect(after(rowAt("making.due"), read("unknown")).pin).toBe("new pin");
   });
 
   it("a make of a copy shares what it copies, and a join shares the machine", () => {
@@ -1100,10 +1107,10 @@ const factsWritten: readonly Write[] = [
     { state: "deleting.held", error },
   ],
   [
-    "a step that fails under a delete goes on to the delete at once and keeps its error, also a resize",
+    "a step that fails under a delete goes on to the delete at once, keeping what it read but not its error, which isn't the delete's",
     rowAt("deleting.draining", prepared),
     report("failed", { sizes }),
-    { state: "deleting.due", error, ...sizes },
+    { state: "deleting.due", ...sizes },
     "resize",
   ],
   [
