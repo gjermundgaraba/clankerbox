@@ -50,9 +50,11 @@ and the host import the SDK and the host contract, and the server never imports
 the host, which it reaches only over the network; the provider imports the SDK;
 the SDK imports none of them. A client never reaches a host's API: it knows one
 URL, and hosts only as the operator's views `hosts` and `capacity`. Each
-package's `package.json` dependencies are that boundary, since pnpm resolves
-nothing else. Tests are the one place apps meet: the server's take the host's
-`./testing`, and the CLI's the server's, each as a dev dependency.
+package's `package.json` dependencies hold that boundary, since pnpm resolves
+nothing else. Its dev dependencies resolve in `src` as well, so the lint fence
+keeps an app's `src` off the apps its tests take. Tests are the one place apps
+meet: the server's take the host's `./testing`, and the CLI's the server's,
+each as a dev dependency.
 
 ## Layout
 
