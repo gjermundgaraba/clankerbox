@@ -1,6 +1,6 @@
+import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import {
-  Clock,
   Context,
   DateTime,
   Duration,
@@ -8,12 +8,13 @@ import {
   Layer,
   Match,
   Option,
+  Schedule,
   Schema,
 } from "effect";
-import { HttpClient, HttpClientRequest } from "effect/http";
-import type { HttpClientError } from "effect/http";
+import { HttpClient, HttpClientError, HttpClientRequest } from "effect/http";
 
 import { actionsByName as actions, Http, replyTimeout } from "./api.ts";
+import type { Declared } from "./api.ts";
 import { describeIssues } from "./describe.ts";
 import {
   Internal,
@@ -22,8 +23,7 @@ import {
   Superseded,
   Unavailable,
 } from "./errors.ts";
-import type { ClankerboxError } from "./errors.ts";
-import { parseName } from "./ids.ts";
+import type { ClankerboxError, HostError } from "./errors.ts";
 import { version, versionHeader } from "./release.ts";
 import { isResting } from "./resources.ts";
 import type {
@@ -51,6 +51,25 @@ type Success<N extends ServerAction> = Actions[N]["success"]["Type"];
 
 type Input<N extends ServerAction> = Actions[N]["input"]["Type"];
 
+/**
+ * What a call of `N` fails with: an error the action declares, which always includes `Invalid`, or
+ * no reply, or a reply the client couldn't use.
+ */
+export type ErrorOf<N extends ServerAction> =
+  | Declared<N>
+  | Invalid
+  | Unavailable
+  | Internal;
+
+/**
+ * What a request of `N` fails with once it waits: its own errors, `Superseded` by a later request,
+ * and what its reads find, which is also any error a step leaves on the resource it waits on.
+ */
+export type WaitErrorOf<N extends ServerAction> =
+  | ErrorOf<N>
+  | Superseded
+  | HostError;
+
 export interface Options {
   /**
    * How long a mutation may wait for its machine or checkpoint to rest, unbounded by default, as a
@@ -74,60 +93,57 @@ export interface CreateOptions {
   readonly fresh?: boolean | undefined;
 }
 
-export interface Interface {
-  readonly hosts: Effect.Effect<readonly Host[], ClankerboxError>;
-  readonly machines: Effect.Effect<readonly Machine[], ClankerboxError>;
-  readonly checkpoints: Effect.Effect<readonly Checkpoint[], ClankerboxError>;
-  readonly capacity: Effect.Effect<CapacityReport, ClankerboxError>;
-  readonly getMachine: (
-    input: Input<"getMachine">
-  ) => Effect.Effect<Machine, ClankerboxError>;
-  readonly getCheckpoint: (
-    input: Input<"getCheckpoint">
-  ) => Effect.Effect<Checkpoint, ClankerboxError>;
-  readonly getPrebuild: (
-    input: Input<"getPrebuild">
-  ) => Effect.Effect<Build, ClankerboxError>;
+type Reads = "getMachine" | "getCheckpoint" | "getPrebuild";
+
+type Waits =
+  | "startMachine"
+  | "stopMachine"
+  | "pauseMachine"
+  | "resizeMachine"
+  | "forkMachine"
+  | "restoreMachine"
+  | "captureCheckpoint";
+
+/**
+ * One method per read and per request on a resource, named and typed as in the contract. Each
+ * request waits until its resource rests at what it asked, unless `noWait`.
+ */
+export type Calls = {
+  readonly [N in Reads]: (
+    input: Input<N>
+  ) => Effect.Effect<Success<N>, ErrorOf<N>>;
+} & {
+  readonly [N in Waits]: (
+    input: Input<N>
+  ) => Effect.Effect<Success<N>, WaitErrorOf<N>>;
+};
+
+export interface Interface extends Calls {
+  readonly hosts: Effect.Effect<readonly Host[], ErrorOf<"listHosts">>;
+  readonly machines: Effect.Effect<readonly Machine[], ErrorOf<"listMachines">>;
+  readonly checkpoints: Effect.Effect<
+    readonly Checkpoint[],
+    ErrorOf<"listCheckpoints">
+  >;
+  readonly capacity: Effect.Effect<CapacityReport, ErrorOf<"getCapacity">>;
   /** `createMachine`, then waits for the machine to rest. */
   readonly create: (
     name: string,
     spec: MachineSpec,
     options?: CreateOptions
-  ) => Effect.Effect<Machine, ClankerboxError>;
-  /** Each asks, then waits until the machine rests at that request, unless `noWait`. */
-  readonly startMachine: (
-    input: Input<"startMachine">
-  ) => Effect.Effect<Machine, ClankerboxError>;
-  readonly stopMachine: (
-    input: Input<"stopMachine">
-  ) => Effect.Effect<Machine, ClankerboxError>;
-  readonly pauseMachine: (
-    input: Input<"pauseMachine">
-  ) => Effect.Effect<Machine, ClankerboxError>;
-  readonly resizeMachine: (
-    input: Input<"resizeMachine">
-  ) => Effect.Effect<Machine, ClankerboxError>;
-  readonly forkMachine: (
-    input: Input<"forkMachine">
-  ) => Effect.Effect<Machine, ClankerboxError>;
-  readonly restoreMachine: (
-    input: Input<"restoreMachine">
-  ) => Effect.Effect<Machine, ClankerboxError>;
-  readonly captureCheckpoint: (
-    input: Input<"captureCheckpoint">
-  ) => Effect.Effect<Checkpoint, ClankerboxError>;
+  ) => Effect.Effect<Machine, WaitErrorOf<"createMachine">>;
   /** Asks for the prebuild, then waits for it to end. */
   readonly prebuild: (
     spec: MachineSpec & { readonly setup: Setup }
-  ) => Effect.Effect<Build, ClankerboxError>;
+  ) => Effect.Effect<Build, WaitErrorOf<"prebuildCheckpoint">>;
   /** A delete of a resource that is already gone is `absent`: done either way. */
   readonly deleteMachine: (
     input: Input<"deleteMachine">
-  ) => Effect.Effect<Deleted, ClankerboxError>;
+  ) => Effect.Effect<Deleted, WaitErrorOf<"deleteMachine">>;
   /** A delete of a checkpoint that is already gone is `absent`: done either way. */
   readonly deleteCheckpoint: (
     input: Input<"deleteCheckpoint">
-  ) => Effect.Effect<Deleted, ClankerboxError>;
+  ) => Effect.Effect<Deleted, WaitErrorOf<"deleteCheckpoint">>;
 }
 
 /**
@@ -153,12 +169,15 @@ const serverApi = (url: string) =>
 
 type ServerApi = Effect.Success<ReturnType<typeof serverApi>>;
 
-type CallError = ActionHttp.MethodError<Actions[ServerAction]>;
+type Undeclared = Exclude<
+  ActionHttp.MethodError<Actions[ServerAction]>,
+  ClankerboxError
+>;
 
 type Methods = {
   readonly [N in ServerAction]: (
     input: Input<N>
-  ) => Effect.Effect<Success<N>, CallError>;
+  ) => Effect.Effect<Success<N>, Declared<N> | Undeclared>;
 };
 
 interface CallContext {
@@ -191,10 +210,47 @@ const unexpected = (
     message: `the control plane answered ${context.what} unexpectedly: ${error.message}`,
   });
 
-const settle = <A>(
-  call: Effect.Effect<A, CallError>,
+const isUndeclared = (error: unknown): error is Undeclared =>
+  HttpClientError.isHttpClientError(error) ||
+  Schema.isSchemaError(error) ||
+  Schema.is(Action.BuiltIn)(error);
+
+const fromUndeclared = (
+  error: Undeclared,
   context: CallContext
-): Effect.Effect<A, ClankerboxError> =>
+): Invalid | Unavailable | Internal =>
+  Match.valueTags(error, {
+    HttpClientError: (failure) =>
+      Match.value(failure.reason).pipe(
+        Match.tag("TransportError", () =>
+          unanswered(context, causeDetail(failure))
+        ),
+        Match.when(
+          {
+            _tag: "DecodeError",
+            cause: (cause: unknown) =>
+              cause !== undefined && !(cause instanceof SyntaxError),
+          },
+          () => unanswered(context, causeDetail(failure))
+        ),
+        Match.orElse(() => unexpected(context, failure))
+      ),
+    InvalidInput: ({ message }) =>
+      new Invalid({
+        message: `${context.what}: the request doesn't match the action's input: ${message}`,
+      }),
+    SchemaError: ({ message }) =>
+      new Internal({
+        message: `the control plane's reply didn't decode: ${message}`,
+      }),
+    Unauthenticated: (failure) => unexpected(context, failure),
+    Forbidden: (failure) => unexpected(context, failure),
+  });
+
+const settle = <A, E>(
+  call: Effect.Effect<A, E | Undeclared>,
+  context: CallContext
+): Effect.Effect<A, E | Invalid | Unavailable | Internal> =>
   call.pipe(
     Effect.timeoutOrElse({
       duration: context.timeout,
@@ -206,39 +262,9 @@ const settle = <A>(
           )
         ),
     }),
-    Effect.catchTags({
-      HttpClientError: (error) =>
-        Effect.fail(
-          Match.value(error.reason).pipe(
-            Match.tag("TransportError", () =>
-              unanswered(context, causeDetail(error))
-            ),
-            Match.when(
-              {
-                _tag: "DecodeError",
-                cause: (cause: unknown) =>
-                  cause !== undefined && !(cause instanceof SyntaxError),
-              },
-              () => unanswered(context, causeDetail(error))
-            ),
-            Match.orElse(() => unexpected(context, error))
-          )
-        ),
-      InvalidInput: (error) =>
-        Effect.fail(
-          new Invalid({
-            message: `${context.what}: the request doesn't match the action's input: ${error.message}`,
-          })
-        ),
-      SchemaError: (error) =>
-        Effect.fail(
-          new Internal({
-            message: `the control plane's reply didn't decode: ${error.message}`,
-          })
-        ),
-      Unauthenticated: (error) => Effect.fail(unexpected(context, error)),
-      Forbidden: (error) => Effect.fail(unexpected(context, error)),
-    })
+    Effect.catchIf(isUndeclared, (error) =>
+      Effect.fail(fromUndeclared(error, context))
+    )
   );
 
 const deleting = (removal: Effect.Effect<void, ClankerboxError>) =>
@@ -394,7 +420,7 @@ export const make = (
       input: Input<N>,
       subject?: string,
       made?: string
-    ): Effect.Effect<Success<N>, ClankerboxError> =>
+    ): Effect.Effect<Success<N>, ErrorOf<N>> =>
       settle(methods[name](input), {
         url,
         timeout: options?.replyTimeout ?? replyTimeout,
@@ -408,7 +434,7 @@ export const make = (
       input: Input<N>,
       subject?: string,
       made?: string
-    ): Effect.Effect<Success<N>, ClankerboxError> =>
+    ): Effect.Effect<Success<N>, ErrorOf<N>> =>
       call(name, input, subject, made).pipe(
         Effect.mapError((error) =>
           error.located({ action: name, id: subject, made })
@@ -440,38 +466,28 @@ export const make = (
       verdict: (value: A) => Verdict<B>,
       action: ServerAction,
       subject: string
-    ) =>
-      Effect.gen(function* () {
-        let outageSince: number | undefined;
+    ): Effect.Effect<B, ClankerboxError> => {
+      const looked: Effect.Effect<B, ClankerboxError> = read.pipe(
+        Effect.retry({
+          while: ({ _tag }) => _tag === "Unavailable",
+          schedule: Schedule.spaced(pollEvery).pipe(
+            Schedule.upTo({ duration: outageLimit })
+          ),
+        }),
+        Effect.catchTag("Unavailable", ({ message }) =>
+          Effect.fail(saved(subject, message))
+        ),
+        Effect.flatMap((value) =>
+          Option.getOrElse(verdict(value), () =>
+            Effect.andThen(Effect.sleep(pollEvery), looked)
+          )
+        )
+      );
 
-        for (;;) {
-          const result = yield* Effect.result(read);
-          const now = yield* Clock.currentTimeMillis;
-
-          if (result._tag === "Success") {
-            outageSince = undefined;
-
-            const answer = verdict(result.success);
-
-            if (Option.isSome(answer)) {
-              return yield* answer.value;
-            }
-          } else if (result.failure._tag === "Unavailable") {
-            outageSince ??= now;
-
-            if (now - outageSince >= Duration.toMillis(outageLimit)) {
-              return yield* saved(subject, result.failure.message);
-            }
-          } else {
-            return yield* result.failure;
-          }
-
-          yield* Effect.sleep(pollEvery);
-        }
-      }).pipe(
-        (wait) => bounded(wait, subject),
+      return bounded(looked, subject).pipe(
         Effect.mapError((error) => error.located({ action, id: subject }))
       );
+    };
 
     const unlessNoWait = <A>(
       recorded: A,
@@ -533,20 +549,16 @@ export const make = (
         );
 
     const create: Interface["create"] = (name, spec, placement) =>
-      parseName(name).pipe(
-        Effect.mapError((error) => error.located({ action: "createMachine" })),
-        Effect.andThen(
-          send(
-            "createMachine",
-            {
-              ...spec,
-              id: name,
-              ...(placement?.fresh === true ? { fresh: true } : {}),
-            },
-            name,
-            name
-          )
-        ),
+      send(
+        "createMachine",
+        {
+          ...spec,
+          id: name,
+          ...(placement?.fresh === true ? { fresh: true } : {}),
+        },
+        name,
+        name
+      ).pipe(
         Effect.flatMap((recorded) =>
           machineRest(recorded, "running", "createMachine")
         ),

@@ -1,6 +1,4 @@
-import { Effect, Schema } from "effect";
-
-import { Invalid } from "./errors.ts";
+import { Schema } from "effect";
 
 const hostIdPattern = /^[a-z][a-z0-9-]{0,31}$/u;
 
@@ -24,10 +22,3 @@ export const HostId = Schema.String.check(
 export const Name = Schema.String.check(
   Schema.makeFilter((name: string) => isName(name) || nameRule)
 );
-
-export const parseName = (name: string): Effect.Effect<string, Invalid> =>
-  isName(name)
-    ? Effect.succeed(name)
-    : Effect.fail(
-        new Invalid({ message: `name ${JSON.stringify(name)}: ${nameRule}` })
-      );

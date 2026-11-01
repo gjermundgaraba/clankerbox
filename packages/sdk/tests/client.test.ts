@@ -252,7 +252,8 @@ describe("client", () => {
             );
 
             expect(error._tag, name).toBe("Invalid");
-            expect(error.message).toContain(`name ${JSON.stringify(name)}`);
+            expect(error.message).toContain(`createMachine ${name}`);
+            expect(error.message).toContain("starts with a letter");
             expect(error).toMatchObject({ action: "createMachine" });
           }
 
