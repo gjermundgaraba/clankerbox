@@ -10,11 +10,21 @@ import type { Machine } from "@gjermundgaraba/clankerbox-sdk";
 import {
   exists,
   read,
+  readBytes,
+  readDirectory,
   remove,
   stat,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
-import { Duration, Effect, Fiber, Option, Result } from "effect";
+import {
+  Duration,
+  Effect,
+  Fiber,
+  Logger,
+  Option,
+  References,
+  Result,
+} from "effect";
 import { expect } from "vite-plus/test";
 
 import {
@@ -1614,6 +1624,57 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(fake.calls.slice(-2)).toStrictEqual(["exec dev", "delete dev"]);
       expect(fake.machines.size).toBe(0);
     })
+  );
+
+  it.effect(
+    "a setup's text reaches neither the control plane's log, nor a host's, nor the control plane's files",
+    () =>
+      Effect.gen(function* () {
+        const secret = "setup-secret-6f1c";
+        const script = `#!/bin/sh\n# ${secret}\nTOKEN=${secret}\necho set up\n`;
+        const logged: string[] = [];
+
+        const heard = Logger.map(Logger.formatJson, (line) => {
+          logged.push(line);
+        });
+
+        const { client, stateDir } = yield* served({
+          logger: heard,
+          runtime: { logger: heard },
+        }).pipe(Effect.provideService(References.MinimumLogLevel, "All"));
+
+        yield* client.create(
+          "dev",
+          request("dev", { setup: { script, timeoutSeconds: 30 } })
+        );
+
+        const failed = yield* Effect.flip(
+          client.create(
+            "bad",
+            request("bad", {
+              setup: { script: `${script}exit 3\n`, timeoutSeconds: 30 },
+            })
+          )
+        );
+
+        const files = yield* readDirectory(stateDir);
+
+        const holding = yield* Effect.filter(files, (file) =>
+          Effect.map(readBytes(path.join(stateDir, file)), (bytes) =>
+            new TextDecoder("latin1").decode(bytes).includes(secret)
+          )
+        );
+
+        expect(failed._tag).toBe("ScriptFailed");
+        expect(files).toContain("server.db");
+        expect(logged.some((line) => line.includes("setup exited 3"))).toBe(
+          true
+        );
+        expect(logged.filter((line) => line.includes(secret))).toStrictEqual(
+          []
+        );
+        expect(holding).toStrictEqual([]);
+      })
   );
 
   it.effect(
