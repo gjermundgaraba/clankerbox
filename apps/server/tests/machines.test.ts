@@ -1142,45 +1142,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "PinMismatch",
           "PinMismatch",
         ]);
-        expect(fake.calls).toStrictEqual([]);
         expect(yield* pins).toStrictEqual(["fake 0"]);
-      })
-  );
-
-  it.effect(
-    "a stop of a paused machine boots it through admission, as a stop",
-    () =>
-      Effect.gen(function* () {
-        const { client, fake } = yield* served();
-
-        yield* client.create("dev", request("dev"));
-        yield* client.pauseMachine({ id: "dev" });
-        fake.calls.length = 0;
-
-        const stopped = yield* client.stopMachine({ id: "dev" });
-
-        expect(at(stopped)).toStrictEqual(["stopped", "stopped", "settled"]);
-        expect(fake.activations.at(-1)?.action).toBe("stopMachine");
-        expect(fake.calls).toStrictEqual(["admit dev", "stop dev"]);
-      })
-  );
-
-  it.effect(
-    "on a runtime whose stop discards a pause, a stop of a paused machine admits nothing",
-    () =>
-      Effect.gen(function* () {
-        const { client, fake } = yield* served({
-          hosts: [{ id: "mac", kind: "mac" }],
-        });
-
-        yield* client.create("dev", request("dev"));
-        yield* client.pauseMachine({ id: "dev" });
-        fake.calls.length = 0;
-
-        const stopped = yield* client.stopMachine({ id: "dev" });
-
-        expect(at(stopped)).toStrictEqual(["stopped", "stopped", "settled"]);
-        expect(fake.calls).toStrictEqual(["stop dev"]);
       })
   );
 
@@ -2667,82 +2629,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a smaller disk is Unsizable, rests failed, and leaves the runtime untouched",
-    () =>
-      Effect.gen(function* () {
-        const { client, fake, machine } = yield* served();
-
-        yield* client.create("dev", request("dev"));
-        yield* client.stopMachine({ id: "dev" });
-        fake.calls.length = 0;
-
-        const smaller = yield* Effect.flip(
-          client.resizeMachine({ id: "dev", diskGib: 5 })
-        );
-
-        expect([smaller._tag, smaller.message]).toStrictEqual([
-          "Unsizable",
-          "machine dev's disk is 10G, and a disk only grows",
-        ]);
-        expect(fake.calls).toStrictEqual([]);
-        expect(refusal(yield* machine("dev"))).toStrictEqual([
-          "failed",
-          "Unsizable",
-        ]);
-        expect(sizesOf(yield* machine("dev"))).toStrictEqual([1, 1024, 10]);
-      })
-  );
-
-  it.effect(
-    "a paused machine, a running mac machine and a live shrink, which smolvm makes only on x86_64, are refused before admission and the runtime",
-    () =>
-      Effect.gen(function* () {
-        const linux = yield* served();
-
-        const mac = yield* served({
-          hosts: [{ id: "mac", kind: "mac" }],
-        });
-
-        yield* linux.client.create("dev", request("dev"));
-        yield* linux.client.create("paused", request("paused"));
-        yield* linux.client.pauseMachine({ id: "paused" });
-        yield* mac.client.create("dev", request("dev"));
-        linux.fake.calls.length = 0;
-        mac.fake.calls.length = 0;
-
-        const refused = [
-          yield* Effect.flip(
-            linux.client.resizeMachine({ id: "paused", cpu: 2 })
-          ),
-          yield* Effect.flip(
-            mac.client.resizeMachine({ id: "dev", ramMib: 2048 })
-          ),
-          yield* Effect.flip(
-            linux.client.resizeMachine({ id: "dev", cpu: 2, ramMib: 512 })
-          ),
-        ];
-
-        expect(
-          refused.map(({ _tag, message }) => [_tag, message])
-        ).toStrictEqual([
-          [
-            "WrongState",
-            "machine paused is paused, and the linux runtime resizes a stopped or running machine: stop it first",
-          ],
-          [
-            "WrongState",
-            "machine dev is running, and the mac runtime resizes only a stopped machine: stop it first",
-          ],
-          [
-            "Unsizable",
-            "a running machine's vCPUs and RAM only grow, and dev has 1 vCPUs and 1G: stop it to shrink them",
-          ],
-        ]);
-        expect([...linux.fake.calls, ...mac.fake.calls]).toStrictEqual([]);
-      })
-  );
-
-  it.effect(
     "a live resize that fails part way keeps the sizes the runtime gave",
     () =>
       Effect.gen(function* () {
@@ -2794,39 +2680,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a resize whose read-back leaves a size out keeps the one it asked",
-    () =>
-      Effect.gen(function* () {
-        const { client, fake } = yield* served();
-
-        yield* client.create("dev", request("dev"));
-        yield* client.stopMachine({ id: "dev" });
-
-        const reading = fake.holdNext("sizes");
-
-        const resize = yield* Effect.forkChild(
-          client.resizeMachine({ id: "dev", cpu: 2, diskGib: 20 })
-        );
-
-        yield* reading.entered;
-        fake.sizes.set("dev", { cpu: 2, ramMib: 1024 });
-        yield* reading.release;
-
-        expect(sizesOf(yield* Fiber.join(resize))).toStrictEqual([2, 1024, 20]);
-      })
-  );
-
-  it.effect(
-    "sizes the runtime can't give are refused before admission and anything native, for a resize and a copy",
+    "sizes a host's runtime can't give reach the client, and the row, of a resize and of a copy",
     () =>
       Effect.gen(function* () {
         const { client, fake, machine } = yield* served();
 
         yield* client.create("dev", request("dev"));
-        fake.calls.length = 0;
-        fake.sized.length = 0;
-
-        const admitted = fake.activations.length;
 
         const refused = new Unsizable({
           message: "smolvm grows RAM in 128M steps",
@@ -2844,19 +2703,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           client.forkMachine({ machine: "dev", name: "copy", ramMib: 2100 })
         );
 
-        const held = { cpu: 1, ramMib: 1024, diskGib: 10 };
-        const asked = { ...held, ramMib: 2100 };
-
-        expect([resized.message, forked.message]).toStrictEqual([
-          refused.message,
-          refused.message,
+        expect(
+          [resized, forked].map(({ _tag, message }) => [_tag, message])
+        ).toStrictEqual([
+          ["Unsizable", refused.message],
+          ["Unsizable", refused.message],
         ]);
-        expect(fake.sized).toStrictEqual([
-          ["dev", held, asked, true],
-          ["copy", held, asked, true],
-        ]);
-        expect(fake.calls).toStrictEqual(["delete copy"]);
-        expect(fake.activations).toHaveLength(admitted);
+        expect(sizesOf(yield* machine("dev"))).toStrictEqual([1, 1024, 10]);
         expect(refusal(yield* machine("copy"))).toStrictEqual([
           "failed",
           "Unsizable",
@@ -2911,30 +2764,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
 
         expect(sizesOf(shown)).toStrictEqual([1, 1024, 10]);
-      })
-  );
-
-  it.effect(
-    "a resize whose sizes can't be read back keeps those it asked when it succeeded, and those it had when it failed",
-    () =>
-      Effect.gen(function* () {
-        const { client, fake, machine } = yield* served();
-
-        yield* client.create("dev", request("dev"));
-        yield* client.stopMachine({ id: "dev" });
-        fake.failNext("sizes", new Internal({ message: "status failed" }));
-
-        const resized = yield* client.resizeMachine({ id: "dev", cpu: 2 });
-
-        fake.failNext("resize", new Internal({ message: "update failed" }));
-        fake.failNext("sizes", new Internal({ message: "status failed" }));
-
-        yield* Effect.flip(client.resizeMachine({ id: "dev", cpu: 3 }));
-
-        const shown = yield* machine("dev");
-
-        expect(sizesOf(resized)).toStrictEqual([2, 1024, 10]);
-        expect(sizesOf(shown)).toStrictEqual([2, 1024, 10]);
       })
   );
 

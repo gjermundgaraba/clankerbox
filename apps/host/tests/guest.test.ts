@@ -14,17 +14,26 @@ import {
   symlink,
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { Duration, Effect, Exit, Schedule } from "effect";
+import { Context, Duration, Effect, Exit, Layer, Schedule } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { expect } from "vite-plus/test";
 
 import {
   hostKeyIn,
+  lastLines,
   preparationScript,
+  runSetup,
   tailnetIn,
   tailnetScript,
 } from "../src/guest.ts";
-import { furnish, writeStubs, writeTailscaleStubs } from "./fake-runtime.ts";
+import { Runtime } from "../src/runtime.ts";
+import {
+  fakeRuntime,
+  furnish,
+  writeStubs,
+  writeTailscaleStubs,
+} from "./fake-runtime.ts";
+import { image } from "./support.ts";
 
 const seedOf = () => globalThis.crypto.getRandomValues(new Uint8Array(64));
 
@@ -190,7 +199,101 @@ const daemon = (root: string, comm: string) =>
     };
   });
 
+const machine = {
+  name: "dev",
+  instance: "0f3a9c1e",
+  cpu: 1,
+  ramMib: 512,
+  diskGib: 10,
+  port: 2222,
+};
+
+const running = Effect.gen(function* () {
+  const runtime = Context.get(
+    yield* Layer.build(fakeRuntime({ dir: yield* scratch }).layer),
+    Runtime
+  );
+
+  yield* runtime.create(machine, image);
+
+  return runtime;
+});
+
+const numbered = (count: number) =>
+  Array.from({ length: count }, (_, line) => `echo line ${line}`).join("\n");
+
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
+  it("an output's tail is its last 20 lines, at most 4000 characters, with no blank end", () => {
+    const lines = Array.from({ length: 30 }, (_, line) => `line ${line}`);
+
+    expect(lastLines(`${lines.join("\n")}\n\n`)).toBe(
+      lines.slice(10).join("\n")
+    );
+    expect(lastLines(`${"a".repeat(6000)}${"b".repeat(4000)}`)).toBe(
+      "b".repeat(4000)
+    );
+    expect(lastLines("short\n")).toBe("short");
+  });
+
+  it.effect(
+    "a setup that exits non-zero fails with its output's tail, never its text, and leaves no copy of it",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* running;
+        const secret = "token-4f1e9a";
+
+        const script = [
+          "#!/bin/sh",
+          `export TOKEN=${secret}`,
+          numbered(30),
+          'echo "kept at $0"',
+          "echo broke >&2",
+          "exit 3",
+        ].join("\n");
+
+        const error = yield* Effect.flip(
+          runSetup(runtime, machine, { script, timeoutSeconds: 30 })
+        );
+
+        const copy =
+          /kept at (?<path>\S+)/u.exec(error.message)?.groups?.["path"] ?? "";
+
+        expect(error).toMatchObject({ _tag: "ScriptFailed", script: "setup" });
+        expect(error.message).toMatch(/^setup exited 3; its last output:\n/u);
+        expect(error.message).toMatch(/line 29\nkept at \S+\nbroke$/u);
+        expect(error.message).not.toContain("line 9\n");
+        expect(error.message).not.toContain(secret);
+        expect(copy).toContain("clankerbox-setup");
+        expect(yield* isMissing(copy)).toBe(true);
+
+        const ok = yield* Effect.exit(
+          runSetup(runtime, machine, { script: "#!/bin/sh\ntrue\n" })
+        );
+
+        expect(Exit.isSuccess(ok)).toBe(true);
+      })
+  );
+
+  it.effect(
+    "a setup that runs past its timeout is cut off, saying so with the output it had",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* running;
+
+        const error = yield* Effect.flip(
+          runSetup(runtime, machine, {
+            script: "#!/bin/sh\necho started\nsleep 30\n",
+            timeoutSeconds: 1,
+          })
+        );
+
+        expect(error).toMatchObject({ _tag: "ScriptFailed", script: "setup" });
+        expect(error.message).toBe(
+          "setup ran past its 1s timeout; its last output:\nstarted"
+        );
+      })
+  );
+
   it.effect(
     "a new instance reseeds, writes the machine ID and the instance, and runs start",
     () =>

@@ -12,8 +12,12 @@ import type {
 } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { Internal, readTimeout } from "@gjermundgaraba/clankerbox-sdk";
-import type { Kind, Setup } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  Internal,
+  readTimeout,
+  Unsizable,
+} from "@gjermundgaraba/clankerbox-sdk";
+import type { Kind, Setup, Sizing } from "@gjermundgaraba/clankerbox-sdk";
 import {
   read,
   scratch,
@@ -1122,7 +1126,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a runtime whose stop doesn't resume stops a paused VM under any pin",
+    "a runtime whose stop doesn't resume stops a paused VM under any pin, and admits nothing",
     () =>
       Effect.gen(function* () {
         const host = yield* runner({ kind: "mac" });
@@ -1132,6 +1136,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           makes("dev", { source: { _tag: "base", base: "macos" } })
         );
         yield* finished(host, { _tag: "pause", machine: ref("dev") }, 2);
+        host.fake.calls.length = 0;
 
         const report = yield* finished(
           host,
@@ -1146,6 +1151,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(host.fake.machines.get("dev")?.state).toBe("stopped");
         expect(report.status).toBe("done");
+        expect(host.fake.calls).toStrictEqual(["stop dev"]);
       })
   );
 
@@ -1292,6 +1298,46 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     })
   );
 
+  it.effect(
+    "a resize whose read-back leaves a size out keeps the one it asked",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner();
+
+        yield* finished(host, makes("dev"));
+        yield* finished(
+          host,
+          { _tag: "stop", machine: ref("dev"), machines: [] },
+          2
+        );
+
+        const reading = host.fake.holdNext("sizes");
+
+        const resizing = yield* Effect.forkChild(
+          finished(
+            host,
+            {
+              _tag: "resize",
+              machine: ref("dev"),
+              to: { cpu: 2, diskGib: 20 },
+              machines: [],
+            },
+            3
+          )
+        );
+
+        yield* reading.entered;
+        host.fake.sizes.set("dev", { cpu: 2, ramMib: 1024 });
+        yield* reading.release;
+
+        expect((yield* Fiber.join(resizing)).outcome.sizes).toStrictEqual({
+          cpu: 2,
+          ramMib: 1024,
+          diskGib: 20,
+        });
+      })
+  );
+
   it.effect("a resize that fails part way keeps the sizes it gave", () =>
     Effect.gen(function* () {
       const host = yield* runner();
@@ -1355,33 +1401,124 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
-  it.effect("a resize refused up front touches nothing", () =>
-    Effect.gen(function* () {
-      const host = yield* runner();
-      const dev = ref("dev");
+  it.effect(
+    "a resize refused up front touches nothing, admission included, and says why",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner();
+        const mac = yield* runner({ kind: "mac" });
+        const dev = ref("dev");
 
-      yield* finished(host, makes("dev"));
+        yield* finished(host, makes("dev"));
+        yield* finished(
+          mac,
+          makes("dev", { source: { _tag: "base", base: "macos" } })
+        );
 
-      const resizing = (
-        to: { readonly cpu?: number; readonly diskGib?: number },
-        sequence: number,
-        machine = dev
-      ) =>
-        finished(host, { _tag: "resize", machine, to, machines: [] }, sequence);
+        const admitted = [
+          host.fake.activations.length,
+          mac.fake.activations.length,
+        ];
 
-      const disk = yield* resizing({ diskGib: 5 }, 2);
-      const live = yield* resizing({ cpu: 0 }, 3, ref("dev", { cpu: 2 }));
-      const gone = yield* resizing({ cpu: 2 }, 1, ref("gone"));
+        const resizing = (
+          to: Sizing,
+          sequence: number,
+          on = host,
+          machine = dev
+        ) =>
+          finished(on, { _tag: "resize", machine, to, machines: [] }, sequence);
 
-      yield* finished(host, { _tag: "pause", machine: dev, pin: "fake 1" }, 4);
+        const disk = yield* resizing({ diskGib: 5 }, 2);
+        const live = yield* resizing({ cpu: 2, ramMib: 512 }, 3);
+        const gone = yield* resizing({ cpu: 2 }, 1, host, ref("gone"));
+        const running = yield* resizing({ ramMib: 2048 }, 2, mac);
 
-      const paused = yield* resizing({ cpu: 2 }, 5);
+        yield* finished(
+          host,
+          { _tag: "pause", machine: dev, pin: "fake 1" },
+          4
+        );
 
-      expect(
-        [disk, live, gone, paused].map(({ error }) => error?._tag)
-      ).toStrictEqual(["Unsizable", "Unsizable", "Missing", "WrongState"]);
-      expect(host.fake.calls).not.toContain("resize dev");
-    })
+        const paused = yield* resizing({ cpu: 2 }, 5);
+
+        expect(
+          [disk, live, running, paused].map(({ error }) => [
+            error?._tag,
+            error?.message,
+          ])
+        ).toStrictEqual([
+          ["Unsizable", "machine dev's disk is 10G, and a disk only grows"],
+          [
+            "Unsizable",
+            "a running machine's vCPUs and RAM only grow, and dev has 1 vCPUs and 1G: stop it to shrink them",
+          ],
+          [
+            "WrongState",
+            "machine dev is running, and the mac runtime resizes only a stopped machine: stop it first",
+          ],
+          [
+            "WrongState",
+            "machine dev is paused, and the linux runtime resizes a stopped or running machine: stop it first",
+          ],
+        ]);
+        expect(gone.error?._tag).toBe("Missing");
+        expect([...host.fake.calls, ...mac.fake.calls]).not.toContain(
+          "resize dev"
+        );
+        expect([
+          host.fake.activations.length,
+          mac.fake.activations.length,
+        ]).toStrictEqual(admitted);
+      })
+  );
+
+  it.effect(
+    "sizes the runtime can't give are refused before admission and anything native, for a resize and a copy",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner();
+        const refused = new Unsizable({ message: "grows RAM in 128M steps" });
+
+        yield* finished(host, makes("dev"));
+        host.fake.sized.length = 0;
+
+        const admitted = host.fake.activations.length;
+
+        host.fake.refuseNextSizes(refused);
+
+        const resized = yield* finished(
+          host,
+          {
+            _tag: "resize",
+            machine: ref("dev"),
+            to: { ramMib: 2100 },
+            machines: [],
+          },
+          2
+        );
+
+        host.fake.refuseNextSizes(refused);
+
+        const forked = yield* finished(
+          host,
+          makes("copy", {
+            machine: { ramMib: 2100 },
+            source: { _tag: "machine", machine: ref("dev"), pin: "fake 1" },
+          })
+        );
+
+        const held = { cpu: 1, ramMib: 1024, diskGib: 10 };
+        const asked = { ...held, ramMib: 2100 };
+
+        expect([resized.error, forked.error]).toStrictEqual([refused, refused]);
+        expect(host.fake.sized).toStrictEqual([
+          ["dev", held, asked, true],
+          ["copy", held, asked, true],
+        ]);
+        expect(host.fake.calls).not.toContain("resize dev");
+        expect(host.fake.calls).not.toContain("fork copy");
+        expect(host.fake.activations).toHaveLength(admitted);
+      })
   );
 
   it.effect("a resize of a machine the runtime couldn't read is refused", () =>
