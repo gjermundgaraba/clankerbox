@@ -166,14 +166,14 @@ export const noManualRunRule = defineRule({
   },
 });
 
-const impureNames = new Set(["Date", "crypto", "Effect"]);
+const impureNames = new Set(["Date", "crypto"]);
 
 export const noImpureRule = defineRule({
   meta: {
     type: "problem",
     docs: {
       description:
-        "Keep a file a pure function of its arguments: no Date, Math.random, crypto or Effect, also through globalThis.",
+        "Keep a file a pure function of its arguments: no Date, Math.random or crypto, also through globalThis.",
     },
     messages: {
       impure:

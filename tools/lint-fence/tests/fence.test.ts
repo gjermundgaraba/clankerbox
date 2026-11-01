@@ -130,10 +130,6 @@ tester.run("no-impure", noImpureRule, {
       errors: [{ messageId: "impure" }],
     },
     { code: "const now = globalThis.Date;", errors: [{ messageId: "impure" }] },
-    {
-      code: "const one = Effect.succeed(1);",
-      errors: [{ messageId: "impure" }],
-    },
   ],
 });
 
