@@ -32,7 +32,9 @@ a table `scripts/export-chart.ts` generates by walking every leaf, wish, flag an
 abstract event through the real chart, `apps/server/src/machine-chart.ts`, with
 `applied`. So the chart TLC checks is the chart that compiles. A stale table
 fails `apps/server/tests/machine-chart.test.ts`, with no Java. `check.sh` exports
-it first.
+it first. The export also gives the model the chart's words it reads by name:
+`Resting`, the phases a wait ends on; `FailedCreate`, the leaves of a failed
+create; and `Undone`. A rename of one fails `vp check` on `export-chart.ts`.
 
 TLC checks these invariants on every reachable state:
 
