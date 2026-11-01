@@ -1,16 +1,18 @@
-import type { Step } from "@clankerbox/host-contract";
-import { NotFound } from "@gjermundgaraba/clankerbox-sdk";
+import { Step } from "@clankerbox/host-contract";
+import {
+  Desired,
+  HostError,
+  Kind,
+  NotFound,
+  Sizing,
+} from "@gjermundgaraba/clankerbox-sdk";
 import type {
   Checkpoint,
   Conflict,
-  Desired,
-  HostError,
   Internal,
-  Kind,
   Phase,
-  Sizing,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Context, Schema } from "effect";
+import { Context, Schema, SchemaGetter } from "effect";
 import type { DateTime, Effect, Option } from "effect";
 import { Hex } from "effect/encoding";
 
@@ -27,20 +29,33 @@ export class CannotStart extends Schema.TaggedError<
   message: Schema.String,
 }) {}
 
+const UndefinedFromNull = <S extends Schema.Top>(schema: S) =>
+  Schema.NullOr(schema).pipe(
+    Schema.decodeTo(Schema.UndefinedOr(Schema.toType(schema)), {
+      decode: SchemaGetter.transform((value) => value ?? undefined),
+      encode: SchemaGetter.transform((value) => value ?? null),
+    })
+  );
+
 /**
  * Where a machine's disk comes from. Copies stay on their source's host, and hold what a setup did,
  * so only a base can have one to run: `scripted` outlives the setup, which stays in memory.
  */
-export type Source =
-  | { readonly kind: "base"; readonly scripted: boolean }
-  | { readonly kind: "checkpoint"; readonly name: string }
-  | { readonly kind: "machine"; readonly name: string };
+export const Source = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("base"), scripted: Schema.Boolean }),
+  Schema.Struct({ kind: Schema.Literal("checkpoint"), name: Schema.String }),
+  Schema.Struct({ kind: Schema.Literal("machine"), name: Schema.String }),
+]);
 
-export interface Lease {
-  readonly resource: "machine" | "checkpoint";
-  readonly name: string;
-  readonly mode: "own" | "share";
-}
+export type Source = typeof Source.Type;
+
+export const Lease = Schema.Struct({
+  resource: Schema.Literals(["machine", "checkpoint"]),
+  name: Schema.String,
+  mode: Schema.Literals(["own", "share"]),
+});
+
+export type Lease = typeof Lease.Type;
 
 /** A new ID for a row's instance or an operation. */
 export const newId = (): string =>
@@ -50,70 +65,71 @@ export const notFound = (resource: Lease["resource"], name: string): NotFound =>
   new NotFound({ message: `no ${resource} ${name}`, id: name });
 
 /** One step on a host. Its row in the store is every lease there is: restarts lose none. */
-export interface Operation {
-  readonly id: string;
-  readonly kind: Step["_tag"];
-  readonly resource: Lease["resource"];
-  readonly name: string;
-  readonly host: string;
-  readonly boot: string;
-  readonly sequence: number;
-  readonly leases: readonly Lease[];
+export const Operation = Schema.Struct({
+  id: Schema.String,
+  kind: Schema.Literals(
+    Step.members.map(({ fields }) => fields._tag.schema.literal)
+  ),
+  resource: Lease.fields.resource,
+  name: Schema.String,
+  host: Schema.String,
+  boot: Schema.String,
+  sequence: Schema.Int,
+  leases: Schema.fromJsonString(Schema.Array(Lease)),
   /** What a resize gives, which left the row when the step began. */
-  readonly to: Sizing | undefined;
-}
+  to: UndefinedFromNull(Schema.fromJsonString(Sizing)),
+});
+
+export type Operation = typeof Operation.Type;
 
 /** `waiting` is never stored: a read tells it, as it tells the state. */
 export type MachinePhase = Exclude<Phase, "waiting">;
 
+const made = {
+  name: Schema.String,
+  instance: Schema.String,
+  createdAt: Schema.DateTimeUtcFromString,
+  kind: Kind,
+  base: Schema.String,
+  profile: UndefinedFromNull(Schema.String),
+  cpu: Schema.Int,
+  ramMib: Schema.Int,
+  diskGib: Schema.Int,
+  host: Schema.String,
+  pin: UndefinedFromNull(Schema.String),
+  error: UndefinedFromNull(Schema.fromJsonString(HostError)),
+};
+
 /** What a machine's row holds but for its leaf: what no leaf can tell, and its chart's context. */
-export interface Facts {
-  readonly name: string;
-  readonly instance: string;
-  readonly createdAt: DateTime.Utc;
-  readonly kind: Kind;
-  readonly base: string;
-  readonly profile: string | undefined;
-  readonly cpu: number;
-  readonly ramMib: number;
-  readonly diskGib: number;
-  readonly host: string;
-  readonly port: number | undefined;
+export const Facts = Schema.Struct({
+  ...made,
+  port: UndefinedFromNull(Schema.Int),
   /** What was asked. A delete is the `deleting` region, so the wire's `deleted` is no wish. */
-  readonly desired: Exclude<Desired, "deleted">;
-  readonly prepared: boolean;
-  readonly error: HostError | undefined;
+  desired: Desired.pick(["running", "stopped", "paused"]),
+  prepared: Schema.BooleanFromBit,
   /** The resize still owed. One that runs is on its operation. */
-  readonly resize: Sizing | undefined;
-  readonly ephemeral: boolean;
-  readonly source: Source;
-  readonly prebuild: string | undefined;
-  readonly hostKey: string | undefined;
-  readonly pin: string | undefined;
-  readonly undoneAt: DateTime.Utc | undefined;
-}
+  resize: UndefinedFromNull(Schema.fromJsonString(Sizing)),
+  ephemeral: Schema.BooleanFromBit,
+  source: Schema.fromJsonString(Source),
+  prebuild: UndefinedFromNull(Schema.String),
+  hostKey: UndefinedFromNull(Schema.String),
+  undoneAt: UndefinedFromNull(Schema.DateTimeUtcFromString),
+});
+
+export type Facts = typeof Facts.Type;
 
 /** What a client reads of a checkpoint's leaf. */
 export type ShownPhase = Checkpoint["phase"];
 
 /** What a checkpoint's row holds but for its leaf. */
-export interface CheckpointFacts {
-  readonly name: string;
-  readonly instance: string;
-  readonly createdAt: DateTime.Utc;
-  readonly machine: string;
-  readonly host: string;
-  readonly kind: Kind;
-  readonly pin: string | undefined;
-  readonly port: number;
-  readonly base: string;
-  readonly profile: string | undefined;
-  readonly cpu: number;
-  readonly ramMib: number;
-  readonly diskGib: number;
-  readonly error: HostError | undefined;
-  readonly failedAt: DateTime.Utc | undefined;
-}
+export const CheckpointFacts = Schema.Struct({
+  ...made,
+  machine: Schema.String,
+  port: Schema.Int,
+  failedAt: UndefinedFromNull(Schema.DateTimeUtcFromString),
+});
+
+export type CheckpointFacts = typeof CheckpointFacts.Type;
 
 /** A row of each resource, as `advance` reads and writes it. */
 export interface Rows {

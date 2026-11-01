@@ -1,14 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import type { StatementSync } from "node:sqlite";
 
-import {
-  Conflict,
-  Desired,
-  HostError,
-  Internal,
-  Kind,
-  Sizing,
-} from "@gjermundgaraba/clankerbox-sdk";
+import { Conflict, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import {
   DateTime,
   Effect,
@@ -22,11 +15,15 @@ import type { Scope } from "effect";
 
 import type { Decision } from "../chart.ts";
 import { leaves as checkpointLeaves } from "../checkpoint-chart.ts";
-import type { CheckpointRow } from "../checkpoint-chart.ts";
 import { leaves } from "../machine-chart.ts";
-import type { MachineRow } from "../machine-chart.ts";
-import { CannotStart, Store } from "../store.ts";
-import type { Advanced, Interface, Lease, Operation, Rows } from "../store.ts";
+import {
+  CannotStart,
+  CheckpointFacts,
+  Facts,
+  Operation,
+  Store,
+} from "../store.ts";
+import type { Advanced, Interface, Lease, Rows } from "../store.ts";
 
 export const databaseFile = "server.db";
 
@@ -36,13 +33,13 @@ export const migrations: readonly string[] = [
   `CREATE TABLE machines (
     name TEXT PRIMARY KEY,
     instance TEXT NOT NULL,
-    created_at TEXT NOT NULL,
+    createdAt TEXT NOT NULL,
     kind TEXT NOT NULL,
     base TEXT NOT NULL,
     profile TEXT,
     cpu INTEGER NOT NULL,
-    ram_mib INTEGER NOT NULL,
-    disk_gib INTEGER NOT NULL,
+    ramMib INTEGER NOT NULL,
+    diskGib INTEGER NOT NULL,
     host TEXT NOT NULL,
     port INTEGER,
     desired TEXT NOT NULL,
@@ -53,15 +50,15 @@ export const migrations: readonly string[] = [
     ephemeral INTEGER NOT NULL,
     source TEXT NOT NULL,
     prebuild TEXT,
-    host_key TEXT,
+    hostKey TEXT,
     pin TEXT,
-    undone_at TEXT,
+    undoneAt TEXT,
     UNIQUE (host, port)
   ) STRICT;
   CREATE TABLE checkpoints (
     name TEXT PRIMARY KEY,
     instance TEXT NOT NULL,
-    created_at TEXT NOT NULL,
+    createdAt TEXT NOT NULL,
     machine TEXT NOT NULL,
     host TEXT NOT NULL,
     kind TEXT NOT NULL,
@@ -70,11 +67,11 @@ export const migrations: readonly string[] = [
     base TEXT NOT NULL,
     profile TEXT,
     cpu INTEGER NOT NULL,
-    ram_mib INTEGER NOT NULL,
-    disk_gib INTEGER NOT NULL,
+    ramMib INTEGER NOT NULL,
+    diskGib INTEGER NOT NULL,
     state TEXT NOT NULL,
     error TEXT,
-    failed_at TEXT
+    failedAt TEXT
   ) STRICT;
   CREATE TABLE operations (
     id TEXT PRIMARY KEY,
@@ -213,179 +210,21 @@ const migrate = (
     });
   });
 
-const Flag = Schema.Literals([0, 1]);
-
-const Optional = Schema.NullOr(Schema.String);
-
-const SourceJson = Schema.fromJsonString(
-  Schema.Union([
-    Schema.Struct({ kind: Schema.Literal("base"), scripted: Schema.Boolean }),
-    Schema.Struct({ kind: Schema.Literal("checkpoint"), name: Schema.String }),
-    Schema.Struct({ kind: Schema.Literal("machine"), name: Schema.String }),
-  ])
-);
-
-const LeasesJson = Schema.fromJsonString(
-  Schema.Array(
-    Schema.Struct({
-      resource: Schema.Literals(["machine", "checkpoint"]),
-      name: Schema.String,
-      mode: Schema.Literals(["own", "share"]),
-    })
-  )
-);
-
-const ErrorJson = Schema.fromJsonString(HostError);
-
-const SizingJson = Schema.fromJsonString(Sizing);
-
-const Stored = <S extends Schema.Top>(schema: S) => Schema.NullOr(schema);
-
-const shared = {
-  name: Schema.String,
-  instance: Schema.String,
-  created_at: Schema.DateTimeUtcFromString,
-  kind: Kind,
-  base: Schema.String,
-  profile: Optional,
-  cpu: Schema.Int,
-  ram_mib: Schema.Int,
-  disk_gib: Schema.Int,
-  host: Schema.String,
-  pin: Optional,
-  error: Stored(ErrorJson),
-};
-
-const MachineFields = Schema.Struct({
-  ...shared,
-  port: Schema.NullOr(Schema.Int),
-  desired: Desired.pick(["running", "stopped", "paused"]),
+const StoredMachine = Schema.Struct({
+  ...Facts.fields,
   state: Schema.Literals(leaves),
-  prepared: Flag,
-  resize: Stored(SizingJson),
-  ephemeral: Flag,
-  source: SourceJson,
-  prebuild: Optional,
-  host_key: Optional,
-  undone_at: Schema.NullOr(Schema.DateTimeUtcFromString),
 });
 
-const CheckpointFields = Schema.Struct({
-  ...shared,
-  machine: Schema.String,
-  port: Schema.Int,
+const StoredCheckpoint = Schema.Struct({
+  ...CheckpointFacts.fields,
   state: Schema.Literals(checkpointLeaves),
-  failed_at: Schema.NullOr(Schema.DateTimeUtcFromString),
 });
-
-const OperationFields = Schema.Struct({
-  id: Schema.String,
-  kind: Schema.Literals([
-    "make",
-    "start",
-    "stop",
-    "pause",
-    "remove",
-    "resize",
-    "capture",
-    "deleteCheckpoint",
-    "join",
-  ]),
-  resource: Schema.Literals(["machine", "checkpoint"]),
-  name: Schema.String,
-  host: Schema.String,
-  boot: Schema.String,
-  sequence: Schema.Int,
-  leases: LeasesJson,
-  to: Stored(SizingJson),
-});
-
-const decodeMachine = Schema.decodeUnknownSync(MachineFields);
-
-const decodeCheckpoint = Schema.decodeUnknownSync(CheckpointFields);
-
-const decodeOperation = Schema.decodeUnknownSync(OperationFields);
-
-const encodeSource = Schema.encodeSync(SourceJson);
-
-const encodeLeases = Schema.encodeSync(LeasesJson);
-
-const encodeError = Schema.encodeSync(ErrorJson);
-
-const encodeSizing = Schema.encodeSync(SizingJson);
-
-const rowOf = (raw: unknown): MachineRow => {
-  const row = decodeMachine(raw);
-
-  return {
-    name: row.name,
-    instance: row.instance,
-    createdAt: row.created_at,
-    kind: row.kind,
-    base: row.base,
-    profile: row.profile ?? undefined,
-    cpu: row.cpu,
-    ramMib: row.ram_mib,
-    diskGib: row.disk_gib,
-    host: row.host,
-    port: row.port ?? undefined,
-    desired: row.desired,
-    state: row.state,
-    prepared: row.prepared === 1,
-    error: row.error ?? undefined,
-    resize: row.resize ?? undefined,
-    ephemeral: row.ephemeral === 1,
-    source: row.source,
-    prebuild: row.prebuild ?? undefined,
-    hostKey: row.host_key ?? undefined,
-    pin: row.pin ?? undefined,
-    undoneAt: row.undone_at ?? undefined,
-  };
-};
-
-const checkpointOf = (raw: unknown): CheckpointRow => {
-  const row = decodeCheckpoint(raw);
-
-  return {
-    name: row.name,
-    instance: row.instance,
-    createdAt: row.created_at,
-    machine: row.machine,
-    host: row.host,
-    kind: row.kind,
-    pin: row.pin ?? undefined,
-    port: row.port,
-    base: row.base,
-    profile: row.profile ?? undefined,
-    cpu: row.cpu,
-    ramMib: row.ram_mib,
-    diskGib: row.disk_gib,
-    state: row.state,
-    error: row.error ?? undefined,
-    failedAt: row.failed_at ?? undefined,
-  };
-};
-
-const operationOf = (raw: unknown): Operation => {
-  const operation = decodeOperation(raw);
-
-  return { ...operation, to: operation.to ?? undefined };
-};
 
 const decodeBoot = Schema.decodeUnknownSync(
   Schema.Struct({ boot: Schema.String })
 );
 
-const flag = (value: boolean | undefined) => (value === true ? 1 : 0);
-
-const time = (value: DateTime.Utc | undefined) =>
-  value === undefined ? null : DateTime.formatIso(value);
-
 type Bound = string | number | null;
-
-type Columns<S extends { readonly fields: object }> = {
-  readonly [K in keyof S["fields"]]: Bound;
-};
 
 const insertInto = (
   table: string,
@@ -409,71 +248,17 @@ const updateIn = (
   return `UPDATE ${table} SET ${set.join(", ")} WHERE name = $name`;
 };
 
-const encodedError = (error: HostError | undefined): Bound =>
-  error === undefined ? null : encodeError(error);
+const rowOf = Schema.decodeUnknownSync(StoredMachine);
 
-const sizing = (value: Sizing | undefined): Bound =>
-  value === undefined ? null : encodeSizing(value);
+const checkpointOf = Schema.decodeUnknownSync(StoredCheckpoint);
 
-const machineColumns = (row: MachineRow): Columns<typeof MachineFields> => ({
-  name: row.name,
-  instance: row.instance,
-  created_at: DateTime.formatIso(row.createdAt),
-  kind: row.kind,
-  base: row.base,
-  profile: row.profile ?? null,
-  cpu: row.cpu,
-  ram_mib: row.ramMib,
-  disk_gib: row.diskGib,
-  host: row.host,
-  port: row.port ?? null,
-  desired: row.desired,
-  state: row.state,
-  prepared: flag(row.prepared),
-  error: encodedError(row.error),
-  resize: sizing(row.resize),
-  ephemeral: flag(row.ephemeral),
-  source: encodeSource(row.source),
-  prebuild: row.prebuild ?? null,
-  host_key: row.hostKey ?? null,
-  pin: row.pin ?? null,
-  undone_at: time(row.undoneAt),
-});
+const operationOf = Schema.decodeUnknownSync(Operation);
 
-const checkpointColumns = (
-  row: CheckpointRow
-): Columns<typeof CheckpointFields> => ({
-  name: row.name,
-  instance: row.instance,
-  created_at: DateTime.formatIso(row.createdAt),
-  machine: row.machine,
-  host: row.host,
-  kind: row.kind,
-  pin: row.pin ?? null,
-  port: row.port,
-  base: row.base,
-  profile: row.profile ?? null,
-  cpu: row.cpu,
-  ram_mib: row.ramMib,
-  disk_gib: row.diskGib,
-  state: row.state,
-  error: encodedError(row.error),
-  failed_at: time(row.failedAt),
-});
+const machineColumns = Schema.encodeSync(StoredMachine);
 
-const operationColumns = (
-  operation: Operation
-): Columns<typeof OperationFields> => ({
-  id: operation.id,
-  kind: operation.kind,
-  resource: operation.resource,
-  name: operation.name,
-  host: operation.host,
-  boot: operation.boot,
-  sequence: operation.sequence,
-  leases: encodeLeases(operation.leases),
-  to: sizing(operation.to),
-});
+const checkpointColumns = Schema.encodeSync(StoredCheckpoint);
+
+const operationColumns = Schema.encodeSync(Operation);
 
 interface Table<R> {
   readonly select: StatementSync;
@@ -530,27 +315,25 @@ export const open = (
     yield* migrate(db, file);
 
     const selectMachines = db.prepare(
-      "SELECT * FROM machines ORDER BY created_at, name"
+      "SELECT * FROM machines ORDER BY createdAt, name"
     );
 
     const selectMachine = db.prepare("SELECT * FROM machines WHERE name = ?");
 
-    const insertMachine = db.prepare(insertInto("machines", MachineFields));
+    const insertMachine = db.prepare(insertInto("machines", StoredMachine));
 
-    const updateMachine = db.prepare(updateIn("machines", MachineFields));
+    const updateMachine = db.prepare(updateIn("machines", StoredMachine));
 
     const deleteUndone = db.prepare(
-      "DELETE FROM machines WHERE name = ? AND undone_at IS NOT NULL"
+      "DELETE FROM machines WHERE name = ? AND undoneAt IS NOT NULL"
     );
 
     const deleteMachine = db.prepare("DELETE FROM machines WHERE name = ?");
 
-    const deleteExpired = db.prepare(
-      "DELETE FROM machines WHERE undone_at < ?"
-    );
+    const deleteExpired = db.prepare("DELETE FROM machines WHERE undoneAt < ?");
 
     const selectCheckpoints = db.prepare(
-      "SELECT * FROM checkpoints ORDER BY created_at, name"
+      "SELECT * FROM checkpoints ORDER BY createdAt, name"
     );
 
     const selectCheckpoint = db.prepare(
@@ -558,15 +341,15 @@ export const open = (
     );
 
     const deleteFailedCheckpoint = db.prepare(
-      "DELETE FROM checkpoints WHERE name = ? AND failed_at IS NOT NULL"
+      "DELETE FROM checkpoints WHERE name = ? AND failedAt IS NOT NULL"
     );
 
     const insertCheckpoint = db.prepare(
-      insertInto("checkpoints", CheckpointFields)
+      insertInto("checkpoints", StoredCheckpoint)
     );
 
     const updateCheckpoint = db.prepare(
-      updateIn("checkpoints", CheckpointFields)
+      updateIn("checkpoints", StoredCheckpoint)
     );
 
     const deleteCheckpoint = db.prepare(
@@ -574,7 +357,7 @@ export const open = (
     );
 
     const deleteExpiredCheckpoints = db.prepare(
-      "DELETE FROM checkpoints WHERE failed_at < ?"
+      "DELETE FROM checkpoints WHERE failedAt < ?"
     );
 
     const selectOperations = db.prepare(
@@ -585,9 +368,7 @@ export const open = (
       "SELECT * FROM operations WHERE resource = ? AND name = ? ORDER BY sequence LIMIT 1"
     );
 
-    const insertOperation = db.prepare(
-      insertInto("operations", OperationFields)
-    );
+    const insertOperation = db.prepare(insertInto("operations", Operation));
 
     const deleteOperation = db.prepare("DELETE FROM operations WHERE id = ?");
 
@@ -626,7 +407,7 @@ export const open = (
     const holderOf = (wanted: readonly Lease[]): Operation | undefined =>
       selectOperations
         .all()
-        .map(operationOf)
+        .map((raw) => operationOf(raw))
         .find(({ leases }) =>
           wanted.some((lease) =>
             leases.some((held) => conflicting(lease, held))
@@ -701,7 +482,7 @@ export const open = (
 
     const store: Interface = {
       machines: sql("list machines", () =>
-        selectMachines.all().map(rowOf)
+        selectMachines.all().map((raw) => rowOf(raw))
       ).pipe(Effect.withSpan("Store.machines")),
       findMachine: Effect.fn("Store.findMachine")((name) =>
         sql(`read ${name}`, () => {
@@ -729,7 +510,7 @@ export const open = (
         })
       ),
       checkpoints: sql("list checkpoints", () =>
-        selectCheckpoints.all().map(checkpointOf)
+        selectCheckpoints.all().map((raw) => checkpointOf(raw))
       ).pipe(Effect.withSpan("Store.checkpoints")),
       findCheckpoint: Effect.fn("Store.findCheckpoint")((name) =>
         sql(`read checkpoint ${name}`, () => {
