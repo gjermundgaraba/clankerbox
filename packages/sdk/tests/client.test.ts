@@ -1053,6 +1053,26 @@ describe("client", () => {
         })
     );
 
+    it.effect(
+      "a create of the name whose host can't be read still ends the delete's wait: the delete is done",
+      () =>
+        Effect.gen(function* () {
+          const stub = server({ machines: [machine("dev")] });
+
+          stub.script("dev", [{ desired: "running", phase: "waiting" }]);
+
+          const deleted = yield* ticking(
+            withClient(
+              stub,
+              (client) => client.deleteMachine({ id: "dev" }),
+              everyMinute
+            )
+          );
+
+          expect(deleted).toBe("deleted");
+        })
+    );
+
     it.effect("a checkpoint's delete waits for it to go", () =>
       Effect.gen(function* () {
         const stub = server({ checkpoints: [checkpoint("snap")] });

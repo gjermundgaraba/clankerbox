@@ -613,7 +613,12 @@ export const make = (
               undefined,
               polled(
                 unlessGone(
-                  Effect.flatMap(call("getMachine", { id }, id), heard)
+                  call("getMachine", { id }, id).pipe(
+                    Effect.filterOrElse(
+                      (machine) => machine.desired !== "deleted",
+                      heard
+                    )
+                  )
                 ),
                 Option.match({
                   onNone: () => Option.some(Effect.void),
