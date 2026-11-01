@@ -6,20 +6,13 @@
   "exports": {
     ".": "./src/api.ts"
   },
-  "scripts": {
-    "test": "vp test"
-  },
   "dependencies": {
     "@gjermundgaraba/clankerbox-sdk": "workspace:*",
     "@gjermundgaraba/effect-actions": "catalog:",
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
-    "typescript": "catalog:",
-    "vite": "catalog:",
-    "vite-plus": "catalog:",
-    "vitest": "catalog:"
+    "typescript": "catalog:"
   }
 }
