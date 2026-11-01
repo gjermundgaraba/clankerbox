@@ -4,16 +4,18 @@ cli=$repo/apps/cli/dist/clankerbox.mjs
 # Vite+'s node shim sets itself up again under any HOME it hasn't seen.
 node=$(node -p process.execPath)
 
-# The tree of the sources the build and the processes load, as they are on disk.
+# The tree of the sources the build and the processes load, and of what resolves and builds them,
+# as they are on disk.
 sources() {
   index=$(mktemp)
   rm "$index"
   (
     cd "$repo" &&
-      GIT_INDEX_FILE=$index git add -A -- apps/cli/src packages/sdk/src \
-        packages/sdk/tests packages/host-contract/src apps/host/src \
-        apps/host/tests apps/server/src apps/server/tests \
-        ':(exclude)*.test.ts' &&
+      GIT_INDEX_FILE=$index git add -A -- apps/cli/src apps/cli/vite.config.ts \
+        packages/sdk/src packages/sdk/tests packages/host-contract/src \
+        apps/host/src apps/host/tests apps/server/src apps/server/tests \
+        ':(glob)**/package.json' pnpm-lock.yaml pnpm-workspace.yaml \
+        tsconfig.base.json ':(exclude)*.test.ts' &&
       GIT_INDEX_FILE=$index git write-tree
   )
   status=$?
@@ -83,4 +85,5 @@ start_server() {
     }
     sleep 0.25
   done
+  rm "$run/server.starting"
 }

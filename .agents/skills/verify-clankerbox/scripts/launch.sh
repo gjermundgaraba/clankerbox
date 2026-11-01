@@ -20,7 +20,7 @@ fail() {
 
 sources >"$evidence/sources"
 cd "$repo"
-vp run -r build >"$evidence/build.log" 2>&1 || fail "the build failed" "$evidence/build.log"
+vp run @gjermundgaraba/clankerbox#build >"$evidence/build.log" 2>&1 || fail "the build failed" "$evidence/build.log"
 
 number=0
 while [ "$number" -lt "$count" ]; do

@@ -33,7 +33,7 @@ $S/cleanup.sh "$RUN"
 ## Launch
 
 `launch.sh [linux|mac] [ram-budget-mib] [hosts]` records the tree of the sources
-it builds, builds every package, makes a fresh run directory under `$TMPDIR`,
+it builds, builds the CLI, makes a fresh run directory under `$TMPDIR`,
 starts the hosts and the control plane in the background and waits until they
 serve. It prints the control plane's URL on stderr and the run directory on
 stdout. A build or start that fails prints its log and the evidence directory.
