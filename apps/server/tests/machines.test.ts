@@ -286,10 +286,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a stop sent while the runtime can't read the machine is saved, answers Unavailable, and the next recheck stops it",
+    "a stop sent while the runtime can't read the machine waits, sending nothing, and the first recheck that reads it stops it",
     () =>
       Effect.gen(function* () {
-        const { client, fake, rests } = yield* served({
+        const { client, fake, machine } = yield* served({
           recheck: Duration.millis(200),
         });
 
@@ -297,7 +297,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         unready(fake, "dev");
         fake.calls.length = 0;
 
-        const unread = yield* Effect.flip(client.stopMachine({ id: "dev" }));
+        const stop = yield* Effect.forkChild(client.stopMachine({ id: "dev" }));
+
+        const unread = yield* eventually(
+          machine("dev"),
+          ({ phase, desired }) => phase === "waiting" && desired === "stopped"
+        );
+
+        yield* Effect.sleep(Duration.millis(300));
+
         const whileUnread = [...fake.calls];
 
         fake.machines.set("dev", {
@@ -305,10 +313,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           root: fake.root("dev") ?? "",
         });
 
-        const stopped = yield* rests("dev");
+        const stopped = yield* Fiber.join(stop);
 
-        expect(unread).toMatchObject({ _tag: "Unavailable", readOnly: false });
-        expect(unread.message).toContain("saved");
+        expect(at(unread)).toStrictEqual(["unknown", "stopped", "waiting"]);
         expect(whileUnread).toStrictEqual([]);
         expect(at(stopped)).toStrictEqual(["stopped", "stopped", "settled"]);
         expect(fake.calls).toStrictEqual(["stop dev"]);
@@ -2132,24 +2139,27 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a stop on a host that is down is saved, answers Unavailable at once, and acts when the host is back",
+    "a stop on a host that is down is saved, and its wait reads on until the host is back and the machine stops",
     () =>
       Effect.gen(function* () {
-        const { client, fake, host, machine, rests } = yield* served({
+        const { client, fake, host, machine } = yield* served({
           recheck: Duration.millis(200),
         });
 
         yield* client.create("dev", request("dev"));
         yield* host.dispose;
 
-        const saved = yield* Effect.flip(client.stopMachine({ id: "dev" }));
-        const waiting = yield* machine("dev");
+        const stop = yield* Effect.forkChild(client.stopMachine({ id: "dev" }));
+
+        const waiting = yield* eventually(
+          machine("dev"),
+          ({ desired }) => desired === "stopped"
+        );
 
         yield* restartedHost(host);
 
-        const stopped = yield* rests("dev");
+        const stopped = yield* Fiber.join(stop);
 
-        expect(saved).toMatchObject({ _tag: "Unavailable", readOnly: false });
         expect([waiting.state, waiting.phase]).toStrictEqual([
           "unknown",
           "waiting",

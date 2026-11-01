@@ -21,8 +21,9 @@ const Size = Schema.Int.check(Schema.isGreaterThan(0));
 /**
  * What the control plane is doing about a machine. A client waits for a rest:
  * `settled`, at rest with what was asked; `failed`, after a step failed, until the next request;
- * `lost`, one the runtime no longer has, which can only be deleted; and `waiting`, one the control
- * plane can't read, where the request stays saved and acts when it can. `creating` copies the
+ * and `lost`, one the runtime no longer has, which can only be deleted. `waiting` is no rest: the
+ * control plane can't read the machine's host, so it tells nothing of a request, which stays saved
+ * and acts when it can, and a wait reads on through it as through an outage. `creating` copies the
  * machine and runs its setup, and a machine whose create or setup fails is deleted, its row kept
  * `failed` to say why. `starting` starts the machine, also when it runs already, resumes a paused
  * one, and prepares it.
@@ -45,10 +46,7 @@ export type Phase = typeof Phase.Type;
 
 /** Where a client's wait ends. */
 export const isResting = (phase: Phase): boolean =>
-  phase === "settled" ||
-  phase === "failed" ||
-  phase === "lost" ||
-  phase === "waiting";
+  phase === "settled" || phase === "failed" || phase === "lost";
 
 export const SshEndpoint = Schema.Struct({
   host: Schema.String,

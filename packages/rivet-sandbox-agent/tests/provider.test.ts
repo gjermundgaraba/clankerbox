@@ -282,12 +282,15 @@ describe("provider", () => {
     expect(stub.held()).toStrictEqual([]);
   });
 
-  it("a create saved until its host can be reached takes its request back", async () => {
-    const { stub, sandbox } = await setup({ created: ["waiting"] });
+  it("a sandbox is handed out once its machine rests, through a moment its host can't be read", async () => {
+    const { stub, sandbox } = await setup({
+      created: ["creating", "waiting", "settled"],
+    });
 
-    await expect(sandbox.create()).rejects.toBeInstanceOf(Unavailable);
-    expect(requests(stub)).toStrictEqual(["machine.create", "machine.delete"]);
-    expect(stub.held()).toStrictEqual([]);
+    const id = await sandbox.create();
+
+    expect(stub.row(id)).toMatchObject({ phase: "settled", state: "running" });
+    expect(requests(stub)).toStrictEqual(["machine.create"]);
   });
 
   it("a sandbox is handed out once its machine rests, through a short outage of the control plane", async () => {

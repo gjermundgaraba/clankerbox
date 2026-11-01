@@ -2,6 +2,7 @@ import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import {
   Clock,
   Context,
+  DateTime,
   Duration,
   Effect,
   Layer,
@@ -129,7 +130,11 @@ export interface Interface {
 /**
  * The server answers a mutation once it has recorded it, and the client waits by reading. Nothing
  * retries a mutation: one whose reply is lost is `Unavailable`, and the caller reads the resource
- * to see what happened. Only a wait's reads go on through an outage of the server, for a while.
+ * to see what happened. Only a wait's reads go on through an outage, of the server or of a
+ * machine's host, for two minutes, and then end `Unavailable`, the request saved. A wait follows
+ * the machine it asked, by `createdAt`: one deleted and made again under its name is `Superseded`
+ * by the delete. A delete, which answers nothing to compare, takes a row that doesn't want deleted
+ * for one made again.
  */
 export class Client extends Context.Service<Client, Interface>()(
   "@gjermundgaraba/clankerbox-sdk/Client"
@@ -264,27 +269,25 @@ const saved = (subject: string, why: string): Unavailable =>
 
 type Verdict<A> = Option.Option<Effect.Effect<A, ClankerboxError>>;
 
-/** What a machine's rest says of a request for `desired`. */
+/** What a wait on a machine waits for: a wish, or a resize, which any wish but a delete lets run first. */
+export type Asked = Machine["desired"] | "resize";
+
+const awaited = (asked: Asked): string =>
+  asked === "resize" ? "its resize rested" : `it got to ${asked}`;
+
+/** What a machine's rest says of a request. */
 export const answerOf = (
   machine: Machine,
-  desired: Machine["desired"]
+  asked: Asked
 ): Effect.Effect<Machine, ClankerboxError> => {
-  const { id, phase, error } = machine;
+  const { id, desired, phase, error } = machine;
+  const kept = asked === "resize" ? desired !== "deleted" : desired === asked;
 
-  if (machine.desired !== desired) {
+  if (!kept) {
     return Effect.fail(
       new Superseded({
-        message: `a later request asked machine ${id} to be ${machine.desired} before it got to ${desired}`,
-        by: machine.desired,
-      })
-    );
-  }
-
-  if (phase === "waiting") {
-    return Effect.fail(
-      new Unavailable({
-        message: `machine ${id}'s host can't be reached; the request is saved, and acts when it can`,
-        readOnly: false,
+        message: `a later request asked machine ${id} to be ${desired} before ${awaited(asked)}`,
+        by: desired,
       })
     );
   }
@@ -307,27 +310,31 @@ export const answerOf = (
   return Effect.succeed(machine);
 };
 
-const machineGone = (machine: Machine): Verdict<void> => {
-  const madeAgain = machine.desired !== "deleted";
+const heard = (machine: Machine): Effect.Effect<Machine, Unavailable> =>
+  machine.phase === "waiting"
+    ? Effect.fail(
+        new Unavailable({
+          message: `machine ${machine.id}'s host can't be reached`,
+          readOnly: true,
+        })
+      )
+    : Effect.succeed(machine);
 
-  if (madeAgain) {
+const machineGone = (machine: Machine): Verdict<void> => {
+  if (machine.desired !== "deleted") {
     return Option.some(Effect.void);
   }
 
-  if (machine.phase === "waiting") {
-    return Option.some(
-      Effect.fail(
-        new Unavailable({
-          message: `machine ${machine.id}'s host can't be reached; its delete is saved, and acts when it can`,
-          readOnly: false,
-        })
+  return machine.phase === "failed"
+    ? Option.some(
+        Effect.fail(
+          machine.error ??
+            new Internal({
+              message: `machine ${machine.id}'s delete failed, saying nothing`,
+            })
+        )
       )
-    );
-  }
-
-  return machine.error === undefined
-    ? Option.none()
-    : Option.some(Effect.fail(machine.error));
+    : Option.none();
 };
 
 const checkpointGone = (checkpoint: Checkpoint): Verdict<void> => {
@@ -471,32 +478,43 @@ export const make = (
 
     const machineRest = (
       recorded: Machine,
-      desired: Machine["desired"],
+      asked: Asked,
       action: ServerAction
     ): Effect.Effect<Machine, ClankerboxError> => {
-      if (recorded.desired === "deleted" && desired !== "deleted") {
-        return answerOf(recorded, desired);
+      const { id, createdAt } = recorded;
+
+      if (recorded.desired === "deleted") {
+        return answerOf(recorded, asked);
       }
 
       return unlessNoWait(
         recorded,
         polled(
-          call("getMachine", { id: recorded.id }, recorded.id).pipe(
+          call("getMachine", { id }, id).pipe(
             Effect.catchTag("NotFound", () =>
               Effect.fail(
                 new Superseded({
-                  message: `machine ${recorded.id} was deleted before it got to ${desired}`,
+                  message: `machine ${id} was deleted before ${awaited(asked)}`,
                   by: "deleted",
                 })
               )
-            )
+            ),
+            Effect.filterOrFail(
+              (machine) => DateTime.Equivalence(machine.createdAt, createdAt),
+              () =>
+                new Superseded({
+                  message: `machine ${id} was deleted and made again before ${awaited(asked)}`,
+                  by: "deleted",
+                })
+            ),
+            Effect.flatMap(heard)
           ),
           (machine) =>
             isResting(machine.phase)
-              ? Option.some(answerOf(machine, desired))
+              ? Option.some(answerOf(machine, asked))
               : Option.none(),
           action,
-          recorded.id
+          id
         )
       );
     };
@@ -545,7 +563,7 @@ export const make = (
       pauseMachine: asking("pauseMachine", "paused"),
       resizeMachine: (input) =>
         Effect.flatMap(send("resizeMachine", input, input.id), (recorded) =>
-          machineRest(recorded, recorded.desired, "resizeMachine")
+          machineRest(recorded, "resize", "resizeMachine")
         ),
       forkMachine: (input) =>
         Effect.flatMap(
@@ -590,7 +608,9 @@ export const make = (
             unlessNoWait(
               undefined,
               polled(
-                unlessGone(call("getMachine", { id }, id)),
+                unlessGone(
+                  Effect.flatMap(call("getMachine", { id }, id), heard)
+                ),
                 Option.match({
                   onNone: () => Option.some(Effect.void),
                   onSome: machineGone,

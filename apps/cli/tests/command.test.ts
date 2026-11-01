@@ -3,6 +3,7 @@ import path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, layer } from "@effect/vitest";
 import { Capacity, ScriptFailed } from "@gjermundgaraba/clankerbox-sdk";
+import { ticking } from "@gjermundgaraba/clankerbox-sdk/testing/clock";
 import {
   mkdir,
   write,
@@ -254,7 +255,7 @@ describe("commands", () => {
     );
 
     it.effect(
-      "a machine whose host can't be reached rests waiting: the command fails fast, and says the request is saved",
+      "a machine whose host stays unreachable ends the command as a long outage does, saying the request is saved",
       () =>
         Effect.gen(function* () {
           const dir = yield* scratch;
@@ -266,9 +267,10 @@ describe("commands", () => {
 
           stub.script("dev", ["waiting"]);
 
-          const { code, stdout } = yield* cli(
-            ["start", "dev", "--json", "--config", config],
-            { server: stub }
+          const { code, stdout } = yield* ticking(
+            cli(["start", "dev", "--json", "--config", config], {
+              server: stub,
+            })
           );
 
           const { error } = decodeJsonError(stdout);

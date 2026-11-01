@@ -33,8 +33,8 @@ import type {
 
 /**
  * What one read of a resource sees: a phase, fields to write on its row, `gone` once it is deleted,
- * or `down` when the read gets no reply. A script's last `down` repeats, so an outage can outlast
- * the wait.
+ * or `down` when the read gets no reply. A script's last `down` or `waiting` repeats, so an outage
+ * of the control plane or of a host can outlast the wait.
  */
 export type Step<Row, Stage> = Stage | Partial<Row> | "gone" | "down";
 
@@ -129,7 +129,7 @@ const nextStep = <S>(
 
   if (rest.length > 0) {
     scripts.set(id, rest);
-  } else if (step !== "down") {
+  } else if (step !== "down" && step !== "waiting") {
     scripts.delete(id);
   }
 

@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest";
-import { Clock, Duration, Effect, Fiber } from "effect";
+import { Clock, DateTime, Duration, Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 import { afterEach, describe, expect } from "vite-plus/test";
 
@@ -17,7 +17,7 @@ import {
   version,
 } from "../src/index.ts";
 import type { MachineSpec } from "../src/index.ts";
-import { elapsing } from "./clock.ts";
+import { elapsing, ticking } from "./clock.ts";
 import {
   checkpoint,
   machine,
@@ -49,18 +49,6 @@ const withClient = <A, E>(
   );
 
 const everyMinute = { pollEvery: Duration.minutes(1) };
-
-const ticking = <A, E>(wait: Effect.Effect<A, E>) =>
-  Effect.gen(function* () {
-    const fiber = yield* Effect.forkChild(wait);
-
-    while (fiber.pollUnsafe() === undefined) {
-      yield* TestClock.withLive(Effect.sleep(Duration.millis(1)));
-      yield* TestClock.adjust(Duration.seconds(10));
-    }
-
-    return yield* Fiber.join(fiber);
-  });
 
 const clocked = <A, E>(wait: Effect.Effect<A, E>) =>
   Effect.gen(function* () {
@@ -628,6 +616,49 @@ describe("client", () => {
     );
 
     it.effect(
+      "a resize rests at its sizes under a wish asked after it, as any wish but a delete leaves it to run",
+      () =>
+        Effect.gen(function* () {
+          const stub = server({ machines: [machine("dev")] });
+
+          stub.script("dev", [
+            { desired: "stopped", phase: "resizing" },
+            { desired: "stopped", state: "stopped", phase: "settled" },
+          ]);
+
+          const resized = yield* ticking(
+            withClient(
+              stub,
+              (client) => client.resizeMachine({ id: "dev", cpu: 4 }),
+              everyMinute
+            )
+          );
+
+          expect(resized).toMatchObject({ cpu: 4, desired: "stopped" });
+        })
+    );
+
+    it.effect("a resize a delete lands on is Superseded by it", () =>
+      Effect.gen(function* () {
+        const stub = server({ machines: [machine("dev")] });
+
+        stub.script("dev", [
+          {
+            desired: "deleted",
+            phase: "failed",
+            error: new Internal({ message: "the VM wouldn't go" }),
+          },
+        ]);
+
+        const error = yield* withClient(stub, (client) =>
+          Effect.flip(client.resizeMachine({ id: "dev", cpu: 4 }))
+        );
+
+        expect(error).toMatchObject({ _tag: "Superseded", by: "deleted" });
+      })
+    );
+
+    it.effect(
       "a failed resize answers the row's error, keeping the action",
       () =>
         Effect.gen(function* () {
@@ -703,22 +734,82 @@ describe("client", () => {
     );
 
     it.effect(
-      "a rest at waiting fails at once, saying the request is saved, and isn't retryable",
+      "a machine whose host can't be read tells nothing of the request, so the wait reads on",
       () =>
         Effect.gen(function* () {
           const stub = server();
 
-          stub.script("dev", ["waiting"]);
+          stub.script("dev", ["waiting", "waiting", "settled"]);
 
-          const error = yield* withClient(stub, (client) =>
-            Effect.flip(client.create("dev", spec))
+          const made = yield* ticking(
+            withClient(
+              stub,
+              (client) => client.create("dev", spec),
+              everyMinute
+            )
+          );
+
+          expect(made.phase).toBe("settled");
+        })
+    );
+
+    it.effect(
+      "a host that stays unread ends the wait as a long outage does, saying the request is saved, and isn't retryable",
+      () =>
+        Effect.gen(function* () {
+          const stub = server();
+
+          stub.script("dev", ["down", "waiting"]);
+
+          const { answer: error, elapsed } = yield* clocked(
+            withClient(
+              stub,
+              (client) => Effect.flip(client.create("dev", spec)),
+              everyMinute
+            )
           );
 
           expect(error._tag).toBe("Unavailable");
           expect(error).toMatchObject({ readOnly: false, made: "dev" });
+          expect(error.message).toContain("can't be reached");
           expect(error.message).toContain("the request is saved");
           expect(retryable(error)).toBe(false);
-          expect(stub.calls).toStrictEqual(["machine.create", "machine.get"]);
+          expect(
+            Duration.isGreaterThanOrEqualTo(elapsed, Duration.minutes(2))
+          ).toBe(true);
+          expect(Duration.isLessThan(elapsed, Duration.minutes(4))).toBe(true);
+        })
+    );
+
+    it.effect(
+      "a machine deleted and made again under its name during the wait is Superseded by the delete",
+      () =>
+        Effect.gen(function* () {
+          const stub = server({
+            machines: [
+              machine("dev", { state: "stopped", desired: "stopped" }),
+            ],
+          });
+
+          stub.script("dev", [
+            {
+              createdAt: DateTime.makeUnsafe("2026-10-02T00:00:00Z"),
+              state: "running",
+              desired: "running",
+              phase: "settled",
+            },
+          ]);
+
+          const error = yield* withClient(stub, (client) =>
+            Effect.flip(client.startMachine({ id: "dev" }))
+          );
+
+          expect(error).toMatchObject({
+            _tag: "Superseded",
+            by: "deleted",
+            action: "startMachine",
+            id: "dev",
+          });
         })
     );
 
@@ -894,20 +985,54 @@ describe("client", () => {
       })
     );
 
-    it.effect("a delete at waiting fails at once, saying it is saved", () =>
-      Effect.gen(function* () {
-        const stub = server({ machines: [machine("dev")] });
+    it.effect(
+      "a delete reads on through a host it can't read, and through a step it cut short, whose failure isn't the delete's",
+      () =>
+        Effect.gen(function* () {
+          const stub = server({ machines: [machine("dev")] });
 
-        stub.script("dev", ["waiting"]);
+          stub.script("dev", [
+            {
+              desired: "deleted",
+              phase: "deleting",
+              error: new Internal({ message: "the disk didn't grow" }),
+            },
+            "waiting",
+            "gone",
+          ]);
 
-        const error = yield* withClient(stub, (client) =>
-          Effect.flip(client.deleteMachine({ id: "dev" }))
-        );
+          const deleted = yield* ticking(
+            withClient(
+              stub,
+              (client) => client.deleteMachine({ id: "dev" }),
+              everyMinute
+            )
+          );
 
-        expect(error._tag).toBe("Unavailable");
-        expect(error.message).toContain("its delete is saved");
-        expect(retryable(error)).toBe(false);
-      })
+          expect(deleted).toBe("deleted");
+        })
+    );
+
+    it.effect(
+      "a delete whose host stays unread ends saying it is saved, and isn't retryable",
+      () =>
+        Effect.gen(function* () {
+          const stub = server({ machines: [machine("dev")] });
+
+          stub.script("dev", ["waiting"]);
+
+          const error = yield* ticking(
+            withClient(
+              stub,
+              (client) => Effect.flip(client.deleteMachine({ id: "dev" })),
+              everyMinute
+            )
+          );
+
+          expect(error._tag).toBe("Unavailable");
+          expect(error.message).toContain("the request is saved");
+          expect(retryable(error)).toBe(false);
+        })
     );
 
     it.effect(

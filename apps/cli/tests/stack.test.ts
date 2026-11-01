@@ -781,7 +781,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a request for a machine whose host is down fails fast and says it is saved, and the machine still reads",
+    "a request for a machine whose host is down waits for it, its --timeout ending the wait saying the request is saved, and the machine still reads",
     () =>
       Effect.gen(function* () {
         const { hosts, run } = yield* setUp();
@@ -789,7 +789,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* run(["create", "dev", ...sizes]);
         yield* hosts[0]?.dispose ?? Effect.void;
 
-        const stopped = yield* run(["stop", "dev", "--json"]);
+        const stopped = yield* run([
+          "stop",
+          "dev",
+          "--json",
+          "--timeout",
+          "1s",
+        ]);
+
         const held = yield* run(["get", "dev", "--json"]);
         const { error } = decodeFailure(stopped.stdout);
 
