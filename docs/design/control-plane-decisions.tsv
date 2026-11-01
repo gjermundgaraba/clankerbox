@@ -47,3 +47,4 @@ ts	phase	decision	why	evidence	result
 2026-10-30T21:00:17Z	design	adoptMachines once per new boot, through a boots table	a host keeps no list, and a runtime may need the machines to reattach	crash.test.ts a host that restarts is told the machines it holds, once	passes
 2026-10-30T21:00:17Z	verify	rows 19 to 21 and the to-record rows closed	cross-model review found no closing row	machines.test.ts, sqlite.test.ts, note sections	closed
 2026-10-30T21:00:17Z	verify	trail rows 2 to 23 were written in one batch after the work	they were not logged at decision time; timestamps do not show when each was decided	cross-model review	disclosed
+2026-11-01T14:43:44Z	design	a wait reads on through waiting as through an outage, ending Unavailable after outageLimit	one failed host read ended a create's wait, and the provider then deleted a healthy create	packages/sdk/src/client.ts; client.test.ts, a machine whose host can't be read	supersedes row 16
