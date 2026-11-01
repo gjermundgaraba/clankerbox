@@ -198,12 +198,16 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
   machine moves it toward what was asked a whole step at a time, and a later
   request cuts a step short. A request takes the row out of rest in the write
   that records it, so a resting `phase` read after it has seen it. A client waits
-  by reading, and works out `Superseded` from what it reads. A wait follows the machine it asked by `createdAt`, reads on through `waiting` as through an outage of the control plane, and ends `Unavailable`, the request saved, once either has lasted two minutes.
+  by reading, and works out `Superseded` from what it reads. A wait follows the
+  machine it asked by `createdAt`, reads on through `waiting` as through an
+  outage of the control plane, and ends `Unavailable`, the request saved, once
+  two minutes pass with no read that tells it anything.
 - **A step is a whole operation on a host.** The write that enters a leaf with a
   `step` records an operation in the store with its leases, and the loop then
   sends it. The host runs it to its end whether or not the caller stays, and
-  keeps its report until it is collected, so a control plane that restarts finds
-  it by ID and carries on. Delivering an ID
+  keeps its report until it is collected or it accepts the scope's next step,
+  which the loop sends only once the report is stored, so a control plane that
+  restarts finds it by ID and carries on. Delivering an ID
   again returns that operation; a sequence not above the scope's is refused and a
   higher one cuts short what still runs there. `boot`, new with each host
   process and carried by the step, tells a restart from a delivery that hasn't
