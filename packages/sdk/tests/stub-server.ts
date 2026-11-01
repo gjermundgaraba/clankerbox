@@ -139,6 +139,9 @@ const nextStep = <S>(
 const noMachine = (id: string) =>
   new NotFound({ message: `no machine ${id}`, id });
 
+const isUndone = ({ phase, state, desired }: Machine) =>
+  phase === "failed" && state === "missing" && desired !== "deleted";
+
 const noCheckpoint = (id: string) =>
   new NotFound({ message: `no checkpoint ${id}`, id });
 
@@ -149,7 +152,9 @@ const noBuild = (id: string) =>
  * The control plane, in memory. A mutation answers with the row it records, out of rest; the next
  * read rests it where the request asked, or removes it after a delete, unless `script`,
  * `scriptCheckpoint` or `scriptBuild` says what the next reads of an ID see, one step a read. Builds
- * are `prebuilt-0`, `prebuilt-1`.
+ * are `prebuilt-0`, `prebuilt-1`. As on the control plane, a failed create's row whose VM is gone,
+ * `failed` and `missing`, is replaced by a create of its name, cleared at once by a delete, and no
+ * machine to any other request.
  */
 export const stubServer = (options: StubServerOptions = {}) => {
   const kind = options.kind ?? "linux";
@@ -195,6 +200,13 @@ export const stubServer = (options: StubServerOptions = {}) => {
       ? Effect.fail(noMachine(id))
       : Effect.succeed(found);
   };
+
+  const findMade = (id: string) =>
+    Effect.filterOrFail(
+      find(id),
+      (found) => !isUndone(found),
+      () => noMachine(id)
+    );
 
   const findCheckpoint = (id: string) => {
     const found = checkpoints.get(id);
@@ -371,7 +383,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
   const add = (made: Machine) => {
     const taken = machines.get(made.id);
 
-    return taken === undefined || taken.phase === "failed"
+    return taken === undefined || isUndone(taken)
       ? Effect.sync(() => writeMachine(made))
       : Effect.fail(
           new Conflict({ message: `${made.id} exists`, id: made.id })
@@ -379,10 +391,19 @@ export const stubServer = (options: StubServerOptions = {}) => {
   };
 
   const asked = (id: string, desired: Machine["desired"]) =>
-    Effect.map(find(id), (found) =>
+    Effect.map(findMade(id), (found) =>
       found.desired === "deleted"
         ? found
         : writeMachine({ ...found, desired, phase: "observing" })
+    );
+
+  const deleted = (id: string) =>
+    Effect.flatMap(find(id), (found) =>
+      isUndone(found)
+        ? Effect.sync(() => {
+            machines.delete(id);
+          })
+        : Effect.asVoid(asked(id, "deleted"))
     );
 
   const recordCreate = (request: CreateRequest) =>
@@ -431,7 +452,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
     );
 
   const recordCapture = (source: string, name: string) =>
-    Effect.flatMap(find(source), (found) =>
+    Effect.flatMap(findMade(source), (found) =>
       checkpoints.has(name)
         ? Effect.fail(new Conflict({ message: `${name} exists`, id: name }))
         : Effect.sync(() =>
@@ -515,7 +536,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
       recording(
         "resizeMachine",
         "machine.resize",
-        Effect.map(find(id), (found) =>
+        Effect.map(findMade(id), (found) =>
           writeMachine({
             ...found,
             ...sized(found, sizes),
@@ -524,16 +545,12 @@ export const stubServer = (options: StubServerOptions = {}) => {
         )
       ),
     deleteMachine: ({ id }) =>
-      recording(
-        "deleteMachine",
-        "machine.delete",
-        Effect.asVoid(asked(id, "deleted"))
-      ),
+      recording("deleteMachine", "machine.delete", deleted(id)),
     forkMachine: ({ machine: source, name, ...sizes }) =>
       recording(
         "forkMachine",
         "machine.fork",
-        Effect.flatMap(find(source), (found) =>
+        Effect.flatMap(findMade(source), (found) =>
           add({
             ...found,
             id: name,

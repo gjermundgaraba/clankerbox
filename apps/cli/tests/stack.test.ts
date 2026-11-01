@@ -10,13 +10,15 @@ import {
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
+import { stubServer } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import { loginSetup, running } from "@gjermundgaraba/clankerbox-server/testing";
 import { Effect, Schema } from "effect";
 import { expect, vi } from "vite-plus/test";
 
 import { ErrorDocument } from "../src/command.ts";
 import { renderSshConfig } from "../src/ssh-config.ts";
-import { cli } from "./support.ts";
+import { cli, writeConfig } from "./support.ts";
+import type { CliRun } from "./support.ts";
 
 vi.setConfig({ testTimeout: 30_000 });
 
@@ -135,6 +137,22 @@ const decodeFailure = (text: string) =>
   Schema.decodeSync(
     Schema.fromJsonString(Schema.Struct({ error: ErrorDocument }))
   )(text, { onExcessProperty: "error" });
+
+const answersOnUndone = (
+  run: (args: readonly string[]) => Effect.Effect<CliRun>
+) => {
+  const outcome = (args: readonly string[]) =>
+    Effect.map(run([...args, "--json"]), ({ code, stdout }) =>
+      code === 0 ? "answered" : decodeFailure(stdout).error.tag
+    );
+
+  return Effect.all({
+    started: outcome(["start", "dev"]),
+    removed: outcome(["delete", "other"]),
+    gone: outcome(["get", "other"]),
+    replaced: outcome(["create", "dev", ...sizes]),
+  });
+};
 
 const fieldsOf = (text: string) =>
   text.split("\n").map((line) => line.split(/\s{2,}/u));
@@ -318,10 +336,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a setup that fails replies with its output, its row says so until it is deleted, and a create of the name replaces it",
+    "a setup that fails replies with its output, its row says so until it is deleted, a create of the name replaces it, and the SDK's stub holding the row answers alike",
     () =>
       Effect.gen(function* () {
-        const { dir, run } = yield* setUp();
+        const { dir, machines, run } = yield* setUp();
         const script = path.join(dir, "setup.sh");
 
         yield* write(
@@ -338,9 +356,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         ];
 
         const created = yield* run(["create", "dev", ...scripted, "--json"]);
+
+        yield* run(["create", "other", ...scripted]);
+
         const held = yield* run(["get", "dev", "--json"]);
         const listed = yield* run(["machines"]);
-        const started = yield* run(["start", "dev", "--json"]);
 
         const { error } = decodeFailure(created.stdout);
 
@@ -355,18 +375,34 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           error: { _tag: "ScriptFailed" },
         });
         expect(listed.stdout).toContain("ScriptFailed");
-        expect(decodeFailure(started.stdout).error.tag).toBe("NotFound");
 
-        const replaced = yield* run(["create", "dev", ...sizes]);
+        const stub = yield* Effect.acquireRelease(
+          Effect.map(machines.list, (rows) => stubServer({ machines: rows })),
+          (made) =>
+            Effect.promise(async () => {
+              await made.dispose();
+            })
+        );
 
-        yield* run(["create", "other", ...scripted]);
+        const stubDir = path.join(dir, "stub");
 
-        const removed = yield* run(["delete", "other"]);
-        const gone = yield* run(["get", "other", "--json"]);
+        yield* mkdir(stubDir);
 
-        expect(replaced).toMatchObject({ code: 0, stdout: "dev" });
-        expect(removed).toMatchObject({ code: 0, stdout: "other" });
-        expect(decodeFailure(gone.stdout).error.tag).toBe("NotFound");
+        const stubConfig = yield* writeConfig(stubDir);
+
+        const undone = {
+          started: "NotFound",
+          removed: "answered",
+          gone: "NotFound",
+          replaced: "answered",
+        };
+
+        expect(yield* answersOnUndone(run)).toStrictEqual(undone);
+        expect(
+          yield* answersOnUndone((args) =>
+            cli([...args, "--config", stubConfig], { server: stub })
+          )
+        ).toStrictEqual(undone);
       })
   );
 
