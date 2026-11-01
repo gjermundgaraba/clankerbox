@@ -1,5 +1,9 @@
 import { HostHttp, HostInfo, Report } from "@clankerbox/host-contract";
-import type { Operation } from "@clankerbox/host-contract";
+import type {
+  HostAction,
+  Operation,
+  hostActionsByName,
+} from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import {
@@ -77,6 +81,9 @@ const made = (id: string, sequence = 1): Omit<Operation, "boot"> => ({
     machines: [],
   },
 });
+
+type Body<N extends HostAction> =
+  (typeof hostActionsByName)[N]["input"]["Encoded"];
 
 const finished = (url: string, id: string) =>
   Effect.map(post(url, "waitOperation", { id }), ({ body }) =>
@@ -254,6 +261,21 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { url, fake } = yield* serve();
+        const ref = { ...dev, port: 10_022 };
+
+        const bodies = {
+          readHost: {},
+          readMachines: {
+            machines: [{ name: dev.name, instance: dev.instance }],
+          },
+          readSizes: { machine: ref },
+          readCapacity: { machines: [ref] },
+          adoptMachines: { machines: [ref] },
+          runOperation: { ...made("op-1"), boot: yield* bootOf(url) },
+          waitOperation: { id: "op-1" },
+          cancelOperation: { id: "op-1" },
+          collectOperation: { id: "op-1" },
+        } satisfies { readonly [N in HostAction]: Body<N> };
 
         const refusals = [
           {
@@ -268,7 +290,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         for (const { name } of HostHttp.actions) {
           for (const { headers, says } of refusals) {
-            const answer = yield* post(url, name, { id: "op-1" }, headers);
+            const answer = yield* post(url, name, bodies[name], headers);
             const { message } = decodeInvalid(answer.body);
 
             expect(answer.status, name).toBe(400);
@@ -279,7 +301,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           }
         }
 
-        expect(fake.calls).toStrictEqual(["startup"]);
+        const calls = [...fake.calls];
+        const observed = [...fake.observed];
+        const served = yield* post(url, "runOperation", bodies.runOperation);
+
+        expect(calls).toStrictEqual(["startup"]);
+        expect(observed).toStrictEqual([]);
+        expect(served.status).toBe(200);
       })
   );
 

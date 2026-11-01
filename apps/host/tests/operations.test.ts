@@ -1395,9 +1395,17 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           3
         );
 
-        expect(given.outcome.sizes?.cpu).toBe(2);
+        expect(given.outcome.sizes).toStrictEqual({
+          cpu: 2,
+          ramMib: 1024,
+          diskGib: 10,
+        });
         expect(refused.status).toBe("failed");
-        expect(refused.outcome.sizes?.cpu).toBe(1);
+        expect(refused.outcome.sizes).toStrictEqual({
+          cpu: 1,
+          ramMib: 1024,
+          diskGib: 10,
+        });
       })
   );
 
@@ -1409,11 +1417,21 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const mac = yield* runner({ kind: "mac" });
         const dev = ref("dev");
 
+        const parked = ref("paused", { port: firstPort + 1 });
+
         yield* finished(host, makes("dev"));
+        yield* finished(host, makes("paused"));
+        yield* finished(
+          host,
+          { _tag: "pause", machine: parked, pin: "fake 1" },
+          2
+        );
         yield* finished(
           mac,
           makes("dev", { source: { _tag: "base", base: "macos" } })
         );
+        host.fake.calls.length = 0;
+        mac.fake.calls.length = 0;
 
         const admitted = [
           host.fake.activations.length,
@@ -1432,14 +1450,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const live = yield* resizing({ cpu: 2, ramMib: 512 }, 3);
         const gone = yield* resizing({ cpu: 2 }, 1, host, ref("gone"));
         const running = yield* resizing({ ramMib: 2048 }, 2, mac);
-
-        yield* finished(
-          host,
-          { _tag: "pause", machine: dev, pin: "fake 1" },
-          4
-        );
-
-        const paused = yield* resizing({ cpu: 2 }, 5);
+        const paused = yield* resizing({ cpu: 2 }, 3, host, parked);
 
         expect(
           [disk, live, running, paused].map(({ error }) => [
@@ -1458,13 +1469,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ],
           [
             "WrongState",
-            "machine dev is paused, and the linux runtime resizes a stopped or running machine: stop it first",
+            "machine paused is paused, and the linux runtime resizes a stopped or running machine: stop it first",
           ],
         ]);
         expect(gone.error?._tag).toBe("Missing");
-        expect([...host.fake.calls, ...mac.fake.calls]).not.toContain(
-          "resize dev"
-        );
+        expect([...host.fake.calls, ...mac.fake.calls]).toStrictEqual([]);
         expect([
           host.fake.activations.length,
           mac.fake.activations.length,

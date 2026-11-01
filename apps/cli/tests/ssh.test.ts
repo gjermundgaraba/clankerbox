@@ -4,12 +4,17 @@ import type { Socket } from "node:net";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, layer } from "@effect/vitest";
+import { Http, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import {
   machine,
   stubServer,
 } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
-import type { StubServer } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
+import type {
+  Refusals,
+  StubServer,
+  StubServerOptions,
+} from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import {
   Effect,
   Layer,
@@ -62,12 +67,21 @@ const reachable = machine("dev", {
   hostKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample root@dev",
 });
 
-const setup = (held = reachable) =>
+const everyWriteRefused: Refusals = Object.fromEntries(
+  Http.actions
+    .filter(({ readOnly }) => !readOnly)
+    .map(({ name }) => [
+      name,
+      new Internal({ message: `this server takes no ${name}` }),
+    ])
+);
+
+const setup = (held = reachable, options?: StubServerOptions) =>
   Effect.gen(function* () {
     const dir = yield* scratch;
     const config = yield* writeConfig(dir);
 
-    const server = stubServer({ machines: [held] });
+    const server = stubServer({ ...options, machines: [held] });
 
     stubs.push(server);
 
@@ -272,20 +286,28 @@ describe("ssh", () => {
     );
 
     it.effect(
-      "ssh-known-hosts prints the machine's host key under the name ssh asked for",
+      "ssh-known-hosts only reads: it prints the machine's host key under the name ssh asked for from a server that takes no write",
       () =>
         Effect.gen(function* () {
-          const { config, server } = yield* setup();
+          const { config, server } = yield* setup(reachable, {
+            refuse: everyWriteRefused,
+          });
 
           const { code, stdout } = yield* cli(
             ["ssh-known-hosts", "--config", config, "dev", "dev"],
             { server }
           );
 
+          const write = yield* cli(["stop", "--config", config, "dev"], {
+            server,
+          });
+
           expect(code).toBe(0);
           expect(stdout).toBe(
             "dev ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample"
           );
+          expect(write.code).toBe(1);
+          expect(write.stderr).toContain("this server takes no stopMachine");
         })
     );
 
