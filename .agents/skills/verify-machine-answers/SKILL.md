@@ -95,19 +95,20 @@ A pass covers this scope, and only it:
 - **`MachineAnswers.cfg`**: one client beside the creator, with one of each
   fault: a step or read that fails, a control plane crash, a partition, a host
   restart and a lost delivery, and nine operations. Every invariant and
-  `AllAnswered` hold over all 6,361,549 distinct states, about 5 minutes.
+  `AllAnswered` hold over every reachable state. A run takes about 5 minutes.
 - **`TwoClients.cfg`**: two clients beside the creator, with a crash and a
   partition and no other fault, and seven operations. Every invariant holds over
-  all 8,745,554 distinct states, about 1 minute. `AllAnswered` is not checked
-  here.
+  every reachable state. A run takes about 1 minute. `AllAnswered` is not
+  checked here.
 - **`ThreeClients.cfg`**: three clients beside the creator, with no fault, and
-  five operations. Every invariant holds over all 9,050,801 distinct states,
-  about 90 seconds. It is the one config where two cuts let a stale request
-  land, which an answer of `lost` for a cut step never delivered breaks in 14
-  seconds.
-- **Both at once is out of reach.** Two clients with every fault passed 152
-  million distinct states in about 40 minutes with no violation and its queue
-  still growing, and was stopped. That is evidence, not a proof.
+  five operations. Every invariant holds over every reachable state. A run
+  takes about 90 seconds. It is the one config where two cuts let a stale
+  request land, which an answer of `lost` for a cut step never delivered breaks
+  within seconds.
+- **Both at once is out of reach.** When last tried, two clients with every
+  fault ran for about 40 minutes, past 150 million distinct states, with no
+  violation and its queue still growing, and was stopped. That is evidence, not
+  a proof.
 - **The setup script is lost with the control plane's memory**, as in the code.
   A make not yet delivered when the process dies is undone.
 - **The runtime changes the VM only in steps**, each change atomic. A step cut
