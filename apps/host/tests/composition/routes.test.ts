@@ -250,55 +250,31 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a request of another release, or with no version, is Invalid and runs nothing",
-    () =>
-      Effect.gen(function* () {
-        const { url, fake } = yield* serve();
-        const older = versioned(bump(1));
-        const run = yield* deliver(url, made("op-1"), older);
-        const read = yield* post(url, "readHost", {}, older);
-        const unversioned = yield* deliver(url, made("op-1"), {});
-
-        const malformed = yield* post(
-          url,
-          "runOperation",
-          { id: "op-1" },
-          older
-        );
-
-        for (const answer of [run, read, unversioned, malformed]) {
-          expect(answer.status).toBe(400);
-        }
-
-        for (const answer of [run, read, malformed]) {
-          expect(decodeInvalid(answer.body).message).toBe(
-            `this host runs clankerbox ${version} and the caller is ${bump(1)}; their major.minor must match`
-          );
-        }
-
-        expect(decodeInvalid(unversioned.body).message).toContain(
-          `no ${versionHeader} header`
-        );
-        expect(decodeInvalid(unversioned.body).message).toContain(
-          `this host runs clankerbox ${version}`
-        );
-        expect(fake.calls).toStrictEqual(["startup"]);
-      })
-  );
-
-  it.effect(
     "every action refuses a request with no version, or another release's, and runs nothing",
     () =>
       Effect.gen(function* () {
         const { url, fake } = yield* serve();
 
+        const refusals = [
+          {
+            headers: {},
+            says: `no ${versionHeader} header`,
+          },
+          {
+            headers: versioned(bump(1)),
+            says: `this host runs clankerbox ${version} and the caller is ${bump(1)}; their major.minor must match`,
+          },
+        ];
+
         for (const { name } of HostHttp.actions) {
-          for (const headers of [{}, versioned(bump(1))]) {
+          for (const { headers, says } of refusals) {
             const answer = yield* post(url, name, { id: "op-1" }, headers);
+            const { message } = decodeInvalid(answer.body);
 
             expect(answer.status, name).toBe(400);
-            expect(decodeInvalid(answer.body).message, name).toMatch(
-              /no clankerbox-version header|their major\.minor must match/u
+            expect(message, name).toContain(says);
+            expect(message, name).toContain(
+              `this host runs clankerbox ${version}`
             );
           }
         }

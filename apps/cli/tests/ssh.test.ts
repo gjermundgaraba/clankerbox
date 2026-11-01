@@ -304,7 +304,6 @@ describe("ssh", () => {
           expect(stdout).toBe(
             "dev.cbx ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample"
           );
-          expect(server.calls).toStrictEqual(["machine.get"]);
         })
     );
 

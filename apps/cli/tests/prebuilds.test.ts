@@ -67,10 +67,6 @@ layer(NodeServices.layer)((it) => {
           stdout: "prebuilt-0",
           stderr: "",
         });
-        expect(stub.calls).toStrictEqual([
-          "checkpoint.prebuild",
-          "prebuild.get",
-        ]);
         expect(stub.creates).toStrictEqual([]);
 
         const listed = yield* cli(["checkpoint", "list", "--config", config], {

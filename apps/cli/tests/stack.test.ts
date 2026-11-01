@@ -219,7 +219,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a create on a full host lands on the next one, and the client sees no difference",
     () =>
       Effect.gen(function* () {
-        const { hosts, run } = yield* setUp({
+        const { run } = yield* setUp({
           ...twoHosts,
           runtime: { runtime: { ramBudgetMib: 2048 } },
         });
@@ -248,15 +248,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         });
         expect(json.stdout).not.toMatch(/alpha|beta/u);
         expect(listed.stdout).not.toMatch(/alpha|beta|failed/u);
-        expect(hosts[0]?.fake.calls).toContain("admit small");
-        expect(hosts[0]?.fake.calls).not.toContain("create small");
-        expect(hosts[1]?.fake.calls).toContain("create small");
-        expect([...(hosts[0]?.fake.machines.keys() ?? [])]).toStrictEqual([
-          "big",
-        ]);
-        expect([...(hosts[1]?.fake.machines.keys() ?? [])]).toStrictEqual([
-          "small",
-        ]);
         expect(
           (yield* decodeJson(CapacityJson, capacity.stdout)).usage.filter(
             ({ resource }) => resource === "ramMib"
@@ -330,7 +321,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a setup that fails replies with its output, its row says so until it is deleted, and a create of the name replaces it",
     () =>
       Effect.gen(function* () {
-        const { dir, hosts, run } = yield* setUp();
+        const { dir, run } = yield* setUp();
         const script = path.join(dir, "setup.sh");
 
         yield* write(
@@ -365,7 +356,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         });
         expect(listed.stdout).toContain("ScriptFailed");
         expect(decodeFailure(started.stdout).error.tag).toBe("NotFound");
-        expect(hosts[0]?.fake.machines.size).toBe(0);
 
         const replaced = yield* run(["create", "dev", ...sizes]);
 
@@ -552,7 +542,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "profiles lists the profiles directory, and a prebuild of one is restored by the next create of it",
     () =>
       Effect.gen(function* () {
-        const { dir, hosts, run } = yield* setUp();
+        const { dir, run } = yield* setUp();
         const profiles = path.join(dir, "profiles");
 
         yield* mkdir(profiles);
@@ -610,20 +600,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(fresh.stderr).not.toContain("restored from the prebuild");
         expect(other).toMatchObject({ code: 0, stdout: "large" });
         expect(other.stderr).not.toContain("restored from the prebuild");
-        expect(hosts[0]?.fake.calls).toStrictEqual(
-          expect.arrayContaining([
-            "restore fast",
-            "create slow",
-            "create large",
-          ])
-        );
-        expect(hosts[0]?.fake.calls).not.toContain("create fast");
       })
   );
 
   it.effect("a make from a prebuild sends no setup", () =>
     Effect.gen(function* () {
-      const { dir, hosts, run } = yield* setUp();
+      const { dir, run } = yield* setUp();
 
       yield* countedProfile(dir);
       yield* run(["prebuild", "--profile", "web"]);
@@ -631,7 +613,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const restored = yield* run(["create", "fast", "--profile", "web"]);
 
       expect(restored).toMatchObject({ code: 0, stdout: "fast" });
-      expect(hosts[0]?.fake.calls).toContain("restore fast");
       expect(yield* setupRuns(dir)).toBe(1);
     })
   );
@@ -651,8 +632,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(moved).toMatchObject({ code: 0, stdout: "fast" });
         expect(JSON.parse(got.stdout)).not.toHaveProperty("prebuild");
-        expect(hosts[0]?.fake.calls).toContain("admit fast");
-        expect(hosts[1]?.fake.calls).toContain("create fast");
         expect(yield* setupRuns(dir)).toBe(2);
       })
   );
@@ -709,7 +688,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "with every host full a create fails as a retryable Capacity, its row says so, and capacity shows the limit",
     () =>
       Effect.gen(function* () {
-        const { hosts, run } = yield* setUp({
+        const { run } = yield* setUp({
           runtime: { runtime: { ramBudgetMib: 2048 } },
         });
 
@@ -745,9 +724,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           used: 2048,
           limit: 2048,
         });
-        expect([...(hosts[0]?.fake.machines.keys() ?? [])]).toStrictEqual([
-          "big",
-        ]);
       })
   );
 

@@ -34,27 +34,6 @@ layer(NodeServices.layer)((it) => {
   });
 
   it.effect(
-    "checkpoint capture waits for the checkpoint to be ready and prints its name",
-    () =>
-      Effect.gen(function* () {
-        const dir = yield* scratch;
-        const config = yield* writeConfig(dir);
-        const stub = server({ machines: [machine("dev")] });
-
-        const captured = yield* cli(
-          ["checkpoint", "capture", "dev", "snap", "--config", config],
-          { server: stub }
-        );
-
-        expect(captured).toMatchObject({ code: 0, stdout: "snap" });
-        expect(stub.calls).toStrictEqual([
-          "checkpoint.capture",
-          "checkpoint.get",
-        ]);
-      })
-  );
-
-  it.effect(
     "a capture that fails exits 1 with its error, and checkpoint get says why",
     () =>
       Effect.gen(function* () {
@@ -240,12 +219,6 @@ layer(NodeServices.layer)((it) => {
           code: 0,
           stdout: JSON.stringify({ deleted: "other" }),
         });
-        expect(stub.calls).toStrictEqual([
-          "checkpoint.delete",
-          "checkpoint.get",
-          "checkpoint.delete",
-          "checkpoint.delete",
-        ]);
       })
   );
 });

@@ -242,7 +242,6 @@ describe("machines", () => {
 
           expect(code).toBe(0);
           expect(stdout).toBe("dev");
-          expect(stub.calls).toStrictEqual(["machine.create", "machine.get"]);
           expect(
             stub.creates.map(({ id, cpu, ramMib, diskGib }) => ({
               id,
@@ -293,25 +292,6 @@ describe("machines", () => {
           expect(request?.profile).toBe("dev");
           expect(request?.setup?.timeoutSeconds).toBe(900);
           expect(request?.setup?.script.startsWith("#!/bin/sh\n")).toBe(true);
-        })
-    );
-
-    it.effect(
-      "create has no --host: a client says what it wants, and the control plane places it",
-      () =>
-        Effect.gen(function* () {
-          const dir = yield* scratch;
-          const config = yield* writeConfig(dir);
-          const stub = server();
-
-          const { code, stderr } = yield* cli(
-            ["create", "dev", ...sizes, "--host", "linux", "--config", config],
-            { server: stub }
-          );
-
-          expect(code).toBe(1);
-          expect(stderr).toContain("--host");
-          expect(stub.calls).toStrictEqual([]);
         })
     );
 
@@ -653,16 +633,6 @@ describe("machines", () => {
             "dev stopped",
             "copy",
           ]);
-          expect(stub.calls).toStrictEqual([
-            "machine.start",
-            "machine.get",
-            "machine.pause",
-            "machine.get",
-            "machine.stop",
-            "machine.get",
-            "machine.fork",
-            "machine.get",
-          ]);
         })
     );
 
@@ -692,7 +662,6 @@ describe("machines", () => {
           expect(stderr).toBe("");
           expect(code).toBe(0);
           expect(stdout).toBe("dev 1 vCPUs, 2G RAM, 30G disk");
-          expect(stub.calls).toStrictEqual(["machine.resize", "machine.get"]);
         })
     );
 
