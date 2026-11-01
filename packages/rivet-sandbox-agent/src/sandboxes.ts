@@ -1,18 +1,17 @@
 import {
   Client,
   Conflict,
+  Invalid,
   loadProfile,
+  NotFound,
+  NotOffered,
   pinnedSsh,
-  Prebuild,
   specRequest,
   sshTarget,
   Superseded,
+  Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
-import type {
-  ClankerboxError,
-  NotFound,
-  Sizing,
-} from "@gjermundgaraba/clankerbox-sdk";
+import type { ClankerboxError, Sizing } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Duration,
   Effect,
@@ -70,7 +69,11 @@ const healthy = (port: number): Effect.Effect<boolean> =>
     Effect.orElseSucceed(() => false)
   );
 
-const destroyed = (id: string) => (cause: NotFound) =>
+const isGone = (error: ClankerboxError): error is NotFound | Superseded =>
+  error instanceof NotFound ||
+  (error instanceof Superseded && error.by === "deleted");
+
+const destroyed = (id: string) => (cause: NotFound | Superseded) =>
   Effect.fail(new SandboxDestroyedError(id, name, { cause }));
 
 const discard = (error: ClankerboxError) =>
@@ -79,7 +82,13 @@ const discard = (error: ClankerboxError) =>
 
     if (
       error.made !== undefined &&
-      !(error instanceof Conflict || error instanceof Superseded)
+      !(
+        error instanceof Conflict ||
+        error instanceof Invalid ||
+        error instanceof NotOffered ||
+        error instanceof Superseded ||
+        error instanceof Unavailable
+      )
     ) {
       yield* Effect.ignore(client.deleteMachine({ id: error.made }));
     }
@@ -212,7 +221,7 @@ export const make = (options: Options, ssh = "ssh") => {
 
       yield* client.startMachine({ id });
       yield* closed(known);
-    }).pipe(Effect.catchTag("NotFound", destroyed(id)));
+    }).pipe(Effect.catchIf(isGone, destroyed(id)));
 
   const made = (named: string) =>
     Effect.gen(function* () {
@@ -227,7 +236,7 @@ export const make = (options: Options, ssh = "ssh") => {
         return yield* client.forkMachine({ ...from, name: named });
       }
 
-      const { spec, host } = yield* specRequest(
+      const { spec } = yield* specRequest(
         "create",
         yield* loadProfile(from.profile),
         {
@@ -238,12 +247,7 @@ export const make = (options: Options, ssh = "ssh") => {
         }
       );
 
-      const { machine } = yield* Prebuild.create(client, named, spec, {
-        host,
-        fresh: options.fresh,
-      });
-
-      return machine;
+      return yield* client.create(named, spec, { fresh: options.fresh });
     });
 
   return {
@@ -280,7 +284,7 @@ export const make = (options: Options, ssh = "ssh") => {
           client.resizeMachine({ ...sizes, id })
         ).pipe(
           Effect.map(({ cpu, ramMib, diskGib }) => ({ cpu, ramMib, diskGib })),
-          Effect.catchTag("NotFound", destroyed(id))
+          Effect.catchIf(isGone, destroyed(id))
         )
       ),
     reconnect: (id: string) => locked(id, (known) => started(id, known)),

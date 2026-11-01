@@ -11,13 +11,13 @@ import {
 } from "../src/index.ts";
 import type { Machine } from "../src/index.ts";
 import { read } from "./files.ts";
-import { machine } from "./stub-host.ts";
+import { machine } from "./stub-server.ts";
 
 const login = { user: "user", host: "100.64.0.7", port: 10_022 };
 
-const hostKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample root@linux_dev";
+const hostKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample root@dev";
 
-const reachable = machine("linux_dev", { ssh: login, hostKey });
+const reachable = machine("dev", { ssh: login, hostKey });
 
 const knownHostsOption = "UserKnownHostsFile=";
 
@@ -32,7 +32,7 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         expect(yield* sshTarget(reachable)).toStrictEqual({
-          id: "linux_dev",
+          id: "dev",
           login,
           hostKey,
         });
@@ -45,16 +45,16 @@ layer(NodeServices.layer)((it) => {
       Effect.gen(function* () {
         const said: ReadonlyArray<readonly [Machine, WrongState]> = [
           [
-            machine("linux_dev", { state: "stopped", hostKey }),
+            machine("dev", { state: "stopped", hostKey }),
             new WrongState({
               message:
-                "linux_dev has no SSH endpoint (stopped): see clankerbox get linux_dev",
-              machine: "linux_dev",
+                "dev has no SSH endpoint (stopped): see clankerbox get dev",
+              machine: "dev",
               state: "stopped",
             }),
           ],
           [
-            machine("linux_dev", {
+            machine("dev", {
               phase: "failed",
               ssh: login,
               error: new ScriptFailed({
@@ -64,21 +64,21 @@ layer(NodeServices.layer)((it) => {
             }),
             new WrongState({
               message:
-                "linux_dev has no SSH host key on record (running (failed)): see clankerbox get linux_dev",
-              machine: "linux_dev",
+                "dev has no SSH host key on record (running (failed)): see clankerbox get dev",
+              machine: "dev",
               state: "running (failed)",
             }),
           ],
           [
-            machine("linux_dev", {
+            machine("dev", {
               state: "stopped",
               desired: "running",
               phase: "starting",
             }),
             new WrongState({
               message:
-                "linux_dev has no SSH endpoint (stopped, wants running (starting)): see clankerbox get linux_dev",
-              machine: "linux_dev",
+                "dev has no SSH endpoint (stopped, wants running (starting)): see clankerbox get dev",
+              machine: "dev",
               state: "stopped, wants running (starting)",
             }),
           ],
@@ -110,7 +110,7 @@ layer(NodeServices.layer)((it) => {
           "-o",
           "Port=10022",
           "-o",
-          "HostKeyAlias=linux_dev",
+          "HostKeyAlias=dev",
           "-o",
           `UserKnownHostsFile=${knownHosts}`,
           "-o",
@@ -123,7 +123,7 @@ layer(NodeServices.layer)((it) => {
           "uptime",
         ]);
         expect(yield* read(knownHosts)).toBe(
-          "linux_dev ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample\n"
+          "dev ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample\n"
         );
       }).pipe(Effect.scoped)
   );

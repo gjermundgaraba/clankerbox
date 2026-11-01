@@ -4,29 +4,29 @@ set -eu
 . "$(dirname "$0")/common.sh"
 use_run "$@"
 
-left() {
-  echo "cleanup: the host left its scratch directory: $(dirname "$(cat "$run/home")")" >&2
+stop() {
+  kill -TERM "$1" 2>/dev/null || return 0
+  tries=0
+  while kill -0 "$1" 2>/dev/null; do
+    tries=$((tries + 1))
+    if [ "$tries" -gt 40 ]; then
+      kill -KILL "$1"
+      echo "cleanup: process $1 ignored TERM" >&2
+      break
+    fi
+    sleep 0.25
+  done
 }
 
-if ! pid=$(host_pid); then
-  echo "cleanup: no host serves $run" >&2
-  if [ -r "$run/home" ]; then
-    left
-  fi
-  exit 0
+if pid=$(server_pid); then
+  stop "$pid"
 fi
 
-kill -TERM "$pid"
-tries=0
-while kill -0 "$pid" 2>/dev/null; do
-  tries=$((tries + 1))
-  if [ "$tries" -gt 40 ]; then
-    kill -KILL "$pid"
-    echo "cleanup: the host ignored TERM" >&2
-    left
-    break
+for file in "$run"/hosts/*.pid; do
+  [ -e "$file" ] || continue
+  if pid=$(serving "$file"); then
+    stop "$pid"
   fi
-  sleep 0.25
 done
 
 echo "stopped $run; evidence in $evidence"

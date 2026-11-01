@@ -19,7 +19,7 @@
     "./testing/clock": "./tests/clock.ts",
     "./testing/files": "./tests/files.ts",
     "./testing/keys": "./tests/keys.ts",
-    "./testing/stub-host": "./tests/stub-host.ts",
+    "./testing/stub-server": "./tests/stub-server.ts",
     "./package.json": "./package.json"
   },
   "publishConfig": {

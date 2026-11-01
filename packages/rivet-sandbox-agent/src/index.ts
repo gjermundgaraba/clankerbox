@@ -14,5 +14,5 @@ export type { ClankerboxProvider, Options, Source } from "./options.ts";
 export const clankerbox = (options: Options): ClankerboxProvider =>
   provider(
     options,
-    Layer.mergeAll(NodeClient.layer(options.hosts), NodeServices.layer)
+    Layer.mergeAll(NodeClient.layer(options.server), NodeServices.layer)
   );

@@ -1,0 +1,228 @@
+import {
+  actionsByName,
+  formatGib,
+  formatMib,
+} from "@gjermundgaraba/clankerbox-sdk";
+import type { Machine } from "@gjermundgaraba/clankerbox-sdk";
+import { Console, Effect } from "effect";
+import { Argument, Command, Flag } from "effect/cli";
+
+import {
+  checkpointArgument,
+  clientFlags,
+  deleted,
+  listCommand,
+  machineArgument,
+  mutationFlags,
+  nameArgument,
+  newId,
+  printResource,
+  table,
+  withClient,
+} from "../command.ts";
+import {
+  flagSizes,
+  flagsRequest,
+  sizeArguments,
+  specArguments,
+} from "./spec.ts";
+import { encodeMachine, machineFields, machineRows } from "./view.ts";
+
+export const machines = listCommand({
+  name: "machines",
+  description: "List every machine, with its age.",
+  key: "machines",
+  read: (client) => client.machines,
+  encode: encodeMachine,
+  rows: machineRows,
+});
+
+export const getMachine = Command.make(
+  "get",
+  { ...clientFlags, machine: machineArgument },
+  (flags) =>
+    printResource(flags, {
+      call: (client) => client.getMachine({ id: flags.machine }),
+      encode: encodeMachine,
+      text: (machine, now) => table(machineFields(machine, now)),
+    })
+).pipe(
+  Command.withDescription(
+    `${actionsByName.getMachine.description} Prints its state, what it was asked to be and what the host is doing about it, the error its last step failed with, its SSH login and its host key.`
+  )
+);
+
+const createArguments = {
+  name: Argument.String("name").pipe(
+    Argument.withDescription(
+      "The new machine's name, unique across every host."
+    )
+  ),
+  ...specArguments,
+  fresh: Flag.Boolean("fresh").pipe(
+    Flag.withDescription(
+      "Run the setup even when a host has a prebuild of it."
+    ),
+    Flag.withDefault(false)
+  ),
+};
+
+export const create = Command.make(
+  "create",
+  { ...mutationFlags, ...createArguments },
+  (flags) =>
+    printResource(flags, {
+      call: (client, config) =>
+        Effect.gen(function* () {
+          const { spec } = yield* flagsRequest("create", flags, config);
+
+          const machine = yield* client.create(flags.name, spec, {
+            fresh: flags.fresh,
+          });
+
+          if (machine.prebuild !== undefined && !flags.json) {
+            yield* Console.error(
+              `clankerbox: restored from the prebuild ${machine.prebuild}`
+            );
+          }
+
+          return machine;
+        }),
+      encode: encodeMachine,
+      text: newId,
+    })
+).pipe(
+  Command.withDescription(
+    "Create a machine from a profile, from a base with sizes and an optional setup, or from both: each flag overrides the profile's field. With a setup, the machine is restored from the setup's prebuild when a host has one (see prebuild). A create waits until its machine runs, unless --no-wait. One whose copy or setup fails deletes its machine, keeps its row to say why, and fails. Prints the new ID."
+  )
+);
+
+const machineState = (machine: {
+  readonly id: string;
+  readonly state: string;
+}) => `${machine.id} ${machine.state}`;
+
+export const start = Command.make(
+  "start",
+  { ...mutationFlags, machine: machineArgument },
+  (flags) =>
+    printResource(flags, {
+      call: (client) => client.startMachine({ id: flags.machine }),
+      encode: encodeMachine,
+      text: machineState,
+    })
+).pipe(Command.withDescription(actionsByName.startMachine.description));
+
+export const stop = Command.make(
+  "stop",
+  { ...mutationFlags, machine: machineArgument },
+  (flags) =>
+    printResource(flags, {
+      call: (client) => client.stopMachine({ id: flags.machine }),
+      encode: encodeMachine,
+      text: machineState,
+    })
+).pipe(Command.withDescription(actionsByName.stopMachine.description));
+
+export const pause = Command.make(
+  "pause",
+  { ...mutationFlags, machine: machineArgument },
+  (flags) =>
+    printResource(flags, {
+      call: (client) => client.pauseMachine({ id: flags.machine }),
+      encode: encodeMachine,
+      text: machineState,
+    })
+).pipe(Command.withDescription(actionsByName.pauseMachine.description));
+
+const sized = (machine: Machine) =>
+  `${machine.id} ${machine.cpu} vCPUs, ${formatMib(machine.ramMib)} RAM, ${formatGib(machine.diskGib)} disk`;
+
+export const resize = Command.make(
+  "resize",
+  { ...mutationFlags, ...sizeArguments, machine: machineArgument },
+  (flags) =>
+    printResource(flags, {
+      call: (client) =>
+        Effect.flatMap(flagSizes(flags), (sizes) =>
+          client.resizeMachine({ id: flags.machine, ...sizes })
+        ),
+      encode: encodeMachine,
+      text: sized,
+    })
+).pipe(
+  Command.withDescription(
+    `${actionsByName.resizeMachine.description} Prints the sizes it then has.`
+  )
+);
+
+export const deleteMachine = Command.make(
+  "delete",
+  { ...mutationFlags, machine: machineArgument },
+  (flags) =>
+    withClient(flags, (client) =>
+      deleted(
+        flags.json,
+        flags.machine,
+        client.deleteMachine({ id: flags.machine })
+      )
+    )
+).pipe(
+  Command.withDescription(
+    `${actionsByName.deleteMachine.description} A machine that is already gone counts as deleted.`
+  )
+);
+
+export const fork = Command.make(
+  "fork",
+  {
+    ...mutationFlags,
+    ...sizeArguments,
+    machine: machineArgument,
+    name: nameArgument,
+  },
+  (flags) =>
+    printResource(flags, {
+      call: (client) =>
+        Effect.flatMap(flagSizes(flags), (sizes) =>
+          client.forkMachine({
+            machine: flags.machine,
+            name: flags.name,
+            ...sizes,
+          })
+        ),
+      encode: encodeMachine,
+      text: newId,
+    })
+).pipe(
+  Command.withDescription(
+    `${actionsByName.forkMachine.description} Prints the new ID.`
+  )
+);
+
+export const restore = Command.make(
+  "restore",
+  {
+    ...mutationFlags,
+    ...sizeArguments,
+    checkpoint: checkpointArgument,
+    name: nameArgument,
+  },
+  (flags) =>
+    printResource(flags, {
+      call: (client) =>
+        Effect.flatMap(flagSizes(flags), (sizes) =>
+          client.restoreMachine({
+            checkpoint: flags.checkpoint,
+            name: flags.name,
+            ...sizes,
+          })
+        ),
+      encode: encodeMachine,
+      text: newId,
+    })
+).pipe(
+  Command.withDescription(
+    `${actionsByName.restoreMachine.description} Prints the new ID.`
+  )
+);

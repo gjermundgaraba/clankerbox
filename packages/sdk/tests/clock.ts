@@ -1,5 +1,4 @@
-import { Effect, Fiber } from "effect";
-import type { Duration } from "effect";
+import { Duration, Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 
 export const elapsing = <A, E>(
@@ -12,6 +11,19 @@ export const elapsing = <A, E>(
 
     yield* waiting;
     yield* TestClock.adjust(duration);
+
+    return yield* Fiber.join(fiber);
+  });
+
+/** Runs `effect` while the test clock moves on ten seconds at a time, until it ends. */
+export const ticking = <A, E>(effect: Effect.Effect<A, E>) =>
+  Effect.gen(function* () {
+    const fiber = yield* Effect.forkChild(effect);
+
+    while (fiber.pollUnsafe() === undefined) {
+      yield* TestClock.withLive(Effect.sleep(Duration.millis(1)));
+      yield* TestClock.adjust(Duration.seconds(10));
+    }
 
     return yield* Fiber.join(fiber);
   });

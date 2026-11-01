@@ -7,9 +7,9 @@ catalogMode: prefer
 saveExact: true
 catalog:
   "@effect/platform-node": 4.0.6
-  # The CLI depends on it directly, at effect's version, for npm installs: platform-node takes
-  # it by caret, and a newer one requires a newer effect, so npm would install a second effect
-  # under it. Keep it equal to effect.
+  # The CLI, the server and the host depend on it directly, with no import, at effect's
+  # version, for npm installs: platform-node takes it by caret, and a newer one requires a newer
+  # effect, so npm would install a second effect under it. Keep it equal to effect.
   "@effect/platform-node-shared": 4.0.6
   "@clanker-stuff/oxlint-config": 0.1.0
   "@effect/tsgo": 0.57.0
@@ -22,10 +22,9 @@ catalog:
   vite: npm:@voidzero-dev/vite-plus-core@1.4.0
   vite-plus: 1.4.0
   vitest: 5.0.5
-  xstate: 6.0.0-alpha.70
-  "@xstate/effect": 1.0.0-alpha.9
   ultracite: 8.0.2
   oxfmt: 0.74.0
+  xstate: 6.0.0-alpha.71
 
 ignoredOptionalDependencies:
   - "@sandbox-agent/cli"
@@ -58,7 +57,6 @@ minimumReleaseAgeExclude:
   - vitest
   - "@vitest/*"
   - xstate
-  - "@xstate/*"
 permissions:
   ultracite:
     skills: true

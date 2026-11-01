@@ -1,24 +1,21 @@
 import { config } from "@clanker-stuff/oxlint-config";
 
 const adapterPackages = [
-  "^node:",
+  "^node:(?!sqlite)",
   "^effect(/(encoding|http|process))?$",
   "^@effect/platform-node/",
   "^@gjermundgaraba/clankerbox-sdk$",
 ];
 
 const adapterBecause =
-  "an adapter imports the domain files, platform's shared process.ts and address.ts, and its own subfolder; never composition/ or another adapter";
+  "an adapter imports the domain files, platform's shared process.ts, and its own subfolder; never composition/ or another adapter";
 
 export default config({
   jsPlugins: [{ name: "fence", specifier: "./tools/lint-fence/src/index.ts" }],
   testBlocks: ["it", "it.effect", "it.live", "it.prop", "it.effect.prop"],
   overrides: [
     {
-      files: [
-        "packages/host/src/guest.ts",
-        "packages/host/tests/fake-runtime.ts",
-      ],
+      files: ["apps/host/src/guest.ts", "apps/host/tests/fake-runtime.ts"],
       rules: { "no-template-curly-in-string": "off" },
     },
     {
@@ -27,8 +24,11 @@ export default config({
     },
     {
       files: [
-        "apps/clankerbox/src/main.ts",
-        "packages/host/tests/serve.ts",
+        "apps/cli/src/main.ts",
+        "apps/host/src/main.ts",
+        "apps/host/tests/serve.ts",
+        "apps/server/src/main.ts",
+        "apps/server/tests/serve.ts",
         "packages/rivet-sandbox-agent/src/provider.ts",
         "packages/rivet-sandbox-agent/tests/leave-tunnel.ts",
         "packages/rivet-sandbox-agent/tests/provider.test.ts",
@@ -36,8 +36,8 @@ export default config({
       rules: { "fence/no-manual-run": "off" },
     },
     {
-      excludeFiles: ["packages/host/src/lifecycle.ts"],
-      files: ["packages/host/src/*.ts"],
+      excludeFiles: ["apps/host/src/main.ts"],
+      files: ["apps/host/src/*.ts"],
       rules: {
         "fence/allowed-imports": [
           "error",
@@ -47,15 +47,115 @@ export default config({
               "^effect$",
               "^effect/encoding$",
               "^@gjermundgaraba/clankerbox-sdk$",
+              "^@clankerbox/host-contract$",
             ],
             because:
-              "a host domain file imports only other domain files, effect and the SDK; platform/, Node and effect/process are for composition/, and xstate for lifecycle.ts",
+              "a host domain file imports only other domain files, effect, the SDK and the host contract; platform/, Node and effect/process are for composition/",
           },
         ],
       },
     },
     {
-      files: ["packages/host/src/lifecycle.ts"],
+      excludeFiles: [
+        "apps/server/src/chart.ts",
+        "apps/server/src/*-chart.ts",
+        "apps/server/src/hosts.ts",
+        "apps/server/src/main.ts",
+      ],
+      files: ["apps/server/src/*.ts"],
+      rules: {
+        "fence/allowed-imports": [
+          "error",
+          {
+            allow: [
+              "^\\./[a-z-]+\\.ts$",
+              "^effect$",
+              "^effect/encoding$",
+              "^@gjermundgaraba/clankerbox-sdk$",
+              "^@clankerbox/host-contract$",
+            ],
+            because:
+              "a server domain file imports only other domain files, effect, the SDK and the host contract; a host is reached through hosts.ts, and platform/ and Node are for composition/",
+          },
+        ],
+      },
+    },
+    {
+      files: ["apps/server/src/chart.ts", "apps/server/src/*-chart.ts"],
+      rules: {
+        "fence/allowed-imports": [
+          "error",
+          {
+            allow: ["^xstate$", "^\\./chart\\.ts$", "^\\./[a-z-]+-chart\\.ts$"],
+            allowTypes: ["^\\./store\\.ts$"],
+            because:
+              "a chart is a pure function run inside the SQLite write: it imports xstate, other charts and the store's types, and what else it needs rides on the event",
+          },
+        ],
+        "fence/no-impure": "error",
+      },
+    },
+    {
+      files: ["apps/server/src/hosts.ts"],
+      rules: {
+        "fence/allowed-imports": [
+          "error",
+          {
+            allow: [
+              "^effect$",
+              "^effect/http$",
+              "^@gjermundgaraba/clankerbox-sdk$",
+              "^@clankerbox/host-contract$",
+              "^@gjermundgaraba/effect-actions/",
+            ],
+            because:
+              "hosts.ts is the one file that calls a host, over the host contract",
+          },
+        ],
+      },
+    },
+    {
+      files: ["apps/server/src/platform/*.ts"],
+      rules: {
+        "fence/allowed-imports": [
+          "error",
+          {
+            allow: [
+              "^\\.\\./[a-z-]+\\.ts$",
+              "^node:sqlite$",
+              "^@clankerbox/host-contract$",
+              "^@gjermundgaraba/clankerbox-sdk$",
+              "^effect$",
+            ],
+            because:
+              "the server's adapter is its Store, which is the one place state lives",
+          },
+        ],
+      },
+    },
+    {
+      files: ["apps/server/src/composition/*.ts", "apps/server/src/main.ts"],
+      rules: {
+        "fence/allowed-imports": [
+          "error",
+          {
+            allow: [
+              "^\\.\\.?/[a-z-]+(/[a-z-]+)?\\.ts$",
+              "^node:http$",
+              "^@effect/platform-node/",
+              "^@gjermundgaraba/clankerbox-sdk(/node)?$",
+              "^@gjermundgaraba/effect-actions/",
+              "^effect$",
+              "^effect/(cli|http)$",
+            ],
+            because:
+              "the server reaches a host only over the network: it never loads the host package or a runtime",
+          },
+        ],
+      },
+    },
+    {
+      files: ["packages/host-contract/src/*.ts"],
       rules: {
         "fence/allowed-imports": [
           "error",
@@ -64,23 +164,22 @@ export default config({
               "^\\./[a-z-]+\\.ts$",
               "^effect$",
               "^@gjermundgaraba/clankerbox-sdk$",
-              "^xstate$",
-              "^@xstate/effect$",
+              "^@gjermundgaraba/effect-actions/",
             ],
             because:
-              "lifecycle.ts holds the machines' statechart, the one domain file on xstate, beside its siblings, effect and the SDK",
+              "the host contract is schemas and actions, shared by the server and the host alone",
           },
         ],
       },
     },
     {
-      files: ["packages/host/src/platform/*.ts"],
+      files: ["apps/host/src/platform/*.ts"],
       rules: {
         "fence/allowed-imports": [
           "error",
           {
             allow: [
-              "^\\./(process|address)\\.ts$",
+              "^\\./process\\.ts$",
               "^\\.\\./[a-z-]+\\.ts$",
               ...adapterPackages,
             ],
@@ -90,14 +189,14 @@ export default config({
       },
     },
     {
-      files: ["packages/host/src/platform/*/*.ts"],
+      files: ["apps/host/src/platform/*/*.ts"],
       rules: {
         "fence/allowed-imports": [
           "error",
           {
             allow: [
               "^\\./[a-z-]+\\.ts$",
-              "^\\.\\./(process|address)\\.ts$",
+              "^\\.\\./process\\.ts$",
               "^\\.\\./\\.\\./[a-z-]+\\.ts$",
               ...adapterPackages,
             ],
@@ -107,11 +206,8 @@ export default config({
       },
     },
     {
-      excludeFiles: [
-        "apps/clankerbox/src/main.ts",
-        "apps/clankerbox/src/host.ts",
-      ],
-      files: ["apps/clankerbox/src/**/*.ts"],
+      excludeFiles: ["apps/cli/src/main.ts"],
+      files: ["apps/cli/src/**/*.ts"],
       rules: {
         "fence/allowed-imports": [
           "error",
@@ -123,7 +219,7 @@ export default config({
               "^@gjermundgaraba/clankerbox-sdk$",
             ],
             because:
-              "a command imports effect, the SDK and its siblings; Node, @effect/platform-node and the host package are for main.ts and host.ts",
+              "a command imports effect, the SDK and its siblings; a client knows the control plane's contract, never a host's, and Node and @effect/platform-node are for main.ts",
           },
         ],
       },

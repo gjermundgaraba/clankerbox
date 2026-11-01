@@ -7,17 +7,17 @@ import { fileURLToPath } from "node:url";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Client } from "@gjermundgaraba/clankerbox-sdk";
-import type {
-  Checkpoint,
-  Declared,
-  Machine,
-} from "@gjermundgaraba/clankerbox-sdk";
+import type { Machine } from "@gjermundgaraba/clankerbox-sdk";
 import {
   machine,
-  stubHost,
+  stubServer,
   transport,
-} from "@gjermundgaraba/clankerbox-sdk/testing/stub-host";
-import type { StubHost } from "@gjermundgaraba/clankerbox-sdk/testing/stub-host";
+} from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
+import type {
+  MachineStep,
+  StubServer,
+  StubServerOptions,
+} from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import { Effect, Layer, Schema } from "effect";
 
 import type { Options } from "../src/options.ts";
@@ -25,17 +25,19 @@ import { provider } from "../src/provider.ts";
 
 export const fakeSsh = fileURLToPath(new URL("fake-ssh.ts", import.meta.url));
 
-const url = "http://linux.test";
+const url = "http://server.test";
 
 export const login = { user: "admin", host: "100.64.0.7", port: 10_022 };
-
-export const runtimeVersion = "0.0.0-test";
 
 export const hostKey =
   "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample root@linux";
 
 export const reachable = (id: string, fields?: Partial<Machine>) =>
   machine(id, { ssh: login, hostKey, ...fields });
+
+/** What the control plane was asked, without the reads a wait or a tunnel makes. */
+export const requests = (stub: StubServer) =>
+  stub.calls.filter((call) => call !== "machine.get");
 
 export const recording =
   (sent: unknown[]) =>
@@ -77,41 +79,33 @@ type Call = typeof Call.Type;
 const decodeCall = Schema.decodeSync(Schema.fromJsonString(Call));
 
 export const setup = async (
-  host: {
-    readonly machines?: readonly Machine[];
-    readonly checkpoints?: readonly Checkpoint[];
-    readonly createFails?: Declared<"createMachine">;
-    readonly createRefused?: Declared<"createMachine">;
-  },
-  options: Omit<Options, "hosts" | "from"> & {
+  server: Pick<StubServerOptions, "machines" | "checkpoints" | "refuse"> & {
+    /** What the reads of a machine this provider creates see. */
+    readonly created?: readonly MachineStep[];
+  } = {},
+  options: Omit<Options, "server" | "from"> & {
     readonly from?: Options["from"];
   } = {},
   ssh = fakeSsh,
   wrap: (client: Client.Interface) => Client.Interface = (client) => client
 ) => {
   const dir = await mkdtemp(path.join(tmpdir(), "clankerbox-provider-"));
+  const { created = [], ...rows } = server;
 
-  const stub: StubHost = stubHost({
-    id: "linux",
-    bases: ["ubuntu"],
-    machines: host.machines ?? [],
-    checkpoints: host.checkpoints ?? [],
-    runtimeVersion,
-    create: ({ id }) => {
-      if (host.createRefused !== undefined) {
-        return Effect.fail(host.createRefused);
-      }
+  const stub: StubServer = stubServer({
+    ...rows,
+    create: ({ id }) =>
+      Effect.sync(() => {
+        const recorded = reachable(id, {
+          state: "unknown",
+          phase: "observing",
+        });
 
-      const made = reachable(id, {
-        phase: host.createFails === undefined ? "settled" : "failed",
-      });
+        stub.hold(recorded);
+        stub.script(id, created);
 
-      stub.hold(made);
-
-      return host.createFails === undefined
-        ? Effect.succeed(made)
-        : Effect.fail(host.createFails);
-    },
+        return recorded;
+      }),
   });
 
   const profile = path.join(dir, "agent.json");
@@ -122,12 +116,10 @@ export const setup = async (
   );
   process.env["FAKE_SSH_DIR"] = dir;
 
-  const hosts = [{ id: "linux", url }];
-
   const sandbox = provider(
-    { hosts, from: { profile }, ...options },
+    { server: url, from: { profile }, ...options },
     Layer.mergeAll(
-      Layer.effect(Client.Client, Effect.map(Client.make(hosts), wrap)).pipe(
+      Layer.effect(Client.Client, Effect.map(Client.make(url), wrap)).pipe(
         Layer.provide(transport(new Map([[new URL(url).origin, stub]])))
       ),
       NodeServices.layer

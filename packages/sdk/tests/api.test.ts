@@ -2,22 +2,22 @@ import * as Action from "@gjermundgaraba/effect-actions/Action";
 import { Schema } from "effect";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { Http, Invalid, PublicKeys, Usage } from "../src/index.ts";
+import { Http, Invalid, PublicKeys, Unavailable, Usage } from "../src/index.ts";
 import { operatorKey } from "./keys.ts";
-import { stubHost } from "./stub-host.ts";
-import type { StubHost } from "./stub-host.ts";
+import { stubServer } from "./stub-server.ts";
+import type { StubServer } from "./stub-server.ts";
 
-let host: StubHost | undefined;
+let server: StubServer | undefined;
 
 const decodeInvalidInput = Schema.decodeUnknownSync(
   Schema.fromJsonString(Action.InvalidInput)
 );
 
 const post = async (path: string, body: Schema.Json) => {
-  host = stubHost({ id: "linux", bases: ["ubuntu"] });
+  server = stubServer();
 
-  const response = await host.handler(
-    new Request(`http://linux.test/api/${path}`, {
+  const response = await server.handler(
+    new Request(`http://cbx.test/api/${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -28,7 +28,7 @@ const post = async (path: string, body: Schema.Json) => {
 };
 
 const create = {
-  id: "linux_dev",
+  id: "dev",
   base: "ubuntu",
   cpu: 1,
   ramMib: 1024,
@@ -37,11 +37,11 @@ const create = {
 
 describe("api", () => {
   afterEach(async () => {
-    await host?.dispose();
-    host = undefined;
+    await server?.dispose();
+    server = undefined;
   });
 
-  it("every action declares Invalid, which the host's version check answers before any handler", () => {
+  it("every action declares Invalid, which a server's version check answers before any handler", () => {
     expect(
       Http.actions
         .filter((action) => !action.error.includes(Invalid))
@@ -55,6 +55,25 @@ describe("api", () => {
     expect(status).toBe(200);
   });
 
+  it("Unavailable answers 503, for a server that can't reach any host", async () => {
+    server = stubServer({
+      refuse: {
+        createMachine: new Unavailable({ message: "no host", readOnly: true }),
+      },
+    });
+
+    const response = await server.handler(
+      new Request("http://cbx.test/api/createMachine", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(create),
+      })
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.text()).resolves.toContain('"_tag":"Unavailable"');
+  });
+
   it("an undeclared field is refused with InvalidInput, before the handler runs", async () => {
     const { status, body } = await post("createMachine", {
       ...create,
@@ -63,14 +82,15 @@ describe("api", () => {
 
     expect(status).toBe(400);
     expect(decodeInvalidInput(body)).toBeInstanceOf(Action.InvalidInput);
-    expect(host?.calls).toStrictEqual([]);
+    expect(server?.calls).toStrictEqual([]);
   });
 
-  it("the reads of a machine, a checkpoint and the host refuse undeclared fields with InvalidInput", async () => {
+  it("the reads refuse undeclared fields with InvalidInput", async () => {
     for (const [path, body] of [
-      ["getMachine", { id: "linux_dev", extra: 1 }],
-      ["getCheckpoint", { id: "linux_dev", extra: 1 }],
-      ["getHost", { extra: 1 }],
+      ["getMachine", { id: "dev", extra: 1 }],
+      ["getCheckpoint", { id: "dev", extra: 1 }],
+      ["getPrebuild", { id: "dev", extra: 1 }],
+      ["listHosts", { extra: 1 }],
       ["getCapacity", { extra: 1 }],
     ] as const) {
       const answer = await post(path, body);
@@ -79,25 +99,22 @@ describe("api", () => {
       expect(decodeInvalidInput(answer.body), path).toBeInstanceOf(
         Action.InvalidInput
       );
-      await host?.dispose();
+      await server?.dispose();
     }
   });
 
   it("malformed IDs, names and sizes, and a resize that names no size, are refused with InvalidInput", async () => {
     for (const [path, body] of [
-      ["getMachine", { id: "nohost" }],
-      ["createMachine", { ...create, id: "linux_2dev" }],
-      ["createMachine", { ...create, id: `linux_${"a".repeat(57)}` }],
+      ["getMachine", { id: "linux_dev" }],
+      ["createMachine", { ...create, id: "2dev" }],
+      ["createMachine", { ...create, id: "a".repeat(63) }],
       ["createMachine", { ...create, cpu: 0 }],
       ["createMachine", { ...create, cpu: 1.5 }],
-      ["forkMachine", { machine: "linux_dev", name: "a.b" }],
-      ["resizeMachine", { id: "linux_dev" }],
-      ["resizeMachine", { id: "linux_dev", ramMib: 0 }],
-      ["forkMachine", { machine: "linux_dev", name: "copy", cpu: 0 }],
-      [
-        "restoreMachine",
-        { checkpoint: "linux_snap", name: "copy", diskGib: 1.5 },
-      ],
+      ["forkMachine", { machine: "dev", name: "a.b" }],
+      ["resizeMachine", { id: "dev" }],
+      ["resizeMachine", { id: "dev", ramMib: 0 }],
+      ["forkMachine", { machine: "dev", name: "copy", cpu: 0 }],
+      ["restoreMachine", { checkpoint: "snap", name: "copy", diskGib: 1.5 }],
     ] as const) {
       const answer = await post(path, body);
 
@@ -105,7 +122,7 @@ describe("api", () => {
       expect(decodeInvalidInput(answer.body), path).toBeInstanceOf(
         Action.InvalidInput
       );
-      await host?.dispose();
+      await server?.dispose();
     }
   });
 
@@ -122,7 +139,7 @@ describe("api", () => {
       expect(decodeInvalidInput(answer.body)).toBeInstanceOf(
         Action.InvalidInput
       );
-      await host?.dispose();
+      await server?.dispose();
     }
   });
 
@@ -221,7 +238,7 @@ describe("api", () => {
     const row = { host: "linux", resource: "cpu" };
 
     expect(decode({ ...row, used: 3 })._tag).toBe("Success");
-    expect(decode({ ...row, unread: ["linux_dev"] })._tag).toBe("Success");
+    expect(decode({ ...row, unread: ["dev"] })._tag).toBe("Success");
     expect(decode(row)._tag).toBe("Failure");
   });
 });
