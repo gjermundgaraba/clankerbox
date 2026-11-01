@@ -111,8 +111,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const sent = yield* deliver(url, made("op-1"));
         const done = yield* finished(url, "op-1");
 
-        const listed = yield* post(url, "listOperations", {});
-
         yield* post(url, "collectOperation", { id: "op-1" });
 
         const gone = yield* finished(url, "op-1");
@@ -120,7 +118,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(sent.status).toBe(200);
         expect(decodeReport(sent.body).id).toBe("op-1");
         expect(done).toMatchObject({ status: "done", boot: operations.boot });
-        expect(listed.body).toContain('"op-1"');
         expect(gone.status).toBe("absent");
         expect(fake.images.get("dev")).toBe(image);
       })

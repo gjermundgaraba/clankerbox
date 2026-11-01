@@ -25,7 +25,6 @@ import type {
 import {
   Cause,
   Context,
-  Deferred,
   Duration,
   Effect,
   Exit,
@@ -57,7 +56,6 @@ export interface Interface {
   readonly run: (operation: Operation) => Effect.Effect<Report, Conflict>;
   /** Reports an operation, once it ends or after `reportWait`. */
   readonly wait: (id: string) => Effect.Effect<Report>;
-  readonly list: Effect.Effect<readonly Report[]>;
   readonly cancel: (id: string) => Effect.Effect<void>;
   readonly collect: (id: string) => Effect.Effect<void>;
   readonly read: (
@@ -128,14 +126,48 @@ const surviving = <A, E>(what: string, work: Effect.Effect<A, E>) =>
     )
   );
 
-interface Entry {
-  readonly operation: Operation;
-  readonly ended: Deferred.Deferred<undefined>;
-  fiber: Fiber.Fiber<void, HostError> | undefined;
+interface Progress {
   status: Report["status"];
   outcome: Outcome;
   error: HostError | undefined;
 }
+
+interface Entry {
+  readonly scope: string;
+  readonly fiber: Fiber.Fiber<void, HostError>;
+  readonly progress: Progress;
+}
+
+const ended = (
+  progress: Progress,
+  name: string,
+  exit: Exit.Exit<void, HostError>
+) =>
+  Effect.gen(function* () {
+    if (Exit.isSuccess(exit)) {
+      progress.status = "done";
+
+      return;
+    }
+
+    if (Cause.hasInterruptsOnly(exit.cause)) {
+      progress.status = "cancelled";
+
+      return;
+    }
+
+    const error = Option.getOrElse(
+      Cause.findErrorOption(exit.cause),
+      () => new Internal({ message: `${name} died; the host log has why` })
+    );
+
+    progress.status = "failed";
+    progress.error = error;
+
+    yield* Cause.hasDies(exit.cause)
+      ? Effect.logError(`${name} died:\n${Cause.pretty(exit.cause)}`)
+      : Effect.logWarning(`${name} failed: ${error.message}`);
+  });
 
 type Make = Extract<Step, { readonly _tag: "make" }>;
 
@@ -279,7 +311,7 @@ export const make = (
       Effect.scoped(Effect.andThen(admitted(action, machine, machines), act));
 
     const resized = (
-      entry: Entry,
+      progress: Progress,
       machine: MachineRef,
       request: Sizing,
       machines: readonly MachineRef[]
@@ -342,7 +374,7 @@ export const make = (
           )
         );
 
-        entry.outcome = { ...entry.outcome, sizes };
+        progress.outcome = { ...progress.outcome, sizes };
 
         yield* result;
       });
@@ -415,7 +447,7 @@ export const make = (
       });
 
     const perform = (
-      entry: Entry,
+      progress: Progress,
       step: Exclude<Step, Make>
     ): Effect.Effect<void, HostError> => {
       switch (step._tag) {
@@ -445,7 +477,7 @@ export const make = (
             const hostKey = yield* prepare(runtime, machine);
 
             if (hostKey !== undefined) {
-              entry.outcome = { ...entry.outcome, hostKey };
+              progress.outcome = { ...progress.outcome, hostKey };
             }
           });
         }
@@ -485,7 +517,7 @@ export const make = (
 
         case "resize": {
           return Effect.scoped(
-            resized(entry, step.machine, step.to, step.machines)
+            resized(progress, step.machine, step.to, step.machines)
           );
         }
 
@@ -493,7 +525,7 @@ export const make = (
           const { machine, checkpoint, pin } = step;
 
           const cleared = Effect.sync(() => {
-            entry.outcome = { ...entry.outcome, cleared: true };
+            progress.outcome = { ...progress.outcome, cleared: true };
           });
 
           return Effect.andThen(
@@ -523,7 +555,7 @@ export const make = (
               Effect.map(
                 joined(joining, step.machine, step.hostname),
                 (status) => {
-                  entry.outcome = { ...entry.outcome, tailnet: status };
+                  progress.outcome = { ...progress.outcome, tailnet: status };
                 }
               ),
           });
@@ -531,51 +563,26 @@ export const make = (
       }
     };
 
-    const reported = (id: string, entry: Entry | undefined): Report =>
-      entry === undefined
+    const reported = (id: string, progress: Progress | undefined): Report =>
+      progress === undefined
         ? { id, boot, status: "absent", outcome: {} }
         : {
             id,
             boot,
-            status: entry.status,
-            outcome: entry.outcome,
-            ...(entry.error === undefined ? {} : { error: entry.error }),
+            status: progress.status,
+            outcome: progress.outcome,
+            ...(progress.error === undefined ? {} : { error: progress.error }),
           };
 
-    const ended = (entry: Entry, exit: Exit.Exit<void, HostError>) =>
-      Effect.gen(function* () {
-        if (Exit.isSuccess(exit)) {
-          entry.status = "done";
-        } else if (Cause.hasInterruptsOnly(exit.cause)) {
-          entry.status = "cancelled";
-        } else {
-          const { step, scope } = entry.operation;
-          const name = `${step._tag} ${scope}`;
-
-          entry.status = "failed";
-          entry.error = Option.getOrElse(
-            Cause.findErrorOption(exit.cause),
-            () =>
-              new Internal({ message: `${name} died; the host log has why` })
-          );
-
-          yield* Cause.hasDies(exit.cause)
-            ? Effect.logError(`${name} died:\n${Cause.pretty(exit.cause)}`)
-            : Effect.logWarning(`${name} failed: ${entry.error.message}`);
-        }
-
-        yield* Deferred.succeed(entry.ended, undefined);
-      });
-
     const heldPorts = () =>
-      [...entries.values()].flatMap(({ status, outcome }) =>
+      [...entries.values()].flatMap(({ progress: { status, outcome } }) =>
         (status === "running" || status === "done") &&
         outcome.port !== undefined
           ? [outcome.port]
           : []
       );
 
-    const picking = (entry: Entry, step: Make) =>
+    const picking = (progress: Progress, step: Make) =>
       Effect.match(
         pickPort(
           probe,
@@ -587,21 +594,31 @@ export const make = (
           onFailure: (error): Effect.Effect<void, HostError> =>
             Effect.fail(error),
           onSuccess: (port) => {
-            entry.outcome = { port };
+            progress.outcome = { port };
 
             return made(step, port);
           },
         }
       );
 
-    const accept = (operation: Operation, before: Entry | undefined) =>
-      Effect.gen(function* () {
-        const { step } = operation;
+    const forgetting = (id: string) =>
+      Effect.suspend(() => {
+        const before = entries.get(id);
 
-        const entry: Entry = {
-          operation,
-          ended: yield* Deferred.make<undefined>(),
-          fiber: undefined,
+        return before === undefined
+          ? Effect.void
+          : Effect.andThen(
+              Fiber.interrupt(before.fiber),
+              Effect.sync(() => entries.delete(id))
+            );
+      });
+
+    const accept = (operation: Operation, before: string | undefined) =>
+      Effect.gen(function* () {
+        const { id, step, scope, sequence } = operation;
+        const name = `${step._tag} ${scope}`;
+
+        const progress: Progress = {
           status: "running",
           outcome: {},
           error: undefined,
@@ -609,30 +626,28 @@ export const make = (
 
         const work =
           step._tag === "make"
-            ? yield* picking(entry, step)
-            : perform(entry, step);
-
-        const cutShort =
-          before?.fiber === undefined
-            ? Effect.void
-            : Effect.uninterruptible(Fiber.interrupt(before.fiber));
+            ? yield* picking(progress, step)
+            : perform(progress, step);
 
         return yield* Effect.uninterruptible(
           Effect.gen(function* () {
-            entries.set(operation.id, entry);
-            scopes.set(operation.scope, {
-              sequence: operation.sequence,
-              id: operation.id,
-            });
-
-            entry.fiber = yield* Effect.forkIn(
-              Effect.onExit(Effect.andThen(cutShort, work), (exit) =>
-                ended(entry, exit)
+            const fiber = yield* Effect.forkIn(
+              Effect.onExit(
+                before === undefined
+                  ? work
+                  : Effect.andThen(
+                      Effect.uninterruptible(forgetting(before)),
+                      work
+                    ),
+                (exit) => ended(progress, name, exit)
               ),
               hostScope
             );
 
-            return reported(operation.id, entry);
+            entries.set(id, { scope, fiber, progress });
+            scopes.set(scope, { sequence, id });
+
+            return reported(id, progress);
           })
         );
       });
@@ -643,7 +658,7 @@ export const make = (
           const same = entries.get(operation.id);
 
           if (same !== undefined) {
-            return reported(operation.id, same);
+            return reported(operation.id, same.progress);
           }
 
           if (operation.boot !== boot) {
@@ -660,12 +675,7 @@ export const make = (
             });
           }
 
-          const before = at === undefined ? undefined : entries.get(at.id);
-
-          return yield* accept(
-            operation,
-            before?.status === "running" ? before : undefined
-          );
+          return yield* accept(operation, at?.id);
         })
       );
 
@@ -676,8 +686,8 @@ export const make = (
         return entry === undefined
           ? Effect.succeed(reported(id, undefined))
           : Effect.map(
-              Effect.timeoutOption(Deferred.await(entry.ended), reportWait),
-              () => reported(id, entry)
+              Effect.timeoutOption(Fiber.await(entry.fiber), reportWait),
+              () => reported(id, entry.progress)
             );
       });
 
@@ -692,7 +702,7 @@ export const make = (
 
     const collect: Interface["collect"] = (id) =>
       Effect.sync(() => {
-        if (entries.get(id)?.status !== "running") {
+        if (entries.get(id)?.progress.status !== "running") {
           entries.delete(id);
         }
       });
@@ -701,9 +711,6 @@ export const make = (
       boot,
       run,
       wait,
-      list: Effect.sync(() =>
-        [...entries].map(([id, entry]) => reported(id, entry))
-      ),
       cancel,
       collect,
       read: (machines) =>

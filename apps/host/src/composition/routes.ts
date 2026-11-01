@@ -45,7 +45,6 @@ const app = (config: Served) =>
         adoptMachines: ({ machines }) => runtime.adopt(machines),
         runOperation: operations.run,
         waitOperation: ({ id }) => operations.wait(id),
-        listOperations: () => operations.list,
         cancelOperation: ({ id }) => operations.cancel(id),
         collectOperation: ({ id }) => operations.collect(id),
       };

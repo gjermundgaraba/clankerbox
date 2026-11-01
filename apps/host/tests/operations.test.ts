@@ -1,4 +1,6 @@
 import path from "node:path";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 
 import type {
   MachineRef,
@@ -179,6 +181,19 @@ const finished = (host: Runner, step: Step, sequence = 1) =>
     return yield* ended(host, operation.id);
   });
 
+const stillRunning = ({ operations }: Runner, id: string) =>
+  Effect.gen(function* () {
+    const waiting = yield* Effect.forkChild(operations.wait(id));
+
+    yield* pause;
+
+    const answered = waiting.pollUnsafe() !== undefined;
+
+    yield* Fiber.interrupt(waiting);
+
+    return !answered;
+  });
+
 const counted = (calls: readonly string[], call: string) =>
   calls.filter((seen) => seen === call).length;
 
@@ -303,9 +318,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* pause;
 
         expect(host.fake.calls).not.toContain("delete dev");
-        expect(
-          (yield* host.operations.list).map(({ status }) => status)
-        ).toContain("running");
+        expect(yield* stillRunning(host, stopping.id)).toBe(true);
 
         yield* release;
 
@@ -319,7 +332,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a third step waits for the first when the second, cut short, never began",
+    "a third step waits for the first when the second, cut short, never began, and forgets the second",
     () =>
       Effect.gen(function* () {
         const host = yield* runner();
@@ -353,7 +366,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* release;
 
         expect((yield* ended(host, third.id)).status).toBe("done");
-        expect((yield* ended(host, second.id)).status).toBe("cancelled");
+        expect((yield* host.operations.wait(second.id)).status).toBe("absent");
         expect(counted(host.fake.calls, "delete dev")).toBe(1);
       })
   );
@@ -399,11 +412,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* host.operations.cancel(pausing.id);
         yield* pause;
 
-        const during = (yield* host.operations.list).find(
-          ({ id }) => id === pausing.id
-        );
-
-        expect(during?.status).toBe("running");
+        expect(yield* stillRunning(host, pausing.id)).toBe(true);
 
         yield* release;
 
@@ -452,15 +461,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       yield* entered;
       yield* host.operations.collect(operation.id);
 
-      expect((yield* host.operations.list).map(({ id }) => id)).toStrictEqual([
-        operation.id,
-      ]);
+      expect(yield* stillRunning(host, operation.id)).toBe(true);
 
       yield* release;
       yield* ended(host, operation.id);
       yield* host.operations.collect(operation.id);
 
-      expect(yield* host.operations.list).toStrictEqual([]);
       expect((yield* host.operations.wait(operation.id)).status).toBe("absent");
     })
   );
@@ -477,8 +483,62 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
 
         expect(refused._tag).toBe("Conflict");
-        expect(yield* host.operations.list).toStrictEqual([]);
+        expect((yield* host.operations.wait(operation.id)).status).toBe(
+          "absent"
+        );
+        expect(host.fake.calls).not.toContain("create dev");
       })
+  );
+
+  it.effect(
+    "a report never collected is forgotten once a later step on its machine is accepted, and frees its port",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner({ ports: 1 });
+        const make = delivery(makes("one"));
+
+        yield* deliver(host, make);
+        yield* ended(host, make.id);
+        yield* finished(
+          host,
+          {
+            _tag: "remove",
+            machine: { name: "one", instance: "one-instance" },
+          },
+          2
+        );
+
+        const next = yield* finished(host, makes("two"));
+
+        expect((yield* host.operations.wait(make.id)).status).toBe("absent");
+        expect([next.status, portOf(next)]).toStrictEqual(["done", firstPort]);
+      })
+  );
+
+  it.effect("a setup never outlives the step that runs it", () =>
+    Effect.gen(function* () {
+      setFlagsFromString("--expose-gc");
+
+      const host = yield* runner();
+
+      const { id, setup } = yield* Effect.suspend(() => {
+        const held: Setup = { script: loginSetup };
+        const operation = delivery(makes("dev", { setup: held }));
+
+        return Effect.as(deliver(host, operation), {
+          id: operation.id,
+          setup: new WeakRef(held),
+        });
+      });
+
+      expect((yield* ended(host, id)).status).toBe("done");
+
+      yield* pause;
+      runInNewContext("gc()");
+      yield* pause;
+
+      expect(setup.deref()).toBeUndefined();
+    })
   );
 
   it.effect("an unknown ID is absent, under this process's boot", () =>
@@ -684,7 +744,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           2
         );
 
-        const making = delivery(makes("dev"), 3);
+        const making = delivery(makes("dev", { ports: [firstPort] }), 3);
 
         yield* deliver(host, stopping);
         yield* entered;
@@ -692,10 +752,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* pause;
 
         expect(host.fake.calls).toContain("stop dev");
-        expect(
-          (yield* host.operations.list).find(({ id }) => id === making.id)
-            ?.status
-        ).toBe("running");
+        expect(yield* stillRunning(host, making.id)).toBe(true);
 
         yield* release;
 

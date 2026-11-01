@@ -117,8 +117,10 @@ export type Step = typeof Step.Type;
 /**
  * One whole step for a host to run to its end, whether or not the caller stays. `scope` names the
  * resource it changes. Delivering an `id` again returns that operation, a lower or equal `sequence`
- * in the scope is refused, and a higher one cuts short what still runs there. `boot` is the host
- * process it was meant for: another process refuses it, as the scopes it would be fenced by are gone.
+ * in the scope is refused, and a higher one cuts short what still runs there, and forgets the one
+ * before once it ended, collected or not. `boot` is the host process it was meant for: another
+ * process refuses it, as the scopes it would be fenced by are gone. The host keeps no step past its
+ * end, so a setup leaves its memory with the step that runs it.
  */
 export const Operation = Schema.Struct({
   id: Schema.String,
@@ -233,12 +235,6 @@ export const HostHttp = ActionHttp.make(
         "Report an operation, waiting a few seconds for it to end when it still runs.",
       input: ById,
       success: Report,
-    }),
-    Action.make("listOperations", {
-      ...read,
-      error: [Invalid] as const,
-      description: "Report every operation this process holds.",
-      success: Schema.Array(Report),
     }),
     Action.make("cancelOperation", {
       ...write,
