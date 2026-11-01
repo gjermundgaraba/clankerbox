@@ -2,8 +2,8 @@
 set -eu
 PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 
-agent_version=0.5.3
-agent_sha256=b4bf7244a67bd74ed91bef68051717503d3b4db6aad8f76c1ba71fccb9712b48
+agent_version=0.5.4
+agent_sha256=bbd978d96e1e835c98562b7f195f53bcc30e41253e23b41125def3896ddcbd2a
 node_version=22.23.4
 node_sha256=c9e1dbc748b33ed2d14f42445191ecaf14c56259c7a9a26d0042c49ec2b66428
 
