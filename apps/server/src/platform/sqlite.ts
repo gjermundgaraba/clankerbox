@@ -8,6 +8,7 @@ import {
   FileSystem,
   Layer,
   Option,
+  Record,
   Result,
   Schema,
 } from "effect";
@@ -33,13 +34,13 @@ export const migrations: readonly string[] = [
   `CREATE TABLE machines (
     name TEXT PRIMARY KEY,
     instance TEXT NOT NULL,
-    createdAt TEXT NOT NULL,
+    created_at TEXT NOT NULL,
     kind TEXT NOT NULL,
     base TEXT NOT NULL,
     profile TEXT,
     cpu INTEGER NOT NULL,
-    ramMib INTEGER NOT NULL,
-    diskGib INTEGER NOT NULL,
+    ram_mib INTEGER NOT NULL,
+    disk_gib INTEGER NOT NULL,
     host TEXT NOT NULL,
     port INTEGER,
     desired TEXT NOT NULL,
@@ -50,15 +51,15 @@ export const migrations: readonly string[] = [
     ephemeral INTEGER NOT NULL,
     source TEXT NOT NULL,
     prebuild TEXT,
-    hostKey TEXT,
+    host_key TEXT,
     pin TEXT,
-    undoneAt TEXT,
+    undone_at TEXT,
     UNIQUE (host, port)
   ) STRICT;
   CREATE TABLE checkpoints (
     name TEXT PRIMARY KEY,
     instance TEXT NOT NULL,
-    createdAt TEXT NOT NULL,
+    created_at TEXT NOT NULL,
     machine TEXT NOT NULL,
     host TEXT NOT NULL,
     kind TEXT NOT NULL,
@@ -67,11 +68,11 @@ export const migrations: readonly string[] = [
     base TEXT NOT NULL,
     profile TEXT,
     cpu INTEGER NOT NULL,
-    ramMib INTEGER NOT NULL,
-    diskGib INTEGER NOT NULL,
+    ram_mib INTEGER NOT NULL,
+    disk_gib INTEGER NOT NULL,
     state TEXT NOT NULL,
     error TEXT,
-    failedAt TEXT
+    failed_at TEXT
   ) STRICT;
   CREATE TABLE operations (
     id TEXT PRIMARY KEY,
@@ -210,12 +211,22 @@ const migrate = (
     });
   });
 
-const StoredMachine = Schema.Struct({
+const snakeCase = (field: string): string =>
+  field.replaceAll(/[A-Z]/gu, (letter) => `_${letter.toLowerCase()}`);
+
+const snakeColumns = <const Fields extends Schema.Struct.Fields>(
+  fields: Fields
+) =>
+  Schema.Struct(fields).pipe(
+    Schema.encodeKeys(Record.map(fields, (_, field) => snakeCase(field)))
+  );
+
+const StoredMachine = snakeColumns({
   ...Facts.fields,
   state: Schema.Literals(leaves),
 });
 
-const StoredCheckpoint = Schema.Struct({
+const StoredCheckpoint = snakeColumns({
   ...CheckpointFacts.fields,
   state: Schema.Literals(checkpointLeaves),
 });
@@ -314,71 +325,90 @@ export const open = (
     yield* lock(db, stateDir);
     yield* migrate(db, file);
 
-    const selectMachines = db.prepare(
-      "SELECT * FROM machines ORDER BY createdAt, name"
+    const prepare = (statement: string) =>
+      Effect.try({
+        try: () => db.prepare(statement),
+        catch: (cause) =>
+          new CannotStart({
+            message: `${file} has tables this clankerbox can't read: ${describe(cause)}`,
+          }),
+      });
+
+    const selectMachines = yield* prepare(
+      "SELECT * FROM machines ORDER BY created_at, name"
     );
 
-    const selectMachine = db.prepare("SELECT * FROM machines WHERE name = ?");
-
-    const insertMachine = db.prepare(insertInto("machines", StoredMachine));
-
-    const updateMachine = db.prepare(updateIn("machines", StoredMachine));
-
-    const deleteUndone = db.prepare(
-      "DELETE FROM machines WHERE name = ? AND undoneAt IS NOT NULL"
+    const selectMachine = yield* prepare(
+      "SELECT * FROM machines WHERE name = ?"
     );
 
-    const deleteMachine = db.prepare("DELETE FROM machines WHERE name = ?");
-
-    const deleteExpired = db.prepare("DELETE FROM machines WHERE undoneAt < ?");
-
-    const selectCheckpoints = db.prepare(
-      "SELECT * FROM checkpoints ORDER BY createdAt, name"
+    const insertMachine = yield* prepare(
+      insertInto("machines", StoredMachine.from)
     );
 
-    const selectCheckpoint = db.prepare(
+    const updateMachine = yield* prepare(
+      updateIn("machines", StoredMachine.from)
+    );
+
+    const deleteUndone = yield* prepare(
+      "DELETE FROM machines WHERE name = ? AND undone_at IS NOT NULL"
+    );
+
+    const deleteMachine = yield* prepare("DELETE FROM machines WHERE name = ?");
+
+    const deleteExpired = yield* prepare(
+      "DELETE FROM machines WHERE undone_at < ?"
+    );
+
+    const selectCheckpoints = yield* prepare(
+      "SELECT * FROM checkpoints ORDER BY created_at, name"
+    );
+
+    const selectCheckpoint = yield* prepare(
       "SELECT * FROM checkpoints WHERE name = ?"
     );
 
-    const deleteFailedCheckpoint = db.prepare(
-      "DELETE FROM checkpoints WHERE name = ? AND failedAt IS NOT NULL"
+    const deleteFailedCheckpoint = yield* prepare(
+      "DELETE FROM checkpoints WHERE name = ? AND failed_at IS NOT NULL"
     );
 
-    const insertCheckpoint = db.prepare(
-      insertInto("checkpoints", StoredCheckpoint)
+    const insertCheckpoint = yield* prepare(
+      insertInto("checkpoints", StoredCheckpoint.from)
     );
 
-    const updateCheckpoint = db.prepare(
-      updateIn("checkpoints", StoredCheckpoint)
+    const updateCheckpoint = yield* prepare(
+      updateIn("checkpoints", StoredCheckpoint.from)
     );
 
-    const deleteCheckpoint = db.prepare(
+    const deleteCheckpoint = yield* prepare(
       "DELETE FROM checkpoints WHERE name = ?"
     );
 
-    const deleteExpiredCheckpoints = db.prepare(
-      "DELETE FROM checkpoints WHERE failedAt < ?"
+    const deleteExpiredCheckpoints = yield* prepare(
+      "DELETE FROM checkpoints WHERE failed_at < ?"
     );
 
-    const selectOperations = db.prepare(
+    const selectOperations = yield* prepare(
       "SELECT * FROM operations ORDER BY sequence"
     );
 
-    const selectOperation = db.prepare(
+    const selectOperation = yield* prepare(
       "SELECT * FROM operations WHERE resource = ? AND name = ? ORDER BY sequence LIMIT 1"
     );
 
-    const insertOperation = db.prepare(insertInto("operations", Operation));
+    const insertOperation = yield* prepare(insertInto("operations", Operation));
 
-    const deleteOperation = db.prepare("DELETE FROM operations WHERE id = ?");
+    const deleteOperation = yield* prepare(
+      "DELETE FROM operations WHERE id = ?"
+    );
 
-    const raiseSequence = db.prepare(
+    const raiseSequence = yield* prepare(
       "UPDATE sequence SET last = last + 1 RETURNING last"
     );
 
-    const selectBoot = db.prepare("SELECT boot FROM hosts WHERE id = ?");
+    const selectBoot = yield* prepare("SELECT boot FROM hosts WHERE id = ?");
 
-    const upsertBoot = db.prepare(
+    const upsertBoot = yield* prepare(
       "INSERT INTO hosts (id, boot) VALUES (?, ?) ON CONFLICT (id) DO UPDATE SET boot = excluded.boot"
     );
 

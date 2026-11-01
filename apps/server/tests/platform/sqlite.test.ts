@@ -35,6 +35,70 @@ import type { Interface, Lease, Operation } from "../../src/store.ts";
 
 const earlierApplicationIds = [0x63_62_78_69, 0x63_62_78_73, 0x63_62_78_74];
 
+const migration1As96bd402Shipped = `CREATE TABLE machines (
+    name TEXT PRIMARY KEY,
+    instance TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    base TEXT NOT NULL,
+    profile TEXT,
+    cpu INTEGER NOT NULL,
+    ram_mib INTEGER NOT NULL,
+    disk_gib INTEGER NOT NULL,
+    host TEXT NOT NULL,
+    port INTEGER,
+    desired TEXT NOT NULL,
+    state TEXT NOT NULL,
+    prepared INTEGER NOT NULL,
+    error TEXT,
+    resize TEXT,
+    ephemeral INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    prebuild TEXT,
+    host_key TEXT,
+    pin TEXT,
+    undone_at TEXT,
+    UNIQUE (host, port)
+  ) STRICT;
+  CREATE TABLE checkpoints (
+    name TEXT PRIMARY KEY,
+    instance TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    machine TEXT NOT NULL,
+    host TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    pin TEXT,
+    port INTEGER NOT NULL,
+    base TEXT NOT NULL,
+    profile TEXT,
+    cpu INTEGER NOT NULL,
+    ram_mib INTEGER NOT NULL,
+    disk_gib INTEGER NOT NULL,
+    state TEXT NOT NULL,
+    error TEXT,
+    failed_at TEXT
+  ) STRICT;
+  CREATE TABLE operations (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    resource TEXT NOT NULL,
+    name TEXT NOT NULL,
+    host TEXT NOT NULL,
+    boot TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    leases TEXT NOT NULL,
+    "to" TEXT
+  ) STRICT;
+  CREATE TABLE hosts (
+    id TEXT PRIMARY KEY,
+    boot TEXT NOT NULL
+  ) STRICT;
+  CREATE TABLE sequence (
+    one INTEGER PRIMARY KEY CHECK (one = 1),
+    last INTEGER NOT NULL
+  ) STRICT;
+  INSERT INTO sequence (one, last) VALUES (1, 0)`;
+
 const withStore = <A, E>(
   stateDir: string,
   use: (store: Interface) => Effect.Effect<A, E>
@@ -51,6 +115,23 @@ const opening = (stateDir: string) =>
   );
 
 const stateIn = Effect.map(scratch, (dir) => path.join(dir, "state"));
+
+const stateDirAtVersion1 = (fill: (db: DatabaseSync) => void) =>
+  Effect.gen(function* () {
+    const stateDir = yield* stateIn;
+
+    yield* mkdir(stateDir);
+
+    const db = new DatabaseSync(path.join(stateDir, databaseFile));
+
+    fill(db);
+    db.exec(
+      `PRAGMA user_version = 1; PRAGMA application_id = ${applicationId}`
+    );
+    db.close();
+
+    return stateDir;
+  });
 
 const row = (name: string, fields?: Partial<MachineRow>): MachineRow => ({
   name,
@@ -473,6 +554,189 @@ layer(NodeServices.layer)((it) => {
         expect(
           yield* withStore(stateDir, (store) => store.machines)
         ).toStrictEqual([]);
+      })
+  );
+
+  it.effect(
+    "a state dir that 96bd402 wrote opens, reads every row as it wrote it, and takes writes",
+    () =>
+      Effect.gen(function* () {
+        const stateDir = yield* stateDirAtVersion1((db) => {
+          db.exec(migration1As96bd402Shipped);
+
+          const insertMachine = db.prepare(
+            `INSERT INTO machines (name, instance, created_at, kind, base, profile, cpu, ram_mib, disk_gib, host, port, desired, state, prepared, error, resize, ephemeral, source, prebuild, host_key, pin, undone_at)
+              VALUES ($name, '0123456789abcdef0123456789abcdef', $created, $kind, 'ubuntu', $profile, $cpu, $ram, $disk, 'linux', $port, $desired, $state, $prepared, $error, $resize, $ephemeral, $source, $prebuild, $key, $pin, $undone)`
+          );
+
+          insertMachine.run({
+            name: "dev",
+            created: "2026-10-04T12:00:00.000Z",
+            kind: "mac",
+            profile: "small",
+            cpu: 2,
+            ram: 2048,
+            disk: 20,
+            port: 10_000,
+            desired: "paused",
+            state: "made.failed",
+            prepared: 1,
+            error: `{"_tag":"Internal","message":"sshd didn't start"}`,
+            resize: `{"cpu":4,"diskGib":40}`,
+            ephemeral: 1,
+            source: `{"kind":"checkpoint","name":"snap"}`,
+            prebuild: "prebuilt-0123456789ab",
+            key: "ssh-ed25519 AAAA",
+            pin: "smolvm 0.0.0-test linux-x64",
+            undone: null,
+          });
+          insertMachine.run({
+            name: "gone",
+            created: "2026-10-04T12:01:00.000Z",
+            kind: "linux",
+            profile: null,
+            cpu: 1,
+            ram: 1024,
+            disk: 10,
+            port: null,
+            desired: "running",
+            state: "undone",
+            prepared: 0,
+            error: `{"_tag":"Internal","message":"setup failed"}`,
+            resize: null,
+            ephemeral: 0,
+            source: `{"kind":"base","scripted":true}`,
+            prebuild: null,
+            key: null,
+            pin: null,
+            undone: "2026-10-04T12:02:00.000Z",
+          });
+
+          const insertCheckpoint = db.prepare(
+            `INSERT INTO checkpoints (name, instance, created_at, machine, host, kind, pin, port, base, profile, cpu, ram_mib, disk_gib, state, error, failed_at)
+              VALUES ($name, 'fedcba9876543210fedcba9876543210', $created, 'dev', 'linux', 'linux', 'smolvm 0.0.0-test linux-x64', 10000, 'ubuntu', NULL, 1, 1024, 10, $state, $error, $failed)`
+          );
+
+          insertCheckpoint.run({
+            name: "snap",
+            created: "2026-10-04T13:00:00.000Z",
+            state: "ready",
+            error: null,
+            failed: null,
+          });
+          insertCheckpoint.run({
+            name: "broken",
+            created: "2026-10-04T13:01:00.000Z",
+            state: "failed",
+            error: `{"_tag":"Internal","message":"ENOSPC"}`,
+            failed: "2026-10-04T14:00:00.000Z",
+          });
+
+          db.exec(`INSERT INTO operations (id, kind, resource, name, host, boot, sequence, leases, "to")
+              VALUES ('op-7', 'resize', 'machine', 'dev', 'linux', 'boot-1', 7, '[{"resource":"machine","name":"dev","mode":"own"}]', '{"cpu":4,"diskGib":40}');
+            UPDATE sequence SET last = 7;
+            INSERT INTO hosts (id, boot) VALUES ('linux', 'boot-1')`);
+        });
+
+        const dev = row("dev", {
+          kind: "mac",
+          profile: "small",
+          cpu: 2,
+          ramMib: 2048,
+          diskGib: 20,
+          port: 10_000,
+          desired: "paused",
+          state: "made.failed",
+          prepared: true,
+          error: new Internal({ message: "sshd didn't start" }),
+          resize: { cpu: 4, diskGib: 40 },
+          ephemeral: true,
+          source: { kind: "checkpoint", name: "snap" },
+          prebuild: "prebuilt-0123456789ab",
+          hostKey: "ssh-ed25519 AAAA",
+          pin: "smolvm 0.0.0-test linux-x64",
+        });
+
+        const gone = row("gone", {
+          createdAt: DateTime.makeUnsafe("2026-10-04T12:01:00Z"),
+          state: "undone",
+          error: new Internal({ message: "setup failed" }),
+          source: { kind: "base", scripted: true },
+          undoneAt: DateTime.makeUnsafe("2026-10-04T12:02:00Z"),
+        });
+
+        const [machines, checkpoints, resizing, boot, written, after, later] =
+          yield* withStore(stateDir, (store) =>
+            Effect.gen(function* () {
+              const read = [
+                yield* store.machines,
+                yield* store.checkpoints,
+                yield* store.operationOn("machine", "dev"),
+                yield* store.hostBoot("linux"),
+              ] as const;
+
+              yield* store.advance("machine", "dev", (given) => ({
+                next: { ...given, cpu: 4, diskGib: 40, resize: undefined },
+                finish: true,
+              }));
+
+              return [
+                ...read,
+                yield* found(store, "dev"),
+                yield* store.operationOn("machine", "dev"),
+                yield* begun(store, operation("gone")),
+              ] as const;
+            })
+          );
+
+        expect(machines).toStrictEqual([dev, gone]);
+        expect(checkpoints).toStrictEqual([
+          checkpoint("snap", { state: "ready" }),
+          checkpoint("broken", {
+            createdAt: DateTime.makeUnsafe("2026-10-04T13:01:00Z"),
+            state: "failed",
+            error: new Internal({ message: "ENOSPC" }),
+            failedAt: DateTime.makeUnsafe("2026-10-04T14:00:00Z"),
+          }),
+        ]);
+        expect(resizing).toStrictEqual(
+          Option.some({
+            id: "op-7",
+            kind: "resize",
+            resource: "machine",
+            name: "dev",
+            host: "linux",
+            boot: "boot-1",
+            sequence: 7,
+            leases: [{ resource: "machine", name: "dev", mode: "own" }],
+            to: { cpu: 4, diskGib: 40 },
+          })
+        );
+        expect(boot).toStrictEqual(Option.some("boot-1"));
+        expect(written).toStrictEqual({
+          ...dev,
+          cpu: 4,
+          diskGib: 40,
+          resize: undefined,
+        });
+        expect(after).toStrictEqual(Option.none());
+        expect(later.sequence).toBe(8);
+      })
+  );
+
+  it.effect(
+    "a database at this binary's version whose tables it can't read is refused, not a crash",
+    () =>
+      Effect.gen(function* () {
+        const stateDir = yield* stateDirAtVersion1((db) => {
+          db.exec("CREATE TABLE machines (name TEXT PRIMARY KEY) STRICT");
+        });
+
+        const error = yield* opening(stateDir);
+
+        expect(error._tag).toBe("CannotStart");
+        expect(error.message).toContain(path.join(stateDir, databaseFile));
+        expect(error.message).toContain("no such column");
       })
   );
 
