@@ -194,6 +194,81 @@ layer(NodeServices.layer)((it) => {
       })
   );
 
+  it.effect(
+    "prebuild get reads a build prebuild --no-wait left going, and how it failed, or says it is gone",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        const config = yield* writeConfig(dir);
+        const script = path.join(dir, "setup.sh");
+
+        yield* write(script, "#!/bin/sh\ntrue\n");
+
+        const stub = server();
+
+        const started = yield* cli(
+          [
+            "prebuild",
+            ...sizes,
+            "--setup",
+            script,
+            "--no-wait",
+            "--config",
+            config,
+          ],
+          { server: stub }
+        );
+
+        stub.scriptBuild("prebuilt-0", [
+          "building",
+          {
+            phase: "failed",
+            error: new ScriptFailed({
+              message: "setup exited 7",
+              script: "setup",
+            }),
+          },
+        ]);
+
+        const building = yield* cli(
+          ["prebuild", "get", "prebuilt-0", "--config", config],
+          { server: stub }
+        );
+
+        const failed = yield* cli(
+          ["prebuild", "get", "prebuilt-0", "--json", "--config", config],
+          { server: stub }
+        );
+
+        const unknown = yield* cli(
+          ["prebuild", "get", "prebuilt-9", "--json", "--config", config],
+          { server: stub }
+        );
+
+        expect(started).toMatchObject({ code: 0, stdout: "prebuilt-0" });
+        expect(building.code).toBe(0);
+        expect(building.stdout).toMatch(/PHASE\s+building/u);
+        expect(failed.code).toBe(0);
+        expect(JSON.parse(failed.stdout)).toMatchObject({
+          id: "prebuilt-0",
+          phase: "failed",
+          error: { _tag: "ScriptFailed", message: "setup exited 7" },
+        });
+        expect(unknown.code).toBe(1);
+        expect(decodeJsonError(unknown.stdout).error).toMatchObject({
+          tag: "NotFound",
+          action: "getPrebuild",
+          id: "prebuilt-9",
+        });
+        expect(stub.calls).toStrictEqual([
+          "checkpoint.prebuild",
+          "prebuild.get",
+          "prebuild.get",
+          "prebuild.get",
+        ]);
+      })
+  );
+
   it.effect("prebuild names itself in a refusal of its spec", () =>
     Effect.gen(function* () {
       const dir = yield* scratch;

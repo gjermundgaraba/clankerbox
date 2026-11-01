@@ -22,7 +22,7 @@ import {
   start,
   stop,
 } from "./machines/commands.ts";
-import { prebuild } from "./prebuilds.ts";
+import { getPrebuild, prebuild } from "./prebuilds.ts";
 import { profiles } from "./profiles.ts";
 import { ssh, sshKnownHosts, sshProxy } from "./ssh.ts";
 
@@ -42,7 +42,7 @@ export const actionCommands = {
   captureCheckpoint: capture,
   deleteCheckpoint,
   prebuildCheckpoint: prebuild,
-  getPrebuild: prebuild,
+  getPrebuild,
   listHosts: hosts,
   getCapacity: capacity,
 } satisfies Record<keyof typeof actionsByName, Command.Command.Any>;

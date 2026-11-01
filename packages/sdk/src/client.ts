@@ -85,6 +85,9 @@ export interface Interface {
   readonly getCheckpoint: (
     input: Input<"getCheckpoint">
   ) => Effect.Effect<Checkpoint, ClankerboxError>;
+  readonly getPrebuild: (
+    input: Input<"getPrebuild">
+  ) => Effect.Effect<Build, ClankerboxError>;
   /** `createMachine`, then waits for the machine to rest. */
   readonly create: (
     name: string,
@@ -557,6 +560,7 @@ export const make = (
       capacity: send("getCapacity", {}),
       getMachine: (input) => send("getMachine", input, input.id),
       getCheckpoint: (input) => send("getCheckpoint", input, input.id),
+      getPrebuild: (input) => send("getPrebuild", input, input.id),
       create,
       startMachine: asking("startMachine", "running"),
       stopMachine: asking("stopMachine", "stopped"),
