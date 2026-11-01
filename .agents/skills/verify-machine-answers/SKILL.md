@@ -55,15 +55,17 @@ TLC checks these invariants on every reachable state:
 vpx .agents/skills/verify-machine-answers/scripts/breaks.ts      # every break below, or those named
 ```
 
-The script needs Java 11 or later on `PATH` and `curl`. It downloads
+`check.sh` and `breaks.ts` run TLC through `scripts/tlc.sh`, which holds its
+flags. It needs Java 11 or later on `PATH` and `curl`, and downloads
 `tla2tools.jar` v1.8.0 to `~/.cache/clankerbox-tla/` and keeps it there. That
 tag is a rolling prerelease that TLA+'s CI rebuilds from master on every push,
 so a machine runs the build it first fetched; delete the jar to take the latest.
-Each run copies `model/` into a fresh directory under `$TMPDIR` and runs TLC there,
-so parallel runs never share files and `model/` stays clean. It prints TLC's
-verdict for each config. A pass deletes the directory. Any other result keeps
-it and prints the paths of `tlc.out`, the full output, and of `trace.json`, the
-counterexample, when there is one; delete it once you have read them.
+Each `check.sh` run copies `model/` into a fresh directory under `$TMPDIR` and
+runs TLC there, so parallel runs never share files and `model/` stays clean. It
+prints TLC's verdict and distinct state count for each config. A pass deletes
+the directory. Any other result keeps it and prints the paths of `tlc.out`, the
+full output, and of `trace.json`, the counterexample, when there is one; delete
+it once you have read them.
 
 Exit 0 is a pass, 12 a violated invariant, 13 a violated `AllAnswered`, and 11
 a deadlock: a row no action can move. Anything else means the model or the

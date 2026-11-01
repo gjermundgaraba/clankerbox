@@ -1,5 +1,3 @@
-/// <reference types="node" />
-
 import { writeFileSync } from "node:fs";
 
 import { applied } from "../../../../apps/server/src/chart.ts";

@@ -1,5 +1,3 @@
-/// <reference types="node" />
-
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -9,7 +7,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 interface Break {
@@ -37,11 +35,6 @@ const copied = [
   `${skill}/model/TwoClients.cfg`,
   `${skill}/scripts/export-chart.ts`,
 ];
-
-const jar = path.join(
-  process.env.XDG_CACHE_HOME ?? path.join(homedir(), ".cache"),
-  "clankerbox-tla/tla2tools-1.8.0.jar"
-);
 
 const breaks: readonly Break[] = [
   {
@@ -267,7 +260,7 @@ const verdicts = new Map<number | null, string>([
 const verdictOf = (status: number | null, output: string) => {
   const invariant = /Invariant (?<name>\w+) is violated/u.exec(output)?.groups;
 
-  return invariant?.name ?? verdicts.get(status) ?? "broken";
+  return invariant?.["name"] ?? verdicts.get(status) ?? "broken";
 };
 
 const run = (taken: Break) => {
@@ -303,28 +296,16 @@ const run = (taken: Break) => {
   }
 
   const checked = spawnSync(
-    "java",
-    [
-      "-XX:+UseParallelGC",
-      "-cp",
-      jar,
-      "tlc2.TLC",
-      "-workers",
-      "auto",
-      "-noGenerateSpecTE",
-      "-metadir",
-      path.join(tree, "states"),
-      "-cleanup",
-      "-config",
-      taken.config,
-      "MachineAnswers.tla",
-    ],
-    { cwd: model, encoding: "utf8", maxBuffer: 2 ** 28 }
+    path.join(root, skill, "scripts/tlc.sh"),
+    [model, taken.config],
+    { stdio: ["ignore", "ignore", "inherit"] }
   );
+
+  const output = readFileSync(path.join(model, "tlc.out"), "utf8");
 
   rmSync(tree, { recursive: true });
 
-  return verdictOf(checked.status, checked.stdout);
+  return verdictOf(checked.status, output);
 };
 
 const asked = process.argv.slice(2);
