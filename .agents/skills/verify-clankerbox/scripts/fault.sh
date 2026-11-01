@@ -1,9 +1,9 @@
 #!/bin/sh
-# Usage: fault.sh <run-dir> kill-server | start-server | kill-host <id> | start-host <id> | hold-capture <id> | setup-go
+# Usage: fault.sh <run-dir> kill-server | start-server | kill-host <id> | start-host <id> | freeze-host <id> | thaw-host <id> | hold-capture <id> | setup-go
 set -eu
 . "$(dirname "$0")/common.sh"
 use_run "$@"
-action=${2:?usage: fault.sh <run-dir> kill-server|start-server|kill-host <id>|start-host <id>|hold-capture <id>|setup-go}
+action=${2:?usage: fault.sh <run-dir> kill-server|start-server|kill-host <id>|start-host <id>|freeze-host <id>|thaw-host <id>|hold-capture <id>|setup-go}
 
 case $action in
   kill-server)
@@ -25,6 +25,14 @@ case $action in
   start-host)
     start_host "${3:?host id}"
     echo "host $3 back" >>"$evidence/transcript.txt"
+    ;;
+  freeze-host)
+    kill -STOP "$(host_pid "${3:?host id}")"
+    echo "host $3 frozen" >>"$evidence/transcript.txt"
+    ;;
+  thaw-host)
+    kill -CONT "$(host_pid "${3:?host id}")"
+    echo "host $3 thawed" >>"$evidence/transcript.txt"
     ;;
   hold-capture)
     kill -USR2 "$(host_pid "${3:?host id}")"
