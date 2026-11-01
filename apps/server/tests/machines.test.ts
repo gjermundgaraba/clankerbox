@@ -3182,7 +3182,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           )
         );
 
-        yield* pause;
+        yield* eventually(Effect.option(machine("copy")), Option.isSome);
         yield* release;
 
         const refused = yield* Fiber.join(fork);
