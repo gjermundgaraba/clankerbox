@@ -227,15 +227,16 @@ export const make = (
         : hosts
             .call(found.host, (api) => api.readSizes({ machine: ref }))
             .pipe(
-              Effect.flatMap((sizing) =>
-                applying(found.name, { type: "sized", sizing })
-              ),
-              Effect.asVoid,
-              Effect.catchTag("Unreachable", (error) =>
-                Effect.logWarning(
-                  `couldn't read the sizes of ${found.name}, so it keeps those it has: ${error.message}`
-                )
-              )
+              Effect.matchEffect({
+                onFailure: ({ message }) =>
+                  Effect.logWarning(
+                    `couldn't read the sizes of ${found.name}, so it keeps those it has: ${message}`
+                  ),
+                onSuccess: (sizing) =>
+                  Effect.asVoid(
+                    applying(found.name, { type: "sized", sizing })
+                  ),
+              })
             );
     };
 
@@ -286,7 +287,7 @@ export const make = (
             const written = yield* stored(name, {
               type: "lost",
               error: new Internal({
-                message: `the ${op.kind} of machine ${name} ended before its host reported it: its host restarted, or the setup left with a restart of the control plane`,
+                message: `the ${op.kind} of machine ${name} ended before its host reported it: ${heard.why}`,
               }),
             });
 

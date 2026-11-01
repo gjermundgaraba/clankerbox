@@ -645,6 +645,36 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
+  it.effect(
+    "a step its host refuses, having seen a later one on the machine, is given up and decided afresh, not retried as unreachable",
+    () =>
+      Effect.gen(function* () {
+        const { client, host, machine } = yield* served();
+
+        yield* host.operations.run({
+          id: "from-another-store",
+          boot: host.operations.boot,
+          scope: "machine dev",
+          sequence: 4,
+          step: { _tag: "remove", machine: { name: "dev", instance: "old" } },
+        });
+
+        const answer = yield* Effect.timeoutOption(
+          Effect.flip(client.create("dev", request("dev"))),
+          Duration.seconds(4)
+        );
+
+        expect(Option.map(answer, ({ _tag }) => _tag)).toStrictEqual(
+          Option.some("Internal")
+        );
+        expect(at(yield* machine("dev"))).toStrictEqual([
+          "missing",
+          "running",
+          "failed",
+        ]);
+      })
+  );
+
   it.effect("a create of a failed create's name replaces its row", () =>
     Effect.gen(function* () {
       const { client, fake } = yield* served();

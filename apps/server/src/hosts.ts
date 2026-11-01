@@ -1,13 +1,14 @@
 import { HostHttp } from "@clankerbox/host-contract";
 import type { HostInfo } from "@clankerbox/host-contract";
 import {
+  HostError,
   readTimeout,
   version,
   versionHeader,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
-import { Context, Data, Effect, Layer } from "effect";
+import { Context, Data, Effect, Layer, Schema } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 
 export interface Member {
@@ -40,11 +41,14 @@ export interface Reached {
 
 export interface Interface {
   readonly members: readonly Member[];
-  /** One call to a host, bounded, with every way it can fail as `Unreachable`. */
-  readonly call: <A, E extends { readonly message: string } | object>(
+  /**
+   * One call to a host, bounded. It fails with an error its action declares, as the host answered
+   * it, and with `Unreachable` for every way it got no answer.
+   */
+  readonly call: <A, E>(
     host: string,
     run: (api: HostApi) => Effect.Effect<A, E>
-  ) => Effect.Effect<A, Unreachable>;
+  ) => Effect.Effect<A, Extract<E, HostError> | Unreachable>;
   /**
    * Reads the host, and checks it calls itself what the config says. Every look at a host comes
    * through here, so this logs when it stops answering and when it answers again, and no one else.
@@ -61,6 +65,8 @@ export class Hosts extends Context.Service<Hosts, Interface>()(
 
 const describe = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
+
+const isHostError = Schema.is(HostError);
 
 export const make = (
   members: readonly Member[]
@@ -93,7 +99,10 @@ export const make = (
         return Effect.logWarning(message);
       });
 
-    const call: Interface["call"] = (host, run) =>
+    const call = <A, E>(
+      host: string,
+      run: (api: HostApi) => Effect.Effect<A, E>
+    ): Effect.Effect<A, Extract<E, HostError> | Unreachable> =>
       Effect.suspend(() => {
         const api = apis.get(host);
 
@@ -105,6 +114,18 @@ export const make = (
               })
             )
           : run(api).pipe(
+              Effect.catchIf(
+                (error: E): error is Extract<E, HostError> =>
+                  isHostError(error),
+                Effect.fail,
+                (error) =>
+                  Effect.fail(
+                    new Unreachable({
+                      host,
+                      message: `host ${host}: ${describe(error)}`,
+                    })
+                  )
+              ),
               Effect.timeoutOrElse({
                 duration: readTimeout,
                 orElse: () =>
@@ -114,21 +135,22 @@ export const make = (
                       message: `host ${host} didn't answer in time`,
                     })
                   ),
-              }),
-              Effect.mapError((error) =>
-                error instanceof Unreachable
-                  ? error
-                  : new Unreachable({
-                      host,
-                      message: `host ${host}: ${describe(error)}`,
-                    })
-              )
+              })
             );
       });
 
     const read = (host: string) =>
       Effect.gen(function* () {
-        const info = yield* call(host, (api) => api.readHost({}));
+        const info = yield* call(host, (api) => api.readHost({})).pipe(
+          Effect.catchTag("Invalid", ({ message }) =>
+            Effect.fail(
+              new Unreachable({
+                host,
+                message: `host ${host} refused the read: ${message}`,
+              })
+            )
+          )
+        );
 
         if (info.id !== host) {
           return yield* new Unreachable({

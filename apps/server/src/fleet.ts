@@ -42,7 +42,7 @@ export const capacity = (
                 ...reading,
               }))
             ),
-            Effect.catchTag("Unreachable", () =>
+            Effect.catch(() =>
               Effect.sync((): Usage[] => {
                 unreachable.push(member.id);
 
@@ -66,20 +66,34 @@ const adopted = (store: Store, hosts: Hosts, host: string, boot: string) =>
 
     const rows = yield* store.machines;
 
-    yield* hosts.call(host, (api) =>
-      api.adoptMachines({
-        machines: rows.flatMap((found) => {
-          const ref =
-            found.host === host && stageOf(found.state) === "made"
-              ? refOf(found)
-              : undefined;
+    const told = yield* hosts
+      .call(host, (api) =>
+        api.adoptMachines({
+          machines: rows.flatMap((found) => {
+            const ref =
+              found.host === host && stageOf(found.state) === "made"
+                ? refOf(found)
+                : undefined;
 
-          return ref === undefined ? [] : [ref];
-        }),
-      })
-    );
+            return ref === undefined ? [] : [ref];
+          }),
+        })
+      )
+      .pipe(
+        Effect.as(true),
+        Effect.catch(({ message }) =>
+          Effect.as(
+            Effect.logWarning(
+              `couldn't give host ${host} its machines, so the next recheck tries again: ${message}`
+            ),
+            false
+          )
+        )
+      );
 
-    yield* store.recordBoot(host, boot);
+    if (told) {
+      yield* store.recordBoot(host, boot);
+    }
   });
 
 /**
@@ -99,11 +113,7 @@ export const recheckHosts = (
       ({ member, info }) =>
         info === undefined
           ? Effect.void
-          : adopted(store, hosts, member.id, info.boot).pipe(
-              Effect.catchTag("Unreachable", (error) =>
-                Effect.logWarning(error.message)
-              )
-            ),
+          : adopted(store, hosts, member.id, info.boot),
       { discard: true }
     );
 

@@ -120,12 +120,12 @@ export const make = (settings: {
         applied(checkpointChart, found, event, op)
       );
 
-    const lostWhy = (record: CheckpointRow, op: Operation) =>
+    const lostWhy = (record: CheckpointRow, op: Operation, why: string) =>
       Effect.map(store.findMachine(record.machine), (source) =>
         op.kind === "capture" && Option.isNone(source)
           ? notFound("machine", record.machine)
           : new Internal({
-              message: `the ${op.kind} of checkpoint ${record.name} ended before its host reported it`,
+              message: `the ${op.kind} of checkpoint ${record.name} ended before its host reported it: ${why}`,
             })
       );
 
@@ -139,7 +139,7 @@ export const make = (settings: {
           record.name,
           heard.at === "ended"
             ? reportedBy(op, heard.report, yield* DateTime.now)
-            : { type: "lost", error: yield* lostWhy(record, op) }
+            : { type: "lost", error: yield* lostWhy(record, op, heard.why) }
         );
         yield* collect(hosts, op);
       });
