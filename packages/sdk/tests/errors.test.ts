@@ -4,6 +4,7 @@ import { describe, expect, expectTypeOf } from "vite-plus/test";
 
 import {
   Capacity,
+  ClankerboxError,
   Conflict,
   HostError,
   Internal,
@@ -15,7 +16,7 @@ import {
   Superseded,
   Unavailable,
 } from "../src/index.ts";
-import type { ClankerboxError, Desired } from "../src/index.ts";
+import type { Desired } from "../src/index.ts";
 import { machine } from "./stub-server.ts";
 
 const failed = (error: ClankerboxError) => ({
@@ -57,6 +58,13 @@ describe("errors", () => {
     expect(retryable(new Unavailable({ message: "m", readOnly: false }))).toBe(
       false
     );
+  });
+
+  it("Superseded is the client's own answer: no row's error is one, and every call may fail with it", () => {
+    const superseded = new Superseded({ message: "m", by: "stopped" });
+
+    expect(Schema.is(Machine)(failed(superseded))).toBe(false);
+    expect(Schema.is(ClankerboxError)(superseded)).toBe(true);
   });
 
   it("a machine's last error can be any error a step ends with, Unavailable included", () => {

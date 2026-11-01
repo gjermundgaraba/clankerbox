@@ -1,6 +1,6 @@
 import {
   Client,
-  hostErrors,
+  clankerboxErrors,
   Invalid,
   retryable,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -44,7 +44,7 @@ export class SpawnFailed extends Schema.TaggedError<
   program: Schema.String,
 }) {}
 
-const failures = [...hostErrors, SpawnFailed] as const;
+const failures = [...clankerboxErrors, SpawnFailed] as const;
 
 const Failure = Schema.Union(failures);
 

@@ -94,20 +94,17 @@ export type Desired = typeof Desired.Type;
 
 /**
  * A later request on the machine replaced this one before the host got there: `by` is what that
- * request asked for. The machine's own state says where it is now.
+ * request asked for. The machine's own state says where it is now. The client makes it, from what
+ * its wait reads; the control plane never answers it.
  */
 export class Superseded extends Schema.TaggedError<
   Superseded,
   { readonly brand: unique symbol }
->()(
-  "Superseded",
-  {
-    message: Schema.String,
-    ...located,
-    by: Desired,
-  },
-  { httpApiStatus: 409 }
-) {
+>()("Superseded", {
+  message: Schema.String,
+  ...located,
+  by: Desired,
+}) {
   located(where: Where): Superseded {
     return new Superseded({
       ...at(this, where),
@@ -314,7 +311,6 @@ export const hostErrors = [
   Invalid,
   NotFound,
   Conflict,
-  Superseded,
   NotOffered,
   NotMade,
   Missing,
@@ -331,17 +327,20 @@ export const HostError = Schema.Union(hostErrors);
 
 export type HostError = typeof HostError.Type;
 
+export const clankerboxErrors = [...hostErrors, Superseded] as const;
+
 /**
- * Each carries, where known: `action`, which the client sets; `id`, the resource the error is
- * about, which the control plane sets on `NotFound` and `Conflict` and the client sets to the
- * call's subject otherwise; and `made`, the resource a create, fork, restore or capture makes. A
- * machine whose copy or setup fails is deleted, again at each recheck while that delete fails, and
- * one whose preparation fails is kept; a call whose answer was lost, `Unavailable`, may leave
+ * What a client's call fails with: what the control plane answers, and `Superseded`, which the
+ * client makes. Each carries, where known: `action`, which the client sets; `id`, the resource the
+ * error is about, which the control plane sets on `NotFound` and `Conflict` and the client sets to
+ * the call's subject otherwise; and `made`, the resource a create, fork, restore or capture makes.
+ * A machine whose copy or setup fails is deleted, again at each recheck while that delete fails,
+ * and one whose preparation fails is kept; a call whose answer was lost, `Unavailable`, may leave
  * `made` behind.
  */
-export const ClankerboxError = HostError;
+export const ClankerboxError = Schema.Union(clankerboxErrors);
 
-export type ClankerboxError = HostError;
+export type ClankerboxError = typeof ClankerboxError.Type;
 
 /**
  * Whether the same call may succeed later: a full host may free up, and a read that got no reply
