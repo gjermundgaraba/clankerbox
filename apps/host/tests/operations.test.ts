@@ -291,7 +291,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         });
 
         const stopping = delivery(
-          { _tag: "stop", machine: ref("dev"), seen: "running", machines: [] },
+          { _tag: "stop", machine: ref("dev"), machines: [] },
           2
         );
 
@@ -333,7 +333,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const stop: Step = {
           _tag: "stop",
           machine: ref("dev"),
-          seen: "running",
+
           machines: [],
         };
 
@@ -680,7 +680,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         });
 
         const stopping = delivery(
-          { _tag: "stop", machine: ref("dev"), seen: "running", machines: [] },
+          { _tag: "stop", machine: ref("dev"), machines: [] },
           2
         );
 
@@ -818,50 +818,68 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
-  it.effect("a start admits a stopped machine, not a running one", () =>
-    Effect.gen(function* () {
-      const host = yield* runner({ ramBudgetMib: 1024 });
-      const dev = ref("dev", { port: firstPort });
+  it.effect(
+    "a start admits a VM the runtime holds stopped beside the machines that run, and not one it holds running",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner({ ramBudgetMib: 1024 });
+        const dev = ref("dev", { port: firstPort });
+        const other = ref("other", { port: firstPort + 1 });
 
-      yield* finished(host, makes("dev", { setup: { script: loginSetup } }));
-      yield* finished(
-        host,
-        { _tag: "stop", machine: dev, seen: "running", machines: [] },
-        2
-      );
+        yield* finished(host, makes("dev", { setup: { script: loginSetup } }));
+        yield* finished(host, { _tag: "stop", machine: dev, machines: [] }, 2);
+        yield* finished(
+          host,
+          makes("other", { setup: { script: loginSetup } })
+        );
 
-      const started = yield* finished(
-        host,
-        {
-          _tag: "start",
-          machine: dev,
-          seen: "stopped",
-          pin: "fake 1",
-          machines: [],
-        },
-        3
-      );
+        const refused = yield* finished(
+          host,
+          { _tag: "start", machine: dev, pin: "fake 1", machines: [other] },
+          3
+        );
 
-      const refused = yield* finished(
-        host,
-        {
-          _tag: "start",
-          machine: ref("big", { ramMib: 4096 }),
-          seen: "stopped",
-          machines: [],
-        },
-        1
-      );
+        const started = yield* finished(
+          host,
+          { _tag: "start", machine: other, pin: "fake 1", machines: [dev] },
+          2
+        );
 
-      expect(started.status).toBe("done");
-      expect(started.outcome.hostKey).toContain("ssh-ed25519");
-      expect(errorOf(refused)).toStrictEqual(["failed", "Capacity"]);
-      expect(host.fake.activations.map(({ action }) => action)).toStrictEqual([
-        "createMachine",
-        "startMachine",
-        "startMachine",
-      ]);
-    })
+        expect(errorOf(refused)).toStrictEqual(["failed", "Capacity"]);
+        expect(host.fake.machines.get("dev")?.state).toBe("stopped");
+        expect(started.status).toBe("done");
+        expect(started.outcome.hostKey).toContain("ssh-ed25519");
+        expect(host.fake.activations.map(({ action }) => action)).toStrictEqual(
+          ["createMachine", "createMachine", "startMachine"]
+        );
+      })
+  );
+
+  it.effect(
+    "a stop that resumes admits a VM the runtime holds paused, beside the machines that run",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner({ ramBudgetMib: 1024 });
+        const dev = ref("dev", { port: firstPort });
+        const other = ref("other", { port: firstPort + 1 });
+
+        yield* finished(host, makes("dev"));
+        yield* finished(
+          host,
+          { _tag: "pause", machine: dev, pin: "fake 1" },
+          2
+        );
+        yield* finished(host, makes("other"));
+
+        const stopped = yield* finished(
+          host,
+          { _tag: "stop", machine: dev, pin: "fake 1", machines: [other] },
+          3
+        );
+
+        expect(errorOf(stopped)).toStrictEqual(["failed", "Capacity"]);
+        expect(host.fake.machines.get("dev")?.state).toBe("paused");
+      })
   );
 
   it.effect("a make from a base boots the image its host maps it to", () =>
@@ -955,17 +973,21 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const host = yield* runner();
 
       yield* finished(host, makes("dev"));
+      yield* finished(
+        host,
+        { _tag: "pause", machine: ref("dev"), pin: "fake 1" },
+        2
+      );
 
       const report = yield* finished(
         host,
         {
           _tag: "start",
           machine: ref("dev"),
-          seen: "paused",
           pin: "fake 0",
           machines: [],
         },
-        2
+        3
       );
 
       expect(errorOf(report)).toStrictEqual(["failed", "PinMismatch"]);
@@ -979,17 +1001,21 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const setup = { script: loginSetup };
 
       yield* finished(host, makes("dev", { setup }));
+      yield* finished(
+        host,
+        { _tag: "stop", machine: ref("dev"), machines: [] },
+        2
+      );
 
       const report = yield* finished(
         host,
         {
           _tag: "start",
           machine: ref("dev"),
-          seen: "stopped",
           pin: "fake 0",
           machines: [],
         },
-        2
+        3
       );
 
       expect(report.status).toBe("done");
@@ -1003,17 +1029,21 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const host = yield* runner();
 
         yield* finished(host, makes("dev"));
+        yield* finished(
+          host,
+          { _tag: "pause", machine: ref("dev"), pin: "fake 1" },
+          2
+        );
 
         const refused = yield* finished(
           host,
           {
             _tag: "stop",
             machine: ref("dev"),
-            seen: "paused",
             pin: "fake 0",
             machines: [],
           },
-          2
+          3
         );
 
         const stopped = yield* finished(
@@ -1021,11 +1051,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           {
             _tag: "stop",
             machine: ref("dev"),
-            seen: "paused",
             pin: "fake 1",
             machines: [],
           },
-          3
+          4
         );
 
         expect(errorOf(refused)).toStrictEqual(["failed", "PinMismatch"]);
@@ -1045,19 +1074,20 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           host,
           makes("dev", { source: { _tag: "base", base: "macos" } })
         );
+        yield* finished(host, { _tag: "pause", machine: ref("dev") }, 2);
 
         const report = yield* finished(
           host,
           {
             _tag: "stop",
             machine: ref("dev"),
-            seen: "paused",
             pin: "older",
             machines: [],
           },
-          2
+          3
         );
 
+        expect(host.fake.machines.get("dev")?.state).toBe("stopped");
         expect(report.status).toBe("done");
       })
   );

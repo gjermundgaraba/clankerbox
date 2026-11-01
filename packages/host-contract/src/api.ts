@@ -81,7 +81,8 @@ const others = { machines: Schema.Array(MachineRef) };
 
 /**
  * What a host runs. `pin` is the runtime pin a VM booted under, compared with the host's own, and
- * `machines` the host's other machines, which admission counts beside the one a step boots.
+ * `machines` the host's other machines, which admission counts beside the one a step boots. A step
+ * that acts by what its VM is doing reads it from the runtime as it begins.
  */
 export const Step = Schema.Union([
   Schema.TaggedStruct("make", {
@@ -90,18 +91,8 @@ export const Step = Schema.Union([
     ports: Schema.Array(Port),
     ...others,
   }),
-  Schema.TaggedStruct("start", {
-    machine: MachineRef,
-    seen: MachineState,
-    ...pinned,
-    ...others,
-  }),
-  Schema.TaggedStruct("stop", {
-    machine: MachineRef,
-    seen: MachineState,
-    ...pinned,
-    ...others,
-  }),
+  Schema.TaggedStruct("start", { machine: MachineRef, ...pinned, ...others }),
+  Schema.TaggedStruct("stop", { machine: MachineRef, ...pinned, ...others }),
   Schema.TaggedStruct("pause", { machine: MachineRef, ...pinned }),
   Schema.TaggedStruct("remove", { machine: Native }),
   Schema.TaggedStruct("resize", {

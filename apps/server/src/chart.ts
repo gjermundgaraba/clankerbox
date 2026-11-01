@@ -82,7 +82,7 @@ export interface Chart<
     row: Stated<S["context"], L>,
     kind: Operation["kind"],
     read: ReadOf<E>
-  ) => Pick<Operation, "id" | "boot" | "seen" | "leases" | "to">;
+  ) => Pick<Operation, "id" | "boot" | "leases" | "to">;
 }
 
 interface Failed {

@@ -140,7 +140,6 @@ export const checkpointChart: Chart<
   begins: (row, kind, { id, boot }) => ({
     id,
     boot,
-    seen: "unknown",
     leases: leasesOf(row, kind),
     to: undefined,
   }),

@@ -1,7 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import type { StatementSync } from "node:sqlite";
 
-import { MachineState } from "@clankerbox/host-contract";
 import {
   Conflict,
   Desired,
@@ -85,7 +84,6 @@ export const migrations: readonly string[] = [
     host TEXT NOT NULL,
     boot TEXT NOT NULL,
     sequence INTEGER NOT NULL,
-    seen TEXT NOT NULL,
     leases TEXT NOT NULL,
     "to" TEXT
   ) STRICT;
@@ -298,7 +296,6 @@ const OperationFields = Schema.Struct({
   host: Schema.String,
   boot: Schema.String,
   sequence: Schema.Int,
-  seen: MachineState,
   leases: LeasesJson,
   to: Stored(SizingJson),
 });
@@ -474,7 +471,6 @@ const operationColumns = (
   host: operation.host,
   boot: operation.boot,
   sequence: operation.sequence,
-  seen: operation.seen,
   leases: encodeLeases(operation.leases),
   to: sizing(operation.to),
 });

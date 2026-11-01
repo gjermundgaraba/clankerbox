@@ -680,7 +680,6 @@ describe("what a write begins and finishes", () => {
       name: "dev",
       host: "linux",
       boot: "fresh",
-      seen: "stopped",
       leases: [{ resource: "machine", name: "dev", mode: "own" }],
       to: undefined,
     });
@@ -1332,7 +1331,6 @@ describe("the chart", () => {
               (moved && step !== undefined
                 ? begin?.kind === step &&
                   event.type === "read" &&
-                  begin.seen === event.seen &&
                   begin.to === (step === "resize" ? row.resize : undefined)
                 : begin === undefined)
             : begin === undefined && finish === (moved && step === undefined);

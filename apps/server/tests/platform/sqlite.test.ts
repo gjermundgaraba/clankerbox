@@ -122,7 +122,6 @@ const operation = (
     name,
     host: "linux",
     boot: "boot-1",
-    seen: "stopped",
     leases: [{ resource: "machine", name, mode: "own" }],
     to: undefined,
     ...fields,

@@ -47,7 +47,6 @@ export const flight = (
   host: "linux",
   boot: "boot",
   sequence: 1,
-  seen: "unknown",
   leases: [],
   to: undefined,
   ...fields,

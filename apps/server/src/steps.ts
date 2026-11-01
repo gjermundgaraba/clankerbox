@@ -138,7 +138,6 @@ export const machineStep = (
         return {
           _tag: op.kind,
           machine: ref,
-          seen: op.seen,
           ...pinned(found.pin),
           machines,
         };

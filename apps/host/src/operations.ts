@@ -48,7 +48,7 @@ import {
   stateReadWait,
   timeoutFail,
 } from "./runtime.ts";
-import type { Booting, Held, MachineState, Observed } from "./runtime.ts";
+import type { Booting, Held, Observed } from "./runtime.ts";
 import type { HostSettings } from "./settings.ts";
 import { Tailnet } from "./tailnet.ts";
 
@@ -252,17 +252,31 @@ export const make = (
         return yield* runtime.fork(source.machine, machine);
       });
 
-    const running = (
+    const stateNow = (machine: MachineRef, what: string) =>
+      Effect.gen(function* () {
+        const seen = stateIn(
+          yield* runtime
+            .observe([machine])
+            .pipe(inTime(`the ${config.kind} runtime`)),
+          machine
+        );
+
+        if (seen === "unknown") {
+          return yield* new Internal({
+            message: `the ${config.kind} runtime couldn't read machine ${machine.name}, so it isn't ${what}: try again`,
+          });
+        }
+
+        return seen;
+      });
+
+    const withRoom = (
+      action: Booting,
       machine: MachineRef,
-      seen: MachineState,
       machines: readonly MachineRef[],
-      started: Effect.Effect<void, HostError>
+      act: Effect.Effect<void, HostError>
     ) =>
-      seen === "running"
-        ? started
-        : Effect.scoped(
-            Effect.andThen(admitted("startMachine", machine, machines), started)
-          );
+      Effect.scoped(Effect.andThen(admitted(action, machine, machines), act));
 
     const resized = (
       entry: Entry,
@@ -280,21 +294,10 @@ export const make = (
           });
         }
 
-        const seen = stateIn(
-          yield* runtime
-            .observe([machine])
-            .pipe(inTime(`the ${config.kind} runtime`)),
-          machine
-        );
+        const seen = yield* stateNow(machine, "resized");
 
         if (seen === "missing") {
           return yield* missing(config.kind, machine);
-        }
-
-        if (seen === "unknown") {
-          return yield* new Internal({
-            message: `the ${config.kind} runtime couldn't read machine ${name}, so it isn't resized: try again`,
-          });
         }
 
         const live = seen === "running";
@@ -417,14 +420,27 @@ export const make = (
     ): Effect.Effect<void, HostError> => {
       switch (step._tag) {
         case "start": {
-          const { machine, seen, pin, machines } = step;
+          const { machine, pin, machines } = step;
 
           return Effect.gen(function* () {
+            const seen = yield* stateNow(machine, "started");
+
+            if (seen === "missing") {
+              return yield* missing(config.kind, machine);
+            }
+
             if (seen === "paused") {
               yield* resumable(machine.name, pin);
             }
 
-            yield* running(machine, seen, machines, runtime.start(machine));
+            yield* seen === "running"
+              ? runtime.start(machine)
+              : withRoom(
+                  "startMachine",
+                  machine,
+                  machines,
+                  runtime.start(machine)
+                );
 
             const hostKey = yield* prepare(runtime, machine);
 
@@ -435,19 +451,18 @@ export const make = (
         }
 
         case "stop": {
-          const { machine, seen, pin, machines } = step;
+          const { machine, pin, machines } = step;
           const stopped = runtime.stop(machine);
 
-          return seen === "paused" && runtime.stopResumes
-            ? Effect.andThen(
-                resumable(machine.name, pin),
-                Effect.scoped(
-                  Effect.andThen(
-                    admitted("stopMachine", machine, machines),
-                    stopped
-                  )
-                )
-              )
+          return runtime.stopResumes
+            ? Effect.gen(function* () {
+                if ((yield* stateNow(machine, "stopped")) !== "paused") {
+                  return yield* stopped;
+                }
+
+                yield* resumable(machine.name, pin);
+                yield* withRoom("stopMachine", machine, machines, stopped);
+              })
             : stopped;
         }
 

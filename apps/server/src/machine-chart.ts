@@ -9,7 +9,13 @@ import type {
   Read as Begins,
   Stated,
 } from "./chart.ts";
-import type { Facts, Lease, MachinePhase, Operation } from "./store.ts";
+import type {
+  Facts,
+  Lease,
+  MachinePhase,
+  MachineState,
+  Operation,
+} from "./store.ts";
 
 /** What a machine can be asked to be. */
 export type Wish = Facts["desired"];
@@ -32,7 +38,7 @@ export interface Outcome {
 export type Move = Pick<Facts, "host" | "kind" | "pin" | "source" | "prebuild">;
 
 export interface Read extends Begins {
-  readonly seen: Operation["seen"];
+  readonly seen: MachineState;
   readonly pin: string | undefined;
   /** Whether a tailnet join is due, should the machine settle. */
   readonly joins: boolean;
@@ -443,10 +449,9 @@ export const machineChart: Chart<
   transition: (snapshot, event) => transition(machine, snapshot, event),
   leaves,
   metaOf,
-  begins: (row, kind, { id, boot, seen }) => ({
+  begins: (row, kind, { id, boot }) => ({
     id,
     boot,
-    seen,
     leases: leasesOf(row, kind),
     to: kind === "resize" ? row.resize : undefined,
   }),

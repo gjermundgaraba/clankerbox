@@ -18,6 +18,8 @@ import type { Decision } from "./chart.ts";
 import type { CheckpointRow } from "./checkpoint-chart.ts";
 import type { MachineRow } from "./machine-chart.ts";
 
+export type { MachineState } from "@clankerbox/host-contract";
+
 export class CannotStart extends Schema.TaggedError<
   CannotStart,
   { readonly brand: unique symbol }
@@ -56,7 +58,6 @@ export interface Operation {
   readonly host: string;
   readonly boot: string;
   readonly sequence: number;
-  readonly seen: "running" | "stopped" | "paused" | "missing" | "unknown";
   readonly leases: readonly Lease[];
   /** What a resize gives, which left the row when the step began. */
   readonly to: Sizing | undefined;

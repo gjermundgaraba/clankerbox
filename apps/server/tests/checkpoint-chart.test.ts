@@ -356,7 +356,6 @@ describe("the chart", () => {
       name: "snap",
       host: "linux",
       boot: "fresh",
-      seen: "unknown",
       leases: [{ resource: "machine", name: "dev", mode: "share" }, self],
       to: undefined,
     });
