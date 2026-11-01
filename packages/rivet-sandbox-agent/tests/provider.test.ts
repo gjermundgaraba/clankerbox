@@ -260,7 +260,7 @@ describe("provider", () => {
     ]);
   });
 
-  it("a create whose answer was lost deletes the machine it may have made", async () => {
+  it("a create whose wait ended with its request saved, or whose answer was lost, keeps the machine, as the server may act on it", async () => {
     const { stub, sandbox } = await setup({}, {}, undefined, (client) => ({
       ...client,
       create: (name, spec, options) =>
@@ -278,8 +278,10 @@ describe("provider", () => {
     }));
 
     await expect(sandbox.create()).rejects.toBeInstanceOf(Unavailable);
-    expect(requests(stub)).toStrictEqual(["machine.create", "machine.delete"]);
-    expect(stub.held()).toStrictEqual([]);
+    expect(requests(stub)).toStrictEqual(["machine.create"]);
+    expect(stub.held()).toStrictEqual([
+      expect.stringMatching(/^sandbox-[0-9a-f]{8}$/u),
+    ]);
   });
 
   it("a sandbox is handed out once its machine rests, through a moment its host can't be read", async () => {

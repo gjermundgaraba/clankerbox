@@ -7,6 +7,7 @@ import {
   specRequest,
   sshTarget,
   Superseded,
+  Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { ClankerboxError, Sizing } from "@gjermundgaraba/clankerbox-sdk";
 import {
@@ -79,7 +80,11 @@ const discard = (error: ClankerboxError) =>
 
     if (
       error.made !== undefined &&
-      !(error instanceof Conflict || error instanceof Superseded)
+      !(
+        error instanceof Conflict ||
+        error instanceof Superseded ||
+        error instanceof Unavailable
+      )
     ) {
       yield* Effect.ignore(client.deleteMachine({ id: error.made }));
     }
