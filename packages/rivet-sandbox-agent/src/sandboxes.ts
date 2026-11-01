@@ -1,8 +1,10 @@
 import {
   Client,
   Conflict,
+  Invalid,
   loadProfile,
   NotFound,
+  NotOffered,
   pinnedSsh,
   specRequest,
   sshTarget,
@@ -82,6 +84,8 @@ const discard = (error: ClankerboxError) =>
       error.made !== undefined &&
       !(
         error instanceof Conflict ||
+        error instanceof Invalid ||
+        error instanceof NotOffered ||
         error instanceof Superseded ||
         error instanceof Unavailable
       )

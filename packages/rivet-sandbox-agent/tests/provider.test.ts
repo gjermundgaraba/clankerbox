@@ -306,7 +306,7 @@ describe("provider", () => {
     expect(requests(stub)).toStrictEqual(["machine.create"]);
   });
 
-  it("a create refused because no host offers its base leaves the machines as they are", async () => {
+  it("a create refused because no host offers its base sends nothing after it, and leaves the machines as they are", async () => {
     const { stub, sandbox } = await setup({
       machines: [reachable("other")],
       refuse: {
@@ -318,6 +318,7 @@ describe("provider", () => {
     });
 
     await expect(sandbox.create()).rejects.toBeInstanceOf(NotOffered);
+    expect(requests(stub)).toStrictEqual(["machine.create"]);
     expect(stub.held()).toStrictEqual(["other"]);
   });
 
