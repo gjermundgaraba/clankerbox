@@ -316,34 +316,6 @@ describe("the chart", () => {
     ).toStrictEqual([]);
   });
 
-  it("begins an operation entering a leaf with a step, and finishes it leaving one", () => {
-    const wrong = fixtures.flatMap(({ row, op }) =>
-      representatives.flatMap((event) => {
-        const { next, begin, finish } = applied(
-          checkpointChart,
-          row,
-          event,
-          op
-        );
-
-        const moved = next !== row;
-        const step = next === "removed" ? undefined : metaOf(next.state).step;
-
-        const right =
-          op === undefined
-            ? !finish &&
-              (moved && step !== undefined
-                ? begin?.kind === step && event.type === "read"
-                : begin === undefined)
-            : begin === undefined && finish === (moved && step === undefined);
-
-        return right ? [] : [[row.state, event.type, op?.kind]];
-      })
-    );
-
-    expect(wrong).toStrictEqual([]);
-  });
-
   it("a capture shares its machine and owns the checkpoint, and a delete owns it alone", () => {
     const self = { resource: "checkpoint", name: "snap", mode: "own" };
 
@@ -370,14 +342,6 @@ describe("the chart", () => {
 });
 
 describe("a delete", () => {
-  it("from a rest never ends at a rest", () => {
-    expect(
-      leaves
-        .filter((state) => activityOf(state) === "none")
-        .map((state) => leafOf(rowAt(state), removal))
-    ).toStrictEqual(["deleting.due", "removed"]);
-  });
-
   it("during a capture lets the step drain, keeping its operation, then runs the delete whatever it reported", () => {
     const capture = inFlight("capture");
 

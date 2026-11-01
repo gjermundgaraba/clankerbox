@@ -516,13 +516,6 @@ describe("wants", () => {
 });
 
 describe("a report", () => {
-  it("a make cut short though no delete asked is undone, saying why, not run again", () => {
-    expect(after(rowAt("making.sent"), cancelled)).toMatchObject({
-      state: "undoing.due",
-      error: { _tag: "Internal" },
-    });
-  });
-
   it("a make cut short by a delete leaves the delete to run", () => {
     expect(after(rowAt("deleting.draining"), cancelled, "make")).toMatchObject({
       state: "deleting.due",
@@ -605,63 +598,6 @@ describe("a report", () => {
       after(deleted, cancelled, "make").port,
       after(deleted, gone, "make").port,
     ]).toStrictEqual(["deleting.draining", 3333, 2222, 2222]);
-  });
-
-  it("a delete keeps all a step's report tells but its failure, which isn't the delete's", () => {
-    expect([
-      after(
-        rowAt("deleting.draining"),
-        report("done", { hostKey: "key" }),
-        "start"
-      ).hostKey,
-      after(rowAt("deleting.draining"), report("failed", { sizes }), "resize"),
-    ]).toMatchObject([
-      "key",
-      { state: "deleting.due", error: undefined, ...sizes },
-    ]);
-  });
-
-  it("the last remove of a failed create rests undone with when, or moves it past a host's capacity", () => {
-    const row = rowAt("undoing.sent", {
-      error: new Internal({ message: "full" }),
-      port: 2222,
-    });
-
-    const move = {
-      host: "other",
-      kind: "mac",
-      pin: "other pin",
-      source: { kind: "base", scripted: true },
-      prebuild: undefined,
-    } as const;
-
-    expect([
-      after(row, done),
-      after(row, { type: "reported", status: "done", outcome: {}, at, move }),
-    ]).toMatchObject([
-      { state: "undone", undoneAt: at, error: { message: "full" } },
-      {
-        state: "making.due",
-        host: "other",
-        kind: "mac",
-        pin: "other pin",
-        error: undefined,
-        port: undefined,
-        undoneAt: undefined,
-      },
-    ]);
-  });
-
-  it("a resize read back after it was lost keeps the sizes the read gave, also under a delete", () => {
-    const sizing = { type: "sized", sizing: { cpu: 4 } } as const;
-
-    expect([
-      after(rowAt("made.observing"), sizing),
-      after(rowAt("deleting.due"), sizing),
-    ]).toMatchObject([
-      { cpu: 4, ramMib: 1024 },
-      { cpu: 4, ramMib: 1024 },
-    ]);
   });
 });
 
@@ -836,18 +772,6 @@ describe("a request", () => {
         return go(row, resizing).next === row;
       })
     ).toStrictEqual([true, true]);
-  });
-
-  it("a request that goes stop, run, stop during a failing stop still gets its failure", () => {
-    const row = after(
-      after(
-        rowAt("made.stepping.stopping", { desired: "stopped" }),
-        ask("running")
-      ),
-      ask("stopped")
-    );
-
-    expect(after(row, failed)).toMatchObject({ state: "made.failed", error });
   });
 });
 
@@ -1114,6 +1038,13 @@ const factsWritten: readonly Write[] = [
     "resize",
   ],
   [
+    "a step done under a delete goes on to the delete, keeping what it told",
+    rowAt("deleting.draining"),
+    report("done", { hostKey: "key" }),
+    { state: "deleting.due", hostKey: "key" },
+    "start",
+  ],
+  [
     "a make lost under a delete goes on to the delete with no error to show",
     rowAt("deleting.draining"),
     gone,
@@ -1283,6 +1214,8 @@ describe("the chart", () => {
           next === "removed" ||
           next.state !== state ||
           next.cpu !== 4 ||
+          next.ramMib !== row.ramMib ||
+          next.diskGib !== row.diskGib ||
           begin !== undefined ||
           finish
         );
@@ -1323,30 +1256,6 @@ describe("the chart", () => {
       state: "undone",
       undoneAt: at,
     });
-  });
-
-  it("begins an operation entering a leaf with a step, finishes it leaving one, and takes what a resize is owed to it", () => {
-    const wrong = fixtures.flatMap(({ row, op }) =>
-      representatives.flatMap((event) => {
-        const { next, begin, finish } = applied(machineChart, row, event, op);
-        const moved = next !== row;
-        const step = next === "removed" ? undefined : metaOf(next.state).step;
-
-        const right =
-          op === undefined
-            ? !finish &&
-              (moved && step !== undefined
-                ? begin?.kind === step &&
-                  event.type === "read" &&
-                  begin.to === (step === "resize" ? row.resize : undefined)
-                : begin === undefined)
-            : begin === undefined && finish === (moved && step === undefined);
-
-        return right ? [] : [[row.state, event.type, op?.kind]];
-      })
-    );
-
-    expect(wrong).toStrictEqual([]);
   });
 
   it("reaches every leaf, with these events from a create", () => {

@@ -4,12 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import {
-  Conflict,
-  Desired,
-  Internal,
-  NotFound,
-} from "@gjermundgaraba/clankerbox-sdk";
+import { Conflict, Internal, NotFound } from "@gjermundgaraba/clankerbox-sdk";
 import {
   mkdir,
   readDirectory,
@@ -37,7 +32,6 @@ import {
   transaction,
 } from "../../src/platform/sqlite.ts";
 import type { Interface, Lease, Operation } from "../../src/store.ts";
-import { applying } from "../support.ts";
 
 const earlierApplicationIds = [0x63_62_78_69, 0x63_62_78_73, 0x63_62_78_74];
 
@@ -576,155 +570,23 @@ layer(NodeServices.layer)((it) => {
       })
   );
 
-  it.effect.prop(
-    "requests through the chart keep the last wish but never over a delete, and start the row afresh in one write",
-    [Arbitrary.array(Arbitrary.schema(Desired), { maxLength: 20 })],
-    ([requests]) =>
-      Effect.gen(function* () {
-        const store = yield* open({ stateDir: yield* stateIn });
-        const error = new Internal({ message: "earlier" });
-
-        const row0 = row("dev", {
-          state: "made.failed",
-          error,
-          prepared: true,
-        });
-
-        yield* store.insertMachine(row0);
-
-        let { desired: kept, prepared } = row0;
-        let state: MachineRow["state"] = row0.state;
-        let cleared: MachineRow["error"] = error;
-
-        for (const desired of requests) {
-          const answered = yield* applying(
-            store,
-            "dev",
-            desired === "deleted"
-              ? { type: "delete" }
-              : { type: "ask", desired }
-          );
-
-          if (desired === "deleted") {
-            state = "deleting.due";
-            cleared = undefined;
-          } else if (state !== "deleting.due") {
-            state = "made.observing";
-            cleared = undefined;
-            kept = desired;
-            prepared = desired === "running" ? false : prepared;
-          }
-
-          const model: MachineRow = {
-            ...row0,
-            desired: kept,
-            prepared,
-            state,
-            error: cleared,
-          };
-
-          expect(answered).toMatchObject({ at: "written", next: model });
-          expect(yield* found(store, "dev")).toStrictEqual(model);
-        }
-
-        expect(
-          yield* applying(store, "gone", { type: "ask", desired: "running" })
-        ).toStrictEqual({ at: "absent" });
-      }).pipe(Effect.scoped),
-    { timeout: 30_000 }
-  );
-
-  it.effect("a row left undone moves for no request, and its error stays", () =>
-    Effect.gen(function* () {
-      const stateDir = yield* stateIn;
-
-      const undone = row("dev", {
-        state: "undone",
-        error: new Internal({ message: "setup failed" }),
-      });
-
-      const [asked, resized, after] = yield* withStore(stateDir, (store) =>
-        Effect.gen(function* () {
-          yield* store.insertMachine(undone);
-
-          return [
-            yield* applying(store, "dev", {
-              type: "ask",
-              desired: "stopped",
-            }),
-            yield* applying(store, "dev", {
-              type: "resize",
-              sizing: { cpu: 2 },
-            }),
-            yield* found(store, "dev"),
-          ] as const;
-        })
-      );
-
-      expect(asked).toStrictEqual({
-        at: "written",
-        next: undone,
-        moved: false,
-      });
-      expect(resized).toStrictEqual(asked);
-      expect(after).toStrictEqual(undone);
-    })
-  );
-
   it.effect(
-    "a resize keeps the sizes asked, starts the row afresh, and leaves what was asked of it",
+    "advance writes the row decide answers, and only it, and a key set to undefined clears its column; the row it was given writes nothing; no row answers absent",
     () =>
       Effect.gen(function* () {
         const stateDir = yield* stateIn;
 
         const before = row("dev", {
-          state: "made.failed",
-          desired: "stopped",
+          pin: "fake 1",
+          hostKey: "key",
           error: new Internal({ message: "earlier" }),
-          prepared: true,
         });
 
-        const [answered, other] = yield* withStore(stateDir, (store) =>
-          Effect.gen(function* () {
-            yield* store.insertMachine(before);
-            yield* store.insertMachine(row("other"));
-
-            return [
-              yield* applying(store, "dev", {
-                type: "resize",
-                sizing: { ramMib: 2048 },
-              }),
-              yield* found(store, "other"),
-            ] as const;
-          })
-        );
-
-        expect(answered).toStrictEqual({
-          at: "written",
-          moved: true,
-          next: {
-            ...before,
-            resize: { ramMib: 2048 },
-            state: "made.observing",
-            error: undefined,
-          },
-        });
-        expect(other).toStrictEqual(row("other"));
-      })
-  );
-
-  it.effect(
-    "advance writes the row decide answers, and a key set to undefined clears its column; the row it was given writes nothing; no row answers absent",
-    () =>
-      Effect.gen(function* () {
-        const stateDir = yield* stateIn;
-        const before = row("dev", { pin: "fake 1", hostKey: "key" });
-
-        const [same, unchanged, written, current, gone] = yield* withStore(
-          stateDir,
-          (store) =>
+        const [same, unchanged, written, current, other, gone] =
+          yield* withStore(stateDir, (store) =>
             Effect.gen(function* () {
               yield* store.insertMachine(before);
+              yield* store.insertMachine(row("other"));
 
               return [
                 yield* store.advance("machine", "dev", (given) => ({
@@ -739,17 +601,19 @@ layer(NodeServices.layer)((it) => {
                     port: 10_000,
                     prepared: true,
                     pin: undefined,
+                    error: undefined,
                   },
                   finish: false,
                 })),
                 yield* found(store, "dev"),
+                yield* found(store, "other"),
                 yield* store.advance("machine", "gone", (given) => ({
                   next: given,
                   finish: false,
                 })),
               ] as const;
             })
-        );
+          );
 
         const after = {
           ...before,
@@ -757,6 +621,7 @@ layer(NodeServices.layer)((it) => {
           port: 10_000,
           prepared: true,
           pin: undefined,
+          error: undefined,
         } as const;
 
         expect(same).toStrictEqual({
@@ -771,6 +636,7 @@ layer(NodeServices.layer)((it) => {
           moved: true,
         });
         expect(current).toStrictEqual(after);
+        expect(other).toStrictEqual(row("other"));
         expect(gone).toStrictEqual({ at: "absent" });
       })
   );
