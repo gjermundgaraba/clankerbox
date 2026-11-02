@@ -50,7 +50,7 @@ The npm packages are `@gjermundgaraba/clankerbox` (the CLI), `@gjermundgaraba/cl
 
 ## Install
 
-Each package needs Node 26.12 or later, and bundles everything else it runs.
+Each package needs Node 26.13 or later, and bundles everything else it runs.
 
 ```sh
 npm install --global @gjermundgaraba/clankerbox          # where you run commands
@@ -243,7 +243,7 @@ Linux guests need `perl`. On mac, Softnet blocks gateway DNS, so set public reso
 
 ## Deploy
 
-Install each package in a versioned prefix; VMs never reference it, so a release replaces it while machines run. Its bin runs the `node` on the service's `PATH`, which must be Node 26.12 or later.
+Install each package in a versioned prefix; VMs never reference it, so a release replaces it while machines run. Its bin runs the `node` on the service's `PATH`, which must be Node 26.13 or later.
 
 ```sh
 npm install --global --prefix /opt/clankerbox/<version> @gjermundgaraba/clankerbox-host@<version>
