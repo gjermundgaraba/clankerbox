@@ -6,17 +6,13 @@ packages:
 catalogMode: prefer
 saveExact: true
 catalog:
-  "@effect/platform-node": 4.1.1
-  # The CLI, the server and the host depend on it directly, with no import, at effect's
-  # version, for npm installs: platform-node takes it by caret, and a newer one requires a newer
-  # effect, so npm would install a second effect under it. Keep it equal to effect.
-  "@effect/platform-node-shared": 4.1.1
+  "@effect/platform-node": 4.1.2
   "@clanker-stuff/oxlint-config": 0.2.1
   "@effect/tsgo": 0.63.0
-  "@effect/vitest": 4.1.1
+  "@effect/vitest": 4.1.2
   "@gjermundgaraba/effect-actions": 0.27.0
   "@types/node": 26.6.6
-  effect: 4.1.1
+  effect: 4.1.2
   sandbox-agent: 0.5.4
   typescript: 7.0.2
   vite: npm:@voidzero-dev/vite-plus-core@1.4.0
