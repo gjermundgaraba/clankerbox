@@ -1,6 +1,6 @@
 {
   "name": "@gjermundgaraba/clankerbox-server",
-  "version": "0.33.2",
+  "version": "0.33.3",
   "description": "The clankerbox control plane",
   "license": "MIT",
   "repository": {
