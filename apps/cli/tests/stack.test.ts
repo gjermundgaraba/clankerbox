@@ -575,7 +575,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "profiles lists the profiles directory, and a prebuild of one is restored by the next create of it",
+    "profiles lists the profiles directory, and a prebuild of one is restored by the next create of it, also at larger sizes",
     () =>
       Effect.gen(function* () {
         const { dir, run } = yield* setUp();
@@ -635,7 +635,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(fresh).toMatchObject({ code: 0, stdout: "slow" });
         expect(fresh.stderr).not.toContain("restored from the prebuild");
         expect(other).toMatchObject({ code: 0, stdout: "large" });
-        expect(other.stderr).not.toContain("restored from the prebuild");
+        expect(other.stderr).toContain(
+          `restored from the prebuild ${prebuilt.stdout}`
+        );
       })
   );
 

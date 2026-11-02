@@ -11,11 +11,12 @@ export const builderName = (): string =>
   `prebuilding-${Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(8)))}`;
 
 /**
- * A digest of the spec's label, base, sizes, setup script as sent, authorized keys, and the host
- * and its runtime version. A `ram` checkpoint restores only under the release that saved it, so
- * after a runtime bump a create misses the old prebuild instead of failing to restore it, and each
- * host keeps its own copy under a name that means nothing to a client. The setup's timeout and the
- * base's image are no part of it.
+ * A digest of the spec's label, base, setup script as sent, authorized keys, and the host and its
+ * runtime version. A `ram` checkpoint restores only under the release that saved it, so after a
+ * runtime bump a create misses the old prebuild instead of failing to restore it, and each host
+ * keeps its own copy under a name that means nothing to a client. The sizes, the setup's timeout
+ * and the base's image are no part of it: a create restores a prebuild at sizes a copy of it can
+ * take, and a prebuild at new sizes replaces the old one.
  */
 export const nameOf = (
   spec: MachineSpec,
@@ -29,9 +30,6 @@ export const nameOf = (
           JSON.stringify([
             spec.profile ?? null,
             spec.base,
-            spec.cpu,
-            spec.ramMib,
-            spec.diskGib,
             spec.setup?.script ?? null,
             spec.setup?.authorizedKeys ?? null,
             host.id,
