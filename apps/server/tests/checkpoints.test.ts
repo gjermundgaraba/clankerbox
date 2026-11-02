@@ -1561,6 +1561,100 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
+  const sized = { cpu: 2, ramMib: 2048, diskGib: 20 };
+
+  const createdFrom = (
+    kind: Kind | undefined,
+    creates: ReadonlyArray<readonly [string, Partial<typeof sized>]>
+  ) =>
+    Effect.gen(function* () {
+      const { client, host } = yield* withClient(onKind(kind));
+      const { id } = yield* client.prebuild(prebuild(sized));
+      const made: Array<readonly [string, boolean, string | undefined]> = [];
+
+      for (const [name, sizing] of creates) {
+        const machine = yield* client.create(
+          name,
+          request(name, { setup: keyed, ...sized, ...sizing })
+        );
+
+        made.push([
+          name,
+          machine.prebuild === id,
+          host.fake.calls.find(
+            (call) => call === `restore ${name}` || call === `create ${name}`
+          ),
+        ]);
+        yield* client.deleteMachine({ id: name });
+      }
+
+      return made;
+    });
+
+  it.effect(
+    "a linux create at its prebuild's sizes or larger restores it, and one smaller in any size runs the setup",
+    () =>
+      Effect.gen(function* () {
+        const made = yield* createdFrom(undefined, [
+          ["same", {}],
+          ["larger", { cpu: 4, ramMib: 4096, diskGib: 40 }],
+          ["fewer-cpus", { cpu: 1 }],
+          ["less-ram", { ramMib: 1024 }],
+          ["less-disk", { diskGib: 10 }],
+        ]);
+
+        expect(made).toStrictEqual([
+          ["same", true, "restore same"],
+          ["larger", true, "restore larger"],
+          ["fewer-cpus", false, "create fewer-cpus"],
+          ["less-ram", false, "create less-ram"],
+          ["less-disk", false, "create less-disk"],
+        ]);
+      })
+  );
+
+  it.effect(
+    "a mac create restores its prebuild at any vCPUs and RAM, and runs the setup for a smaller disk",
+    () =>
+      Effect.gen(function* () {
+        const made = yield* createdFrom("mac", [
+          ["smaller", { cpu: 1, ramMib: 1024 }],
+          ["larger", { cpu: 4, ramMib: 4096, diskGib: 40 }],
+          ["less-disk", { diskGib: 10 }],
+        ]);
+
+        expect(made).toStrictEqual([
+          ["smaller", true, "restore smaller"],
+          ["larger", true, "restore larger"],
+          ["less-disk", false, "create less-disk"],
+        ]);
+      })
+  );
+
+  it.effect(
+    "a prebuild at other sizes replaces the one of its setup, and another setup is a prebuild of its own",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* withClient();
+        const { client, store } = served;
+        const first = yield* client.prebuild(prebuild());
+        const resized = yield* client.prebuild(prebuild(sized));
+
+        const other = yield* client.prebuild(
+          prebuild({ setup: { ...keyed, script: `${keyed.script}\ntrue` } })
+        );
+
+        yield* noMachines(served);
+
+        const row = Option.getOrThrow(yield* store.findCheckpoint(first.id));
+
+        expect(resized.id).toBe(first.id);
+        expect(other.id).not.toBe(first.id);
+        expect([row.cpu, row.ramMib, row.diskGib]).toStrictEqual([2, 2048, 20]);
+        expect(yield* checkpointIds(client)).toHaveLength(2);
+      })
+  );
+
   it.effect(
     "a prebuild that exists is built again, and replaced once the setup has run",
     () =>

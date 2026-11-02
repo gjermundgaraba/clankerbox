@@ -447,7 +447,13 @@ export const make = (
             const prebuilt = yield* nameOf(request, host);
             const found = yield* store.findCheckpoint(prebuilt);
 
-            if (Option.isSome(found) && found.value.state === "ready") {
+            if (
+              Option.isSome(found) &&
+              found.value.state === "ready" &&
+              (yield* Effect.isSuccess(
+                copied(name, found.value, request, host.kind)
+              ))
+            ) {
               prebuilds.set(host.id, prebuilt);
             }
           }
