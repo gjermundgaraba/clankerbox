@@ -15,7 +15,7 @@ The goal is that a client talks to one server, IDs carry no host, and adding a h
 7. **Start fresh.** Existing machines, checkpoints and prebuilds are not imported, so there is no import tool and names can't clash.
 8. **Cross-host forks and moves stay out of stage 2.** The design leaves room for them. Nothing in the client contract promises that a fork stays on its source's host. The two-host smolvm restore test runs before that work starts.
 
-9. **Amp orbs and `exec` are removed.** Those were the action's only two callers. `clankerbox amp-orb`, `execMachine` and `clankerbox exec` go, and `clankerbox ssh dev -- <command>` covers a command run by hand. `Runtime.exec` stays, because setup and preparation run through it. Image-reference bases stay, and a machine made from one still needs sshd from its setup to be reachable.
+9. **Amp orbs are removed, and `exec` came back in 0.35 as a pass-through.** `clankerbox amp-orb` went with the redesign, and `execMachine` and `clankerbox exec` went with it, as `clankerbox ssh dev -- <command>` covers a command run by hand. 0.35 brings `execMachine` back for callers without SSH into the machine, such as an image with no sshd: the control plane finds the machine's host, waits for a step in flight on it to end, and passes the request on; the host waits for a step in its scope too, checks the machine runs, runs the command and answers its exit code and output. No row, operation or log line holds the command, so a secret may go on its stdin. A stop, pause or delete asked meanwhile ends it, as it takes the machine. `Runtime.exec` stays as it was, because setup and preparation run through it. Image-reference bases stay.
 10. **One app per program.** See "Where the code lives".
 11. **The remaining defaults stand.**
     - The control plane calls hosts (D2).
@@ -28,6 +28,9 @@ The goal is that a client talks to one server, IDs carry no host, and adding a h
     - Placement takes the first host that fits, then the next on `Capacity`, and tries a host holding the matching prebuild first (D9).
     - A prebuild's digest includes its host, so each host keeps its own copy under a name that means nothing to a client (D9).
     - Tailnet nodes are named with a fixed prefix, `cbx-dev`, so they can't clash with other nodes (D5).
+12. **Labels are set when a resource is made, and lists filter by them.** (0.35) `create`, `fork`, `restore` and `captureCheckpoint` take `labels`, kept on the row as JSON, and a copy takes only the labels its own request gives. `listMachines` and `listCheckpoints` take a filter that every pair must match. Nothing changes a label later, so a label is a fact about how the resource was made, and no write can race another over it.
+13. **A pause may capture first, and the capture's lease orders them.** (0.35) `pauseMachine` takes a `capture`. The control plane records the capture, waits for its operation to begin, then records the pause with `after` naming the checkpoint. The pause's step owns the machine and the capture's shares it, so the pause's begin finds the lease taken and waits for the capture to end, across a restart too, as leases are rows. A read that finds the capture recorded but not begun, as a restart between the two can leave it, holds the pause until the next recheck, so the checkpoint always holds the machine as it ran.
+14. **A checkpoint may expire.** (0.35) `captureCheckpoint` takes `expiresAt`. A sweep at each recheck deletes every ready checkpoint past it, through the same delete a client asks for. A prebuild never carries one.
 
 Everything below this section follows from these.
 

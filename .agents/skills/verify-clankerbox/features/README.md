@@ -20,6 +20,8 @@ that drive it here, with `--json` fields to check. `cb` is
 | A host restarts mid-capture or mid-delete | see the skill's Faults section | the second table there |
 | SSH config sync | `cb machines` (a command that reads no server, such as `profiles`, doesn't sync) | `$(cat "$RUN/home")/.ssh/clankerbox` has the one block `Host *.cbx` |
 | `ssh-known-hosts` | `cb ssh-known-hosts app app.example` | prints `app.example <hostKey>` |
+| `exec` | `cb exec app --user user --env TOKEN=t -- sh -c 'echo "$CLANKERBOX_USER $TOKEN"; exit 3'`, then `cb stop app` and `cb exec app --json -- true` | prints `user t` and exits 3; on the stopped machine `error.tag` is `WrongState` |
+| Labels, expiry and a pause that captures | `cb create tagged --base ubuntu --cpu 1 --ram 1G --disk 10G --label app=web`, `cb pause tagged --capture snap --label app=web --expires 1d`, `cb machines --label app=web`, `cb checkpoint list --label app=web`, `cb checkpoint get snap --json` | `runtime-calls.txt` has `capture snap` before `pause tagged`; each list shows only what carries the label, and `--label app=api` lists nothing; `checkpoint get` has `labels` and `expiresAt` |
 
 On a `mac` run (`launch.sh mac`) the base is `macos`, so drive with
 `--base macos`; `--profile web` takes it already. A capture or fork takes a

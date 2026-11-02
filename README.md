@@ -143,6 +143,10 @@ The control plane exits 130 on SIGINT or SIGTERM and 1 when it fails.
 
 Hosts and the control plane start fresh: 0.30's machines aren't carried over. Before you upgrade, delete each machine and checkpoint with the old release, then stop its host, and remove its `stateDir`. IDs no longer carry a host: `linux_dev` is `dev`, and `ssh dev.cbx` replaces `ssh linux_dev`. Client configs name `server` instead of `hosts`, and profiles lose `host`. `clankerbox host` is now `clankerbox-host`.
 
+### Upgrading from 0.34
+
+State carries over: the control plane migrates its database on its first start, adding the columns that labels, expiry and a pause's capture take, and nothing on a host changes. Upgrade hosts and the control plane together, as always.
+
 ## Use the CLI
 
 The client config is `$XDG_CONFIG_HOME/clankerbox/config.json` (`~/.config` when unset), or `--config PATH`:
@@ -178,14 +182,18 @@ clankerbox machines
 clankerbox get dev
 clankerbox ssh dev -- uptime
 ssh dev.cbx                                # plain OpenSSH, scp and rsync work too
+clankerbox exec dev --user admin -- uptime # through the host, no SSH; --env, --stdin and --timeout
 clankerbox pause dev                       # saves its RAM and frees it
+clankerbox pause dev --capture snap --expires 7d  # captures it as it runs, then pauses
 clankerbox stop dev
 clankerbox resize dev --cpu 4 --ram 4G --disk 80G
 clankerbox start dev
 clankerbox fork dev dev2
 clankerbox fork dev big --ram 8G           # a copy with more RAM
-clankerbox checkpoint capture dev base
-clankerbox restore base dev3
+clankerbox checkpoint capture dev base --label app=web --expires 30d
+clankerbox checkpoint list --label app=web
+clankerbox restore base dev3 --label app=web
+clankerbox machines --label app=web
 clankerbox delete dev3
 clankerbox checkpoint delete base
 clankerbox hosts                           # for an operator: each host, its state and versions
@@ -206,6 +214,10 @@ clankerbox capacity                        # for an operator: each host's resour
 - A request on a machine whose host can't be reached stays saved, and its wait reads on, failing `Unavailable` once the host has been unreachable for two minutes; it acts once the host answers. A capture on such a machine reads `capturing` until the host answers, so `checkpoint capture` waits that long, or until its `--timeout`.
 - A machine being deleted can't be captured or forked: either answers `NotFound`.
 - A checkpoint is `ready` until its delete begins, and a delete that fails runs again.
+- `exec` runs a command in a running machine through its host, as root or `--user`, with `--env NAME=VALUE` set and, with `--stdin`, this stdin sent whole. It prints the command's output, its last 65,536 characters, saying on stderr when it was cut, and exits with the command's code. It waits for a step under way on the machine first, and a stop, pause or delete asked meanwhile ends it. `--timeout 90s` ends the command and exits 124. Nothing of a command is stored or logged, so a secret may go on its stdin.
+- `--label KEY=VALUE`, repeated for more, tags a machine or checkpoint when it is made: on `create`, `fork`, `restore`, `checkpoint capture` and `pause --capture`. Labels never change after that, and a copy takes only the labels its own request gives. `machines --label KEY=VALUE` and `checkpoint list --label KEY=VALUE` list what carries every pair given. A resource takes at most 16 labels; a key is a name like a resource's, and a value up to 63 characters.
+- `--expires 7d` on `checkpoint capture` or `pause --capture` has the control plane delete the checkpoint once it is ready and that long has passed, at its next check; `checkpoint get` shows `EXPIRES`. A prebuild never expires.
+- `pause --capture NAME` records the capture first, and the pause begins once the capture has, so the checkpoint holds the machine as it ran; `--label` and `--expires` go on the checkpoint. The machine must be running: a stopped or paused one answers `WrongState`, so capture it with `checkpoint capture` instead. A capture that fails fails the command with its error once the machine has paused; `checkpoint get NAME` says why.
 - A prebuild matches the profile, its setup, the config's authorized keys, and the host it was built on and its runtime release; any change runs the setup again until a new `prebuild`. It serves a create at sizes a `restore` of it takes: on linux vCPUs, RAM and disk each at least its own, and on a Mac any vCPUs and RAM and a disk at least its own. A smaller create runs the setup, so prebuild at the smallest sizes you create. A linux create grows the restored VM while it runs, so smolvm's limits on a live grow hold: RAM grows in 128M steps, and a create past that fails `Unsizable`, which `--fresh` avoids by running the setup. Each host keeps its own: a create uses a prebuild held by any host that can take it. Each `prebuild` runs the setup again and replaces the one that matches, at any sizes, once it has run, so a setup that installs latest releases picks up today's; creates restore the old one until then. A capture that fails leaves none. Prebuilds that match nothing any more stay until deleted: `checkpoint list` shows them.
 - `ssh` pins the machine's host key and logs in as `admin`.
 - Plain OpenSSH reaches machines as `<name>.cbx`, so `ssh dev.cbx`, scp, rsync and tools that run ssh work. A command on the default client config keeps `~/.ssh/clankerbox` with one `Host *.cbx` block, as `admin`, and ends `~/.ssh/config` with `Match all` and `Include clankerbox`, so your own entries come first and win. Each connection runs `clankerbox ssh-proxy` and `clankerbox ssh-known-hosts` for the machine's current endpoint and host key, so nothing goes stale when a port changes or a machine is recreated, and the connection goes straight to the machine's host. Both run through your login shell, `$SHELL` as of the command that wrote the file (`/bin/sh` without one), so `clankerbox` must be on the `PATH` that shell sets up, even for an app started outside a terminal. `CLANKERBOX_SSH_CONFIG=false` removes both.
@@ -326,6 +338,9 @@ program.pipe(
 - Every action is a method named as in the contract (`api.ts`), such as `client.forkMachine({ machine, name })`, and fails with tagged errors (`errors.ts`); `retryable(error)` says whether to try again.
 - A mutation answers once recorded, and the client waits until the resource rests: a machine with what was asked, its `phase` and `error` saying how it got there. `Client.make(url, { noWait: true })` skips the wait, and `timeout` bounds it. One whose reply is lost fails `Unavailable`: it may have run, so read the resource.
 - `client.prebuild` does what `clankerbox prebuild` does, and answers the `Build`. `client.create` restores a prebuild when a host holds one at sizes the create can grow from, unless `{ fresh: true }`, and `machine.prebuild` names it.
+- `client.ensure(name, { spec, checkpoint, sizing, labels })` answers a machine of `name` that runs: the one that exists, started or resumed; else one restored from `checkpoint` when that is ready, at `sizing` or its own; else one created from `spec`. A failed create's row that still answers `Conflict` is deleted and the make tried once more, and a make whose reply was lost reads the machine and decides again, once. `labels` go on what it makes.
+- `client.pauseMachine({ id, capture })` waits for the machine to pause and then for the checkpoint to be ready, failing with the capture's error when it failed.
+- `client.execMachine({ id, argv, user, env, stdin, timeoutSeconds })` runs a command and answers `{ exitCode, output, truncated }`; the client waits as long as the command runs, or `timeoutSeconds` and the reply timeout. `client.listMachines({ labels })` and `client.listCheckpoints({ labels })` filter by labels; `client.machines` and `client.checkpoints` list everything.
 
 ## Sandbox Agent provider
 
