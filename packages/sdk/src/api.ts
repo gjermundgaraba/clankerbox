@@ -74,7 +74,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: creating,
       description:
-        "Create a machine from a base, or on linux from an image reference, on a host with room. It runs its setup once, or restores the setup's prebuild when a host holds one, and prepares it. A create or setup that fails deletes the VM, again at each recheck while that delete fails, and keeps the row, failed, to say why; a preparation that fails keeps the machine.",
+        "Create a machine from a base, or on linux from an image reference, on a host with room. It runs its setup once, or restores the setup's prebuild when a host holds one at sizes the create can grow from, and prepares it. A create or setup that fails deletes the VM, again at each recheck while that delete fails, and keeps the row, failed, to say why; a preparation that fails keeps the machine.",
       input: CreateRequest,
       success: Machine,
     }),
@@ -165,7 +165,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: creating,
       description:
-        "Make a checkpoint from a machine built from the spec, setup and all, and delete the machine after. A checkpoint of that spec that exists is replaced once the build's setup has run.",
+        "Make a checkpoint from a machine built from the spec, setup and all, and delete the machine after. A prebuild of that setup that exists, at any sizes, is replaced once the build's setup has run.",
       input: PrebuildRequest,
       success: Build,
     }),
