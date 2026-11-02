@@ -7,7 +7,7 @@ const bases = {
   },
   mac: {
     macos:
-      "ghcr.io/cirruslabs/macos-tahoe-xcode@sha256:71d9dc1d6c4614b7ecbb328753124912b43425fc8cf1c4085d7f352026df6601",
+      "ghcr.io/cirruslabs/macos-golden-gate-xcode@sha256:d7641b1d985fd53fbac071c663bf249007b9b387e16b7d576144588acb1d93f9",
   },
 } as const satisfies Record<Kind, Readonly<Record<string, string>>>;
 
@@ -21,7 +21,7 @@ const bases = {
 export const requirements = {
   smolvm: { testedVersion: "1.33.0" },
   tart: { minimumVersion: "2.41.1" },
-  softnet: { checkedVersion: "0.24.1" },
+  softnet: { checkedVersion: "0.25.0" },
   node: { engines: ">=26.12.0" },
   bases,
 } as const;
