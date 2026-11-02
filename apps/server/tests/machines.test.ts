@@ -158,6 +158,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "exec dev",
           "start dev",
           "exec dev",
+          "exec dev",
         ]);
       })
   );
@@ -186,7 +187,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const started = yield* client.startMachine({ id: "dev" });
 
         expect(at(started)).toStrictEqual(["running", "running", "settled"]);
-        expect(fake.calls).toStrictEqual(["start dev", "exec dev"]);
+        expect(fake.calls).toStrictEqual(["start dev", "exec dev", "exec dev"]);
         expect(yield* read(path.join(fake.root("dev") ?? "", "starts"))).toBe(
           "start\nstart\n"
         );
@@ -213,6 +214,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "stop dev",
           "admit dev",
           "start dev",
+          "exec dev",
           "exec dev",
           "delete dev",
         ]);
@@ -1020,7 +1022,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const started = yield* client.startMachine({ id: "dev" });
 
       expect(at(started)).toStrictEqual(["running", "running", "settled"]);
-      expect(fake.calls).toStrictEqual(["stop dev", "start dev", "exec dev"]);
+      expect(fake.calls).toStrictEqual([
+        "stop dev",
+        "start dev",
+        "exec dev",
+        "exec dev",
+      ]);
     })
   );
 
@@ -1039,7 +1046,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const started = yield* client.startMachine({ id: "dev" });
 
       expect(at(started)).toStrictEqual(["running", "running", "settled"]);
-      expect(fake.calls).toStrictEqual(["pause dev", "start dev", "exec dev"]);
+      expect(fake.calls).toStrictEqual([
+        "pause dev",
+        "start dev",
+        "exec dev",
+        "exec dev",
+      ]);
     })
   );
 
@@ -1064,6 +1076,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "pause dev",
           "admit dev",
           "start dev",
+          "exec dev",
           "exec dev",
         ]);
       })
@@ -1191,6 +1204,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(fake.calls).toStrictEqual([
           "admit dev",
           "start dev",
+          "exec dev",
           "exec dev",
         ]);
       })
@@ -1556,7 +1570,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           `${theirs}\n${operatorKey}\n\n`
         );
         expect(fake.calls.filter((call) => call === "exec dev")).toHaveLength(
-          2
+          3
         );
         expect(yield* read(fresh)).toBe(`\n${operatorKey}\n`);
         expect((yield* stat(fresh)).mode & 0o777).toBe(0o600);
@@ -1863,7 +1877,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(stage).toBe("made");
         expect(refusal(failed)).toStrictEqual(["failed", "Internal"]);
         expect(at(started)).toStrictEqual(["running", "running", "settled"]);
-        expect(fake.calls).toStrictEqual(["start dev", "exec dev"]);
+        expect(fake.calls).toStrictEqual(["start dev", "exec dev", "exec dev"]);
       })
   );
 
@@ -1981,13 +1995,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       yield* eventually(
         Effect.sync(() => [...fake.calls]),
-        (calls) => calls.length >= 6
+        (calls) => calls.length >= 8
       );
 
       expect(fake.calls.toSorted()).toStrictEqual([
         "admit dev",
         "admit other",
         "exec dev",
+        "exec dev",
+        "exec other",
         "exec other",
         "start dev",
         "start other",

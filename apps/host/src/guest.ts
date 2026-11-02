@@ -264,7 +264,7 @@ export const tailnetIn = (output: string): TailnetReport | undefined => {
   );
 };
 
-export const preparationScript = [
+export const identityScript = [
   "set -eu",
   "instance=$1",
   "id=$2",
@@ -298,6 +298,13 @@ export const preparationScript = [
   `  printf '%s\\n' "$instance" >"$state/instance.new"`,
   `  mv "$state/instance.new" "$state/instance"`,
   "fi",
+  "",
+].join("\n");
+
+export const startScript = [
+  "set -eu",
+  "root=${CLANKERBOX_ROOT-}",
+  "PATH=$root/usr/local/sbin:$root/usr/local/bin:$root/usr/sbin:$root/usr/bin:$root/sbin:$root/bin",
   `if [ -e "$root/etc/clankerbox/start" ]; then`,
   `  "$root/etc/clankerbox/start" </dev/null`,
   "fi",
@@ -326,6 +333,30 @@ export const hostKeyIn = (output: string): string | undefined => {
   return line !== undefined && hostKeyPattern.test(line) ? line : undefined;
 };
 
+export const identify = (
+  runtime: Runtime,
+  machine: MachineRef
+): Effect.Effect<void, RuntimeError | ScriptFailed> =>
+  Effect.asVoid(
+    runInGuest(
+      runtime,
+      "preparation",
+      machine,
+      {
+        argv: [
+          "/bin/sh",
+          "-c",
+          identityScript,
+          "clankerbox-identity",
+          machine.instance,
+          machine.name,
+        ],
+        stdin: globalThis.crypto.getRandomValues(new Uint8Array(seedBytes)),
+      },
+      preparationTimeout
+    )
+  );
+
 export const prepare = (
   runtime: Runtime,
   machine: MachineRef
@@ -334,17 +365,7 @@ export const prepare = (
     runtime,
     "preparation",
     machine,
-    {
-      argv: [
-        "/bin/sh",
-        "-c",
-        preparationScript,
-        "clankerbox-prepare",
-        machine.instance,
-        machine.name,
-      ],
-      stdin: globalThis.crypto.getRandomValues(new Uint8Array(seedBytes)),
-    },
+    { argv: ["/bin/sh", "-c", startScript, "clankerbox-start"] },
     preparationTimeout
   ).pipe(Effect.map(hostKeyIn));
 

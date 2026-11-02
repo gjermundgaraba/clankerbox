@@ -84,7 +84,12 @@ export const Step = Schema.Union([
     ports: Schema.Array(Port),
     ...others,
   }),
-  Schema.TaggedStruct("start", { machine: MachineRef, ...pinned, ...others }),
+  Schema.TaggedStruct("start", {
+    machine: MachineRef,
+    hostname: Schema.optionalKey(Schema.String),
+    ...pinned,
+    ...others,
+  }),
   Schema.TaggedStruct("stop", { machine: MachineRef, ...pinned, ...others }),
   Schema.TaggedStruct("pause", { machine: MachineRef, ...pinned }),
   Schema.TaggedStruct("remove", { machine: Native }),

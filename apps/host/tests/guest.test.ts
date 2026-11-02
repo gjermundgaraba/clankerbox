@@ -21,7 +21,8 @@ import { expect } from "vite-plus/test";
 import {
   hostKeyIn,
   lastLines,
-  preparationScript,
+  identityScript,
+  startScript,
   runSetup,
   tailnetIn,
   tailnetScript,
@@ -56,11 +57,15 @@ const prepare = (
   seed: Uint8Array = seedOf()
 ) =>
   Effect.map(
-    outputOf("/bin/sh", ["-c", preparationScript, "prepare", instance, "dev"], {
-      env: { CLANKERBOX_ROOT: where.root, PATH: "/nowhere" },
-      extendEnv: true,
-      input: seed,
-    }),
+    outputOf(
+      "/bin/sh",
+      ["-c", `${identityScript}\n${startScript}`, "prepare", instance, "dev"],
+      {
+        env: { CLANKERBOX_ROOT: where.root, PATH: "/nowhere" },
+        extendEnv: true,
+        input: seed,
+      }
+    ),
     ({ code, stdout, stderr }) => ({ code, output: `${stdout}${stderr}` })
   );
 
@@ -291,6 +296,51 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(error.message).toBe(
           "setup ran past its 1s timeout; its last output:\nstarted"
         );
+      })
+  );
+
+  it.effect(
+    "identity finishes before start is invoked, and start keeps the new node",
+    () =>
+      Effect.gen(function* () {
+        const where = yield* guest();
+
+        yield* hook(
+          where.root,
+          "start",
+          'test -e "$CLANKERBOX_ROOT/var/lib/clankerbox/tailscale/joined"; echo started'
+        );
+
+        const identity = yield* outputOf(
+          "/bin/sh",
+          ["-c", identityScript, "identity", "aaaa1111", "dev"],
+          {
+            env: { CLANKERBOX_ROOT: where.root },
+            extendEnv: true,
+            input: seedOf(),
+          }
+        );
+
+        expect(identity.code).toBe(0);
+        expect(identity.stdout).not.toContain("started");
+        expect(hostKeyIn(identity.stdout)).toBeUndefined();
+        expect(yield* read(where.root, "var/lib/clankerbox/instance")).toBe(
+          "aaaa1111\n"
+        );
+
+        yield* mkdir(path.join(where.root, "var/lib/clankerbox/tailscale"));
+        yield* write(
+          path.join(where.root, "var/lib/clankerbox/tailscale/joined"),
+          "own node"
+        );
+
+        const start = yield* outputOf("/bin/sh", ["-c", startScript, "start"], {
+          env: { CLANKERBOX_ROOT: where.root },
+          extendEnv: true,
+        });
+
+        expect(start.code).toBe(0);
+        expect(start.stdout).toContain("started");
       })
   );
 

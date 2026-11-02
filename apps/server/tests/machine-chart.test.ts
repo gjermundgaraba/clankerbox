@@ -323,6 +323,16 @@ describe("a read", () => {
     ).toStrictEqual([]);
   });
 
+  it("a completed start settles without another join, and a later due check joins", () => {
+    const observed = after(rowAt("made.stepping.starting"), done);
+    const settled = after(observed, read("running", false));
+
+    expect(settled.state).toBe("made.settled");
+    expect(go(settled, read("running", true)).next).toMatchObject({
+      state: "made.stepping.joining.sent",
+    });
+  });
+
   it("a machine asked to be deleted is deleted, whatever else holds", () => {
     expect(
       inputs.filter(

@@ -19,6 +19,8 @@ import {
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Kind, Setup, Sizing } from "@gjermundgaraba/clankerbox-sdk";
 import {
+  chmod,
+  mkdir,
   read,
   scratch,
   write,
@@ -1689,6 +1691,22 @@ const joinedAs = { state: "joined", name: "linux-dev.example.ts.net" };
 const rootOf = (host: Runner, file: string) =>
   path.join(host.fake.machines.get("dev")?.root ?? "", file);
 
+const starting: Step = {
+  _tag: "start",
+  machine: ref("dev"),
+  machines: [],
+  hostname: "cbx-dev",
+};
+
+const startHook = (host: Runner, body: string) =>
+  Effect.gen(function* () {
+    const file = rootOf(host, "etc/clankerbox/start");
+
+    yield* mkdir(path.dirname(file));
+    yield* write(file, `#!/bin/sh\nset -eu\n${body}\n`);
+    yield* chmod(file, 0o755);
+  });
+
 const runningStatus = (health: readonly string[]) =>
   JSON.stringify(
     {
@@ -1701,6 +1719,103 @@ const runningStatus = (health: readonly string[]) =>
   );
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
+  it.effect(
+    "a start resets a copied identity, joins, then runs its hook; another start keeps the node",
+    () =>
+      Effect.gen(function* () {
+        const keys = yield* minting();
+        const host = yield* runner({ tailnet: keys.tailnet, tailscale: true });
+
+        yield* finished(host, makes("dev", { setup: { script: loginSetup } }));
+        yield* mkdir(rootOf(host, "var/lib/clankerbox/tailscale/state"));
+        yield* write(
+          rootOf(host, "var/lib/clankerbox/tailscale/state/source"),
+          "source node"
+        );
+        yield* startHook(
+          host,
+          [
+            'test ! -e "$CLANKERBOX_ROOT/var/lib/clankerbox/tailscale/state/source"',
+            'test -d "$CLANKERBOX_ROOT/var/lib/clankerbox/tailscale"',
+            'test "$(cat "$CLANKERBOX_ROOT/var/lib/clankerbox/instance")" = dev-instance',
+            'cat "$CLANKERBOX_ROOT/status.json" >"$CLANKERBOX_ROOT/started"',
+          ].join("\n")
+        );
+
+        const first = yield* finished(host, starting, 2);
+        const second = yield* finished(host, starting, 3);
+
+        expect([first.status, second.status]).toStrictEqual(["done", "done"]);
+        expect(first.outcome.tailnet).toStrictEqual(joinedAs);
+        expect(second.outcome.tailnet).toStrictEqual(joinedAs);
+        expect(first.outcome.hostKey).toContain("ssh-ed25519");
+        expect(yield* read(rootOf(host, "started"))).toContain('"Running"');
+        expect(yield* read(rootOf(host, "calls"))).toContain(
+          "--hostname=cbx-dev"
+        );
+        expect(yield* keys.minted).toBe(1);
+      })
+  );
+
+  it.effect(
+    "a failed join still runs the start hook and reports its status",
+    () =>
+      Effect.gen(function* () {
+        const keys = yield* minting(1);
+        const host = yield* runner({ tailnet: keys.tailnet, tailscale: true });
+
+        yield* finished(host, makes("dev"));
+        yield* startHook(host, 'echo started >"$CLANKERBOX_ROOT/started"');
+
+        const report = yield* finished(host, starting, 2);
+
+        expect(report.status).toBe("done");
+        expect(report.outcome.tailnet).toStrictEqual({
+          state: "failed",
+          error: "Tailscale refused the OAuth client",
+        });
+        expect(yield* read(rootOf(host, "started"))).toBe("started\n");
+        expect(yield* keys.minted).toBe(0);
+      })
+  );
+
+  it.effect(
+    "a failing start hook keeps the join status in its failed report",
+    () =>
+      Effect.gen(function* () {
+        const keys = yield* minting();
+        const host = yield* runner({ tailnet: keys.tailnet, tailscale: true });
+
+        yield* finished(host, makes("dev"));
+        yield* startHook(host, "echo hook failed; exit 3");
+
+        const report = yield* finished(host, starting, 2);
+
+        expect(errorOf(report)).toStrictEqual(["failed", "ScriptFailed"]);
+        expect(report.outcome.tailnet).toStrictEqual(joinedAs);
+        expect(report.error?.message).toContain("hook failed");
+      })
+  );
+
+  it.effect(
+    "a start without guest tailscaled runs its hook and reports missing",
+    () =>
+      Effect.gen(function* () {
+        const keys = yield* minting();
+        const host = yield* runner({ tailnet: keys.tailnet });
+
+        yield* finished(host, makes("dev"));
+        yield* startHook(host, 'echo started >"$CLANKERBOX_ROOT/started"');
+
+        const report = yield* finished(host, starting, 2);
+
+        expect(report.status).toBe("done");
+        expect(report.outcome.tailnet).toStrictEqual({ state: "missing" });
+        expect(yield* read(rootOf(host, "started"))).toBe("started\n");
+        expect(yield* keys.minted).toBe(0);
+      })
+  );
+
   it.effect(
     "a machine that needs a login gets one minted key, and shows the DNS name it joined as",
     () =>
@@ -1839,6 +1954,89 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 });
 
 layer(NodeServices.layer)((it) => {
+  it.effect("a slow join leaves the start hook its own full 60 seconds", () =>
+    Effect.gen(function* () {
+      const mintingKey = yield* Deferred.make<undefined>();
+
+      const host = yield* runner({
+        tailscale: true,
+        tailnet: {
+          mint: Effect.gen(function* () {
+            yield* Deferred.succeed(mintingKey, undefined);
+            yield* Effect.sleep("2 minutes");
+
+            return Redacted.make("tskey-auth-slow");
+          }),
+        },
+      });
+
+      yield* finished(host, makes("dev"));
+
+      const operation = delivery(starting, 2);
+
+      yield* deliver(host, operation);
+      yield* Deferred.await(mintingKey);
+
+      const login = host.fake.holdNext("exec");
+      const hook = host.fake.holdNext("exec");
+
+      yield* TestClock.adjust("2 minutes");
+      yield* login.entered;
+      yield* login.release;
+      yield* hook.entered;
+      yield* TestClock.adjust("59 seconds");
+
+      const waiting = yield* Effect.forkChild(
+        host.operations.wait(operation.id)
+      );
+
+      expect(waiting.pollUnsafe()).toBeUndefined();
+      yield* TestClock.adjust("1 second");
+
+      const report = yield* Fiber.join(waiting);
+
+      expect(errorOf(report)).toStrictEqual(["failed", "ScriptFailed"]);
+      expect(report.error?.message).toContain(
+        "preparation ran past its 1m timeout"
+      );
+      expect(report.outcome.tailnet).toStrictEqual(joinedAs);
+    })
+  );
+
+  it.effect("a join timeout is reported and still runs the start hook", () =>
+    Effect.gen(function* () {
+      const mintingKey = yield* Deferred.make<undefined>();
+
+      const host = yield* runner({
+        tailscale: true,
+        tailnet: {
+          mint: Effect.andThen(
+            Deferred.succeed(mintingKey, undefined),
+            Effect.never
+          ),
+        },
+      });
+
+      yield* finished(host, makes("dev"));
+      yield* startHook(host, 'echo started >"$CLANKERBOX_ROOT/started"');
+
+      const operation = delivery(starting, 2);
+
+      yield* deliver(host, operation);
+      yield* Deferred.await(mintingKey);
+      yield* TestClock.adjust("3 minutes");
+
+      const report = yield* host.operations.wait(operation.id);
+
+      expect(report.status).toBe("done");
+      expect(report.outcome.tailnet).toStrictEqual({
+        state: "failed",
+        error: "the join didn't finish within 3m",
+      });
+      expect(yield* read(rootOf(host, "started"))).toBe("started\n");
+    })
+  );
+
   it.effect("wait answers a step still running after five seconds", () =>
     Effect.gen(function* () {
       const host = yield* runner();

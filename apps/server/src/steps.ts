@@ -133,7 +133,16 @@ export const machineStep = (
     }
 
     switch (op.kind) {
-      case "start":
+      case "start": {
+        return {
+          _tag: "start",
+          machine: ref,
+          ...pinned(found.pin),
+          machines,
+          ...(found.ephemeral ? {} : { hostname: `cbx-${name}` }),
+        };
+      }
+
       case "stop": {
         return {
           _tag: op.kind,

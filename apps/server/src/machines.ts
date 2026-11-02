@@ -262,17 +262,16 @@ export const make = (
               reportedBy(found, op, report, yield* DateTime.now)
             );
 
-            if (written && op.kind === "join") {
+            if (written && (op.kind === "join" || op.kind === "start")) {
               tailnets.set(
                 name,
-                checked(tailnets.get(name) ?? unchecked, report.outcome.tailnet)
+                checked(
+                  op.kind === "start"
+                    ? unchecked
+                    : (tailnets.get(name) ?? unchecked),
+                  report.outcome.tailnet
+                )
               );
-            } else if (
-              written &&
-              op.kind === "start" &&
-              report.status === "done"
-            ) {
-              tailnets.set(name, firstCheck);
             }
 
             return yield* collect(hosts, op);

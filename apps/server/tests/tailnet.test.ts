@@ -30,6 +30,7 @@ const tailscaleApi = (
   options?: {
     readonly refuse?: { count: number };
     readonly hold?: Deferred.Deferred<undefined>;
+    readonly entered?: Deferred.Deferred<undefined>;
   }
 ) =>
   Layer.succeed(
@@ -37,6 +38,10 @@ const tailscaleApi = (
     HttpClient.make((sent, url) =>
       Effect.gen(function* () {
         const token = url.pathname.endsWith("/oauth/token");
+
+        if (options?.entered !== undefined) {
+          yield* Deferred.succeed(options.entered, undefined);
+        }
 
         if (options?.hold !== undefined) {
           yield* Deferred.await(options.hold);
@@ -194,14 +199,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   });
 
   it.effect(
-    "a machine that starts joins once it settles, and shows the name it joined as",
+    "a machine joins before its start settles, and shows the name without another join",
     () =>
       Effect.gen(function* () {
         const minted: string[] = [];
 
-        const { client, tailnetOf } = yield* served(
-          joining(tailscaleApi(minted))
-        );
+        const { client, hosts } = yield* served(joining(tailscaleApi(minted)));
 
         const created = yield* client.create("dev", request("dev"));
 
@@ -209,32 +212,38 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "running",
           "settled",
         ]);
-        expect((yield* tailnetOf()).tailnet).toStrictEqual(joinedName);
+        expect(created.tailnet).toStrictEqual(joinedName);
+        expect(
+          hosts[0]?.fake.calls.filter((call) => call === "exec dev")
+        ).toHaveLength(4);
         expect(minted).toHaveLength(1);
       })
   );
 
   it.effect(
-    "a create answers before its join is done, which get shows once it is",
+    "a create stays starting while it joins, and answers with its tailnet status",
     () =>
       Effect.gen(function* () {
         const hold = yield* Deferred.make<undefined>();
+        const entered = yield* Deferred.make<undefined>();
 
-        const { client, tailnetOf } = yield* served(
-          joining(tailscaleApi([], { hold }))
+        const { asking, shown } = yield* served(
+          joining(tailscaleApi([], { hold, entered }))
         );
 
-        const created = yield* client.create("dev", request("dev"));
+        yield* asking.create("dev", request("dev"));
+        yield* Deferred.await(entered);
 
-        expect([created.state, created.phase, created.tailnet]).toStrictEqual([
-          "running",
-          "settled",
-          undefined,
-        ]);
+        expect((yield* shown()).phase).toBe("starting");
 
         yield* Deferred.succeed(hold, undefined);
 
-        expect((yield* tailnetOf()).tailnet).toStrictEqual(joinedName);
+        const settled = yield* eventually(
+          shown(),
+          (machine) => machine.phase === "settled"
+        );
+
+        expect(settled.tailnet).toStrictEqual(joinedName);
       })
   );
 
@@ -395,19 +404,19 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a stop sent while a join runs cuts it short, and is the answer",
+    "a stop sent while the start joins cuts it short, and is the answer",
     () =>
       Effect.gen(function* () {
         const hold = yield* Deferred.make<undefined>();
 
-        const { client, hosts, store } = yield* served(
+        const { client, asking, hosts, store } = yield* served(
           joining(tailscaleApi([], { hold }))
         );
 
-        yield* client.create("dev", request("dev"));
+        yield* asking.create("dev", request("dev"));
         yield* eventually(
           store.operationOn("machine", "dev"),
-          (found) => found._tag === "Some" && found.value.kind === "join"
+          (found) => found._tag === "Some" && found.value.kind === "start"
         );
         yield* pause;
 

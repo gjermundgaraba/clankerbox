@@ -282,7 +282,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(found.pin).toBeUndefined();
         expect(
           second?.fake.calls.filter((call) => call === "exec dev")
-        ).toHaveLength(2);
+        ).toHaveLength(3);
       })
   );
 

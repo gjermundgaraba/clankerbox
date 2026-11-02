@@ -178,6 +178,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "fork copy",
           "start copy",
           "exec copy",
+          "exec copy",
         ]);
       })
   );
@@ -388,7 +389,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
           expect(row.state).toBe("made.failed");
           expect(at(started)).toStrictEqual(["running", "running", "settled"]);
-          expect(callsTo(host, "exec")).toStrictEqual([`exec ${name}`]);
+          expect(callsTo(host, "exec")).toStrictEqual([
+            `exec ${name}`,
+            `exec ${name}`,
+          ]);
         }
       })
   );
@@ -889,6 +893,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "admit dev",
           "restore dev",
           "start dev",
+          "exec dev",
           "exec dev",
         ]);
         expect(yield* checkpointIds(client)).toStrictEqual(["snap"]);
@@ -1426,6 +1431,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "exec",
           "start",
           "exec",
+          "exec",
           "capture",
           "delete",
         ]);
@@ -1583,6 +1589,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "create",
           "exec",
           "start",
+          "exec",
           "exec",
           "deleteCheckpoint",
           "capture",

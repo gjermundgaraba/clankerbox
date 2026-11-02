@@ -40,7 +40,7 @@ export type Move = Pick<Facts, "host" | "kind" | "pin" | "source" | "prebuild">;
 export interface Read extends Begins {
   readonly seen: MachineState;
   readonly pin: string | undefined;
-  /** Whether a tailnet join is due, should the machine settle. */
+  /** Whether a tailnet recheck is due, accounting for the start's join report. */
   readonly joins: boolean;
 }
 

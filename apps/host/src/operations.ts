@@ -36,7 +36,7 @@ import {
 import type { Scope } from "effect";
 import { Hex } from "effect/encoding";
 
-import { checkTailnet, prepare, runSetup } from "./guest.ts";
+import { checkTailnet, identify, prepare, runSetup } from "./guest.ts";
 import type { TailnetReport } from "./guest.ts";
 import { pickPort, PortProbe } from "./machine-ports.ts";
 import {
@@ -473,6 +473,18 @@ export const make = (
                   machines,
                   runtime.start(machine)
                 );
+
+            yield* identify(runtime, machine);
+
+            if (Option.isSome(tailnet) && step.hostname !== undefined) {
+              const status = yield* joined(
+                tailnet.value,
+                machine,
+                step.hostname
+              );
+
+              progress.outcome = { ...progress.outcome, tailnet: status };
+            }
 
             const hostKey = yield* prepare(runtime, machine);
 
