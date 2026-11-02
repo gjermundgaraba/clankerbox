@@ -97,6 +97,7 @@ const read = (
   pin: "new pin",
   id: "new",
   joins,
+  awaiting: false,
 });
 
 const reported = (
@@ -331,6 +332,25 @@ describe("a read", () => {
     expect(go(settled, read("running", true)).next).toMatchObject({
       state: "made.stepping.joining.sent",
     });
+  });
+
+  it("a read holds a pause while the capture it comes after hasn't begun, and pauses once it has", () => {
+    const row = rowAt("made.observing", {
+      desired: "paused",
+      after: "snap",
+      prepared: true,
+    });
+
+    const held = go(row, { ...read("running"), awaiting: true });
+
+    expect(held.next).toBe(row);
+    expect(held.begin).toBeUndefined();
+    expect(leafOf(row, { ...read("running"), awaiting: false })).toBe(
+      "made.stepping.pausing"
+    );
+    expect(leafOf(row, { ...read("stopped"), awaiting: true })).toBe(
+      "made.settled"
+    );
   });
 
   it("a machine asked to be deleted is deleted, whatever else holds", () => {

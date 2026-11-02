@@ -14,8 +14,10 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import {
   Internal,
+  Missing,
   readTimeout,
   Unsizable,
+  WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Kind, Setup, Sizing } from "@gjermundgaraba/clankerbox-sdk";
 import {
@@ -943,6 +945,126 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(errorOf(stopped)).toStrictEqual(["failed", "Capacity"]);
         expect(host.fake.machines.get("dev")?.state).toBe("paused");
       })
+  );
+
+  it.effect(
+    "exec runs a command in a running machine as the user named, with its env and stdin",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner();
+        const dev = ref("dev", { port: firstPort });
+
+        yield* finished(host, makes("dev"));
+
+        const executed = yield* host.operations.exec({
+          machine: dev,
+          argv: [
+            "/bin/sh",
+            "-c",
+            'printf "%s %s %s" "$CLANKERBOX_USER" "$TOKEN" "$(cat)"',
+          ],
+          user: "user",
+          env: { TOKEN: "t-1" },
+          stdin: "secret",
+        });
+
+        expect(executed).toStrictEqual({
+          exitCode: 0,
+          output: "user t-1 secret",
+          truncated: false,
+        });
+      })
+  );
+
+  it.effect(
+    "exec waits for a step on the machine to end, and then answers for the state it left",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner();
+        const dev = ref("dev", { port: firstPort });
+
+        yield* finished(host, makes("dev"));
+
+        const { entered, release } = host.fake.holdNext("stop");
+
+        yield* deliver(
+          host,
+          delivery({ _tag: "stop", machine: dev, machines: [] }, 2)
+        );
+        yield* entered;
+
+        const running = yield* Effect.forkChild(
+          Effect.flip(host.operations.exec({ machine: dev, argv: ["true"] }))
+        );
+
+        yield* pause;
+
+        const early = running.pollUnsafe();
+
+        yield* release;
+
+        const error = yield* Fiber.join(running);
+
+        expect(early).toBeUndefined();
+        expect(error).toBeInstanceOf(WrongState);
+        expect(error).toMatchObject({ machine: "dev", state: "stopped" });
+        expect(counted(host.fake.calls, "exec dev")).toBe(0);
+      })
+  );
+
+  it.effect(
+    "exec in a stopped machine is WrongState, and in one the host doesn't hold Missing, running nothing",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner();
+        const dev = ref("dev", { port: firstPort });
+
+        yield* finished(host, makes("dev"));
+        yield* finished(host, { _tag: "stop", machine: dev, machines: [] }, 2);
+        host.fake.calls.length = 0;
+
+        const stopped = yield* Effect.flip(
+          host.operations.exec({ machine: dev, argv: ["true"] })
+        );
+
+        const unheld = yield* Effect.flip(
+          host.operations.exec({ machine: ref("other"), argv: ["true"] })
+        );
+
+        expect(stopped).toBeInstanceOf(WrongState);
+        expect(unheld).toBeInstanceOf(Missing);
+        expect(host.fake.calls).not.toContain("exec dev");
+        expect(host.fake.calls).not.toContain("exec other");
+      })
+  );
+
+  it.effect("an exec cut short ends its command", () =>
+    Effect.gen(function* () {
+      const host = yield* runner();
+      const dev = ref("dev", { port: firstPort });
+
+      yield* finished(host, makes("dev"));
+
+      const pidFile = path.join(host.fake.root("dev") ?? "", "exec.pid");
+
+      const running = yield* Effect.forkChild(
+        host.operations.exec({
+          machine: dev,
+          argv: [
+            "/bin/sh",
+            "-c",
+            'echo "$$" >"$0.partial" && mv "$0.partial" "$0" && exec sleep 30',
+            pidFile,
+          ],
+        })
+      );
+
+      const pid = Number(yield* Effect.eventually(read(pidFile)));
+
+      yield* Fiber.interrupt(running);
+
+      expect(() => process.kill(pid, 0)).toThrow("ESRCH");
+    })
   );
 
   it.effect("a make from a base boots the image its host maps it to", () =>

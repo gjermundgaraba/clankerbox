@@ -1,5 +1,11 @@
-import { loginUser, ScriptFailed } from "@gjermundgaraba/clankerbox-sdk";
-import type { Setup } from "@gjermundgaraba/clankerbox-sdk";
+import type { ExecCommand } from "@clankerbox/host-contract";
+import {
+  loginUser,
+  outputLimit,
+  ScriptFailed,
+  timedOutExitCode,
+} from "@gjermundgaraba/clankerbox-sdk";
+import type { Executed, Setup } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Option, Redacted, Schema, Stream } from "effect";
 
 import { timeoutFail } from "./runtime.ts";
@@ -22,14 +28,14 @@ export const lastLines = (text: string): string =>
     .join("\n")
     .slice(-tailCharacters);
 
-const keptCharacters = 65_536;
-
 const keptOutput = () => {
   const decoder = new TextDecoder();
   let kept = "";
+  let truncated = false;
 
   const keep = (text: string) => {
-    kept = (kept + text).slice(-keptCharacters);
+    truncated ||= kept.length + text.length > outputLimit;
+    kept = (kept + text).slice(-outputLimit);
   };
 
   return {
@@ -41,6 +47,7 @@ const keptOutput = () => {
 
       return kept;
     },
+    truncated: () => truncated,
   };
 };
 
@@ -100,6 +107,45 @@ const runInGuest = (
     }
 
     return text;
+  });
+
+/**
+ * Runs `argv` in a running machine, as `user` or root, with `env` set through `env(1)` and `stdin`
+ * written whole, and answers its exit code and the last `outputLimit` characters of its output.
+ * Past `timeoutSeconds` the command is ended and the exit code is `timedOutExitCode`.
+ */
+export const runCommand = (
+  runtime: Runtime,
+  { machine, argv, user, env, stdin, timeoutSeconds }: ExecCommand
+): Effect.Effect<Executed, RuntimeError> =>
+  Effect.gen(function* () {
+    const output = keptOutput();
+
+    const pairs = Object.entries(env ?? {}).map(
+      ([name, value]) => `${name}=${value}`
+    );
+
+    const drain = drained(
+      runtime,
+      machine,
+      {
+        argv: pairs.length === 0 ? argv : ["env", ...pairs, ...argv],
+        user,
+        stdin:
+          stdin === undefined ? undefined : new TextEncoder().encode(stdin),
+      },
+      output
+    );
+
+    const exitCode =
+      timeoutSeconds === undefined
+        ? yield* drain
+        : yield* Effect.timeoutOrElse(drain, {
+            duration: Duration.seconds(timeoutSeconds),
+            orElse: () => Effect.succeed(timedOutExitCode),
+          });
+
+    return { exitCode, output: output.text(), truncated: output.truncated() };
   });
 
 const setupRunner = [

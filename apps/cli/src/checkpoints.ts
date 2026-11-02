@@ -4,19 +4,23 @@ import {
   formatGib,
   formatMib,
 } from "@gjermundgaraba/clankerbox-sdk";
-import type { DateTime } from "effect";
-import { Schema } from "effect";
+import { DateTime, Effect, Schema } from "effect";
 import { Command } from "effect/cli";
 
 import {
   checkpointArgument,
   clientFlags,
   deleted,
-  listCommand,
+  expiresFlag,
+  expiring,
+  filteredListCommand,
+  labelFlag,
+  labelled,
   machineArgument,
   mutationFlags,
   nameArgument,
   newId,
+  pairsText,
   printResource,
   table,
   withClient,
@@ -53,6 +57,13 @@ export const checkpointFields = (checkpoint: Checkpoint, now: DateTime.Utc) => [
   ["CPU", String(checkpoint.cpu)],
   ["RAM", formatMib(checkpoint.ramMib)],
   ["DISK", formatGib(checkpoint.diskGib)],
+  ["LABELS", pairsText(checkpoint.labels)],
+  [
+    "EXPIRES",
+    checkpoint.expiresAt === undefined
+      ? "-"
+      : DateTime.formatIso(checkpoint.expiresAt),
+  ],
   [
     "ERROR",
     checkpoint.error === undefined
@@ -65,11 +76,24 @@ export const encodeCheckpoint = Schema.encodeSync(Checkpoint);
 
 export const capture = Command.make(
   "capture",
-  { ...mutationFlags, machine: machineArgument, name: nameArgument },
+  {
+    ...mutationFlags,
+    label: labelFlag,
+    expires: expiresFlag,
+    machine: machineArgument,
+    name: nameArgument,
+  },
   (flags) =>
     printResource(flags, {
       call: (client) =>
-        client.captureCheckpoint({ machine: flags.machine, name: flags.name }),
+        Effect.gen(function* () {
+          return yield* client.captureCheckpoint({
+            machine: flags.machine,
+            name: flags.name,
+            ...(yield* labelled(flags.label)),
+            ...(yield* expiring(flags.expires)),
+          });
+        }),
       encode: encodeCheckpoint,
       text: newId,
     })
@@ -79,11 +103,11 @@ export const capture = Command.make(
   )
 );
 
-export const listCheckpoints = listCommand({
+export const listCheckpoints = filteredListCommand({
   name: "list",
-  description: "List every checkpoint.",
+  description: "List every checkpoint, or those carrying every --label given.",
   key: "checkpoints",
-  read: (client) => client.checkpoints,
+  read: (client, filter) => client.listCheckpoints(filter),
   encode: encodeCheckpoint,
   rows: checkpointRows,
 });

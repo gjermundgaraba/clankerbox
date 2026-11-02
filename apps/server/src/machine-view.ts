@@ -90,6 +90,7 @@ export const machineOf = (
     desired: desiredOf(found),
     phase: phaseShown(found, seen),
     ...(found.profile === undefined ? {} : { profile: found.profile }),
+    ...(found.labels === undefined ? {} : { labels: found.labels }),
     ...(found.prebuild === undefined ? {} : { prebuild: found.prebuild }),
     ...(found.error === undefined ? {} : { error: found.error }),
     ...(running && found.port !== undefined && reach.address !== undefined

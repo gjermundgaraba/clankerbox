@@ -62,7 +62,15 @@ const events: ReadonlyArray<readonly [string, MachineEvent]> = [
     (seen) =>
       [
         `read:${seen}`,
-        { type: "read", seen, boot: "", pin: undefined, id: "", joins: false },
+        {
+          type: "read",
+          seen,
+          boot: "",
+          pin: undefined,
+          id: "",
+          joins: false,
+          awaiting: false,
+        },
       ] as const
   ),
   [

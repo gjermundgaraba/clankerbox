@@ -1,16 +1,20 @@
 import {
   Conflict,
+  Executed,
+  ExecRequest,
   HostError,
   Internal,
   Invalid,
   Kind,
   Machine,
+  Missing,
   Name,
   Port,
   Reading,
   Setup,
   Sizing,
   TailnetStatus,
+  WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
@@ -176,6 +180,13 @@ const ById = Schema.Struct({ id: Schema.String });
 
 const Machines = Schema.Struct({ machines: Schema.Array(MachineRef) });
 
+const { id: _machine, ...command } = ExecRequest.fields;
+
+/** A command for a machine the control plane names in full, as `ExecRequest` names it by ID. */
+export const ExecCommand = Schema.Struct({ machine: MachineRef, ...command });
+
+export type ExecCommand = typeof ExecCommand.Type;
+
 const read = { caller: Action.Anyone, readOnly: true } as const;
 
 const write = { caller: Action.Anyone, readOnly: false } as const;
@@ -247,6 +258,14 @@ export const HostHttp = ActionHttp.make(
       description:
         "Forget a finished operation, once its report is safely stored.",
       input: ById,
+    }),
+    Action.make("execMachine", {
+      ...write,
+      error: [Invalid, Missing, WrongState, Internal] as const,
+      description:
+        "Run a command in a running machine, once any step on it has ended, and answer its exit code and output. It runs as long as the request does, or until its timeout, which answers exit code 124. Nothing of it is kept.",
+      input: ExecCommand,
+      success: Executed,
     }),
   ],
   { prefix: "/host" }

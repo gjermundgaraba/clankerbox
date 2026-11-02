@@ -63,6 +63,7 @@ const unsent = (
     pin: undefined,
     id: `unsent-${name}`,
     joins: false,
+    awaiting: false,
   });
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {

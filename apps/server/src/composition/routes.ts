@@ -15,28 +15,26 @@ const app = Action.implement(
     const hosts = yield* Hosts;
 
     return {
-      listMachines: () => machines.list,
+      listMachines: machines.list,
       getMachine: ({ id }) => machines.get(id),
       createMachine: (request) => machines.create(request),
       startMachine: ({ id }) => machines.start(id),
       stopMachine: ({ id }) => machines.stop(id),
-      pauseMachine: ({ id }) => machines.pause(id),
+      pauseMachine: checkpoints.pause,
       resizeMachine: machines.resize,
       deleteMachine: ({ id }) => machines.delete(id),
-      forkMachine: ({ machine, name, ...sizing }) =>
-        machines.fork(machine, name, sizing),
-      restoreMachine: ({ checkpoint, name, ...sizing }) =>
-        machines.restore(checkpoint, name, sizing),
-      listCheckpoints: () => checkpoints.list,
+      forkMachine: machines.fork,
+      restoreMachine: machines.restore,
+      listCheckpoints: checkpoints.list,
       getCheckpoint: ({ id }) => checkpoints.get(id),
-      captureCheckpoint: ({ machine, name }) =>
-        checkpoints.capture(machine, name),
+      captureCheckpoint: checkpoints.capture,
       deleteCheckpoint: ({ id }) => checkpoints.delete(id),
       prebuildCheckpoint: checkpoints.prebuild,
       getPrebuild: ({ id }) => checkpoints.build(id),
       listHosts: () =>
         Effect.map(hosts.reachAll, (reached) => reached.map(listed)),
       getCapacity: () => machines.capacity,
+      execMachine: machines.exec,
     };
   })
 );

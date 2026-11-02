@@ -12,7 +12,7 @@ import {
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import { stubServer } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import { loginSetup, running } from "@gjermundgaraba/clankerbox-server/testing";
-import { Effect, Schema } from "effect";
+import { Effect, Schema, Stdio, Stream } from "effect";
 import { expect, vi } from "vite-plus/test";
 
 import { ErrorDocument } from "../src/command.ts";
@@ -377,7 +377,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(listed.stdout).toContain("ScriptFailed");
 
         const stub = yield* Effect.acquireRelease(
-          Effect.map(machines.list, (rows) => stubServer({ machines: rows })),
+          Effect.map(machines.list({}), (rows) =>
+            stubServer({ machines: rows })
+          ),
           (made) =>
             Effect.promise(async () => {
               await made.dispose();
@@ -792,6 +794,103 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(ran.code).toBe(1);
       }
     })
+  );
+
+  it.effect(
+    "exec runs in the VM as the user named with its env and stdin, exits with the command's code, and is WrongState on a stopped machine",
+    () =>
+      Effect.gen(function* () {
+        const { dir, run } = yield* setUp();
+
+        yield* run(["create", "dev", ...sizes]);
+
+        const stdio = Stdio.layerTest({
+          stdin: Stream.make(new TextEncoder().encode("secret")),
+        });
+
+        const exec = (args: readonly string[]) =>
+          cli(
+            [
+              "exec",
+              "dev",
+              "--json",
+              "--config",
+              path.join(dir, "config.json"),
+              ...args,
+            ],
+            { http, stdio }
+          );
+
+        const ran = yield* exec([
+          "--user",
+          "user",
+          "--env",
+          "TOKEN=t-1",
+          "--stdin",
+          "--",
+          "/bin/sh",
+          "-c",
+          'printf "%s %s %s" "$CLANKERBOX_USER" "$TOKEN" "$(cat)"; exit 3',
+        ]);
+
+        yield* run(["stop", "dev"]);
+
+        const stopped = yield* exec(["--", "true"]);
+
+        expect(ran.code).toBe(3);
+        expect(JSON.parse(ran.stdout)).toStrictEqual({
+          exitCode: 3,
+          output: "user t-1 secret",
+          truncated: false,
+        });
+        expect(stopped.code).toBe(1);
+        expect(decodeFailure(stopped.stdout).error).toMatchObject({
+          tag: "WrongState",
+          state: "stopped",
+        });
+      })
+  );
+
+  it.effect(
+    "pause --capture holds the VM as it ran in a labelled checkpoint, which machines and checkpoint list find by label",
+    () =>
+      Effect.gen(function* () {
+        const { hosts, run } = yield* setUp();
+
+        yield* run(["create", "dev", ...sizes, "--label", "app=web"]);
+        hosts[0]?.fake.calls.splice(0);
+
+        const paused = yield* run([
+          "pause",
+          "dev",
+          "--capture",
+          "snap",
+          "--label",
+          "app=web",
+          "--expires",
+          "1d",
+        ]);
+
+        const machines = yield* run(["machines", "--label", "app=web"]);
+        const none = yield* run(["machines", "--label", "app=api"]);
+        const listed = yield* run(["checkpoint", "list", "--label", "app=web"]);
+        const got = yield* run(["get", "dev"]);
+
+        expect(paused).toMatchObject({ code: 0, stdout: "dev paused" });
+        expect(hosts[0]?.fake.calls).toStrictEqual([
+          "capture snap",
+          "pause dev",
+        ]);
+        expect(machines.stdout).toContain("dev");
+        expect(none.stderr).toBe("clankerbox: no machines to list");
+        expect(listed.stdout).toContain("snap");
+        expect(fieldsOf(got.stdout)).toStrictEqual(
+          expect.arrayContaining([
+            ["STATE", "paused"],
+            ["LABELS", "app=web"],
+          ])
+        );
+      })
   );
 
   it.effect(

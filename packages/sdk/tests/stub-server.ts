@@ -9,12 +9,14 @@ import type { HttpClient } from "effect/http";
 import {
   Conflict,
   Http,
+  labelledWith,
   NotFound,
   NotOffered,
   offered,
   offers,
   version,
   versionHeader,
+  WrongState,
 } from "../src/index.ts";
 import type {
   Build,
@@ -23,8 +25,11 @@ import type {
   Client,
   CreateRequest,
   Declared,
+  Executed,
+  ExecRequest,
   Host,
   Kind,
+  Labels,
   Machine,
   Phase,
   PrebuildRequest,
@@ -68,6 +73,10 @@ export interface StubServerOptions {
   readonly prebuild?: (
     request: PrebuildRequest
   ) => Effect.Effect<Build, Declared<"prebuildCheckpoint">>;
+  /** What a command answers; by default exit 0 with no output. */
+  readonly exec?: (
+    request: ExecRequest
+  ) => Effect.Effect<Executed, Declared<"execMachine">>;
 }
 
 export const machine = (id: string, fields?: Partial<Machine>): Machine => ({
@@ -102,8 +111,13 @@ export const checkpoint = (
 
 const labelled = <A extends Machine | Checkpoint>(
   made: A,
-  profile: string | undefined
-): A => (profile === undefined ? made : { ...made, profile });
+  profile: string | undefined,
+  labels?: Labels
+): A => ({
+  ...made,
+  ...(profile === undefined ? {} : { profile }),
+  ...(labels === undefined ? {} : { labels }),
+});
 
 const sized = (found: Machine | Checkpoint, sizes: Sizing) => ({
   cpu: sizes.cpu ?? found.cpu,
@@ -168,6 +182,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
   const buildScripts = new Map<string, readonly BuildStep[]>();
   const creates: CreateRequest[] = [];
   const prebuilds: PrebuildRequest[] = [];
+  const execs: ExecRequest[] = [];
   const calls: string[] = [];
   const versions: Array<string | null> = [];
   let replyDropped = false;
@@ -430,12 +445,18 @@ export const stubServer = (options: StubServerOptions = {}) => {
             state: "unknown",
             phase: "observing",
           }),
-          request.profile
+          request.profile,
+          request.labels
         )
       );
     });
 
-  const recordRestore = (source: string, name: string, sizes: Sizing) =>
+  const recordRestore = (
+    source: string,
+    name: string,
+    sizes: Sizing,
+    labels: Labels | undefined
+  ) =>
     Effect.flatMap(findCheckpoint(source), (found) =>
       add(
         labelled(
@@ -446,12 +467,17 @@ export const stubServer = (options: StubServerOptions = {}) => {
             state: "unknown",
             phase: "observing",
           }),
-          found.profile
+          found.profile,
+          labels
         )
       )
     );
 
-  const recordCapture = (source: string, name: string) =>
+  const recordCapture = (
+    source: string,
+    name: string,
+    fields: Pick<Checkpoint, "labels" | "expiresAt">
+  ) =>
     Effect.flatMap(findMade(source), (found) =>
       checkpoints.has(name)
         ? Effect.fail(new Conflict({ message: `${name} exists`, id: name }))
@@ -466,12 +492,57 @@ export const stubServer = (options: StubServerOptions = {}) => {
                   cpu: found.cpu,
                   ramMib: found.ramMib,
                   diskGib: found.diskGib,
+                  ...(fields.expiresAt === undefined
+                    ? {}
+                    : { expiresAt: fields.expiresAt }),
                 }),
-                found.profile
+                found.profile,
+                fields.labels
               )
             )
           )
     );
+
+  const recordPause = ({
+    id,
+    capture,
+  }: Parameters<Client.Interface["pauseMachine"]>[0]) =>
+    Effect.gen(function* () {
+      if (capture !== undefined) {
+        const found = yield* findMade(id);
+
+        if (found.state !== "running") {
+          return yield* new WrongState({
+            message: `machine ${id} is ${found.state}, and a capture takes a running one`,
+            machine: id,
+            state: found.state,
+          });
+        }
+
+        yield* recordCapture(id, capture.name, capture);
+      }
+
+      return yield* asked(id, "paused");
+    });
+
+  const recordExec = (request: ExecRequest) =>
+    Effect.gen(function* () {
+      execs.push(request);
+
+      const found = yield* findMade(request.id);
+
+      if (found.state !== "running") {
+        return yield* new WrongState({
+          message: `machine ${request.id} is ${found.state}, and a command runs only in a running machine: start it first`,
+          machine: request.id,
+          state: found.state,
+        });
+      }
+
+      return options.exec === undefined
+        ? { exitCode: 0, output: "", truncated: false }
+        : yield* options.exec(request);
+    });
 
   const recordPrebuild = (
     request: PrebuildRequest
@@ -509,11 +580,15 @@ export const stubServer = (options: StubServerOptions = {}) => {
   };
 
   const app = Action.implement(Http.actions, {
-    listMachines: () =>
+    listMachines: ({ labels }) =>
       recording(
         "listMachines",
         "machine.list",
-        Effect.sync(() => [...machines.values()])
+        Effect.sync(() =>
+          [...machines.values()].filter((row) =>
+            labelledWith(row.labels, labels)
+          )
+        )
       ),
     getMachine: ({ id }) =>
       recording("getMachine", "machine.get", readMachine(id)),
@@ -530,8 +605,8 @@ export const stubServer = (options: StubServerOptions = {}) => {
       recording("startMachine", "machine.start", asked(id, "running")),
     stopMachine: ({ id }) =>
       recording("stopMachine", "machine.stop", asked(id, "stopped")),
-    pauseMachine: ({ id }) =>
-      recording("pauseMachine", "machine.pause", asked(id, "paused")),
+    pauseMachine: (request) =>
+      recording("pauseMachine", "machine.pause", recordPause(request)),
     resizeMachine: ({ id, ...sizes }) =>
       recording(
         "resizeMachine",
@@ -546,42 +621,51 @@ export const stubServer = (options: StubServerOptions = {}) => {
       ),
     deleteMachine: ({ id }) =>
       recording("deleteMachine", "machine.delete", deleted(id)),
-    forkMachine: ({ machine: source, name, ...sizes }) =>
+    forkMachine: ({ machine: source, name, labels, ...sizes }) =>
       recording(
         "forkMachine",
         "machine.fork",
         Effect.flatMap(findMade(source), (found) =>
-          add({
-            ...found,
-            id: name,
-            ...sized(found, sizes),
-            state: "unknown",
-            desired: "running",
-            phase: "observing",
-          })
+          add(
+            labelled(
+              machine(name, {
+                kind: found.kind,
+                base: found.base,
+                ...sized(found, sizes),
+                state: "unknown",
+                phase: "observing",
+              }),
+              found.profile,
+              labels
+            )
+          )
         )
       ),
-    restoreMachine: ({ checkpoint: source, name, ...sizes }) =>
+    restoreMachine: ({ checkpoint: source, name, labels, ...sizes }) =>
       recording(
         "restoreMachine",
         "machine.restore",
-        recordRestore(source, name, sizes)
+        recordRestore(source, name, sizes, labels)
       ),
-    listCheckpoints: () =>
+    execMachine: (request) =>
+      recording("execMachine", "machine.exec", recordExec(request)),
+    listCheckpoints: ({ labels }) =>
       recording(
         "listCheckpoints",
         "checkpoint.list",
         Effect.sync(() =>
-          [...checkpoints.values()].filter(({ phase }) => phase === "ready")
+          [...checkpoints.values()].filter(
+            (row) => row.phase === "ready" && labelledWith(row.labels, labels)
+          )
         )
       ),
     getCheckpoint: ({ id }) =>
       recording("getCheckpoint", "checkpoint.get", readCheckpoint(id)),
-    captureCheckpoint: ({ machine: source, name }) =>
+    captureCheckpoint: ({ machine: source, name, ...fields }) =>
       recording(
         "captureCheckpoint",
         "checkpoint.capture",
-        recordCapture(source, name)
+        recordCapture(source, name, fields)
       ),
     deleteCheckpoint: ({ id }) =>
       recording(
@@ -628,6 +712,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
   return {
     creates,
     prebuilds,
+    execs,
     calls,
     versions,
     hold: (held: Machine) => {

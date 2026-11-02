@@ -2,7 +2,8 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, layer } from "@effect/vitest";
-import { ScriptFailed } from "@gjermundgaraba/clankerbox-sdk";
+import { outputLimit, ScriptFailed } from "@gjermundgaraba/clankerbox-sdk";
+import type { Executed } from "@gjermundgaraba/clankerbox-sdk";
 import {
   mkdir,
   write,
@@ -14,7 +15,7 @@ import {
   machine,
 } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import type { StubServer } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
-import { DateTime, Effect, Schema } from "effect";
+import { DateTime, Effect, Schema, Sink, Stdio, Stream } from "effect";
 import { afterEach, expect } from "vite-plus/test";
 
 import {
@@ -30,6 +31,64 @@ import {
 const stubs: StubServer[] = [];
 
 const server = serverIn(stubs);
+
+const decodeJson = <S extends Schema.Top>(schema: S, text: string) =>
+  Schema.decodeEffect(Schema.fromJsonString(schema))(text, {
+    onExcessProperty: "ignore",
+  });
+
+const Listed = Schema.Struct({
+  machines: Schema.Array(Schema.Struct({ id: Schema.String })),
+});
+
+const listedIds = (text: string) =>
+  Effect.map(decodeJson(Listed, text), ({ machines }) =>
+    machines.map(({ id }) => id)
+  );
+
+const CheckpointJson = Schema.Struct({
+  machine: Schema.String,
+  labels: Schema.Record(Schema.String, Schema.String),
+  expiresAt: Schema.DateTimeUtcFromString,
+});
+
+const execOn = (
+  args: readonly string[],
+  answer: Effect.Effect<Executed> = Effect.succeed({
+    exitCode: 3,
+    output: "hi\n",
+    truncated: false,
+  })
+) =>
+  Effect.gen(function* () {
+    const dir = yield* scratch;
+    const config = yield* writeConfig(dir);
+    const printed: string[] = [];
+
+    const stub = server({
+      machines: [machine("dev")],
+      exec: () => answer,
+    });
+
+    const stdio = Stdio.layerTest({
+      stdin: Stream.make(new TextEncoder().encode("the input")),
+      stdout: () =>
+        Sink.forEachArray((chunks) =>
+          Effect.sync(() => {
+            printed.push(
+              ...chunks.map((chunk) => Buffer.from(chunk).toString())
+            );
+          })
+        ),
+    });
+
+    const run = yield* cli(["exec", "--config", config, ...args], {
+      server: stub,
+      stdio,
+    });
+
+    return { ...run, printed: printed.join(""), execs: stub.execs, stub };
+  });
 
 describe("machines", () => {
   afterEach(async () => {
@@ -731,6 +790,231 @@ describe("machines", () => {
             [1, 2048, 10],
             [4, 1024, 40],
           ]);
+        })
+    );
+
+    it.effect(
+      "exec sends the command, its user, env, timeout and, with --stdin, this stdin, prints its output and exits with its code",
+      () =>
+        Effect.gen(function* () {
+          const { code, printed, execs } = yield* execOn([
+            "--user",
+            "user",
+            "--env",
+            "TOKEN=t-1",
+            "--env",
+            "URL=https://a.example/?x=1",
+            "--stdin",
+            "--timeout",
+            "2m",
+            "dev",
+            "--",
+            "/bin/sh",
+            "-c",
+            "cat",
+          ]);
+
+          expect(code).toBe(3);
+          expect(printed).toBe("hi\n");
+          expect(execs).toStrictEqual([
+            {
+              id: "dev",
+              argv: ["/bin/sh", "-c", "cat"],
+              user: "user",
+              env: { TOKEN: "t-1", URL: "https://a.example/?x=1" },
+              stdin: "the input",
+              timeoutSeconds: 120,
+            },
+          ]);
+        })
+    );
+
+    it.effect(
+      "exec --json prints the exit code and output, and sends nothing unasked",
+      () =>
+        Effect.gen(function* () {
+          const { code, stdout, printed, execs } = yield* execOn([
+            "--json",
+            "dev",
+            "--",
+            "true",
+          ]);
+
+          expect(code).toBe(3);
+          expect(JSON.parse(stdout)).toStrictEqual({
+            exitCode: 3,
+            output: "hi\n",
+            truncated: false,
+          });
+          expect(printed).toBe("");
+          expect(execs).toStrictEqual([{ id: "dev", argv: ["true"] }]);
+        })
+    );
+
+    it.effect("exec says on stderr when the host cut the output short", () =>
+      Effect.gen(function* () {
+        const { code, stderr, printed } = yield* execOn(
+          ["dev", "--", "true"],
+          Effect.succeed({ exitCode: 0, output: "tail", truncated: true })
+        );
+
+        expect(code).toBe(0);
+        expect(printed).toBe("tail");
+        expect(stderr).toContain(`last ${outputLimit} characters`);
+      })
+    );
+
+    it.effect("exec --env without a value is refused before any call", () =>
+      Effect.gen(function* () {
+        const { code, stderr, execs } = yield* execOn([
+          "--env",
+          "TOKEN",
+          "dev",
+          "--",
+          "true",
+        ]);
+
+        expect(code).toBe(1);
+        expect(stderr).toContain('--env "TOKEN" isn\'t a KEY=VALUE pair');
+        expect(execs).toStrictEqual([]);
+      })
+    );
+
+    it.effect(
+      "create --label sends the labels, get shows them, and machines --label lists what carries them",
+      () =>
+        Effect.gen(function* () {
+          const dir = yield* scratch;
+          const config = yield* writeConfig(dir);
+
+          const stub = server({
+            machines: [machine("other", { labels: { app: "api" } })],
+          });
+
+          const created = yield* cli(
+            [
+              "create",
+              "dev",
+              ...sizes,
+              "--label",
+              "app=web",
+              "--label",
+              "env=ci",
+              "--config",
+              config,
+            ],
+            { server: stub }
+          );
+
+          const got = yield* cli(["get", "dev", "--config", config], {
+            server: stub,
+          });
+
+          const web = yield* cli(
+            ["machines", "--label", "app=web", "--json", "--config", config],
+            { server: stub }
+          );
+
+          const none = yield* cli(
+            [
+              "machines",
+              "--label",
+              "app=web",
+              "--label",
+              "env=qa",
+              "--config",
+              config,
+            ],
+            { server: stub }
+          );
+
+          const all = yield* cli(["machines", "--json", "--config", config], {
+            server: stub,
+          });
+
+          expect(created).toMatchObject({ code: 0, stdout: "dev" });
+          expect(stub.creates.map(({ labels }) => labels)).toStrictEqual([
+            { app: "web", env: "ci" },
+          ]);
+          expect(
+            got.stdout.split("\n").map((line) => line.split(/\s{2,}/u))
+          ).toStrictEqual(
+            expect.arrayContaining([["LABELS", "app=web env=ci"]])
+          );
+          expect(yield* listedIds(web.stdout)).toStrictEqual(["dev"]);
+          expect(none.stderr).toBe("clankerbox: no machines to list");
+          expect(yield* listedIds(all.stdout)).toStrictEqual(["other", "dev"]);
+        })
+    );
+
+    it.effect(
+      "pause --capture captures first, with --label and --expires on the checkpoint, and pauses",
+      () =>
+        Effect.gen(function* () {
+          const dir = yield* scratch;
+          const config = yield* writeConfig(dir);
+          const stub = server({ machines: [machine("dev")] });
+          const before = yield* DateTime.now;
+
+          const paused = yield* cli(
+            [
+              "pause",
+              "dev",
+              "--capture",
+              "snap",
+              "--label",
+              "app=web",
+              "--expires",
+              "1h",
+              "--config",
+              config,
+            ],
+            { server: stub }
+          );
+
+          const snap = yield* cli(
+            ["checkpoint", "get", "snap", "--json", "--config", config],
+            { server: stub }
+          );
+
+          const {
+            labels,
+            expiresAt,
+            machine: source,
+          } = yield* decodeJson(CheckpointJson, snap.stdout);
+
+          const hour =
+            DateTime.toEpochMillis(expiresAt) - DateTime.toEpochMillis(before);
+
+          expect(paused).toMatchObject({ code: 0, stdout: "dev paused" });
+          expect([source, labels]).toStrictEqual(["dev", { app: "web" }]);
+          expect(hour).toBeGreaterThanOrEqual(3_600_000);
+          expect(hour).toBeLessThan(3_660_000);
+          expect(stub.calls).toStrictEqual([
+            "machine.pause",
+            "machine.get",
+            "checkpoint.get",
+            "checkpoint.get",
+          ]);
+        })
+    );
+
+    it.effect(
+      "pause --label or --expires without --capture is refused before any call",
+      () =>
+        Effect.gen(function* () {
+          const dir = yield* scratch;
+          const config = yield* writeConfig(dir);
+          const stub = server({ machines: [machine("dev")] });
+
+          const { code, stderr } = yield* cli(
+            ["pause", "dev", "--label", "app=web", "--config", config],
+            { server: stub }
+          );
+
+          expect(code).toBe(1);
+          expect(stderr).toContain("give --capture NAME");
+          expect(stub.calls).toStrictEqual([]);
         })
     );
 

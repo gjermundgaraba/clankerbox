@@ -207,6 +207,353 @@ describe("client", () => {
         ]);
       })
     );
+
+    it.effect(
+      "labels go with a create, fork, restore and capture, and a list takes a filter",
+      () =>
+        Effect.gen(function* () {
+          const stub = server({ checkpoints: [checkpoint("snap")] });
+          const labels = { app: "web", env: "ci" };
+
+          const seen = yield* withClient(stub, (client) =>
+            Effect.gen(function* () {
+              yield* client.create("dev", spec, { labels });
+              yield* client.create("plain", spec);
+              yield* client.forkMachine({
+                machine: "dev",
+                name: "copy",
+                labels: { app: "copy" },
+              });
+              yield* client.restoreMachine({
+                checkpoint: "snap",
+                name: "again",
+                labels: { app: "web", env: "dev" },
+              });
+              yield* client.captureCheckpoint({
+                machine: "dev",
+                name: "tagged",
+                labels: { app: "web" },
+              });
+
+              return {
+                web: yield* client.listMachines({ labels: { app: "web" } }),
+                ci: yield* client.listMachines({
+                  labels: { app: "web", env: "ci" },
+                }),
+                all: yield* client.listMachines(),
+                checkpoints: yield* client.listCheckpoints({
+                  labels: { app: "web" },
+                }),
+              };
+            })
+          );
+
+          expect(
+            stub.creates.map(({ id, labels: given }) => [id, given])
+          ).toStrictEqual([
+            ["dev", labels],
+            ["plain", undefined],
+          ]);
+          expect(seen.web.map(({ id }) => id)).toStrictEqual(["dev", "again"]);
+          expect(seen.ci.map(({ id }) => id)).toStrictEqual(["dev"]);
+          expect(seen.all.map(({ id }) => id)).toStrictEqual([
+            "dev",
+            "plain",
+            "copy",
+            "again",
+          ]);
+          expect(seen.all[0]?.labels).toStrictEqual(labels);
+          expect(seen.all[1]).not.toHaveProperty("labels");
+          expect(seen.checkpoints.map(({ id }) => id)).toStrictEqual([
+            "tagged",
+          ]);
+        })
+    );
+
+    it.effect(
+      "a pause with a capture records the checkpoint, with its labels and expiry, and rests paused",
+      () =>
+        Effect.gen(function* () {
+          const stub = server({ machines: [machine("dev")] });
+          const expiresAt = DateTime.makeUnsafe("2026-12-01T00:00:00Z");
+
+          const { paused, snap } = yield* withClient(stub, (client) =>
+            Effect.gen(function* () {
+              const rested = yield* client.pauseMachine({
+                id: "dev",
+                capture: { name: "snap", labels: { app: "web" }, expiresAt },
+              });
+
+              return {
+                paused: rested,
+                snap: yield* client.getCheckpoint({ id: "snap" }),
+              };
+            })
+          );
+
+          expect([paused.state, paused.phase]).toStrictEqual([
+            "paused",
+            "settled",
+          ]);
+          expect(snap).toMatchObject({
+            machine: "dev",
+            labels: { app: "web" },
+            expiresAt,
+          });
+        })
+    );
+
+    it.effect(
+      "a pause whose capture fails answers the capture's error, once the machine has paused",
+      () =>
+        Effect.gen(function* () {
+          const stub = server({ machines: [machine("dev")] });
+
+          stub.scriptCheckpoint("snap", [
+            { phase: "failed", error: scriptFailed },
+          ]);
+
+          const { error, dev } = yield* withClient(stub, (client) =>
+            Effect.gen(function* () {
+              const failed = yield* Effect.flip(
+                client.pauseMachine({ id: "dev", capture: { name: "snap" } })
+              );
+
+              return {
+                error: failed,
+                dev: yield* client.getMachine({ id: "dev" }),
+              };
+            })
+          );
+
+          expect(error).toMatchObject({
+            _tag: "ScriptFailed",
+            action: "pauseMachine",
+            id: "snap",
+          });
+          expect([dev.state, dev.phase]).toStrictEqual(["paused", "settled"]);
+        })
+    );
+
+    it.effect(
+      "a pause with a capture of a machine that isn't running is WrongState",
+      () =>
+        Effect.gen(function* () {
+          const stub = server({
+            machines: [
+              machine("dev", { state: "stopped", desired: "stopped" }),
+            ],
+          });
+
+          const error = yield* withClient(stub, (client) =>
+            Effect.flip(
+              client.pauseMachine({ id: "dev", capture: { name: "snap" } })
+            )
+          );
+
+          expect(error).toMatchObject({
+            _tag: "WrongState",
+            machine: "dev",
+            state: "stopped",
+          });
+        })
+    );
+
+    it.effect(
+      "exec sends the command whole and answers what ran, within its timeout and the reply's",
+      () =>
+        Effect.gen(function* () {
+          const stub = server({
+            machines: [machine("dev")],
+            exec: ({ argv, env }) =>
+              Effect.succeed({
+                exitCode: 3,
+                output: `${argv.join(" ")} ${env?.["TOKEN"] ?? ""}`,
+                truncated: false,
+              }),
+          });
+
+          const answered = yield* withClient(stub, (client) =>
+            client.execMachine({
+              id: "dev",
+              argv: ["/bin/sh", "-c", "cat"],
+              user: "user",
+              env: { TOKEN: "t" },
+              stdin: "in",
+              timeoutSeconds: 30,
+            })
+          );
+
+          expect(answered).toStrictEqual({
+            exitCode: 3,
+            output: "/bin/sh -c cat t",
+            truncated: false,
+          });
+          expect(stub.execs).toStrictEqual([
+            {
+              id: "dev",
+              argv: ["/bin/sh", "-c", "cat"],
+              user: "user",
+              env: { TOKEN: "t" },
+              stdin: "in",
+              timeoutSeconds: 30,
+            },
+          ]);
+        })
+    );
+
+    it.effect(
+      "an exec with no timeout waits past the reply timeout, and one with a timeout gives up after it and the reply's",
+      () =>
+        Effect.gen(function* () {
+          const silent = new Silent();
+
+          const [early, error] = yield* withClient(silent, (client) =>
+            Effect.gen(function* () {
+              const unbounded = yield* Effect.forkChild(
+                client.execMachine({ id: "dev", argv: ["sleep"] })
+              );
+
+              const bounded = yield* Effect.forkChild(
+                Effect.flip(
+                  client.execMachine({
+                    id: "dev",
+                    argv: ["sleep"],
+                    timeoutSeconds: 10,
+                  })
+                )
+              );
+
+              yield* Effect.yieldNow;
+              yield* TestClock.adjust(
+                Duration.sum(replyTimeout, Duration.seconds(9))
+              );
+
+              const polled = [unbounded.pollUnsafe(), bounded.pollUnsafe()];
+
+              yield* TestClock.adjust(Duration.seconds(1));
+
+              return [polled, yield* Fiber.join(bounded)] as const;
+            })
+          );
+
+          expect(early).toStrictEqual([undefined, undefined]);
+          expect(error._tag).toBe("Unavailable");
+          expect(error.message).toContain("may have run");
+        })
+    );
+
+    it.effect("ensure starts the machine of the name when one exists", () =>
+      Effect.gen(function* () {
+        const stub = server({
+          machines: [machine("dev", { state: "paused", desired: "paused" })],
+        });
+
+        const ensured = yield* withClient(stub, (client) =>
+          client.ensure("dev", { spec })
+        );
+
+        expect([ensured.state, ensured.desired]).toStrictEqual([
+          "running",
+          "running",
+        ]);
+        expect(stub.calls).toStrictEqual([
+          "machine.get",
+          "machine.start",
+          "machine.get",
+        ]);
+        expect(stub.creates).toStrictEqual([]);
+      })
+    );
+
+    it.effect(
+      "ensure restores the checkpoint when it is ready, with the sizing and labels given, else creates from the spec",
+      () =>
+        Effect.gen(function* () {
+          const stub = server({
+            checkpoints: [
+              checkpoint("snap", { cpu: 2 }),
+              checkpoint("broken", { phase: "failed", error: scriptFailed }),
+            ],
+          });
+
+          const [restored, created, fresh] = yield* withClient(stub, (client) =>
+            Effect.all([
+              client.ensure("one", {
+                spec,
+                checkpoint: "snap",
+                sizing: { ramMib: 2048 },
+                labels: { app: "web" },
+              }),
+              client.ensure("two", { spec, checkpoint: "broken" }),
+              client.ensure("three", {
+                spec,
+                checkpoint: "none",
+                labels: { app: "web" },
+              }),
+            ])
+          );
+
+          expect([
+            restored.cpu,
+            restored.ramMib,
+            restored.labels,
+          ]).toStrictEqual([2, 2048, { app: "web" }]);
+          expect([created.id, created.state]).toStrictEqual(["two", "running"]);
+          expect(fresh.labels).toStrictEqual({ app: "web" });
+          expect(
+            stub.creates.map(({ id, labels }) => [id, labels])
+          ).toStrictEqual([
+            ["two", undefined],
+            ["three", { app: "web" }],
+          ]);
+        })
+    );
+
+    it.effect(
+      "ensure deletes a failed create's row that still answers Conflict, and makes the machine once more",
+      () =>
+        Effect.gen(function* () {
+          let creates = 0;
+
+          const stub = server({
+            machines: [
+              machine("dev", {
+                state: "missing",
+                phase: "failed",
+                error: scriptFailed,
+              }),
+            ],
+            create: ({ id }) => {
+              creates += 1;
+
+              if (creates === 1) {
+                return Effect.fail(
+                  new Conflict({ message: `machine ${id} exists`, id })
+                );
+              }
+
+              const made = machine(id);
+
+              stub.hold(made);
+
+              return Effect.succeed(made);
+            },
+          });
+
+          const ensured = yield* withClient(stub, (client) =>
+            client.ensure("dev", { spec })
+          );
+
+          expect(ensured.state).toBe("running");
+          expect(stub.calls.slice(0, 3)).toStrictEqual([
+            "machine.get",
+            "machine.create",
+            "machine.delete",
+          ]);
+          expect(creates).toBe(2);
+        })
+    );
   });
 
   describe("errors", () => {

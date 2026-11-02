@@ -69,6 +69,8 @@ const sizesOf = (machine: {
   readonly diskGib: number;
 }) => [machine.cpu, machine.ramMib, machine.diskGib];
 
+const idsOf = (listed: readonly Machine[]) => listed.map(({ id }) => id);
+
 const refusal = (machine: Pick<Machine, "phase" | "error">) => [
   machine.phase,
   machine.error?._tag,
@@ -1337,6 +1339,138 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(refusal(rested)).toStrictEqual(["failed", "Internal"]);
         expect(whileRested).toStrictEqual([]);
         expect(refusal(retried)).toStrictEqual(["settled", undefined]);
+      })
+  );
+
+  it.effect(
+    "exec runs a command in the machine through its host, as the user named, with its env and stdin",
+    () =>
+      Effect.gen(function* () {
+        const { client } = yield* served();
+
+        yield* client.create("dev", request("dev"));
+
+        const executed = yield* client.execMachine({
+          id: "dev",
+          argv: [
+            "/bin/sh",
+            "-c",
+            'printf "%s %s %s" "$CLANKERBOX_USER" "$TOKEN" "$(cat)"',
+          ],
+          user: "user",
+          env: { TOKEN: "t-1" },
+          stdin: "secret",
+        });
+
+        expect(executed).toStrictEqual({
+          exitCode: 0,
+          output: "user t-1 secret",
+          truncated: false,
+        });
+      })
+  );
+
+  it.effect(
+    "exec waits for a step in flight on the machine, and answers for the state it leaves",
+    () =>
+      Effect.gen(function* () {
+        const { client, asking, fake } = yield* served();
+
+        yield* client.create("dev", request("dev"));
+
+        const { entered, release } = fake.holdNext("stop");
+
+        yield* asking.stopMachine({ id: "dev" });
+        yield* entered;
+
+        const executing = yield* Effect.forkChild(
+          Effect.flip(client.execMachine({ id: "dev", argv: ["true"] }))
+        );
+
+        yield* pause;
+
+        const early = executing.pollUnsafe();
+
+        yield* release;
+
+        const error = yield* Fiber.join(executing);
+
+        expect(early).toBeUndefined();
+        expect(error).toMatchObject({
+          _tag: "WrongState",
+          machine: "dev",
+          state: "stopped",
+        });
+        expect(fake.calls.at(-1)).toBe("stop dev");
+      })
+  );
+
+  it.effect(
+    "exec in a machine being made is NotMade at once, and in none NotFound",
+    () =>
+      Effect.gen(function* () {
+        const { client, asking, fake } = yield* served();
+        const { entered, release } = fake.holdNext("create");
+
+        yield* asking.create("dev", request("dev"));
+        yield* entered;
+
+        const making = yield* Effect.flip(
+          client.execMachine({ id: "dev", argv: ["true"] })
+        );
+
+        const none = yield* Effect.flip(
+          client.execMachine({ id: "other", argv: ["true"] })
+        );
+
+        const calls = [...fake.calls];
+
+        yield* release;
+
+        expect(making._tag).toBe("NotMade");
+        expect(none._tag).toBe("NotFound");
+        expect(calls).toStrictEqual(["admit dev", "create dev"]);
+      })
+  );
+
+  it.effect(
+    "labels go on a machine at its make, show on it, and pick it out of a list",
+    () =>
+      Effect.gen(function* () {
+        const { client } = yield* served();
+        const labels = { app: "web", env: "ci" };
+
+        const made = yield* client.create("dev", request("dev"), { labels });
+
+        yield* client.create("plain", request("plain"));
+
+        const copy = yield* client.forkMachine({
+          machine: "dev",
+          name: "copy",
+          labels: { app: "copy" },
+        });
+
+        expect(made.labels).toStrictEqual(labels);
+        expect(copy.labels).toStrictEqual({ app: "copy" });
+        expect(yield* client.getMachine({ id: "plain" })).not.toHaveProperty(
+          "labels"
+        );
+        expect(
+          idsOf(yield* client.listMachines({ labels: { app: "web" } }))
+        ).toStrictEqual(["dev"]);
+        expect(
+          idsOf(
+            yield* client.listMachines({ labels: { env: "ci", app: "web" } })
+          )
+        ).toStrictEqual(["dev"]);
+        expect(
+          idsOf(yield* client.listMachines({ labels: { app: "none" } }))
+        ).toStrictEqual([]);
+        expect(idsOf(yield* client.machines)).toStrictEqual([
+          "dev",
+          "plain",
+          "copy",
+        ]);
       })
   );
 

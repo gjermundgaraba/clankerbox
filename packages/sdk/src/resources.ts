@@ -18,6 +18,47 @@ export const loginUser = "admin";
 
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
 
+/** How many labels a machine or checkpoint may carry. */
+export const maxLabels = 16;
+
+const maxLabelLength = 63;
+
+/**
+ * What a caller tags a machine or checkpoint with, to find it again: at most `maxLabels` pairs,
+ * each key a name and each value at most 63 characters. Set when the resource is made, and never
+ * changed after.
+ */
+export const Labels = Schema.Record(
+  Name,
+  Schema.String.check(Schema.isMaxLength(maxLabelLength))
+).check(
+  Schema.makeFilter(
+    (labels: Readonly<Record<string, string>>) =>
+      Object.keys(labels).length <= maxLabels || `at most ${maxLabels} labels`
+  )
+);
+
+export type Labels = typeof Labels.Type;
+
+const labelled = { labels: Schema.optionalKey(Labels) };
+
+const expiring = {
+  expiresAt: Schema.optionalKey(Schema.DateTimeUtcFromString),
+};
+
+/** `labels` that each resource listed must carry, with those values. */
+export const ListFilter = Schema.Struct(labelled);
+
+export type ListFilter = typeof ListFilter.Type;
+
+/** Whether `labels` carries every pair of `wanted`. */
+export const labelledWith = (
+  labels: Labels | undefined,
+  wanted: Labels | undefined
+): boolean =>
+  wanted === undefined ||
+  Object.entries(wanted).every(([key, value]) => labels?.[key] === value);
+
 /**
  * What the control plane is doing about a machine. A client waits for a rest:
  * `settled`, at rest with what was asked; `failed`, after a step failed, until the next request;
@@ -102,6 +143,7 @@ export const Machine = Schema.Struct({
   base: Schema.String,
   profile: Schema.optionalKey(Schema.String),
   prebuild: Schema.optionalKey(Name),
+  ...labelled,
   cpu: Size,
   ramMib: Size,
   diskGib: Size,
@@ -139,7 +181,8 @@ export const stateLabel = ({ state, desired, phase }: Machine): string => {
 /**
  * `kind` follows its host's: `ram` (RAM and disks) on linux, captured from a running machine, and
  * `disk` on mac, from a stopped one. A client waits on `phase`: a checkpoint is usable only `ready`,
- * and never changes after. A capture that failed stays `failed` to say why, holding no copy.
+ * and never changes after. A capture that failed stays `failed` to say why, holding no copy. One
+ * with `expiresAt` is deleted by the control plane once that time has passed.
  */
 export const Checkpoint = Schema.Struct({
   id: Name,
@@ -150,6 +193,8 @@ export const Checkpoint = Schema.Struct({
   error: Schema.optionalKey(HostError),
   base: Schema.String,
   profile: Schema.optionalKey(Schema.String),
+  ...labelled,
+  ...expiring,
   cpu: Size,
   ramMib: Size,
   diskGib: Size,
@@ -280,9 +325,91 @@ export const CreateRequest = Schema.Struct({
   id: Name,
   ...specFields,
   fresh: Schema.optionalKey(Schema.Boolean),
+  ...labelled,
 });
 
 export type CreateRequest = typeof CreateRequest.Type;
+
+const FromMachine = { machine: Name, name: Name };
+
+/** A copy of a machine, `machine`, to a new `name`, with the sizes given or its source's. */
+export const ForkRequest = Schema.Struct({
+  ...FromMachine,
+  ...labelled,
+});
+
+export type ForkRequest = typeof ForkRequest.Type;
+
+/** A machine `name` made from a checkpoint, with the sizes given or the checkpoint's. */
+export const RestoreRequest = Schema.Struct({
+  checkpoint: Name,
+  name: Name,
+  ...labelled,
+});
+
+export type RestoreRequest = typeof RestoreRequest.Type;
+
+/** A checkpoint `name` of `machine`, deleted once `expiresAt` has passed, if given. */
+export const CaptureRequest = Schema.Struct({
+  ...FromMachine,
+  ...labelled,
+  ...expiring,
+});
+
+export type CaptureRequest = typeof CaptureRequest.Type;
+
+/**
+ * A pause of machine `id`. With `capture`, a checkpoint of that name is captured first, and the
+ * pause begins once the capture has ended, however it ended: the checkpoint's row says how.
+ */
+export const PauseRequest = Schema.Struct({
+  id: Name,
+  capture: Schema.optionalKey(
+    Schema.Struct({ name: Name, ...labelled, ...expiring })
+  ),
+});
+
+export type PauseRequest = typeof PauseRequest.Type;
+
+/**
+ * A command run in a running machine as `user`, root when it is left out, with `env` set for it,
+ * `stdin` written whole, and ended with exit code 124 after `timeoutSeconds`. Nothing logs or
+ * stores `env` or `stdin`: they can carry secrets. The command runs as long as the request does.
+ */
+export const ExecRequest = Schema.Struct({
+  id: Name,
+  argv: Schema.NonEmptyArray(Schema.String),
+  user: Schema.optionalKey(Schema.NonEmptyString),
+  env: Schema.optionalKey(
+    Schema.Record(
+      Schema.String.check(Schema.isPattern(/^[A-Za-z_][A-Za-z0-9_]*$/u)),
+      Schema.String
+    )
+  ),
+  stdin: Schema.optionalKey(Schema.String),
+  timeoutSeconds: Schema.optionalKey(Size),
+});
+
+export type ExecRequest = typeof ExecRequest.Type;
+
+/** How many characters of a command's output `Executed` keeps, the last ones. */
+export const outputLimit = 65_536;
+
+/** The exit code a command ended for running past its `timeoutSeconds` answers, as `timeout(1)`. */
+export const timedOutExitCode = 124;
+
+/**
+ * `output` is stdout and stderr together, as they arrived, cut to the last `outputLimit`
+ * characters, and `truncated` when that dropped any. A runtime that fails to run the command answers
+ * its own exit code, with its message in `output`.
+ */
+export const Executed = Schema.Struct({
+  exitCode: Schema.Int,
+  output: Schema.String,
+  truncated: Schema.Boolean,
+}).annotate({ identifier: "Executed" });
+
+export type Executed = typeof Executed.Type;
 
 /** Sizes to give a machine, each optional: one left out stays as it is, or as its source's. */
 export const Sizing = Schema.Struct({

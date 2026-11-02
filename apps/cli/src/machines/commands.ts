@@ -2,24 +2,36 @@ import {
   actionsByName,
   formatGib,
   formatMib,
+  Invalid,
+  outputLimit,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Machine } from "@gjermundgaraba/clankerbox-sdk";
-import { Console, Effect } from "effect";
+import { Console, Effect, Option, Stdio, Stream } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 
 import {
   checkpointArgument,
   clientFlags,
   deleted,
-  listCommand,
+  Exited,
+  expiresFlag,
+  expiring,
+  fail,
+  filteredListCommand,
+  labelFlag,
+  labelled,
   machineArgument,
   mutationFlags,
   nameArgument,
   newId,
+  parsed,
+  parsePairs,
   printResource,
+  readStdin,
   table,
   withClient,
 } from "../command.ts";
+import { parseSeconds } from "../units.ts";
 import {
   flagSizes,
   flagsRequest,
@@ -28,11 +40,12 @@ import {
 } from "./spec.ts";
 import { encodeMachine, machineFields, machineRows } from "./view.ts";
 
-export const machines = listCommand({
+export const machines = filteredListCommand({
   name: "machines",
-  description: "List every machine, with its age.",
+  description:
+    "List every machine, with its age, or those carrying every --label given.",
   key: "machines",
-  read: (client) => client.machines,
+  read: (client, filter) => client.listMachines(filter),
   encode: encodeMachine,
   rows: machineRows,
 });
@@ -65,6 +78,7 @@ const createArguments = {
     ),
     Flag.withDefault(false)
   ),
+  label: labelFlag,
 };
 
 export const create = Command.make(
@@ -78,6 +92,7 @@ export const create = Command.make(
 
           const machine = yield* client.create(flags.name, spec, {
             fresh: flags.fresh,
+            ...(yield* labelled(flags.label)),
           });
 
           if (machine.prebuild !== undefined && !flags.json) {
@@ -126,14 +141,56 @@ export const stop = Command.make(
 
 export const pause = Command.make(
   "pause",
-  { ...mutationFlags, machine: machineArgument },
+  {
+    ...mutationFlags,
+    capture: Flag.String("capture").pipe(
+      Flag.withMetavar("NAME"),
+      Flag.withDescription(
+        "Capture the running machine as checkpoint NAME first, so it holds the machine as it ran; the pause begins once the capture has."
+      ),
+      Flag.optional
+    ),
+    label: labelFlag,
+    expires: expiresFlag,
+    machine: machineArgument,
+  },
   (flags) =>
     printResource(flags, {
-      call: (client) => client.pauseMachine({ id: flags.machine }),
+      call: (client) =>
+        Effect.gen(function* () {
+          const capture = Option.getOrUndefined(flags.capture);
+
+          if (
+            capture === undefined &&
+            (flags.label.length > 0 || Option.isSome(flags.expires))
+          ) {
+            return yield* new Invalid({
+              message:
+                "--label and --expires go on the checkpoint --capture makes: give --capture NAME",
+            });
+          }
+
+          return yield* client.pauseMachine({
+            id: flags.machine,
+            ...(capture === undefined
+              ? {}
+              : {
+                  capture: {
+                    name: capture,
+                    ...(yield* labelled(flags.label)),
+                    ...(yield* expiring(flags.expires)),
+                  },
+                }),
+          });
+        }),
       encode: encodeMachine,
       text: machineState,
     })
-).pipe(Command.withDescription(actionsByName.pauseMachine.description));
+).pipe(
+  Command.withDescription(
+    `${actionsByName.pauseMachine.description} --label and --expires go on the checkpoint --capture makes, and a capture that fails fails the command with its error once the machine has paused.`
+  )
+);
 
 const sized = (machine: Machine) =>
   `${machine.id} ${machine.cpu} vCPUs, ${formatMib(machine.ramMib)} RAM, ${formatGib(machine.diskGib)} disk`;
@@ -178,19 +235,23 @@ export const fork = Command.make(
   {
     ...mutationFlags,
     ...sizeArguments,
+    label: labelFlag,
     machine: machineArgument,
     name: nameArgument,
   },
   (flags) =>
     printResource(flags, {
       call: (client) =>
-        Effect.flatMap(flagSizes(flags), (sizes) =>
-          client.forkMachine({
+        Effect.gen(function* () {
+          const sizes = yield* flagSizes(flags);
+
+          return yield* client.forkMachine({
             machine: flags.machine,
             name: flags.name,
             ...sizes,
-          })
-        ),
+            ...(yield* labelled(flags.label)),
+          });
+        }),
       encode: encodeMachine,
       text: newId,
     })
@@ -205,24 +266,117 @@ export const restore = Command.make(
   {
     ...mutationFlags,
     ...sizeArguments,
+    label: labelFlag,
     checkpoint: checkpointArgument,
     name: nameArgument,
   },
   (flags) =>
     printResource(flags, {
       call: (client) =>
-        Effect.flatMap(flagSizes(flags), (sizes) =>
-          client.restoreMachine({
+        Effect.gen(function* () {
+          const sizes = yield* flagSizes(flags);
+
+          return yield* client.restoreMachine({
             checkpoint: flags.checkpoint,
             name: flags.name,
             ...sizes,
-          })
-        ),
+            ...(yield* labelled(flags.label)),
+          });
+        }),
       encode: encodeMachine,
       text: newId,
     })
 ).pipe(
   Command.withDescription(
     `${actionsByName.restoreMachine.description} Prints the new ID.`
+  )
+);
+
+export const exec = Command.make(
+  "exec",
+  {
+    ...clientFlags,
+    limit: Flag.String("timeout").pipe(
+      Flag.withMetavar("DURATION"),
+      Flag.withDescription(
+        "End the command after this long, such as 90s or 30m, and exit 124; unbounded by default."
+      ),
+      Flag.optional
+    ),
+    user: Flag.String("user").pipe(
+      Flag.withDescription("The user to run it as. Default: root."),
+      Flag.optional
+    ),
+    env: Flag.String("env").pipe(
+      Flag.withMetavar("NAME=VALUE"),
+      Flag.withDescription(
+        "An environment variable for the command; repeat for more."
+      ),
+      Flag.atLeast(0)
+    ),
+    stdin: Flag.Boolean("stdin").pipe(
+      Flag.withDescription(
+        "Send this command's stdin, read to its end, as the command's."
+      ),
+      Flag.withDefault(false)
+    ),
+    machine: machineArgument,
+    program: Argument.String("program").pipe(
+      Argument.withDescription("The program to run, after `--`.")
+    ),
+    args: Argument.String("args").pipe(
+      Argument.withDescription("Its arguments."),
+      Argument.variadic()
+    ),
+  },
+  (flags) =>
+    Effect.gen(function* () {
+      const limit = yield* parsed(flags.limit, "--timeout", parseSeconds).pipe(
+        Effect.catch(fail(flags.json))
+      );
+
+      const env = yield* parsePairs("--env", flags.env).pipe(
+        Effect.catch(fail(flags.json))
+      );
+
+      const stdin = flags.stdin
+        ? yield* readStdin.pipe(Effect.catch(fail(flags.json)))
+        : undefined;
+
+      const executed = yield* withClient(flags, (client) =>
+        client.execMachine({
+          id: flags.machine,
+          argv: [flags.program, ...flags.args],
+          ...(Option.isNone(flags.user) ? {} : { user: flags.user.value }),
+          ...(env === undefined ? {} : { env }),
+          ...(stdin === undefined ? {} : { stdin }),
+          ...(Option.isNone(limit) ? {} : { timeoutSeconds: limit.value }),
+        })
+      );
+
+      if (flags.json) {
+        yield* Console.log(JSON.stringify(executed));
+      } else {
+        const stdio = yield* Stdio.Stdio;
+
+        yield* Stream.run(
+          Stream.make(new TextEncoder().encode(executed.output)),
+          stdio.stdout()
+        );
+
+        if (executed.truncated) {
+          yield* Console.error(
+            `clankerbox: the output above is only its last ${outputLimit} characters`
+          );
+        }
+      }
+
+      if (executed.exitCode !== 0) {
+        return yield* new Exited({ code: executed.exitCode });
+      }
+    })
+).pipe(
+  Command.withDescription(
+    `${actionsByName.execMachine.description} Prints its output and exits with its exit code.`
   )
 );

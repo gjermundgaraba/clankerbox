@@ -30,10 +30,14 @@ import type {
   Build,
   CapacityReport,
   Checkpoint,
+  Executed,
   Host,
+  Labels,
+  ListFilter,
   Machine,
   MachineSpec,
   Setup,
+  Sizing,
 } from "./resources.ts";
 
 const ServerUrl = Schema.String.check(
@@ -91,9 +95,23 @@ export type Deleted = "deleted" | "absent";
 export interface CreateOptions {
   /** Run the setup even when a host holds a prebuild of the spec. */
   readonly fresh?: boolean | undefined;
+  /** What the machine carries, to find it again. */
+  readonly labels?: Labels | undefined;
+}
+
+/**
+ * What `ensure` makes a machine from when none of its name exists: the `checkpoint` when one of
+ * that name is ready, at `sizing` or the checkpoint's, else `spec`, as `create` would.
+ */
+export interface EnsureOptions extends CreateOptions {
+  readonly spec: MachineSpec;
+  readonly checkpoint?: string | undefined;
+  readonly sizing?: Sizing | undefined;
 }
 
 type Reads = "getMachine" | "getCheckpoint" | "getPrebuild";
+
+type Lists = "listMachines" | "listCheckpoints";
 
 type Waits =
   | "startMachine"
@@ -113,14 +131,27 @@ export type Calls = {
     input: Input<N>
   ) => Effect.Effect<Success<N>, ErrorOf<N>>;
 } & {
+  readonly [N in Lists]: (
+    filter?: ListFilter
+  ) => Effect.Effect<Success<N>, ErrorOf<N>>;
+} & {
   readonly [N in Waits]: (
     input: Input<N>
   ) => Effect.Effect<Success<N>, WaitErrorOf<N>>;
 };
 
+/** What `ensure` fails with: what making the machine or starting it does. */
+export type EnsureError =
+  | WaitErrorOf<"createMachine">
+  | WaitErrorOf<"restoreMachine">
+  | WaitErrorOf<"startMachine">
+  | WaitErrorOf<"deleteMachine">;
+
 export interface Interface extends Calls {
   readonly hosts: Effect.Effect<readonly Host[], ErrorOf<"listHosts">>;
+  /** Every machine; `listMachines` takes a filter. */
   readonly machines: Effect.Effect<readonly Machine[], ErrorOf<"listMachines">>;
+  /** Every ready checkpoint; `listCheckpoints` takes a filter. */
   readonly checkpoints: Effect.Effect<
     readonly Checkpoint[],
     ErrorOf<"listCheckpoints">
@@ -132,6 +163,24 @@ export interface Interface extends Calls {
     spec: MachineSpec,
     options?: CreateOptions
   ) => Effect.Effect<Machine, WaitErrorOf<"createMachine">>;
+  /**
+   * A machine of `name` that runs: the one that exists, started, or resumed when paused; else one
+   * restored from `checkpoint` when that is ready; else one created from `spec`. Each waits as the
+   * request would. A failed create's row that still answers `Conflict`, as its VM is still going,
+   * is deleted and the make tried once more, and a make whose reply was lost reads the machine
+   * and decides again, once.
+   */
+  readonly ensure: (
+    name: string,
+    options: EnsureOptions
+  ) => Effect.Effect<Machine, EnsureError>;
+  /**
+   * `execMachine`, waiting `timeoutSeconds` and the reply timeout for the answer, or for as long as
+   * the command runs when there is none.
+   */
+  readonly execMachine: (
+    input: Input<"execMachine">
+  ) => Effect.Effect<Executed, ErrorOf<"execMachine">>;
   /** Asks for the prebuild, then waits for it to end. */
   readonly prebuild: (
     spec: MachineSpec & { readonly setup: Setup }
@@ -397,6 +446,9 @@ const endedAt =
       : Option.none();
   };
 
+const undoneCreate = ({ phase, state, desired }: Machine) =>
+  phase === "failed" && state === "missing" && desired !== "deleted";
+
 /** A client of the control plane at `url`. It sends nothing until called. */
 export const make = (
   url: string,
@@ -415,15 +467,18 @@ export const make = (
     const pollEvery = options?.pollEvery ?? defaultPoll;
     const noWait = options?.noWait === true;
 
+    const reply = options?.replyTimeout ?? replyTimeout;
+
     const call = <N extends ServerAction>(
       name: N,
       input: Input<N>,
       subject?: string,
-      made?: string
+      made?: string,
+      timeout: Duration.Duration = reply
     ): Effect.Effect<Success<N>, ErrorOf<N>> =>
       settle(methods[name](input), {
         url,
-        timeout: options?.replyTimeout ?? replyTimeout,
+        timeout,
         readOnly: actions[name].readOnly,
         what: subject === undefined ? name : `${name} ${subject}`,
         target: made ?? subject,
@@ -433,9 +488,10 @@ export const make = (
       name: N,
       input: Input<N>,
       subject?: string,
-      made?: string
+      made?: string,
+      timeout?: Duration.Duration
     ): Effect.Effect<Success<N>, ErrorOf<N>> =>
-      call(name, input, subject, made).pipe(
+      call(name, input, subject, made, timeout).pipe(
         Effect.mapError((error) =>
           error.located({ action: name, id: subject, made })
         )
@@ -541,11 +597,11 @@ export const make = (
     };
 
     const asking =
-      (
-        name: "startMachine" | "stopMachine" | "pauseMachine",
+      <N extends "startMachine" | "stopMachine" | "pauseMachine">(
+        name: N,
         desired: Machine["desired"]
       ) =>
-      (input: Input<"startMachine">) =>
+      (input: Input<N>) =>
         Effect.flatMap(send(name, input, input.id), (recorded) =>
           machineRest(recorded, desired, name)
         );
@@ -557,6 +613,9 @@ export const make = (
           ...spec,
           id: name,
           ...(placement?.fresh === true ? { fresh: true } : {}),
+          ...(placement?.labels === undefined
+            ? {}
+            : { labels: placement.labels }),
         },
         name,
         name
@@ -567,18 +626,142 @@ export const make = (
         Effect.mapError(making(name))
       );
 
+    const startMachine = asking("startMachine", "running");
+
+    const restoreMachine: Interface["restoreMachine"] = (input) =>
+      Effect.flatMap(
+        send("restoreMachine", input, input.checkpoint, input.name),
+        (recorded) => machineRest(recorded, "running", "restoreMachine")
+      ).pipe(Effect.mapError(making(input.name)));
+
+    const deleteMachine: Interface["deleteMachine"] = ({ id }) =>
+      deleting(
+        Effect.andThen(
+          send("deleteMachine", { id }, id),
+          unlessNoWait(
+            undefined,
+            polled(
+              unlessGone(
+                call("getMachine", { id }, id).pipe(
+                  Effect.filterOrElse(
+                    (machine) => machine.desired !== "deleted",
+                    heard
+                  )
+                )
+              ),
+              Option.match({
+                onNone: () => Option.some(Effect.void),
+                onSome: machineGone,
+              }),
+              "deleteMachine",
+              id
+            )
+          )
+        )
+      );
+
+    const madeFrom = (
+      name: string,
+      { checkpoint, spec, sizing, labels, fresh }: EnsureOptions
+    ): Effect.Effect<Machine, EnsureError> =>
+      Effect.gen(function* () {
+        const ready =
+          checkpoint === undefined
+            ? false
+            : yield* call("getCheckpoint", { id: checkpoint }, checkpoint).pipe(
+                Effect.map(({ phase }) => phase === "ready"),
+                Effect.catchTag("NotFound", () => Effect.succeed(false))
+              );
+
+        return ready && checkpoint !== undefined
+          ? yield* restoreMachine({
+              checkpoint,
+              name,
+              ...sizing,
+              ...(labels === undefined ? {} : { labels }),
+            })
+          : yield* create(name, spec, { fresh, labels });
+      });
+
+    const ensuring = (
+      name: string,
+      from: EnsureOptions,
+      again: boolean
+    ): Effect.Effect<Machine, EnsureError> =>
+      Effect.gen(function* () {
+        const found = yield* call("getMachine", { id: name }, name).pipe(
+          Effect.asSome,
+          Effect.catchTag("NotFound", () => Effect.succeedNone)
+        );
+
+        if (Option.isSome(found) && !undoneCreate(found.value)) {
+          return yield* startMachine({ id: name });
+        }
+
+        return yield* madeFrom(name, from).pipe(
+          Effect.catchTags({
+            Conflict: (conflict) =>
+              again
+                ? Effect.andThen(
+                    deleteMachine({ id: name }),
+                    ensuring(name, from, false)
+                  )
+                : Effect.fail(conflict),
+            Unavailable: (unavailable) =>
+              again && !unavailable.readOnly
+                ? ensuring(name, from, false)
+                : Effect.fail(unavailable),
+          })
+        );
+      });
+
+    const pauseMachine: Interface["pauseMachine"] = (input) =>
+      Effect.flatMap(asking("pauseMachine", "paused")(input), (machine) => {
+        const { capture } = input;
+
+        return capture === undefined
+          ? Effect.succeed(machine)
+          : unlessNoWait(
+              machine,
+              Effect.as(
+                polled(
+                  call("getCheckpoint", { id: capture.name }, capture.name),
+                  endedAt<Checkpoint>("ready", "checkpoint"),
+                  "pauseMachine",
+                  capture.name
+                ),
+                machine
+              )
+            );
+      });
+
+    const execMachine: Interface["execMachine"] = (input) =>
+      send(
+        "execMachine",
+        input,
+        input.id,
+        undefined,
+        input.timeoutSeconds === undefined
+          ? Duration.infinity
+          : Duration.sum(Duration.seconds(input.timeoutSeconds), reply)
+      );
+
     return {
       hosts: send("listHosts", {}),
       machines: send("listMachines", {}),
       checkpoints: send("listCheckpoints", {}),
+      listMachines: (filter) => send("listMachines", filter ?? {}),
+      listCheckpoints: (filter) => send("listCheckpoints", filter ?? {}),
       capacity: send("getCapacity", {}),
       getMachine: (input) => send("getMachine", input, input.id),
       getCheckpoint: (input) => send("getCheckpoint", input, input.id),
       getPrebuild: (input) => send("getPrebuild", input, input.id),
       create,
-      startMachine: asking("startMachine", "running"),
+      ensure: (name, from) => ensuring(name, from, true),
+      execMachine,
+      startMachine,
       stopMachine: asking("stopMachine", "stopped"),
-      pauseMachine: asking("pauseMachine", "paused"),
+      pauseMachine,
       resizeMachine: (input) =>
         Effect.flatMap(send("resizeMachine", input, input.id), (recorded) =>
           machineRest(recorded, "resize", "resizeMachine")
@@ -588,11 +771,7 @@ export const make = (
           send("forkMachine", input, input.machine, input.name),
           (recorded) => machineRest(recorded, "running", "forkMachine")
         ).pipe(Effect.mapError(making(input.name))),
-      restoreMachine: (input) =>
-        Effect.flatMap(
-          send("restoreMachine", input, input.checkpoint, input.name),
-          (recorded) => machineRest(recorded, "running", "restoreMachine")
-        ).pipe(Effect.mapError(making(input.name))),
+      restoreMachine,
       captureCheckpoint: (input) =>
         Effect.flatMap(
           send("captureCheckpoint", input, input.machine, input.name),
@@ -619,31 +798,7 @@ export const make = (
             )
           )
         ),
-      deleteMachine: ({ id }) =>
-        deleting(
-          Effect.andThen(
-            send("deleteMachine", { id }, id),
-            unlessNoWait(
-              undefined,
-              polled(
-                unlessGone(
-                  call("getMachine", { id }, id).pipe(
-                    Effect.filterOrElse(
-                      (machine) => machine.desired !== "deleted",
-                      heard
-                    )
-                  )
-                ),
-                Option.match({
-                  onNone: () => Option.some(Effect.void),
-                  onSome: machineGone,
-                }),
-                "deleteMachine",
-                id
-              )
-            )
-          )
-        ),
+      deleteMachine,
       deleteCheckpoint: ({ id }) =>
         deleting(
           Effect.andThen(

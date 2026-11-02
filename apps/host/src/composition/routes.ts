@@ -47,6 +47,7 @@ const app = (config: Served) =>
         waitOperation: ({ id }) => operations.wait(id),
         cancelOperation: ({ id }) => operations.cancel(id),
         collectOperation: ({ id }) => operations.collect(id),
+        execMachine: operations.exec,
       };
     })
   );

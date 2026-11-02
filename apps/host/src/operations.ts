@@ -1,4 +1,5 @@
 import type {
+  ExecCommand,
   MachineRef,
   Native,
   Operation,
@@ -18,7 +19,9 @@ import {
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
+  Executed,
   HostError,
+  Missing,
   Sizing,
   TailnetStatus,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -36,7 +39,13 @@ import {
 import type { Scope } from "effect";
 import { Hex } from "effect/encoding";
 
-import { checkTailnet, identify, prepare, runSetup } from "./guest.ts";
+import {
+  checkTailnet,
+  identify,
+  prepare,
+  runCommand,
+  runSetup,
+} from "./guest.ts";
 import type { TailnetReport } from "./guest.ts";
 import { pickPort, PortProbe } from "./machine-ports.ts";
 import {
@@ -64,6 +73,13 @@ export interface Interface {
   readonly capacity: (
     machines: readonly MachineRef[]
   ) => ReturnType<Runtime["Service"]["capacity"]>;
+  /**
+   * Runs a command in a running machine, once a step in its scope has ended, and for as long as
+   * the request does. Nothing of it is kept.
+   */
+  readonly exec: (
+    command: ExecCommand
+  ) => Effect.Effect<Executed, Missing | WrongState | Internal>;
 }
 
 export class Operations extends Context.Service<Operations, Interface>()(
@@ -719,6 +735,42 @@ export const make = (
         }
       });
 
+    const stepEnded = (machine: MachineRef) =>
+      Effect.suspend(() => {
+        const held = scopes.get(`machine ${machine.name}`);
+        const entry = held === undefined ? undefined : entries.get(held.id);
+
+        return entry === undefined || entry.progress.status !== "running"
+          ? Effect.void
+          : Effect.asVoid(Fiber.await(entry.fiber));
+      });
+
+    const exec: Interface["exec"] = (command) =>
+      surviving(
+        `exec in ${command.machine.name}`,
+        Effect.gen(function* () {
+          const { machine } = command;
+
+          yield* stepEnded(machine);
+
+          const seen = yield* stateNow(machine, "given the command");
+
+          if (seen === "missing") {
+            return yield* missing(config.kind, machine);
+          }
+
+          if (seen !== "running") {
+            return yield* new WrongState({
+              message: `machine ${machine.name} is ${seen}, and a command runs only in a running machine: start it first`,
+              machine: machine.name,
+              state: seen,
+            });
+          }
+
+          return yield* runCommand(runtime, command);
+        })
+      );
+
     return {
       boot,
       run,
@@ -736,6 +788,7 @@ export const make = (
         runtime
           .capacity(heldBy(machines))
           .pipe(inTime(`the ${config.kind} runtime`)),
+      exec: Effect.fn("Operations.exec")(exec),
     } satisfies Interface;
   });
 

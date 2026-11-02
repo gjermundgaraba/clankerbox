@@ -32,6 +32,8 @@ export const facts = (fields?: Partial<Facts>): Facts => ({
   hostKey: undefined,
   pin: "pin",
   undoneAt: undefined,
+  labels: undefined,
+  after: undefined,
   ...fields,
 });
 
@@ -71,5 +73,7 @@ export const checkpointFacts = (
   diskGib: 10,
   error: undefined,
   failedAt: undefined,
+  labels: undefined,
+  expiresAt: undefined,
   ...fields,
 });

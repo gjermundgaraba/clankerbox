@@ -3,24 +3,34 @@ import {
   checkpointKinds,
   Conflict,
   Internal,
+  labelledWith,
   NotFound,
+  readTimeout,
+  Unavailable,
+  WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   Build,
+  CaptureRequest,
   Checkpoint,
   Declared,
+  ListFilter,
+  Machine,
+  PauseRequest,
   PrebuildRequest,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Cause,
   Context,
   DateTime,
+  Duration,
   Effect,
   Layer,
   Option,
   Result,
+  Schedule,
 } from "effect";
-import type { Duration, Scope } from "effect";
+import type { Scope } from "effect";
 
 import { applied } from "./chart.ts";
 import { activityOf, checkpointChart, phaseOf } from "./checkpoint-chart.ts";
@@ -29,6 +39,7 @@ import { driver, untilRest } from "./driver.ts";
 import type { Heard } from "./driver.ts";
 import { answering, Hosts } from "./hosts.ts";
 import { stageOf } from "./machine-chart.ts";
+import { stateOf } from "./machine-view.ts";
 import { Machines, unmade } from "./machines.ts";
 import { collect, cutShort, poll } from "./operations.ts";
 import { placing } from "./placement.ts";
@@ -37,8 +48,12 @@ import { checkpointStep } from "./steps.ts";
 import { newId, notFound, Store } from "./store.ts";
 import type { Operation } from "./store.ts";
 
+const beginPoll = Duration.millis(100);
+
 export interface Interface {
-  readonly list: Effect.Effect<readonly Checkpoint[], Internal>;
+  readonly list: (
+    filter: ListFilter
+  ) => Effect.Effect<readonly Checkpoint[], Internal>;
   readonly get: (
     id: string
   ) => Effect.Effect<Checkpoint, Declared<"getCheckpoint">>;
@@ -48,9 +63,15 @@ export interface Interface {
    * without one for as long as the host stays dead.
    */
   readonly capture: (
-    machine: string,
-    name: string
+    request: CaptureRequest
   ) => Effect.Effect<Checkpoint, Declared<"captureCheckpoint">>;
+  /**
+   * Asks a machine to pause, after capturing it if `capture` says so. The capture is recorded
+   * first, and the pause waits for it to begin, so the checkpoint holds the machine as it ran.
+   */
+  readonly pause: (
+    request: PauseRequest
+  ) => Effect.Effect<Machine, Declared<"pauseMachine">>;
   readonly delete: (
     id: string
   ) => Effect.Effect<void, Declared<"deleteCheckpoint">>;
@@ -75,8 +96,15 @@ const shown = (record: CheckpointRow): Checkpoint => ({
   diskGib: record.diskGib,
   phase: phaseOf(record.state),
   ...(record.profile === undefined ? {} : { profile: record.profile }),
+  ...(record.labels === undefined ? {} : { labels: record.labels }),
+  ...(record.expiresAt === undefined ? {} : { expiresAt: record.expiresAt }),
   ...(record.error === undefined ? {} : { error: record.error }),
 });
+
+const expired = (record: CheckpointRow, now: DateTime.Utc): boolean =>
+  record.state === "ready" &&
+  record.expiresAt !== undefined &&
+  DateTime.toEpochMillis(record.expiresAt) < DateTime.toEpochMillis(now);
 
 const reportedBy = (
   op: Operation,
@@ -159,7 +187,12 @@ export const make = (settings: {
       following,
     });
 
-    const capturing = (source: string, name: string) =>
+    const capturing = ({
+      machine: source,
+      name,
+      labels,
+      expiresAt,
+    }: CaptureRequest) =>
       Effect.gen(function* () {
         const present = yield* store.findMachine(source);
 
@@ -187,9 +220,11 @@ export const make = (settings: {
           cpu: machine.cpu,
           ramMib: machine.ramMib,
           diskGib: machine.diskGib,
+          labels,
           state: "capturing.due",
           error: undefined,
           failedAt: undefined,
+          expiresAt,
         };
 
         yield* store.insertCheckpoint(record);
@@ -229,6 +264,81 @@ export const make = (settings: {
       });
 
     const rested = (name: string) => untilRest(settings.recheck, rests(name));
+
+    const begun = (name: string) =>
+      Effect.gen(function* () {
+        const record = yield* store.findCheckpoint(name);
+
+        return (
+          Option.isNone(record) ||
+          record.value.state !== "capturing.due" ||
+          Option.isSome(yield* store.operationOn("checkpoint", name))
+        );
+      }).pipe(
+        Effect.repeat({
+          until: (has) => has,
+          schedule: Schedule.spaced(beginPoll).pipe(
+            Schedule.upTo({ duration: readTimeout })
+          ),
+        }),
+        Effect.asVoid
+      );
+
+    const pausing = ({ id, capture }: PauseRequest) =>
+      Effect.gen(function* () {
+        if (capture === undefined) {
+          return yield* machines.pause(id);
+        }
+
+        const present = yield* store.findMachine(id);
+
+        if (Option.isNone(present)) {
+          return yield* notFound("machine", id);
+        }
+
+        const found = present.value;
+
+        if (stageOf(found.state) !== "made") {
+          return yield* unmade(found);
+        }
+
+        const seen = yield* stateOf(hosts, found);
+
+        if (seen === "unknown") {
+          return yield* new Unavailable({
+            message: `machine ${id}'s host can't be reached, so it can't be captured before it pauses`,
+            readOnly: true,
+          });
+        }
+
+        if (seen !== "running") {
+          return yield* new WrongState({
+            message: `machine ${id} is ${seen}, and a pause captures only a running machine: capture it instead`,
+            machine: id,
+            state: seen,
+          });
+        }
+
+        yield* capturing({ machine: id, ...capture });
+        yield* begun(capture.name);
+
+        return yield* machines.pause(id, capture.name);
+      });
+
+    const sweep = Effect.gen(function* () {
+      const now = yield* DateTime.now;
+
+      for (const record of yield* store.checkpoints) {
+        if (expired(record, now)) {
+          yield* Effect.logInfo(`checkpoint ${record.name} expired`);
+          yield* remove(record.name);
+        }
+      }
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logError(`the expiry sweep failed:\n${Cause.pretty(cause)}`)
+      )
+    );
 
     const building = (name: string, request: PrebuildRequest, host: string) =>
       Effect.gen(function* () {
@@ -276,7 +386,7 @@ export const make = (settings: {
             yield* rested(name);
           }
 
-          yield* capturing(builder, name);
+          yield* capturing({ machine: builder, name });
           yield* rested(name);
         }).pipe(Effect.ensuring(deleted));
 
@@ -324,14 +434,25 @@ export const make = (settings: {
       yield* drive(record.name);
     }
 
+    yield* Effect.forkIn(
+      Effect.forever(Effect.andThen(Effect.sleep(settings.recheck), sweep)),
+      scope
+    );
+
     return {
-      list: Effect.map(store.checkpoints, (records) =>
-        records.flatMap((record) =>
-          record.state === "ready" ? [shown(record)] : []
+      list: Effect.fn("Checkpoints.list")((filter) =>
+        Effect.map(store.checkpoints, (records) =>
+          records.flatMap((record) =>
+            record.state === "ready" &&
+            labelledWith(record.labels, filter.labels)
+              ? [shown(record)]
+              : []
+          )
         )
-      ).pipe(Effect.withSpan("Checkpoints.list")),
+      ),
       get: Effect.fn("Checkpoints.get")((id) => Effect.map(row(id), shown)),
       capture: Effect.fn("Checkpoints.capture")(capturing),
+      pause: Effect.fn("Checkpoints.pause")(pausing),
       delete: Effect.fn("Checkpoints.delete")(remove),
       prebuild: Effect.fn("Checkpoints.prebuild")(prebuild),
       build: Effect.fn("Checkpoints.build")((id) =>

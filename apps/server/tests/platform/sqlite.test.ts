@@ -116,7 +116,7 @@ const opening = (stateDir: string) =>
 
 const stateIn = Effect.map(scratch, (dir) => path.join(dir, "state"));
 
-const stateDirAtVersion1 = (fill: (db: DatabaseSync) => void) =>
+const stateDirAt = (version: number, fill: (db: DatabaseSync) => void) =>
   Effect.gen(function* () {
     const stateDir = yield* stateIn;
 
@@ -126,12 +126,15 @@ const stateDirAtVersion1 = (fill: (db: DatabaseSync) => void) =>
 
     fill(db);
     db.exec(
-      `PRAGMA user_version = 1; PRAGMA application_id = ${applicationId}`
+      `PRAGMA user_version = ${version}; PRAGMA application_id = ${applicationId}`
     );
     db.close();
 
     return stateDir;
   });
+
+const stateDirAtVersion1 = (fill: (db: DatabaseSync) => void) =>
+  stateDirAt(1, fill);
 
 const row = (name: string, fields?: Partial<MachineRow>): MachineRow => ({
   name,
@@ -156,6 +159,8 @@ const row = (name: string, fields?: Partial<MachineRow>): MachineRow => ({
   hostKey: undefined,
   pin: undefined,
   undoneAt: undefined,
+  labels: undefined,
+  after: undefined,
   ...fields,
 });
 
@@ -179,6 +184,8 @@ const checkpoint = (
   state: "capturing.due",
   error: undefined,
   failedAt: undefined,
+  labels: undefined,
+  expiresAt: undefined,
   ...fields,
 });
 
@@ -728,7 +735,7 @@ layer(NodeServices.layer)((it) => {
     "a database at this binary's version whose tables it can't read is refused, not a crash",
     () =>
       Effect.gen(function* () {
-        const stateDir = yield* stateDirAtVersion1((db) => {
+        const stateDir = yield* stateDirAt(migrations.length, (db) => {
           db.exec("CREATE TABLE machines (name TEXT PRIMARY KEY) STRICT");
         });
 

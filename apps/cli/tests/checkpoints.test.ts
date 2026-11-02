@@ -7,7 +7,7 @@ import {
   machine,
 } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import type { StubServer } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
-import { Effect } from "effect";
+import { DateTime, Effect, Schema } from "effect";
 import { afterEach, expect } from "vite-plus/test";
 
 import {
@@ -22,6 +22,10 @@ const stubs: StubServer[] = [];
 
 const server = serverIn(stubs);
 
+const Listed = Schema.Struct({
+  checkpoints: Schema.Array(Schema.Struct({ id: Schema.String })),
+});
+
 const other = checkpoint("other", {
   machine: "dev",
   kind: "ram",
@@ -32,6 +36,75 @@ layer(NodeServices.layer)((it) => {
   afterEach(async () => {
     await cleanup(stubs);
   });
+
+  it.effect(
+    "capture --label and --expires go on the checkpoint, get shows them, and list --label filters by them",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        const config = yield* writeConfig(dir);
+
+        const stub = server({
+          machines: [machine("dev")],
+          checkpoints: [checkpoint("plain", { machine: "dev" })],
+        });
+
+        const captured = yield* cli(
+          [
+            "checkpoint",
+            "capture",
+            "dev",
+            "snap",
+            "--label",
+            "app=web",
+            "--expires",
+            "2d",
+            "--config",
+            config,
+          ],
+          { server: stub }
+        );
+
+        const got = yield* cli(
+          ["checkpoint", "get", "snap", "--config", config],
+          { server: stub }
+        );
+
+        const listed = yield* cli(
+          [
+            "checkpoint",
+            "list",
+            "--label",
+            "app=web",
+            "--json",
+            "--config",
+            config,
+          ],
+          { server: stub }
+        );
+
+        const fields = got.stdout
+          .split("\n")
+          .map((line) => line.split(/\s{2,}/u));
+
+        const expires =
+          fields.find(([label]) => label === "EXPIRES")?.[1] ?? "";
+
+        const { checkpoints } = yield* Schema.decodeEffect(
+          Schema.fromJsonString(Listed)
+        )(listed.stdout, { onExcessProperty: "ignore" });
+
+        expect(captured).toMatchObject({ code: 0, stdout: "snap" });
+        expect(fields).toStrictEqual(
+          expect.arrayContaining([["LABELS", "app=web"]])
+        );
+        expect(
+          DateTime.toEpochMillis(DateTime.makeUnsafe(expires)) -
+            DateTime.toEpochMillis(yield* DateTime.now)
+        ).toBeGreaterThan(172_000_000);
+        expect(checkpoints.map(({ id }) => id)).toStrictEqual(["snap"]);
+      })
+  );
 
   it.effect(
     "a capture that fails exits 1 with its error, and checkpoint get says why",

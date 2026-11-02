@@ -4,7 +4,7 @@ import {
   Invalid,
   retryable,
 } from "@gjermundgaraba/clankerbox-sdk";
-import type { ClankerboxError } from "@gjermundgaraba/clankerbox-sdk";
+import type { ClankerboxError, Labels } from "@gjermundgaraba/clankerbox-sdk";
 import type { FileSystem, Path } from "effect";
 import {
   Console,
@@ -16,6 +16,8 @@ import {
   Option,
   Runtime,
   Schema,
+  Stdio,
+  Stream,
 } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import type { HttpClient } from "effect/http";
@@ -151,6 +153,107 @@ export const parsed = <A>(
   parse: (name: string, text: string) => Effect.Effect<A, Invalid>
 ) => Effect.transposeOption(Option.map(flag, (text) => parse(name, text)));
 
+const pairPattern = /^(?<key>[^=]+)=(?<value>.*)$/su;
+
+/** `KEY=VALUE` pairs a repeated flag gave, or undefined when it wasn't given. */
+export const parsePairs = (
+  flag: string,
+  texts: readonly string[]
+): Effect.Effect<Record<string, string> | undefined, Invalid> =>
+  Effect.gen(function* () {
+    if (texts.length === 0) {
+      return undefined;
+    }
+
+    const pairs: Record<string, string> = {};
+
+    for (const text of texts) {
+      const { key, value } = pairPattern.exec(text)?.groups ?? {};
+
+      if (key === undefined || value === undefined) {
+        return yield* new Invalid({
+          message: `${flag} ${JSON.stringify(text)} isn't a KEY=VALUE pair`,
+        });
+      }
+
+      pairs[key] = value;
+    }
+
+    return pairs;
+  });
+
+export const labelFlag = Flag.String("label").pipe(
+  Flag.withMetavar("KEY=VALUE"),
+  Flag.withDescription(
+    "A label to carry, to find it by; repeat for more. Labels are set when the resource is made."
+  ),
+  Flag.atLeast(0)
+);
+
+export const labelFilterFlag = Flag.String("label").pipe(
+  Flag.withMetavar("KEY=VALUE"),
+  Flag.withDescription(
+    "List only what carries this label, with this value; repeat to require more."
+  ),
+  Flag.atLeast(0)
+);
+
+/** `{ labels }` when any `--label` was given, else nothing, as a request leaves them out. */
+export const labelled = (
+  texts: readonly string[]
+): Effect.Effect<{ readonly labels?: Labels }, Invalid> =>
+  Effect.map(parsePairs("--label", texts), (labels) =>
+    labels === undefined ? {} : { labels }
+  );
+
+export const expiresFlag = Flag.String("expires").pipe(
+  Flag.withMetavar("DURATION"),
+  Flag.withDescription(
+    "Delete the checkpoint this long after now, such as 7d or 12h, once it is ready."
+  ),
+  Flag.optional
+);
+
+/** `{ expiresAt }` from `--expires`, else nothing. */
+export const expiring = (
+  flag: Option.Option<string>
+): Effect.Effect<{ readonly expiresAt?: DateTime.Utc }, Invalid> =>
+  Effect.gen(function* () {
+    const seconds = yield* parsed(flag, "--expires", parseSeconds);
+
+    if (Option.isNone(seconds)) {
+      return {};
+    }
+
+    return {
+      expiresAt: DateTime.addDuration(
+        yield* DateTime.now,
+        Duration.seconds(seconds.value)
+      ),
+    };
+  });
+
+export const pairsText = (
+  pairs: Readonly<Record<string, string>> | undefined
+): string =>
+  pairs === undefined || Object.keys(pairs).length === 0
+    ? "-"
+    : Object.entries(pairs)
+        .map(([key, value]) => `${key}=${value}`)
+        .join(" ");
+
+export const readStdin: Effect.Effect<string, Invalid, Stdio.Stdio> =
+  Effect.gen(function* () {
+    const stdio = yield* Stdio.Stdio;
+
+    return yield* Stream.mkString(Stream.decodeText(stdio.stdin)).pipe(
+      Effect.mapError(
+        (error) =>
+          new Invalid({ message: `couldn't read stdin: ${error.message}` })
+      )
+    );
+  });
+
 type Services =
   | FileSystem.FileSystem
   | Path.Path
@@ -207,35 +310,73 @@ export const nameArgument = Argument.String("name").pipe(
   Argument.withDescription("The new resource's name.")
 );
 
-export const listCommand = <A>(options: {
-  readonly name: string;
-  readonly description: string;
+interface Listing<A> {
   readonly key: string;
-  readonly read: (
-    client: Client.Interface
-  ) => Effect.Effect<readonly A[], ClankerboxError>;
   readonly encode: (answer: A) => object;
   readonly rows: (answers: readonly A[], now: DateTime.Utc) => string[][];
-}) =>
+}
+
+export const printList = <A>(
+  json: boolean,
+  listing: Listing<A>,
+  answers: readonly A[]
+) =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+
+    if (json) {
+      yield* Console.log(
+        JSON.stringify({
+          [listing.key]: answers.map((answer) => listing.encode(answer)),
+        })
+      );
+    } else if (answers.length > 0) {
+      yield* Console.log(table(listing.rows(answers, now)));
+    } else {
+      yield* Console.error(`clankerbox: no ${listing.key} to list`);
+    }
+  });
+
+export const listCommand = <A>(
+  options: Listing<A> & {
+    readonly name: string;
+    readonly description: string;
+    readonly read: (
+      client: Client.Interface
+    ) => Effect.Effect<readonly A[], ClankerboxError>;
+  }
+) =>
   Command.make(options.name, clientFlags, (flags) =>
     withClient(flags, (client) =>
-      Effect.gen(function* () {
-        const answers = yield* options.read(client);
-        const now = yield* DateTime.now;
-
-        if (flags.json) {
-          yield* Console.log(
-            JSON.stringify({
-              [options.key]: answers.map((answer) => options.encode(answer)),
-            })
-          );
-        } else if (answers.length > 0) {
-          yield* Console.log(table(options.rows(answers, now)));
-        } else {
-          yield* Console.error(`clankerbox: no ${options.key} to list`);
-        }
-      })
+      Effect.flatMap(options.read(client), (answers) =>
+        printList(flags.json, options, answers)
+      )
     )
+  ).pipe(Command.withDescription(options.description));
+
+/** A list of what carries every `--label` given. */
+export const filteredListCommand = <A>(
+  options: Listing<A> & {
+    readonly name: string;
+    readonly description: string;
+    readonly read: (
+      client: Client.Interface,
+      filter: { readonly labels?: Labels }
+    ) => Effect.Effect<readonly A[], ClankerboxError>;
+  }
+) =>
+  Command.make(
+    options.name,
+    { ...clientFlags, label: labelFilterFlag },
+    (flags) =>
+      withClient(flags, (client) =>
+        Effect.gen(function* () {
+          const filter = yield* labelled(flags.label);
+          const answers = yield* options.read(client, filter);
+
+          yield* printList(flags.json, options, answers);
+        })
+      )
   ).pipe(Command.withDescription(options.description));
 
 export const printResource = <A, R>(

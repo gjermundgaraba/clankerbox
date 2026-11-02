@@ -7,6 +7,7 @@ import {
 import type { DateTime } from "effect";
 import { Schema } from "effect";
 
+import { pairsText } from "../command.ts";
 import { age } from "../units.ts";
 
 const machineColumns: ReadonlyArray<
@@ -76,6 +77,7 @@ export const machineFields = (machine: Machine, now: DateTime.Utc) => {
     ],
     ["HOST_KEY", machine.hostKey ?? "-"],
     ["TAILNET", tailnetLabel(machine)],
+    ["LABELS", pairsText(machine.labels)],
   ];
 };
 

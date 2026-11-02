@@ -2,6 +2,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
+import { outputLimit } from "@gjermundgaraba/clankerbox-sdk";
 import {
   chmod,
   mkdir,
@@ -23,6 +24,7 @@ import {
   lastLines,
   identityScript,
   startScript,
+  runCommand,
   runSetup,
   tailnetIn,
   tailnetScript,
@@ -276,6 +278,83 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
 
         expect(Exit.isSuccess(ok)).toBe(true);
+      })
+  );
+
+  it.effect(
+    "a command runs as the user named, root by default, with its env and stdin, and answers its exit code and output",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* running;
+
+        const argv = [
+          "/bin/sh",
+          "-c",
+          'echo "$CLANKERBOX_USER $TOKEN"; cat; exit 3',
+        ] as const;
+
+        const asUser = yield* runCommand(runtime, {
+          machine,
+          argv: [...argv],
+          user: "user",
+          env: { TOKEN: "t-1" },
+          stdin: "hello\n",
+        });
+
+        const asRoot = yield* runCommand(runtime, { machine, argv: [...argv] });
+
+        expect(asUser).toStrictEqual({
+          exitCode: 3,
+          output: "user t-1\nhello\n",
+          truncated: false,
+        });
+        expect(asRoot).toStrictEqual({
+          exitCode: 3,
+          output: "root \n",
+          truncated: false,
+        });
+      })
+  );
+
+  it.effect(
+    "a command that runs past its timeout is ended, and answers 124 with the output it had",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* running;
+
+        const executed = yield* runCommand(runtime, {
+          machine,
+          argv: ["/bin/sh", "-c", "echo started; sleep 30"],
+          timeoutSeconds: 1,
+        });
+
+        expect(executed).toStrictEqual({
+          exitCode: 124,
+          output: "started\n",
+          truncated: false,
+        });
+      })
+  );
+
+  it.effect(
+    "a command's output keeps its last outputLimit characters, and says when it was cut",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* running;
+
+        const executed = yield* runCommand(runtime, {
+          machine,
+          argv: [
+            "/bin/sh",
+            "-c",
+            `head -c ${outputLimit} /dev/zero | tr '\\0' a; printf end`,
+          ],
+        });
+
+        expect(executed.exitCode).toBe(0);
+        expect(executed.truncated).toBe(true);
+        expect(executed.output).toHaveLength(outputLimit);
+        expect(executed.output.endsWith("aaaend")).toBe(true);
       })
   );
 

@@ -2,21 +2,37 @@ import type { HostInfo, MachineState, Report } from "@clankerbox/host-contract";
 import {
   Internal,
   isResting,
+  labelledWith,
   NotMade,
+  readTimeout,
   Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   CreateRequest,
   Declared,
+  Executed,
+  ExecRequest,
+  ForkRequest,
+  Labels,
+  ListFilter,
   Machine,
   NotFound,
   PrebuildRequest,
   ResizeRequest,
+  RestoreRequest,
   Setup,
   Sizing,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Context, DateTime, Effect, Layer, Option } from "effect";
-import type { Duration, Scope } from "effect";
+import {
+  Context,
+  DateTime,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Schedule,
+} from "effect";
+import type { Scope } from "effect";
 
 import { applied } from "./chart.ts";
 import { copied, refusedBySource } from "./copies.ts";
@@ -57,8 +73,12 @@ export interface Settings {
   readonly failedRowsLast: Duration.Duration;
 }
 
+const stepPoll = Duration.millis(100);
+
 export interface Interface {
-  readonly list: Effect.Effect<readonly Machine[], Internal>;
+  readonly list: (
+    filter: ListFilter
+  ) => Effect.Effect<readonly Machine[], Internal>;
   readonly get: (id: string) => Effect.Effect<Machine, Declared<"getMachine">>;
   readonly create: (
     request: CreateRequest
@@ -75,8 +95,10 @@ export interface Interface {
   readonly stop: (
     id: string
   ) => Effect.Effect<Machine, Declared<"stopMachine">>;
+  /** `after` names a checkpoint whose capture, once recorded, begins before the pause does. */
   readonly pause: (
-    id: string
+    id: string,
+    after?: string
   ) => Effect.Effect<Machine, Declared<"pauseMachine">>;
   readonly resize: (
     request: ResizeRequest
@@ -85,15 +107,18 @@ export interface Interface {
     id: string
   ) => Effect.Effect<void, Declared<"deleteMachine">>;
   readonly fork: (
-    id: string,
-    name: string,
-    sizing?: Sizing
+    request: ForkRequest & Sizing
   ) => Effect.Effect<Machine, Declared<"forkMachine">>;
   readonly restore: (
-    checkpoint: string,
-    name: string,
-    sizing?: Sizing
+    request: RestoreRequest & Sizing
   ) => Effect.Effect<Machine, Declared<"restoreMachine">>;
+  /**
+   * Runs a command in a machine, through its host, once a step on it has ended, and for as long
+   * as the request does. Nothing of it is stored.
+   */
+  readonly exec: (
+    request: ExecRequest
+  ) => Effect.Effect<Executed, Declared<"execMachine">>;
   readonly capacity: Effect.Effect<CapacityRead, Internal>;
   /**
    * Waits until a machine rests or is gone, for a prebuild's own steps. A machine that can't be read
@@ -298,6 +323,17 @@ export const make = (
         }
       });
 
+    const unbegun = (checkpoint: string) =>
+      Effect.gen(function* () {
+        const record = yield* store.findCheckpoint(checkpoint);
+
+        return (
+          Option.isSome(record) &&
+          record.value.state === "capturing.due" &&
+          Option.isNone(yield* store.operationOn("checkpoint", checkpoint))
+        );
+      });
+
     const looking = (found: MachineRow) =>
       Effect.gen(function* () {
         const { name } = found;
@@ -327,6 +363,10 @@ export const make = (
           id: newId(),
           joins:
             seen === "running" && !found.ephemeral && due(check) && info.joins,
+          awaiting:
+            found.desired === "paused" &&
+            found.after !== undefined &&
+            (yield* unbegun(found.after)),
         });
 
         if (
@@ -370,6 +410,7 @@ export const make = (
     const born = (
       name: string,
       spec: Spec,
+      labels: Labels | undefined,
       placed: Candidate,
       info: HostInfo,
       ephemeral: boolean,
@@ -386,6 +427,7 @@ export const make = (
           cpu: spec.cpu,
           ramMib: spec.ramMib,
           diskGib: spec.diskGib,
+          labels,
           host: placed.host,
           port: undefined,
           desired: "running",
@@ -399,6 +441,7 @@ export const make = (
           hostKey: undefined,
           pin: info.pin,
           undoneAt: undefined,
+          after: undefined,
         };
 
         yield* store.insertMachine(created);
@@ -408,11 +451,12 @@ export const make = (
         return shown(created);
       });
 
-    const asked = (name: string, desired: Wish) =>
+    const asked = (name: string, desired: Wish, after?: string) =>
       Effect.gen(function* () {
         const { next, moved } = yield* recorded(name, {
           type: "ask",
           desired,
+          after,
         });
 
         return moved || stageOf(next.state) === "deleting"
@@ -423,14 +467,20 @@ export const make = (
     const copy = (
       name: string,
       spec: Spec,
+      labels: Labels | undefined,
       info: HostInfo,
       host: string,
       source: Source
     ) =>
-      born(name, spec, { host, source, prebuild: undefined }, info, false, {
-        setup: undefined,
-        untried: [],
-      });
+      born(
+        name,
+        spec,
+        labels,
+        { host, source, prebuild: undefined },
+        info,
+        false,
+        { setup: undefined, untried: [] }
+      );
 
     const create = (request: CreateRequest) =>
       Effect.gen(function* () {
@@ -473,7 +523,7 @@ export const make = (
           });
         }
 
-        return yield* born(name, request, first, info, false, {
+        return yield* born(name, request, request.labels, first, info, false, {
           setup,
           untried,
         });
@@ -486,6 +536,7 @@ export const make = (
         yield* born(
           name,
           request,
+          undefined,
           {
             host,
             source: { kind: "base", scripted: true },
@@ -497,7 +548,12 @@ export const make = (
         );
       });
 
-    const fork = (id: string, name: string, sizing?: Sizing) =>
+    const fork = ({
+      machine: id,
+      name,
+      labels,
+      ...sizing
+    }: ForkRequest & Sizing) =>
       Effect.gen(function* () {
         const from = yield* row(id);
 
@@ -510,13 +566,19 @@ export const make = (
         return yield* copy(
           name,
           yield* copied(name, from, sizing, from.kind),
+          labels,
           info,
           from.host,
           { kind: "machine", name: id }
         );
       });
 
-    const restore = (checkpoint: string, name: string, sizing?: Sizing) =>
+    const restore = ({
+      checkpoint,
+      name,
+      labels,
+      ...sizing
+    }: RestoreRequest & Sizing) =>
       Effect.gen(function* () {
         const present = yield* store.findCheckpoint(checkpoint);
 
@@ -531,10 +593,54 @@ export const make = (
         return yield* copy(
           name,
           yield* copied(name, record, sizing, info.kind),
+          labels,
           info,
           record.host,
           { kind: "checkpoint", name: checkpoint }
         );
+      });
+
+    const stepless = (name: string) =>
+      row(name).pipe(
+        Effect.repeat({
+          until: (found) => activityOf(found.state) !== "follow",
+          schedule: Schedule.spaced(stepPoll).pipe(
+            Schedule.upTo({ duration: readTimeout })
+          ),
+        })
+      );
+
+    const exec = ({ id, ...command }: ExecRequest) =>
+      Effect.gen(function* () {
+        const made = yield* row(id);
+
+        if (stageOf(made.state) !== "made") {
+          return yield* unmade(made);
+        }
+
+        const found = yield* stepless(id);
+        const ref = refOf(found);
+
+        if (stageOf(found.state) !== "made" || ref === undefined) {
+          return yield* unmade(found);
+        }
+
+        const { timeoutSeconds } = command;
+
+        return yield* hosts
+          .call(
+            found.host,
+            (api) => api.execMachine({ machine: ref, ...command }),
+            timeoutSeconds === undefined
+              ? Duration.infinity
+              : Duration.sum(Duration.seconds(timeoutSeconds), readTimeout)
+          )
+          .pipe(
+            Effect.catchTag(
+              "Unreachable",
+              ({ message }) => new Unavailable({ message, readOnly: false })
+            )
+          );
       });
 
     const resize = (request: ResizeRequest) =>
@@ -605,15 +711,18 @@ export const make = (
     );
 
     return {
-      list: Effect.gen(function* () {
-        const rows = (yield* store.machines).filter(
-          ({ ephemeral }) => !ephemeral
-        );
+      list: Effect.fn("Machines.list")((filter) =>
+        Effect.gen(function* () {
+          const rows = (yield* store.machines).filter(
+            ({ ephemeral, labels }) =>
+              !ephemeral && labelledWith(labels, filter.labels)
+          );
 
-        const states = yield* readStates(hosts, rows);
+          const states = yield* readStates(hosts, rows);
 
-        return rows.map((found) => shown(found, stateIn(found, states)));
-      }).pipe(Effect.withSpan("Machines.list")),
+          return rows.map((found) => shown(found, stateIn(found, states)));
+        })
+      ),
       get: Effect.fn("Machines.get")((id) =>
         Effect.flatMap(row(id), (found) =>
           Effect.map(stateOf(hosts, found), (state) => shown(found, state))
@@ -623,11 +732,14 @@ export const make = (
       build: Effect.fn("Machines.build")(build),
       start: Effect.fn("Machines.start")((id) => asked(id, "running")),
       stop: Effect.fn("Machines.stop")((id) => asked(id, "stopped")),
-      pause: Effect.fn("Machines.pause")((id) => asked(id, "paused")),
+      pause: Effect.fn("Machines.pause")((id, after) =>
+        asked(id, "paused", after)
+      ),
       resize: Effect.fn("Machines.resize")(resize),
       delete: Effect.fn("Machines.delete")(remove),
       fork: Effect.fn("Machines.fork")(fork),
       restore: Effect.fn("Machines.restore")(restore),
+      exec: Effect.fn("Machines.exec")(exec),
       capacity: capacity(store, hosts).pipe(
         Effect.withSpan("Machines.capacity")
       ),

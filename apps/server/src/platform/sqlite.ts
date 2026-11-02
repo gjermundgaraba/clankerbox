@@ -94,6 +94,10 @@ export const migrations: readonly string[] = [
     last INTEGER NOT NULL
   ) STRICT;
   INSERT INTO sequence (one, last) VALUES (1, 0)`,
+  `ALTER TABLE machines ADD COLUMN labels TEXT;
+  ALTER TABLE machines ADD COLUMN after TEXT;
+  ALTER TABLE checkpoints ADD COLUMN labels TEXT;
+  ALTER TABLE checkpoints ADD COLUMN expires_at TEXT`,
 ];
 
 const isSqliteError = (

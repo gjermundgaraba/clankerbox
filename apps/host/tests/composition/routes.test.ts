@@ -275,6 +275,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           waitOperation: { id: "op-1" },
           cancelOperation: { id: "op-1" },
           collectOperation: { id: "op-1" },
+          execMachine: { machine: ref, argv: ["true"] },
         } satisfies { readonly [N in HostAction]: Body<N> };
 
         const refusals = [

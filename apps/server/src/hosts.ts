@@ -9,7 +9,7 @@ import {
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Host, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
-import { Context, Data, Effect, Layer, Schema } from "effect";
+import { Context, Data, Duration, Effect, Layer, Schema } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 
 export interface Member {
@@ -43,12 +43,14 @@ export interface Reached {
 export interface Interface {
   readonly members: readonly Member[];
   /**
-   * One call to a host, bounded. It fails with an error its action declares, as the host answered
+   * One call to a host, bounded by `readTimeout` unless `within` says otherwise, as a command runs
+   * as long as its request does. It fails with an error its action declares, as the host answered
    * it, and with `Unreachable` for every way it got no answer.
    */
   readonly call: <A, E>(
     host: string,
-    run: (api: HostApi) => Effect.Effect<A, E>
+    run: (api: HostApi) => Effect.Effect<A, E>,
+    within?: Duration.Duration
   ) => Effect.Effect<A, Extract<E, HostError> | Unreachable>;
   /**
    * Reads the host, and checks it calls itself what the config says. Every look at a host comes
@@ -100,6 +102,24 @@ const describe = (error: unknown): string =>
 
 const isHostError = Schema.is(HostError);
 
+const bounded = <A, E>(
+  host: string,
+  answer: Effect.Effect<A, E>,
+  within: Duration.Duration
+) =>
+  Duration.isFinite(within)
+    ? Effect.timeoutOrElse(answer, {
+        duration: within,
+        orElse: () =>
+          Effect.fail(
+            new Unreachable({
+              host,
+              message: `host ${host} didn't answer in time`,
+            })
+          ),
+      })
+    : answer;
+
 export const make = (
   members: readonly Member[]
 ): Effect.Effect<Interface, Internal, HttpClient.HttpClient> =>
@@ -133,7 +153,8 @@ export const make = (
 
     const call = <A, E>(
       host: string,
-      run: (api: HostApi) => Effect.Effect<A, E>
+      run: (api: HostApi) => Effect.Effect<A, E>,
+      within: Duration.Duration = readTimeout
     ): Effect.Effect<A, Extract<E, HostError> | Unreachable> =>
       Effect.suspend(() => {
         const api = apis.get(host);
@@ -145,29 +166,23 @@ export const make = (
                 message: `host ${host} isn't in the control plane's config`,
               })
             )
-          : run(api).pipe(
-              Effect.catchIf(
-                (error: E): error is Extract<E, HostError> =>
-                  isHostError(error),
-                Effect.fail,
-                (error) =>
-                  Effect.fail(
-                    new Unreachable({
-                      host,
-                      message: `host ${host}: ${describe(error)}`,
-                    })
-                  )
+          : bounded(
+              host,
+              run(api).pipe(
+                Effect.catchIf(
+                  (error: E): error is Extract<E, HostError> =>
+                    isHostError(error),
+                  Effect.fail,
+                  (error) =>
+                    Effect.fail(
+                      new Unreachable({
+                        host,
+                        message: `host ${host}: ${describe(error)}`,
+                      })
+                    )
+                )
               ),
-              Effect.timeoutOrElse({
-                duration: readTimeout,
-                orElse: () =>
-                  Effect.fail(
-                    new Unreachable({
-                      host,
-                      message: `host ${host} didn't answer in time`,
-                    })
-                  ),
-              })
+              within
             );
       });
 

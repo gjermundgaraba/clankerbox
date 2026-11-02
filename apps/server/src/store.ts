@@ -3,6 +3,7 @@ import {
   Desired,
   HostError,
   Kind,
+  Labels,
   NotFound,
   Sizing,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -98,6 +99,7 @@ const made = {
   host: Schema.String,
   pin: UndefinedFromNull(Schema.String),
   error: UndefinedFromNull(Schema.fromJsonString(HostError)),
+  labels: UndefinedFromNull(Schema.fromJsonString(Labels)),
 };
 
 /** What a machine's row holds but for its leaf: what no leaf can tell, and its chart's context. */
@@ -114,6 +116,8 @@ export const Facts = Schema.Struct({
   prebuild: UndefinedFromNull(Schema.String),
   hostKey: UndefinedFromNull(Schema.String),
   undoneAt: UndefinedFromNull(Schema.DateTimeUtcFromString),
+  /** The checkpoint whose capture a pause lets begin before it does. */
+  after: UndefinedFromNull(Schema.String),
 });
 
 export type Facts = typeof Facts.Type;
@@ -127,6 +131,8 @@ export const CheckpointFacts = Schema.Struct({
   machine: Schema.String,
   port: Schema.Int,
   failedAt: UndefinedFromNull(Schema.DateTimeUtcFromString),
+  /** When the control plane deletes it, once ready. */
+  expiresAt: UndefinedFromNull(Schema.DateTimeUtcFromString),
 });
 
 export type CheckpointFacts = typeof CheckpointFacts.Type;

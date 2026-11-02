@@ -42,6 +42,8 @@ export interface Read extends Begins {
   readonly pin: string | undefined;
   /** Whether a tailnet recheck is due, accounting for the start's join report. */
   readonly joins: boolean;
+  /** Whether the capture a pause comes `after` is recorded but not yet begun. */
+  readonly awaiting: boolean;
 }
 
 export interface Done {
@@ -60,7 +62,10 @@ export interface NotDone {
 }
 
 const events = {
-  ask: types<{ readonly desired: Wish }>(),
+  ask: types<{
+    readonly desired: Wish;
+    readonly after?: string | undefined;
+  }>(),
   resize: types<{ readonly sizing: Sizing }>(),
   delete: types<object>(),
   read: types<Read>(),
@@ -109,6 +114,7 @@ export const wants = (kind: Operation["kind"], desired: Asked): boolean => {
 
 const asked = ({ context, event }: On<"ask">) => ({
   desired: event.desired,
+  after: event.after,
   error: undefined,
   prepared: event.desired === "running" ? false : context.prepared,
 });
@@ -149,7 +155,7 @@ const ended =
 
 const decided = ({ context, event }: On<"read">) => {
   const { desired, prepared, resize } = context;
-  const { seen, joins, pin } = event;
+  const { seen, joins, pin, awaiting } = event;
 
   if (seen === "unknown") {
     return;
@@ -164,9 +170,13 @@ const decided = ({ context, event }: On<"read">) => {
   }
 
   if (desired === "paused") {
-    return seen === "running"
-      ? ({ target: "#machine.made.stepping.pausing" } as const)
-      : ({ target: "#machine.made.settled" } as const);
+    if (seen !== "running") {
+      return { target: "#machine.made.settled" } as const;
+    }
+
+    return awaiting
+      ? undefined
+      : ({ target: "#machine.made.stepping.pausing" } as const);
   }
 
   if (desired === "stopped") {

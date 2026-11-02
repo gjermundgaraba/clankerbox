@@ -404,7 +404,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       yield* client.create("copy", request("copy"));
       host.fake.calls.length = 0;
 
-      const error = yield* Effect.flip(machines.fork("dev", "copy"));
+      const error = yield* Effect.flip(
+        machines.fork({ machine: "dev", name: "copy" })
+      );
 
       expect(error).toStrictEqual(
         new Conflict({ message: "machine copy exists", id: "copy" })
@@ -424,7 +426,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           name: "snap",
         });
 
-        const error = yield* Effect.flip(checkpoints.capture("dev", "snap"));
+        const error = yield* Effect.flip(
+          checkpoints.capture({ machine: "dev", name: "snap" })
+        );
 
         expect(error).toStrictEqual(
           new Conflict({ message: "checkpoint snap exists", id: "snap" })
@@ -552,7 +556,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* entered;
 
-        const early = yield* Effect.flip(checkpoints.capture("dev", "snap"));
+        const early = yield* Effect.flip(
+          checkpoints.capture({ machine: "dev", name: "snap" })
+        );
 
         yield* release;
         yield* Fiber.join(create);
@@ -703,16 +709,236 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a capture carries its labels and expiry, which a restore of it doesn't take, and a list takes a filter",
+    () =>
+      Effect.gen(function* () {
+        const { client } = yield* withSource();
+
+        const expiresAt = DateTime.addDuration(
+          yield* DateTime.now,
+          Duration.days(1)
+        );
+
+        const snap = yield* client.captureCheckpoint({
+          machine: "dev",
+          name: "snap",
+          labels: { app: "web" },
+          expiresAt,
+        });
+
+        yield* client.captureCheckpoint({ machine: "dev", name: "plain" });
+
+        const restored = yield* client.restoreMachine({
+          checkpoint: "snap",
+          name: "copy",
+          labels: { from: "snap" },
+        });
+
+        const got = yield* client.getCheckpoint({ id: "snap" });
+
+        expect(snap.labels).toStrictEqual({ app: "web" });
+        expect(
+          [snap, got].map((shown) =>
+            shown.expiresAt === undefined
+              ? undefined
+              : DateTime.toEpochMillis(shown.expiresAt)
+          )
+        ).toStrictEqual([
+          DateTime.toEpochMillis(expiresAt),
+          DateTime.toEpochMillis(expiresAt),
+        ]);
+        expect(restored.labels).toStrictEqual({ from: "snap" });
+        expect(
+          (yield* client.listCheckpoints({ labels: { app: "web" } })).map(
+            ({ id }) => id
+          )
+        ).toStrictEqual(["snap"]);
+        expect(yield* checkpointIds(client)).toStrictEqual(["snap", "plain"]);
+      })
+  );
+
+  it.effect(
+    "a ready checkpoint past its expiry is deleted at a recheck, and one with none stays",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* withSource({ recheck: nearby });
+        const { client, host } = served;
+
+        const soon = DateTime.addDuration(
+          yield* DateTime.now,
+          Duration.millis(300)
+        );
+
+        yield* client.captureCheckpoint({
+          machine: "dev",
+          name: "brief",
+          expiresAt: soon,
+        });
+        yield* client.captureCheckpoint({ machine: "dev", name: "kept" });
+        yield* gone(served, "brief");
+
+        expect(yield* checkpointIds(client)).toStrictEqual(["kept"]);
+        expect(callsTo(host, "deleteCheckpoint")).toStrictEqual([
+          "deleteCheckpoint brief",
+        ]);
+      })
+  );
+
+  it.effect(
+    "a pause with a capture records the checkpoint first, and pauses once the capture has begun, so it holds the machine as it ran",
+    () =>
+      Effect.gen(function* () {
+        const { client, host } = yield* withSource();
+        const { entered, release } = host.fake.holdNext("capture");
+
+        const pausing = yield* Effect.forkChild(
+          client.pauseMachine({
+            id: "dev",
+            capture: { name: "snap", labels: { app: "web" } },
+          })
+        );
+
+        yield* entered;
+
+        const during = yield* eventually(
+          client.getMachine({ id: "dev" }),
+          ({ desired }) => desired === "paused"
+        );
+
+        yield* pause;
+
+        const still = yield* client.getMachine({ id: "dev" });
+
+        yield* release;
+
+        const paused = yield* Fiber.join(pausing);
+        const snap = yield* client.getCheckpoint({ id: "snap" });
+
+        expect([during.phase, during.state]).toStrictEqual([
+          "observing",
+          "running",
+        ]);
+        expect([still.phase, still.state]).toStrictEqual([
+          "observing",
+          "running",
+        ]);
+        expect([paused.state, paused.phase]).toStrictEqual([
+          "paused",
+          "settled",
+        ]);
+        expect(snap).toMatchObject({ phase: "ready", labels: { app: "web" } });
+        expect(host.fake.calls).toStrictEqual(["capture snap", "pause dev"]);
+      })
+  );
+
+  it.effect(
+    "a pause whose capture fails still pauses, after the capture, and answers the capture's error",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* withSource();
+        const { client, host } = served;
+
+        host.fake.failNext("capture", new Internal({ message: "ENOTSUP" }));
+
+        const error = yield* Effect.flip(
+          client.pauseMachine({ id: "dev", capture: { name: "snap" } })
+        );
+
+        const dev = yield* client.getMachine({ id: "dev" });
+        const row = yield* rested(served, "snap");
+
+        expect(error.message).toBe("ENOTSUP");
+        expect([dev.state, dev.phase]).toStrictEqual(["paused", "settled"]);
+        expect(row.state).toBe("failed");
+        expect(callsTo(host, "capture")).toStrictEqual(["capture snap"]);
+        expect(host.fake.calls.indexOf("capture snap")).toBeLessThan(
+          host.fake.calls.indexOf("pause dev")
+        );
+      })
+  );
+
+  it.effect(
+    "a pause with a capture of a taken name is Conflict, and of a stopped machine WrongState, recording no pause",
+    () =>
+      Effect.gen(function* () {
+        const { client, host } = yield* withSource();
+
+        yield* client.captureCheckpoint({ machine: "dev", name: "snap" });
+        host.fake.calls.length = 0;
+
+        const taken = yield* Effect.flip(
+          client.pauseMachine({ id: "dev", capture: { name: "snap" } })
+        );
+
+        yield* client.stopMachine({ id: "dev" });
+
+        const stopped = yield* Effect.flip(
+          client.pauseMachine({ id: "dev", capture: { name: "late" } })
+        );
+
+        const dev = yield* client.getMachine({ id: "dev" });
+
+        expect(taken._tag).toBe("Conflict");
+        expect(stopped).toMatchObject({ _tag: "WrongState", state: "stopped" });
+        expect(dev.desired).toBe("stopped");
+        expect(host.fake.calls).toStrictEqual(["stop dev"]);
+        expect(yield* checkpointIds(client)).toStrictEqual(["snap"]);
+      })
+  );
+
+  it.effect(
+    "a pause with a capture pauses after the capture across a restart of the control plane between them",
+    () =>
+      Effect.gen(function* () {
+        const planned = yield* plane();
+        const first = yield* planned.start();
+        const host = firstHost(planned);
+        const client = yield* clientOf(first.url);
+        const asking = yield* clientOf(first.url, { noWait: true });
+
+        yield* client.create("dev", request("dev"));
+        host.fake.calls.length = 0;
+
+        const { entered, release } = host.fake.holdNext("capture");
+
+        yield* asking.pauseMachine({ id: "dev", capture: { name: "snap" } });
+        yield* entered;
+        yield* first.crash;
+        yield* release;
+
+        const second = yield* planned.start();
+
+        yield* Effect.addFinalizer(() => second.crash);
+
+        const again = yield* clientOf(second.url);
+
+        const paused = yield* eventually(
+          again.getMachine({ id: "dev" }),
+          ({ state, phase }) => state === "paused" && phase === "settled"
+        );
+
+        const snap = yield* again.getCheckpoint({ id: "snap" });
+
+        expect(paused.desired).toBe("paused");
+        expect(snap.phase).toBe("ready");
+        expect(host.fake.calls).toStrictEqual(["capture snap", "pause dev"]);
+      })
+  );
+
+  it.effect(
     "a capture under way is no checkpoint yet: a restore of it is NotFound and no list shows it",
     () =>
       Effect.gen(function* () {
         const { client, host, machines, checkpoints } = yield* withSource();
         const { release, entered } = host.fake.holdNext("capture");
 
-        yield* checkpoints.capture("dev", "snap");
+        yield* checkpoints.capture({ machine: "dev", name: "snap" });
         yield* entered;
 
-        const restoring = yield* Effect.flip(machines.restore("snap", "copy"));
+        const restoring = yield* Effect.flip(
+          machines.restore({ checkpoint: "snap", name: "copy" })
+        );
+
         const listed = yield* checkpointIds(client);
         const got = yield* client.getCheckpoint({ id: "snap" });
 
@@ -733,7 +959,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { client, host, checkpoints } = served;
         const { release, entered } = host.fake.holdNext("capture");
 
-        yield* checkpoints.capture("dev", "snap");
+        yield* checkpoints.capture({ machine: "dev", name: "snap" });
         yield* entered;
         yield* pause;
 
@@ -766,7 +992,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { client, host, checkpoints } = served;
         const { release, entered } = host.fake.holdNext("capture");
 
-        yield* checkpoints.capture("dev", "snap");
+        yield* checkpoints.capture({ machine: "dev", name: "snap" });
         yield* entered;
         yield* checkpoints.delete("snap");
         host.fake.machines.clear();
@@ -790,7 +1016,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* client.create("dev", request("dev"));
 
-        const source = yield* first.checkpoints.capture("dev", "snap");
+        const source = yield* first.checkpoints.capture({
+          machine: "dev",
+          name: "snap",
+        });
 
         yield* rested(first, "snap");
         yield* first.crash;
@@ -947,7 +1176,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* entered;
 
         const early = yield* Effect.flip(
-          checkpoints.capture("restored", "snap")
+          checkpoints.capture({ machine: "restored", name: "snap" })
         );
 
         yield* release;
@@ -955,7 +1184,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const restored = yield* Fiber.join(restoring);
 
         const late = yield* Effect.flip(
-          checkpoints.capture("restored", "snap")
+          checkpoints.capture({ machine: "restored", name: "snap" })
         );
 
         expect([restored.id, early._tag, late._tag]).toStrictEqual([
@@ -1133,7 +1362,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { host, checkpoints } = served;
         const { entered } = host.fake.holdNext("capture");
 
-        yield* checkpoints.capture("dev", "snap");
+        yield* checkpoints.capture({ machine: "dev", name: "snap" });
         yield* entered;
         yield* restarted(host);
 
@@ -1159,7 +1388,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { port } = new URL(host.url);
 
         yield* host.dispose;
-        yield* checkpoints.capture("dev", "snap");
+        yield* checkpoints.capture({ machine: "dev", name: "snap" });
         yield* pause;
 
         const again = yield* startHost(host.dir, {
@@ -1187,7 +1416,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const { release, entered } = host.fake.holdNext("capture");
 
-        yield* first.checkpoints.capture("dev", "snap");
+        yield* first.checkpoints.capture({ machine: "dev", name: "snap" });
         yield* entered;
         yield* first.crash;
         yield* release;
@@ -1391,7 +1620,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           client.captureCheckpoint({ machine: "dev", name: "snap" })
         );
 
-        const clearing = yield* Effect.flip(checkpoints.capture("dev", "snap"));
+        const clearing = yield* Effect.flip(
+          checkpoints.capture({ machine: "dev", name: "snap" })
+        );
 
         yield* rested(served, "snap");
 

@@ -6,22 +6,31 @@ import {
   Conflict,
   Internal,
   Invalid,
+  Missing,
   NotFound,
   NotMade,
   NotOffered,
   Unavailable,
   Unsizable,
+  WrongState,
 } from "./errors.ts";
 import { Name } from "./ids.ts";
 import {
   Build,
   CapacityReport,
+  CaptureRequest,
   Checkpoint,
   CreateRequest,
+  Executed,
+  ExecRequest,
+  ForkRequest,
   Host,
+  ListFilter,
   Machine,
+  PauseRequest,
   PrebuildRequest,
   ResizeRequest,
+  RestoreRequest,
   Sizing,
 } from "./resources.ts";
 
@@ -32,8 +41,6 @@ export const readTimeout = Duration.seconds(10);
 export const replyTimeout = Duration.seconds(15);
 
 const ById = Schema.Struct({ id: Name });
-
-const FromMachine = Schema.Struct({ machine: Name, name: Name });
 
 const read = { caller: Action.Anyone, readOnly: true } as const;
 
@@ -60,7 +67,8 @@ export const Http = ActionHttp.make(
     Action.make("listMachines", {
       ...read,
       error: listing,
-      description: "List every machine.",
+      description: "List every machine, or those carrying every label given.",
+      input: ListFilter,
       success: Schema.Array(Machine),
     }),
     Action.make("getMachine", {
@@ -96,10 +104,18 @@ export const Http = ActionHttp.make(
     }),
     Action.make("pauseMachine", {
       ...write,
-      error: reading,
+      error: [
+        Invalid,
+        NotFound,
+        NotMade,
+        Conflict,
+        WrongState,
+        Unavailable,
+        Internal,
+      ] as const,
       description:
-        "Ask for a machine to stay paused: the runtime saves its RAM, processes and disks and stops its VM, and a start resumes it. A machine that is stopped stays stopped, and one whose VM the runtime can't save, booted under another smolvm build or by an older mac host, is stopped instead.",
-      input: ById,
+        "Ask for a machine to stay paused: the runtime saves its RAM, processes and disks and stops its VM, and a start resumes it. A machine that is stopped stays stopped, and one whose VM the runtime can't save, booted under another smolvm build or by an older mac host, is stopped instead. With `capture`, a checkpoint of that name is captured first, as captureCheckpoint would, and the pause begins once the capture has ended, however it ended; a capture of a machine that isn't running is refused before anything is recorded.",
+      input: PauseRequest,
       success: Machine,
     }),
     Action.make("resizeMachine", {
@@ -122,7 +138,7 @@ export const Http = ActionHttp.make(
       error: making,
       description:
         "Copy a machine to a new name, with its sizes or the ones given. A linux machine is copied only when its VM booted under the smolvm build its host runs, and its copy holds the source's RAM, so its vCPUs and RAM only grow, live once it runs; a mac copy takes any. A disk only grows. A copy that fails deletes the new VM and keeps its row, failed, to say why.",
-      input: Schema.Struct({ ...FromMachine.fields, ...Sizing.fields }),
+      input: Schema.Struct({ ...ForkRequest.fields, ...Sizing.fields }),
       success: Machine,
     }),
     Action.make("restoreMachine", {
@@ -130,13 +146,31 @@ export const Http = ActionHttp.make(
       error: making,
       description:
         "Create a machine from a checkpoint, with its sizes or the ones given. A linux checkpoint holds RAM, so a restore's vCPUs and RAM only grow, live once it runs; a mac restore takes any. A disk only grows. A restore that fails deletes the new VM and keeps its row, failed, to say why.",
-      input: Schema.Struct({ checkpoint: Name, name: Name, ...Sizing.fields }),
+      input: Schema.Struct({ ...RestoreRequest.fields, ...Sizing.fields }),
       success: Machine,
+    }),
+    Action.make("execMachine", {
+      ...write,
+      error: [
+        Invalid,
+        NotFound,
+        NotMade,
+        Missing,
+        WrongState,
+        Unavailable,
+        Internal,
+      ] as const,
+      description:
+        "Run a command in a running machine, as the user it names or root, with the environment given, and answer its exit code and output once it exits, whatever the code. It waits for a step under way on the machine before it begins, and a stop, pause or delete ends it. It runs as long as the request does: ending the request ends the command, and so does its timeout, which answers exit code 124. Nothing of it is stored or logged.",
+      input: ExecRequest,
+      success: Executed,
     }),
     Action.make("listCheckpoints", {
       ...read,
       error: listing,
-      description: "List every ready checkpoint.",
+      description:
+        "List every ready checkpoint, or those carrying every label given.",
+      input: ListFilter,
       success: Schema.Array(Checkpoint),
     }),
     Action.make("getCheckpoint", {
@@ -150,8 +184,8 @@ export const Http = ActionHttp.make(
       ...write,
       error: [Invalid, NotFound, Conflict, NotMade, Internal] as const,
       description:
-        "Capture a checkpoint of a machine. Its kind follows the machine's: ram on linux, which captures only a running machine whose VM booted under the smolvm build its host runs, and disk on mac, which captures only a stopped one.",
-      input: FromMachine,
+        "Capture a checkpoint of a machine. Its kind follows the machine's: ram on linux, which captures only a running machine whose VM booted under the smolvm build its host runs, and disk on mac, which captures only a stopped one. One given `expiresAt` is deleted once that time has passed.",
+      input: CaptureRequest,
       success: Checkpoint,
     }),
     Action.make("deleteCheckpoint", {
