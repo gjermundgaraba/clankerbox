@@ -1,6 +1,6 @@
 {
   "name": "@gjermundgaraba/clankerbox-rivet-sandbox-agent",
-  "version": "0.32.0",
+  "version": "0.33.0",
   "description": "clankerbox machines as sandboxes for Rivet's Sandbox Agent",
   "license": "MIT",
   "repository": {
@@ -47,7 +47,7 @@
   },
   "peerDependencies": {
     "@effect/platform-node": "~4.1.1",
-    "@gjermundgaraba/effect-actions": "^0.26.0",
+    "@gjermundgaraba/effect-actions": "^0.27.0",
     "effect": "~4.1.1",
     "sandbox-agent": "~0.5.4"
   }
