@@ -77,26 +77,26 @@ export interface Settings {
   readonly arch: string;
 }
 
-// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/agent/live_resize.rs#L325
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/agent/live_resize.rs#L325
 const ramStepMib = 128;
 
-// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/data/resources.rs#L180
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/data/resources.rs#L180
 const minimumRamMib = 64;
 
-// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/data/storage.rs#L14
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/data/storage.rs#L14
 const defaultStorageGib = 20;
 
-// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/cli/machine.rs#L4468
-// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/cli/machine.rs#L6635
-// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/cli/machine.rs#L6708
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/cli/machine.rs#L4478
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/cli/machine.rs#L6666
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/cli/machine.rs#L6739
 const maximumCpu = 255;
 
-// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/cli/machine.rs#L4473
-// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/cli/machine.rs#L6639
-// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/cli/machine.rs#L6712
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/cli/machine.rs#L4483
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/cli/machine.rs#L6670
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/cli/machine.rs#L6743
 const maximumRamMib = 2 ** 32 - 1;
 
-// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/db/resize.rs#L179
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/db/resize.rs#L179
 const unfinishedRefusal = "an unfinished resize belongs to a different target";
 
 export const pathsIn = (stateDir: string) => ({
@@ -113,9 +113,9 @@ export const nativeName = (
 
 const observeConcurrency = 8;
 
-// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/agent/manager.rs#L118
-// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/process.rs#L3553
-// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/agent/state_probe.rs#L41
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/agent/manager.rs#L118
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/process.rs#L3730
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/agent/state_probe.rs#L41
 const exitWait = Duration.seconds(30);
 
 const exitPause = Duration.millis(500);
@@ -157,7 +157,7 @@ export const observeEach = (
     ).pipe(Effect.map((entries): Observed => new Map(entries)))
   );
 
-// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/systemd_scope.rs#L151
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/systemd_scope.rs#L151
 const scopeName = (native: string): string => `smolvm-vm-${native}.scope`;
 
 export const templates = [
@@ -165,9 +165,9 @@ export const templates = [
   "overlay-template.ext4",
 ] as const;
 
-// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/agent/manager.rs#L381
-// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/agent/fork.rs#L322
-// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/agent/launcher_dynamic.rs#L1256
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/agent/manager.rs#L381
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/agent/fork.rs#L322
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/agent/launcher_dynamic.rs#L1256
 const socketPathMax = 107;
 
 export const controlSocket = (dataDir: string): string =>
@@ -176,9 +176,9 @@ export const controlSocket = (dataDir: string): string =>
 const searchPath =
   "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
-// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/process.rs#L1402
-// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/process.rs#L417
-// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/usage.rs#L171
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/process.rs#L1446
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/process.rs#L416
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/usage.rs#L171
 // https://github.com/tokio-rs/tracing/blob/tracing-subscriber-0.3.23/tracing-subscriber/src/fmt/fmt_layer.rs#L743
 export const environment = (settings: Settings) => ({
   PATH: searchPath,
@@ -200,7 +200,7 @@ export const environment = (settings: Settings) => ({
   NO_COLOR: "1",
 });
 
-// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/config.rs#L39
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/config.rs#L39
 const RecordState = Schema.Literals([
   "created",
   "running",
@@ -218,7 +218,7 @@ const decodeStatus = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Struct({ state: RecordState }))
 );
 
-// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/cli/vm_common.rs#L3515
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/cli/vm_common.rs#L3522
 const decodeSizes = Schema.decodeUnknownEffect(
   Schema.fromJsonString(
     Schema.Struct({
@@ -236,7 +236,7 @@ const alive: ReadonlySet<RecordState> = new Set([
   "frozen",
 ]);
 
-// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/embedded/runtime.rs#L374
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/embedded/runtime.rs#L374
 const resumable: ReadonlySet<RecordState> = new Set(["pausing", "paused"]);
 
 export const stateOf = (state: RecordState): MachineState => {
@@ -537,7 +537,7 @@ export const make = (
       );
     };
 
-    // https://github.com/smol-machines/smolvm/blob/v1.32.1/src/agent/live_resize.rs#L348
+    // https://github.com/smol-machines/smolvm/blob/v1.33.0/src/agent/live_resize.rs#L348
     const sizable = (
       machine: Pick<MachineRef, "name">,
       from: Sizes,
@@ -696,7 +696,7 @@ export const make = (
       deleteCheckpoint: Effect.fn("Smolvm.deleteCheckpoint")((checkpoint) => {
         const objects = path.join(paths.store, "objects");
 
-        // https://github.com/smol-machines/smolvm/blob/v1.32.1/crates/smolvm-checkpoint/src/store.rs#L1529
+        // https://github.com/smol-machines/smolvm/blob/v1.33.0/crates/smolvm-checkpoint/src/store.rs#L1666
         return Effect.gen(function* () {
           yield* removeAll(checkpointDir(checkpoint));
 
@@ -757,7 +757,7 @@ export const make = (
             return;
           }
 
-          // https://github.com/smol-machines/smolvm/blob/v1.32.1/src/cli/vm_common.rs#L1693
+          // https://github.com/smol-machines/smolvm/blob/v1.33.0/src/cli/vm_common.rs#L1696
           if (recorded === "frozen") {
             return yield* new WrongState({
               message: `smolvm reads machine ${machine.name} ${recorded}, and doesn't start it from there`,

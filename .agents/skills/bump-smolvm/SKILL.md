@@ -30,10 +30,10 @@ separately, and don't deploy, change production hosts, or commit unless asked.
   Fetch missing tags; read with `git show <tag>:<path>` and
   `git diff <old>..<new>`. Never edit, reset or switch it.
 - **Notation:** a citation is a path in smolvm's source at the tested release,
-  1.32.1, and the identifier beside it (a function, constant, environment
+  1.33.0, and the identifier beside it (a function, constant, environment
   variable or message) finds the code: `git grep -n <identifier> <tag> --
   <path>`. Code comments cite a permalink at the tested release, as
-  `// https://github.com/smol-machines/smolvm/blob/v1.32.1/<path>#L<line>`:
+  `// https://github.com/smol-machines/smolvm/blob/v1.33.0/<path>#L<line>`:
   `git grep -n 'github.com/smol-machines/smolvm/blob/'`.
 - Read the release notes and the full changed-file list between the tags first,
   then each claim's file. A changelog or a clean build is not evidence.
@@ -58,7 +58,9 @@ as it is.
   `NO_COLOR=1`; never `SMOLVM_BOOT_BINARY` or `SMOLVM_MACHINE_NAME` (the
   default of every `--name`, `ENV_SMOLVM_MACHINE_NAME`, src/data/consts.rs).
   The claims below give each variable's reason; re-check the set as a whole,
-  and any variable the target adds.
+  and any variable the target adds. `SMOLVM_CHECKPOINT_STORE_RETENTION`,
+  `_MAX_BYTES`, `_MAX_AGE_SECS` and `_GRACE_SECS` are read only by `serve`'s
+  retention (`start_background`, src/checkpoint_retention.rs), so none is set.
 
 **Install and prefix**
 
@@ -112,8 +114,11 @@ as it is.
   qcow2 backed on the template (`open_or_overlay_at`, src/storage.rs). Above
   it, a seeded image machine gets a qcow2 over its seed, grown
   (`attach_seed_disk`, src/image_seed.rs); otherwise a sparse copy and a
-  guest-side resize at boot. Workload writes land on the storage disk
-  (`/dev/vda`). Ours: `diskGib` is `--storage`, the overlay keeps its default,
+  guest-side resize at boot. A disk grown while its machine was stopped is
+  grown mounted at the next boot, and a disk that holds an ext4 filesystem is
+  never formatted, whatever makes it unmountable (`Ext4Growth`,
+  `grow_mounted_ext4`, `format_blank_ext4`, crates/smolvm-agent/src/main.rs).
+  Workload writes land on the storage disk (`/dev/vda`). Ours: `diskGib` is `--storage`, the overlay keeps its default,
   `searchPath` keeps the sbin directories for smolvm's host tools.
 - The host-side image seed is built for every `--storage` but 0 on a fresh
   image machine (`seedable_image`, src/image_seed.rs): 20 or more, or none,
@@ -265,7 +270,8 @@ as it is.
   `last_exit` is written only where smolvm is the VMM's parent and reaps it,
   `serve` or an embedder, never after a CLI start (src/vm_exit.rs;
   `register_vm_child`, src/process.rs).
-  It reports a port count (`ports`), and `branchable: false` even after `start
+  It reports a port count (`ports`), the booted agent rootfs's
+  `agent_rootfs_digest`, and `branchable: false` even after `start
   --branchable`. For a machine whose state resolves `running` and that
   publishes a port, it also runs `cat /proc/net/tcp /proc/net/tcp6` in the VM
   for `published_ports` (`status_vm_json`, src/cli/vm_common.rs;
@@ -423,12 +429,16 @@ as it is.
   host before any created machine, and a fresh restore or fork before
   anything.
 - The guest's `/dev/shm` is half its RAM (`shm_size`,
-  crates/smolvm-agent/src/oci.rs), inside `--mem`. The workload's `/tmp` is a
-  directory on the storage disk, not a tmpfs (`back_tmp_with`,
-  `WORKLOAD_TMP_DIR`, crates/smolvm-agent/src/oci.rs; `ensure_workload_tmp`,
-  crates/smolvm-agent/src/storage.rs), emptied at each boot but a fork
-  clone's (`reset_workload_tmp`). Ours: the RAM budget counts `--mem` alone,
-  and `/tmp` counts against `diskGib`.
+  crates/smolvm-agent/src/oci.rs), inside `--mem`. The workload's `/tmp` is
+  part of its root filesystem, an opaque directory in the overlay's upper
+  layer under `/storage`, on the storage disk, not a tmpfs (`tmp_on_root`,
+  crates/smolvm-agent/src/oci.rs). Each boot but a fork clone's moves the
+  previous one into the overlay's `.tmp-trash` in one rename and deletes it
+  in the background (`reset_workload_tmp`, `TMP_TRASH_DIR`,
+  crates/smolvm-agent/src/storage.rs). A boot that can't make the fresh one
+  opaque keeps a tmpfs `/tmp`, inside `--mem` (`TMP_KEEP_TMPFS_MARKER`).
+  Ours: the RAM budget counts `--mem` alone, and `/tmp` counts against
+  `diskGib`.
 - Every boot adds two live virtio-fs devices, rooted in empty directories in
   the VM's data dir (`ATTACH_TAG_RW`, `ATTACH_TAG_RO`,
   crates/smolvm-protocol/src/lib.rs; `launch_agent_vm`,
@@ -512,14 +522,26 @@ as it is.
 - smolvm records and enforces CPU, memory, disk sizes, platform, CPU contract,
   guest CPU features, clock, state origin and network
   (`validate_compatibility`, src/portable_checkpoint.rs), but not the engine
-  build or the agent, and its ABI string (`RUNTIME_ABI`) has stayed the same
-  across libkrun changes to restored device state, a vCPU's KVM nested state
-  among them. Only a branch compares its source VMM's binary with the
-  engine's (`source_runs_another_engine`, src/agent/fork.rs). Ours: `pin`, so
-  a RAM state is restored only under the release that saved it, and a machine
-  is captured or forked only when its VM booted under the host's (`pinnedOn`,
-  `apps/host/src/refs.ts`). If smolvm starts enforcing
-  engine and agent identity itself, the pin could go.
+  build, and its ABI string (`RUNTIME_ABI`) has stayed the same across libkrun
+  changes to restored device state, a vCPU's KVM nested state among them.
+  Only a branch compares its source VMM's binary with the engine's
+  (`source_runs_another_engine`, src/agent/fork.rs). The agent rootfs it does
+  follow: each boot records the content digest of the rootfs it booted
+  (`agent_rootfs_digest` in `VmRecord`, src/config.rs;
+  `cached_agent_rootfs_digest`, crates/smolvm-pack/src/assets.rs), a
+  checkpoint or pause carries it with a copy of the tree, and a restore or
+  resume boots the rootfs with that digest: the installed one when it
+  matches, else a copy the restore installs from the checkpoint into
+  `<data root>/.cache/smolvm/agent-rootfs-store/` (`pin_restore_rootfs`,
+  src/portable_checkpoint.rs; `resolve`, src/agent/rootfs_store.rs), which
+  nothing outside tests prunes. A checkpoint without a digest is unpacked
+  there to learn one (`install_tar`). A resume, which keeps its identity, runs
+  `/bin/true` in the guest before it returns (`probe_restored_guest`,
+  src/agent/fork.rs). Ours: `pin`, so a RAM state is restored only under the
+  release that saved it, and a machine is captured or forked only when its VM
+  booted under the host's (`pinnedOn`, `apps/host/src/refs.ts`); under it a
+  restore's digest is the installed rootfs's, so the store stays empty. If
+  smolvm starts enforcing the engine build itself, the pin could go.
 - Store mode: `--store` with `--history 0` (the default keeps 32 generations, so
   deleting older checkpoints frees nothing until the newest goes), then
   `checkpoint-prune`; the store's `objects/` layout (`prune`,
@@ -554,16 +576,20 @@ as it is.
 
 **Why things are avoided** (re-check whether the reason still holds)
 
-- `machine branch`: branch children pin their source. `stop` refuses a source
-  whose children don't let it continue, and `delete` and a disk resize refuse
-  one with any child (`has_frozen_fork_state`, src/agent/state_probe.rs; "is
-  the fork base for" in `stop_vm_named`, `ensure_fork_base_delete_is_safe`,
-  `expand_disks`, src/cli/vm_common.rs). Ours: fork is a checkpoint plus a
-  restore.
+- `machine branch`: branch children pin their source. `stop` refuses a frozen
+  source while any child's VMM runs, a stopped source never starts again while
+  it has a child, and `delete` and a disk resize refuse one with any child
+  (`has_frozen_fork_state`, src/agent/state_probe.rs; "is the fork base for"
+  in `stop_vm_named`, `stop_blocking_dependent_clones`, src/agent/fork.rs;
+  `ensure_fork_base_delete_is_safe`, `expand_disks`, src/cli/vm_common.rs).
+  Ours: fork is a checkpoint plus a restore.
 - Bare VMs: copied-up files gave `Stale file handle` after a cold boot, from
   the root overlay's `index=Y` over a virtiofs lower; the root overlay is now
   `index=off` (`setup_persistent_rootfs`, crates/smolvm-agent/src/main.rs),
-  untried. Ours: machines always run an image.
+  and libkrun numbers each virtio-fs session's nodeids from a random base, so
+  an earlier boot's origin handle goes stale rather than naming another file
+  (libkrun's src/devices/src/virtio/fs/inode_alloc.rs), untried. Ours:
+  machines always run an image.
 - Packs: an image export's guest `tar` drops every xattr,
   `security.capability` included (no `--xattrs`, crates/smolvm-agent/src/main.rs).
   Ours: no `disk` checkpoints on smolvm.

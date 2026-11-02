@@ -4,7 +4,7 @@ import { describe, expect } from "vite-plus/test";
 
 import { HostId, Name } from "../src/index.ts";
 
-// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/data/mod.rs#L58
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/data/mod.rs#L58
 const smolvmAccepts = (name: string): boolean =>
   name.length <= 128 &&
   /^[A-Za-z0-9][A-Za-z0-9_-]*$/u.test(name) &&

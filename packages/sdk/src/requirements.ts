@@ -19,7 +19,7 @@ const bases = {
  * claims about its guests were checked on. The `bump-smolvm` and `bump-tart` skills own them.
  */
 export const requirements = {
-  smolvm: { testedVersion: "1.32.1" },
+  smolvm: { testedVersion: "1.33.0" },
   tart: { minimumVersion: "2.41.1" },
   softnet: { checkedVersion: "0.24.1" },
   node: { engines: ">=26.12.0" },
