@@ -206,9 +206,13 @@ const hostKeyMarker = "clankerbox-host-key: ";
 
 const tailnetDir = "$root/var/lib/clankerbox/tailscale";
 
-const dropNode = [
+const nodeProcess = [
   `pid=$(cat "${tailnetDir}/tailscaled.pid" 2>/dev/null || true)`,
   `comm=$(cat "$root/proc/$pid/comm" 2>/dev/null || ps -p "$pid" -o comm= 2>/dev/null || true)`,
+];
+
+const dropNode = [
+  ...nodeProcess,
   `case "$comm" in *tailscaled) kill -9 "$pid" 2>/dev/null || true ;; esac`,
   `rm -rf "${tailnetDir}"`,
 ];
@@ -239,7 +243,12 @@ export const tailnetScript = [
   `  cat >"$key"`,
   `  up --auth-key="file:$key"`,
   "else",
-  `  if ! ts status --json >/dev/null 2>&1; then`,
+  ...nodeProcess.map((line) => `  ${line}`),
+  // The CLI retries a refused socket for 2 seconds, and up to 5 while any tailscaled runs:
+  // https://github.com/tailscale/tailscale/blob/v1.104.4/safesocket/safesocket.go#L43
+  "  answering=",
+  `  case "$comm" in *tailscaled) if ts status --json >/dev/null 2>&1; then answering=1; fi ;; esac`,
+  `  if [ -z "$answering" ]; then`,
   "    if command -v setsid >/dev/null 2>&1; then detach=setsid; else detach=nohup; fi",
   `    TS_PERMIT_CERT_UID="$user" "$detach" tailscaled --statedir="$dir/state" --socket="$dir/tailscaled.sock" --port=0 </dev/null >"$dir/tailscaled.log" 2>&1 &`,
   `    echo "$!" >"$dir/tailscaled.pid"`,

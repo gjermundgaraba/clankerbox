@@ -79,6 +79,12 @@ const calls = (root: string) =>
     (text) => text.split("\n").filter((line) => line !== "")
   );
 
+const pidsWhenRefused = (root: string) =>
+  Effect.map(
+    Effect.orElseSucceed(read(root, "refused"), () => ""),
+    (text) => text.split("\n").filter((line) => line !== "")
+  );
+
 const hook = (root: string, name: string, body: string) =>
   Effect.gen(function* () {
     const file = path.join(root, "etc", "clankerbox", name);
@@ -734,6 +740,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         ]);
         expect(yield* isMissing(path.join(dir, "tailscaled.pid"))).toBe(false);
         expect(yield* read(dir, "tailscaled.log")).toBe("");
+        expect(yield* pidsWhenRefused(where.root)).not.toContain("none");
       })
   );
 
@@ -812,6 +819,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* Effect.sync(() => {
           writeTailscaleStubs(where.bin);
         });
+        yield* daemon(where.root, "tailscaled");
         yield* write(path.join(where.root, "daemon"), "");
         yield* write(
           path.join(where.root, "status.json"),
@@ -841,6 +849,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* Effect.sync(() => {
           writeTailscaleStubs(where.bin);
         });
+        yield* daemon(where.root, "tailscaled");
         yield* write(path.join(where.root, "daemon"), "");
         yield* write(
           path.join(where.root, "status.json"),
@@ -855,6 +864,45 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           expect.stringMatching(/ set --accept-dns --netfilter-mode=off$/u),
         ]);
       })
+  );
+
+  it.effect(
+    "a stale tailscaled.pid naming another process starts tailscaled without asking the old socket",
+    () =>
+      Effect.gen(function* () {
+        const where = yield* guest();
+        const other = yield* daemon(where.root, "sleep");
+        const stale = (yield* read(other.dir, "tailscaled.pid")).trim();
+
+        yield* Effect.sync(() => {
+          writeTailscaleStubs(where.bin);
+        });
+
+        const { code, output } = yield* tailnet(where, ["linux-dev", "user"]);
+
+        expect(code, output).toBe(0);
+        expect(tailnetIn(output)).toMatchObject({ backend: "NeedsLogin" });
+        expect((yield* calls(where.root))[0]).toMatch(/^tailscaled /u);
+        expect(yield* pidsWhenRefused(where.root)).not.toContain(stale);
+        expect(yield* other.alive).toBe(true);
+      })
+  );
+
+  it.effect("a tailscaled that doesn't answer gets a fresh one beside it", () =>
+    Effect.gen(function* () {
+      const where = yield* guest();
+
+      yield* daemon(where.root, "tailscaled");
+      yield* Effect.sync(() => {
+        writeTailscaleStubs(where.bin);
+      });
+
+      const { code, output } = yield* tailnet(where, ["linux-dev", "user"]);
+
+      expect(code, output).toBe(0);
+      expect(tailnetIn(output)).toMatchObject({ backend: "NeedsLogin" });
+      expect((yield* calls(where.root))[0]).toMatch(/^tailscaled /u);
+    })
   );
 
   it.effect(
