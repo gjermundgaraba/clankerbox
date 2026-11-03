@@ -21,6 +21,7 @@ import {
   checkpointFacts,
   failure as error,
   flight,
+  freshBoot,
   when as at,
 } from "./chart-rows.ts";
 
@@ -66,7 +67,11 @@ const after = (row: CheckpointRow, event: CheckpointEvent): CheckpointRow => {
 
 const removal: CheckpointEvent = { type: "delete" };
 
-const read: CheckpointEvent = { type: "read", boot: "fresh", id: "new" };
+const read: CheckpointEvent = {
+  type: "read",
+  boot: freshBoot("fresh"),
+  id: "new",
+};
 
 const done: CheckpointEvent = { type: "reported", status: "done", at };
 

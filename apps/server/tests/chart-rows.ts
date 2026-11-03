@@ -1,9 +1,11 @@
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { DateTime } from "effect";
+import { Brand, DateTime } from "effect";
 
+import type { FreshBoot } from "../src/hosts.ts";
 import type { CheckpointFacts, Facts, Operation } from "../src/store.ts";
 
-/** The failure a report or a read carries. */
+export const freshBoot = Brand.nominal<FreshBoot>();
+
 export const failure = new Internal({ message: "krun busy" });
 
 /** When a report's step ended. */

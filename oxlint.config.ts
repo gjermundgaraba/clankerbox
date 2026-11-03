@@ -89,9 +89,9 @@ export default config({
           "error",
           {
             allow: ["^xstate$", "^\\./chart\\.ts$", "^\\./[a-z-]+-chart\\.ts$"],
-            allowTypes: ["^\\./store\\.ts$"],
+            allowTypes: ["^\\./store\\.ts$", "^\\./hosts\\.ts$"],
             because:
-              "a chart is a pure function run inside the SQLite write: it imports xstate, other charts and the store's types, and what else it needs rides on the event",
+              "a chart is a pure function run inside the SQLite write: it imports xstate, other charts and the store's and hosts' types, and what else it needs rides on the event",
           },
         ],
         "fence/no-impure": "error",

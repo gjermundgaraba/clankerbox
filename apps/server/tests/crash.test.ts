@@ -5,6 +5,7 @@ import { expect } from "vite-plus/test";
 
 import { applied } from "../src/chart.ts";
 import { checkpointChart } from "../src/checkpoint-chart.ts";
+import { freshBoot } from "./chart-rows.ts";
 import {
   applying,
   at,
@@ -59,7 +60,7 @@ const unsent = (
   applying(store, name, {
     type: "read",
     seen,
-    boot,
+    boot: freshBoot(boot),
     pin: undefined,
     id: `unsent-${name}`,
     joins: false,
@@ -478,7 +479,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         for (const event of [
           { type: "delete" },
-          { type: "read", boot: host!.operations.boot, id: "unsent-snap" },
+          {
+            type: "read",
+            boot: freshBoot(host!.operations.boot),
+            id: "unsent-snap",
+          },
         ] as const) {
           yield* first.store.advance("checkpoint", "snap", (row, op) =>
             applied(checkpointChart, row, event, op)

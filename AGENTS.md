@@ -243,7 +243,8 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
 - **A lint fence** (`tools/lint-fence`, each rule with its tests; settings in
   `oxlint.config.ts`): a server or host domain file imports only its siblings,
   `effect`, `effect/encoding`, the SDK and the host contract; `chart.ts` and
-  `*-chart.ts` import only `xstate`, each other and the store's types, and
+  `*-chart.ts` import only `xstate`, each other and the store's and `hosts.ts`'s
+  types, and
   `fence/no-impure` keeps `Date`, `Math.random` and `crypto` out of
   them; `apps/server/src/hosts.ts` alone calls a host; the server's `composition/` and `main.ts` never load the
   host package; the server's only adapter is the `Store`, and a host's adapters

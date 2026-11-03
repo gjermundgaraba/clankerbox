@@ -19,7 +19,7 @@ import {
   SpawnFailed,
   withClient,
 } from "./command.ts";
-import { domain } from "./ssh-config.ts";
+import { machineDomain } from "./ssh-config.ts";
 
 export class Dial extends Context.Service<
   Dial,
@@ -27,8 +27,8 @@ export class Dial extends Context.Service<
 >()("@gjermundgaraba/clankerbox/Dial") {}
 
 const machineOf = (destination: string): string =>
-  destination.endsWith(domain)
-    ? destination.slice(0, -domain.length)
+  destination.endsWith(machineDomain)
+    ? destination.slice(0, -machineDomain.length)
     : destination;
 
 const destination = (

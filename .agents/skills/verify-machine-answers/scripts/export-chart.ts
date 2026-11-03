@@ -24,6 +24,7 @@ import {
   facts,
   failure,
   flight,
+  freshBoot,
   when,
 } from "../../../../apps/server/tests/chart-rows.ts";
 
@@ -65,7 +66,7 @@ const events: ReadonlyArray<readonly [string, MachineEvent]> = [
         {
           type: "read",
           seen,
-          boot: "",
+          boot: freshBoot(""),
           pin: undefined,
           id: "",
           joins: false,

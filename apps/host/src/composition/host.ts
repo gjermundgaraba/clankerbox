@@ -32,7 +32,7 @@ export interface HostLayerConfig extends HostSettings {
   readonly tailnet?: Tailscale.TailnetSettings | undefined;
 }
 
-const cleared = Layer.effectDiscard(
+const startedUp = Layer.effectDiscard(
   Effect.flatMap(Runtime, ({ startup }) => startup)
 );
 
@@ -58,7 +58,7 @@ export const hostLayer = <E, R>(
       )
     ),
     Layer.provideMerge(Operations.layer(config)),
-    Layer.provide(Layer.merge(BindProbe.layer, cleared)),
+    Layer.provide(Layer.merge(BindProbe.layer, startedUp)),
     Layer.provideMerge(runtime),
     Layer.provide(
       config.tailnet === undefined

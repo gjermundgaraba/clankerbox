@@ -31,7 +31,13 @@ import type {
   Wish,
 } from "../src/machine-chart.ts";
 import type { Facts, MachinePhase, Operation } from "../src/store.ts";
-import { facts, failure as error, flight, when as at } from "./chart-rows.ts";
+import {
+  facts,
+  failure as error,
+  flight,
+  freshBoot,
+  when as at,
+} from "./chart-rows.ts";
 
 const wishes: readonly Wish[] = ["running", "stopped", "paused"];
 
@@ -93,7 +99,7 @@ const read = (
 ): Extract<MachineEvent, { type: "read" }> => ({
   type: "read",
   seen,
-  boot: "fresh",
+  boot: freshBoot("fresh"),
   pin: "new pin",
   id: "new",
   joins,

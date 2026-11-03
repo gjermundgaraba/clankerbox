@@ -32,6 +32,7 @@ import {
   transaction,
 } from "../../src/platform/sqlite.ts";
 import type { Interface, Lease, Operation } from "../../src/store.ts";
+import { freshBoot } from "../chart-rows.ts";
 
 const earlierApplicationIds = [0x63_62_78_69, 0x63_62_78_73, 0x63_62_78_74];
 
@@ -1381,7 +1382,11 @@ layer(NodeServices.layer)((it) => {
               (name) =>
                 Effect.andThen(
                   store.insertCheckpoint(checkpoint(name)),
-                  told(name, { type: "read", boot: "boot-1", id: name })
+                  told(name, {
+                    type: "read",
+                    boot: freshBoot("boot-1"),
+                    id: name,
+                  })
                 ),
               { discard: true }
             );

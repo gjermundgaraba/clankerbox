@@ -9,8 +9,14 @@ import {
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Host, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
-import { Context, Data, Duration, Effect, Layer, Schema } from "effect";
+import { Brand, Context, Data, Duration, Effect, Layer, Schema } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
+
+export type FreshBoot = Brand.Branded<string, "FreshBoot">;
+
+const freshBoot = Brand.nominal<FreshBoot>();
+
+export type Fresh = HostInfo & { readonly boot: FreshBoot };
 
 export interface Member {
   readonly id: string;
@@ -56,7 +62,7 @@ export interface Interface {
    * Reads the host, and checks it calls itself what the config says. Every look at a host comes
    * through here, so this logs when it stops answering and when it answers again, and no one else.
    */
-  readonly read: (host: string) => Effect.Effect<HostInfo, Unreachable>;
+  readonly read: (host: string) => Effect.Effect<Fresh, Unreachable>;
   /** What the host last said, read or not since. */
   readonly known: (host: string) => HostInfo | undefined;
   readonly reachAll: Effect.Effect<readonly Reached[]>;
@@ -208,7 +214,7 @@ export const make = (
 
         infos.set(host, info);
 
-        return info;
+        return { ...info, boot: freshBoot(info.boot) };
       }).pipe(
         Effect.tap(() => answered(host)),
         Effect.tapError(unanswering)

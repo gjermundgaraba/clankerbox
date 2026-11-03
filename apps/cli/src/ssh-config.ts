@@ -5,14 +5,13 @@ export const includeLines = "Match all\nInclude clankerbox\n";
 
 const usableShell = /^\/[^\s"'$`\\%]*$/u;
 
-/** What marks an ssh destination as a machine: `ssh dev.cbx`. */
-export const domain = ".cbx";
+export const machineDomain = ".cbx";
 
 export const renderSshConfig = (shell: string): string =>
   [
     "# Managed by clankerbox; do not edit. CLANKERBOX_SSH_CONFIG=false removes it.",
     "",
-    `Host *${domain}`,
+    `Host *${machineDomain}`,
     `  User ${loginUser}`,
     "  ProxyCommand clankerbox ssh-proxy %n",
     `  KnownHostsCommand ${shell} -c "exec clankerbox ssh-known-hosts %n %H"`,

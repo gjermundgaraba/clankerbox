@@ -5,6 +5,7 @@ import type {
   StateValue,
 } from "xstate";
 
+import type { FreshBoot } from "./hosts.ts";
 import type { Facts, Lease, Operation } from "./store.ts";
 
 /** What a resource's write does: its next row, and the operation it begins or finishes. */
@@ -43,11 +44,7 @@ export type Stated<C, L> = C & { readonly state: L };
 
 /** What a `read` carries for the operation it begins, when the leaf it enters has a step. */
 export interface Read {
-  /**
-   * From a fresh `hosts.read`, never `hosts.known`, whose boot may be from before a restart: a step
-   * sent under it is lost as soon as it is polled.
-   */
-  readonly boot: string;
+  readonly boot: FreshBoot;
   /** The ID of the operation this read begins. */
   readonly id: string;
 }
