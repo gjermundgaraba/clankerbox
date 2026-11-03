@@ -94,6 +94,8 @@ export interface CreateOptions {
   /** Run the setup even when a host holds a prebuild of the spec. */
   readonly fresh?: boolean | undefined;
   readonly labels?: Labels | undefined;
+  /** Runs once the server has recorded the create, before the wait, with what it recorded. */
+  readonly recorded?: ((machine: Machine) => Effect.Effect<void>) | undefined;
 }
 
 /**
@@ -614,6 +616,9 @@ export const make = (
         name,
         name
       ).pipe(
+        Effect.tap(
+          (recorded) => placement?.recorded?.(recorded) ?? Effect.void
+        ),
         Effect.flatMap((recorded) =>
           machineRest(recorded, "running", "createMachine")
         ),
@@ -656,7 +661,7 @@ export const make = (
 
     const madeFrom = (
       name: string,
-      { checkpoint, spec, sizing, labels, fresh }: EnsureOptions
+      { checkpoint, spec, sizing, labels, fresh, recorded }: EnsureOptions
     ): Effect.Effect<Machine, EnsureError> =>
       Effect.gen(function* () {
         const ready =
@@ -674,7 +679,7 @@ export const make = (
               ...sizing,
               ...(labels === undefined ? {} : { labels }),
             })
-          : yield* create(name, spec, { fresh, labels });
+          : yield* create(name, spec, { fresh, labels, recorded });
       });
 
     const ensuring = (

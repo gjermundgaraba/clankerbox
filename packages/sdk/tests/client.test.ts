@@ -209,6 +209,42 @@ describe("client", () => {
     );
 
     it.effect(
+      "a create hands what the server recorded to `recorded` before its wait reads the machine",
+      () =>
+        Effect.gen(function* () {
+          const stub = server();
+
+          const seen: Array<{
+            readonly phase: string;
+            readonly reads: number;
+          }> = [];
+
+          stub.script("dev", [
+            { phase: "creating", state: "unknown" },
+            { phase: "settled", state: "running" },
+          ]);
+
+          const made = yield* ticking(
+            withClient(stub, (client) =>
+              client.create("dev", spec, {
+                recorded: ({ phase }) =>
+                  Effect.sync(() => {
+                    seen.push({
+                      phase,
+                      reads: stub.calls.filter((call) => call === "machine.get")
+                        .length,
+                    });
+                  }),
+              })
+            )
+          );
+
+          expect(seen).toStrictEqual([{ phase: "observing", reads: 0 }]);
+          expect(made.phase).toBe("settled");
+        })
+    );
+
+    it.effect(
       "labels go with a create, fork, restore and capture, and a list takes a filter",
       () =>
         Effect.gen(function* () {

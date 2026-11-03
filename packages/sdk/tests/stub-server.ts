@@ -428,6 +428,17 @@ export const stubServer = (options: StubServerOptions = {}) => {
         });
       }
 
+      const prebuild =
+        request.fresh === true
+          ? undefined
+          : machineScripts
+              .get(request.id)
+              ?.flatMap((step) =>
+                !Predicate.isString(step) && step.prebuild !== undefined
+                  ? [step.prebuild]
+                  : []
+              )[0];
+
       return yield* add(
         labelled(
           machine(request.id, {
@@ -438,6 +449,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
             diskGib: request.diskGib,
             state: "unknown",
             phase: "observing",
+            ...(prebuild === undefined ? {} : { prebuild }),
           }),
           request.profile,
           request.labels

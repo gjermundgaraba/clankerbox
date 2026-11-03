@@ -5,11 +5,12 @@ import { layer } from "@effect/vitest";
 import { NotOffered, ScriptFailed } from "@gjermundgaraba/clankerbox-sdk";
 import { write, scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
+import { checkpoint } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import type {
   MachineStep,
   StubServer,
 } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
-import { Effect } from "effect";
+import { DateTime, Effect } from "effect";
 import { afterEach, expect } from "vite-plus/test";
 
 import {
@@ -31,6 +32,17 @@ const restored: MachineStep = {
   state: "running",
   prebuild: "prebuilt-0",
 };
+
+const prebuilt = (id: string, createdAt: string, profile = "dev") =>
+  checkpoint(id, {
+    createdAt: DateTime.makeUnsafe(createdAt),
+    kind: "ram",
+    base: "ubuntu-dev",
+    profile,
+    cpu: 2,
+    ramMib: 4096,
+    diskGib: 20,
+  });
 
 layer(NodeServices.layer)((it) => {
   afterEach(async () => {
@@ -123,6 +135,115 @@ layer(NodeServices.layer)((it) => {
           undefined,
           undefined,
           true,
+        ]);
+      })
+  );
+
+  it.effect(
+    "a create no prebuild matches says so before its wait, naming the profile's newest prebuild and why it was passed over",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        yield* writeProfiles(dir);
+
+        const config = yield* writeConfig(dir, "profiles");
+
+        const stub = server({
+          bases: ["ubuntu-dev"],
+          checkpoints: [
+            prebuilt("prebuilt-new", "2026-11-02T00:00:00Z"),
+            prebuilt("prebuilt-old", "2026-11-01T00:00:00Z"),
+            prebuilt("prebuilt-later", "2026-11-03T00:00:00Z", "other"),
+            checkpoint("snap", {
+              createdAt: DateTime.makeUnsafe("2026-11-03T00:00:00Z"),
+              base: "ubuntu-dev",
+              profile: "dev",
+            }),
+          ],
+        });
+
+        const missed = yield* cli(
+          ["create", "box", "--profile", "dev", "--config", config],
+          { server: stub }
+        );
+
+        const smaller = yield* cli(
+          [
+            "create",
+            "small",
+            "--profile",
+            "dev",
+            "--ram",
+            "2G",
+            "--disk",
+            "10G",
+            "--config",
+            config,
+          ],
+          { server: stub }
+        );
+
+        expect(missed).toMatchObject({
+          code: 0,
+          stdout: "box",
+          stderr:
+            "clankerbox: no prebuild matches this create, so its setup runs: prebuilt-new of dev is of another setup, authorized keys or host release; clankerbox prebuild with the same flags makes one",
+        });
+        expect(smaller.stderr).toBe(
+          "clankerbox: no prebuild matches this create, so its setup runs: prebuilt-new of dev has 4G of RAM and a 20G disk, more than this create; clankerbox prebuild with the same flags makes one"
+        );
+        expect(stub.calls.slice(0, 3)).toStrictEqual([
+          "machine.create",
+          "checkpoint.list",
+          "machine.get",
+        ]);
+      })
+  );
+
+  it.effect(
+    "a create with no prebuild of its profile says how to make one, and one with no setup, --fresh or --json says nothing",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        yield* writeProfiles(dir);
+
+        const config = yield* writeConfig(dir, "profiles");
+        const stub = server({ bases: ["ubuntu", "ubuntu-dev"] });
+
+        const run = (args: readonly string[]) =>
+          cli([...args, "--config", config], { server: stub });
+
+        const missed = yield* run(["create", "box", "--profile", "dev"]);
+        const bare = yield* run(["create", "bare", "--profile", "small"]);
+
+        const fresh = yield* run([
+          "create",
+          "slow",
+          "--profile",
+          "dev",
+          "--fresh",
+        ]);
+
+        const json = yield* run([
+          "create",
+          "quiet",
+          "--profile",
+          "dev",
+          "--json",
+        ]);
+
+        expect(missed).toMatchObject({
+          code: 0,
+          stdout: "box",
+          stderr:
+            "clankerbox: no prebuild matches this create, so its setup runs; clankerbox prebuild with the same flags makes one",
+        });
+        expect(
+          [bare, fresh, json].map(({ code, stderr }) => [code, stderr])
+        ).toStrictEqual([
+          [0, ""],
+          [0, ""],
+          [0, ""],
         ]);
       })
   );

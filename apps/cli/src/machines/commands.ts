@@ -5,8 +5,22 @@ import {
   Invalid,
   outputLimit,
 } from "@gjermundgaraba/clankerbox-sdk";
-import type { Machine } from "@gjermundgaraba/clankerbox-sdk";
-import { Console, Effect, Option, Stdio, Stream } from "effect";
+import type {
+  Checkpoint,
+  Client,
+  Machine,
+  MachineSpec,
+} from "@gjermundgaraba/clankerbox-sdk";
+import {
+  Array,
+  Console,
+  DateTime,
+  Effect,
+  Option,
+  Order,
+  Stdio,
+  Stream,
+} from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 
 import {
@@ -81,6 +95,57 @@ const createArguments = {
   label: labelFlag,
 };
 
+const grownFrom = (spec: MachineSpec, prebuild: Checkpoint) => [
+  ...(prebuild.kind === "ram" && spec.cpu < prebuild.cpu
+    ? [`${prebuild.cpu} vCPUs`]
+    : []),
+  ...(prebuild.kind === "ram" && spec.ramMib < prebuild.ramMib
+    ? [`${formatMib(prebuild.ramMib)} of RAM`]
+    : []),
+  ...(spec.diskGib < prebuild.diskGib
+    ? [`a ${formatGib(prebuild.diskGib)} disk`]
+    : []),
+];
+
+const missedPrebuild = (client: Client.Interface, spec: MachineSpec) =>
+  Effect.gen(function* () {
+    const { profile } = spec;
+
+    const listed =
+      profile === undefined
+        ? []
+        : yield* Effect.orElseSucceed(client.checkpoints, () => []);
+
+    const newest = Array.last(
+      Array.sort(
+        listed.filter(
+          ({ id, base, ...checkpoint }) =>
+            id.startsWith("prebuilt-") &&
+            base === spec.base &&
+            checkpoint.profile === profile
+        ),
+        Order.mapInput(DateTime.Order, ({ createdAt }: Checkpoint) => createdAt)
+      )
+    );
+
+    const larger = Option.match(newest, {
+      onNone: () => [],
+      onSome: (prebuild) => grownFrom(spec, prebuild),
+    });
+
+    const why = Option.match(newest, {
+      onNone: () => "",
+      onSome: ({ id }) =>
+        larger.length > 0
+          ? `: ${id} of ${profile} has ${larger.join(" and ")}, more than this create`
+          : `: ${id} of ${profile} is of another setup, authorized keys or host release`,
+    });
+
+    yield* Console.error(
+      `clankerbox: no prebuild matches this create, so its setup runs${why}; clankerbox prebuild with the same flags makes one`
+    );
+  });
+
 export const create = Command.make(
   "create",
   { ...mutationFlags, ...createArguments },
@@ -93,6 +158,13 @@ export const create = Command.make(
           const machine = yield* client.create(flags.name, spec, {
             fresh: flags.fresh,
             ...(yield* labelled(flags.label)),
+            recorded: ({ prebuild }) =>
+              spec.setup === undefined ||
+              flags.fresh ||
+              flags.json ||
+              prebuild !== undefined
+                ? Effect.void
+                : missedPrebuild(client, spec),
           });
 
           if (machine.prebuild !== undefined && !flags.json) {
@@ -108,7 +180,7 @@ export const create = Command.make(
     })
 ).pipe(
   Command.withDescription(
-    "Create a machine from a profile, from a base with sizes and an optional setup, or from both: each flag overrides the profile's field. With a setup, the machine is restored from the setup's prebuild when a host has one (see prebuild). A create waits until its machine runs, unless --no-wait. One whose copy or setup fails deletes its machine, keeps its row to say why, and fails. Prints the new ID."
+    "Create a machine from a profile, from a base with sizes and an optional setup, or from both: each flag overrides the profile's field. With a setup, the machine is restored from the setup's prebuild when a host has one (see prebuild), and a create none serves says why on stderr as it begins. A create waits until its machine runs, unless --no-wait. One whose copy or setup fails deletes its machine, keeps its row to say why, and fails. Prints the new ID."
   )
 );
 
