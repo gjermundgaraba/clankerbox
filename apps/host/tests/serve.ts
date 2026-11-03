@@ -3,7 +3,6 @@ import path from "node:path";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { requirements } from "@gjermundgaraba/clankerbox-sdk";
 import type { Kind } from "@gjermundgaraba/clankerbox-sdk";
 import {
   mkdir,
@@ -12,7 +11,7 @@ import {
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { Console, Effect, FileSystem, Logger } from "effect";
 
-import { startHost } from "./support.ts";
+import { image as ubuntu, startHost } from "./support.ts";
 
 const usage =
   "usage: serve.ts <run-dir> <host-id> [linux|mac] [ram-budget-mib]";
@@ -43,8 +42,8 @@ const parsed = () => {
 };
 
 const offered = {
-  linux: ["ubuntu", requirements.bases.linux.ubuntu],
-  mac: ["macos", requirements.bases.mac.macos],
+  linux: ["ubuntu", ubuntu],
+  mac: ["macos", "registry.example/macos@sha256:00"],
 } as const;
 
 const serve = Effect.gen(function* () {

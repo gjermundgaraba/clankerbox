@@ -63,7 +63,7 @@ Each host needs its kind's runtime, installed by the operator:
 
 | Kind | Host | Prerequisite |
 | --- | --- | --- |
-| linux | Linux/amd64 with KVM | smolvm exactly 1.33.0, upstream, in a versioned prefix; runs as root |
+| linux | Linux/amd64 with KVM | smolvm 1.33.0 or later, upstream, in a versioned prefix; runs as root |
 | mac | Apple Silicon, macOS 26 or later for the base's ASIF disk, checked on 27.2 | Tart 2.41.1 or later, Softnet 0.25.0 installed SUID root |
 
 smolvm, with both disk templates expanded beside their `.zst` files:
@@ -78,8 +78,6 @@ done
 ```
 
 Softnet, for Tart: `sudo install -o root -g wheel -m 4755 softnet /usr/local/bin/softnet`.
-
-The SDK exports these, with the bases below and the Node range, as `requirements`, for deploy tooling to pin from.
 
 ## Run a host
 

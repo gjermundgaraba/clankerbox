@@ -3,7 +3,6 @@ import { inspect } from "node:util";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { requirements } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { Effect, Redacted } from "effect";
 import type { Schema } from "effect";
@@ -11,7 +10,8 @@ import { expect } from "vite-plus/test";
 
 import { loadConfig } from "../../src/composition/config.ts";
 
-const image = requirements.bases.linux.ubuntu;
+const image = "registry.example/ubuntu@sha256:00";
+const macImage = "registry.example/macos@sha256:00";
 
 const config = {
   id: "linux",
@@ -69,7 +69,7 @@ layer(NodeServices.layer)((it) => {
     kind: "mac",
     listen: { address: "100.122.69.11", port: 8484 },
     stateDir: "state",
-    bases: { macos: requirements.bases.mac.macos },
+    bases: { macos: macImage },
     mac: { binary: "/opt/tart/2.41.1/tart.app/Contents/MacOS/tart" },
   };
 
@@ -82,7 +82,7 @@ layer(NodeServices.layer)((it) => {
         kind: "mac",
         listen: { address: "100.122.69.11", port: 8484 },
         stateDir: path.join(file, "..", "state"),
-        bases: new Map([["macos", requirements.bases.mac.macos]]),
+        bases: new Map([["macos", macImage]]),
         machinePorts: { first: 10_000, last: 19_999 },
         mac: { binary: "/opt/tart/2.41.1/tart.app/Contents/MacOS/tart" },
       });

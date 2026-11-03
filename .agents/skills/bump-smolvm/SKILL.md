@@ -6,22 +6,24 @@ disable-model-invocation: true
 
 # Bump smolvm
 
-clankerbox runs upstream smolvm, unmodified, at exactly one tested release, which
-the operator installs into a versioned prefix. A bump re-checks the claims below
+clankerbox runs upstream smolvm, unmodified, any release at or above a floor,
+checked at one tested release, which the operator installs into a versioned
+prefix. A bump re-checks the claims below
 against smolvm's source at the target release, not just the tests: the host's
 code embodies each one. Fix what broke, report optional opportunities
 separately, and don't deploy, change production hosts, or commit unless asked.
 
 ## Source and scope
 
-- **Pinned in this repo:** `requirements.smolvm.testedVersion` in
-  `packages/sdk/src/requirements.ts`, published for deploy tooling, is exact:
-  startup refuses any other `smolvm --version`. `pin` in
-  `apps/host/src/platform/smolvm.ts` derives from it (`smolvm <version>
-  <platform>-<arch>`) and is recorded on every `ram` checkpoint and every paused
-  machine. Tests use it or a neutral `0.0.0-test`; only README repeats the
-  version, and `requirements.test.ts` fails until it does: `git grep -n '<old
-  version>'` finds every place. `requirements.bases.linux` pins `ubuntu`.
+- **Pinned in this repo:** `minimumVersion` in
+  `apps/host/src/platform/smolvm.ts` is a floor: startup refuses a
+  `smolvm --version` that isn't a `major.minor.patch` at or above it.
+  `requirements.test.ts` fails until README states it. `pin` (`smolvm
+  <version> <platform>-<arch>`) names the release the host's smolvm reports,
+  and is recorded on every `ram` checkpoint and every paused machine. The
+  tested release appears in README (the install snippet, the `linux.prefix`
+  example), Notation below and the permalinks: `git grep -n '<old version>'`
+  finds every place. README pins the `ubuntu` base by digest.
 - **Target:** the latest stable published `smol-machines/smolvm` release (its
   release metadata, such as `gh release view --repo smol-machines/smolvm`),
   unless the user names one. Not upstream main, an installed binary or a cached
@@ -141,7 +143,7 @@ as it is.
   `SMOLVM_IMAGE_SEED_MAX_BYTES`). Bases go through `mirror.gcr.io`, a
   pull-through cache of Docker Hub, to avoid Docker Hub's anonymous pull
   limit. Ours: bases name `mirror.gcr.io` directly, by digest
-  (`requirements.bases.linux`, README); a
+  (README); a
   create from an image reference boots what its tag names then, with no
   `--seed-digest-ttl`.
 
@@ -607,13 +609,15 @@ as it is.
 
 ## After
 
-- Set `requirements.smolvm.testedVersion`, the version in README (`git grep` for the old one) and
-  the release in Notation above. Move every smolvm permalink to the target's
+- Raise `minimumVersion` only when the code comes to depend on something the
+  target added or fixed, and say why in the commit message; otherwise the
+  floor stays. Set the tested release in README (`git grep` for the old one)
+  and Notation above. Move every smolvm permalink to the target's
   tag and the line its code now sits on, edit a claim only where the target
   changed it, and add claims the new release introduced.
-- Tell the operator what the bump does to a running host: the host refuses to
-  start until its config names a prefix with the new release (install into a new
-  prefix, expand its templates, change `linux.prefix`, restart); running VMs
+- Tell the operator what moving a host to the new release does: install it
+  into a new prefix, expand its templates, change `linux.prefix` and restart (a
+  host whose floor rose refuses to start until then); running VMs
   keep their old prefix, which must stay until its last machine is deleted; the
   new prefix builds new image seeds; every existing `ram` checkpoint now fails
   its restore with `PinMismatch`, since its pin names the old release; and so

@@ -124,8 +124,7 @@ it is given, with the config's tailnet, if any.
 **SDK** (`packages/sdk/src`). A library. Its root modules are the client
 contract and the vocabulary everything else imports: `api.ts`, `resources.ts`,
 `errors.ts`, `ids.ts`, `release.ts` (with `versionCheck`, for a server of either
-contract), `requirements.ts` (the runtime versions and bases a host of the
-release runs on), `sizes.ts`, `describe.ts`. The rest are `client.ts`,
+contract), `sizes.ts`, `describe.ts`. The rest are `client.ts`,
 `profile.ts`, `setup.ts` and `ssh.ts`. The `.` entry loads no Node; `./node`
 (`node.ts`) holds what needs it.
 

@@ -4,7 +4,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { Internal, requirements } from "@gjermundgaraba/clankerbox-sdk";
+import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
 import {
   mkdir,
@@ -30,10 +30,10 @@ import {
   environment,
   machineReadWait,
   make,
+  minimumVersion,
   nativeName,
   observeEach,
   pathsIn,
-  pin,
   stateOf,
   templates,
   ramBudget,
@@ -51,12 +51,14 @@ const failure = (error: HostError) => [error._tag, error.message];
 
 const encoder = new TextEncoder();
 
+const image = "registry.example/ubuntu@sha256:00";
+
 const scripted = (reply: (call: Call) => Reply | undefined) =>
   scriptedSpawner(
     (call) =>
       reply(call) ??
       (call.args[0] === "--version"
-        ? { stdout: `smolvm ${requirements.smolvm.testedVersion}\n` }
+        ? { stdout: `smolvm ${minimumVersion}\n` }
         : undefined)
   );
 
@@ -64,7 +66,7 @@ const prepared = (expanded: readonly string[] = templates) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const dir = yield* scratch;
-    const prefix = path.join(dir, "smolvm", requirements.smolvm.testedVersion);
+    const prefix = path.join(dir, "smolvm", minimumVersion);
 
     const stateDir = yield* fs.makeTempDirectoryScoped({
       directory: "/tmp",
@@ -202,7 +204,7 @@ layer(NodeServices.layer)((it) => {
 
         const runtime = yield* runtimeOf(settings, spawner);
 
-        expect(runtime.version).toBe(requirements.smolvm.testedVersion);
+        expect(runtime.version).toBe(minimumVersion);
         expect(spawner.calls).toStrictEqual([
           {
             file: path.join(settings.prefix, "smolvm"),
@@ -287,20 +289,24 @@ layer(NodeServices.layer)((it) => {
       })
   );
 
-  it.effect("a smolvm host refuses a smolvm release it wasn't tested on", () =>
-    Effect.gen(function* () {
-      const settings = yield* prepared();
+  it.effect(
+    "a smolvm host refuses a smolvm release older than its floor, or one it can't read",
+    () =>
+      Effect.gen(function* () {
+        const settings = yield* prepared();
 
-      const error = yield* startupError(
-        settings,
-        scripted(() => ({ stdout: "smolvm 0.0.0-test\n" }))
-      );
+        for (const reported of ["smolvm 1.32.9", "smolvm dev", "1.33.0"]) {
+          const error = yield* startupError(
+            settings,
+            scripted(() => ({ stdout: `${reported}\n` }))
+          );
 
-      expect(error._tag).toBe("CannotStart");
-      expect(error.message).toBe(
-        `${path.join(settings.prefix, "smolvm")} reports "smolvm 0.0.0-test", and this host was tested on smolvm ${requirements.smolvm.testedVersion}`
-      );
-    })
+          expect(error._tag).toBe("CannotStart");
+          expect(error.message).toBe(
+            `${path.join(settings.prefix, "smolvm")} reports "${reported}", and this host needs smolvm ${minimumVersion} or later`
+          );
+        }
+      })
   );
 
   it("smolvm's paused state is its own, and the rest map onto running and stopped by whether the VMM is alive", () => {
@@ -459,7 +465,7 @@ layer(NodeServices.layer)((it) => {
         const spawner = scripted(() => {});
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-        yield* runtime.create(machine, requirements.bases.linux.ubuntu);
+        yield* runtime.create(machine, image);
 
         expect(smolvmArgs(spawner.calls)).toStrictEqual([
           [
@@ -468,7 +474,7 @@ layer(NodeServices.layer)((it) => {
             "--name",
             "dev-01234567",
             "--image",
-            requirements.bases.linux.ubuntu,
+            image,
             "--cpus",
             "2",
             "--mem",
@@ -1484,15 +1490,24 @@ layer(NodeServices.layer)((it) => {
     port: 10_001,
   };
 
-  it.effect("the runtime names its pin", () =>
-    Effect.gen(function* () {
-      const runtime = yield* runtimeOf(
-        yield* prepared(),
-        scripted(() => {})
-      );
+  it.effect(
+    "a later smolvm release starts, and the runtime pins the release it reports",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* runtimeOf(
+          yield* prepared(),
+          scripted((call) =>
+            call.args[0] === "--version"
+              ? { stdout: "smolvm 1.40.2\n" }
+              : undefined
+          )
+        );
 
-      expect(runtime.pin).toBe(pin);
-    })
+        expect(runtime.version).toBe("1.40.2");
+        expect(runtime.pin).toBe(
+          `smolvm 1.40.2 ${process.platform}-${process.arch}`
+        );
+      })
   );
 
   it.effect(

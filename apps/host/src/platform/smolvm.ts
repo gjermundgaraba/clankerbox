@@ -5,7 +5,6 @@ import {
   formatMib,
   Internal,
   Invalid,
-  requirements,
   Unsizable,
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -22,6 +21,7 @@ import {
 import type { ChildProcessSpawner } from "effect/process";
 
 import {
+  atLeast,
   CannotStart,
   changes,
   missing,
@@ -105,7 +105,10 @@ export const pathsIn = (stateDir: string) => ({
   forks: path.join(stateDir, "forks"),
 });
 
-export const pin = `smolvm ${requirements.smolvm.testedVersion} ${process.platform}-${process.arch}`;
+/** The oldest smolvm a linux host starts under; the `bump-smolvm` skill owns it. */
+export const minimumVersion = "1.33.0";
+
+const supported = atLeast(minimumVersion);
 
 export const nativeName = (
   resource: Pick<MachineRef, "name" | "instance">
@@ -311,11 +314,15 @@ export const make = (
 
     const reported = (yield* call(["--version"], "--version")).stdout.trim();
 
-    if (reported !== `smolvm ${requirements.smolvm.testedVersion}`) {
+    const version = reported.replace(/^smolvm /u, "");
+
+    if (version === reported || !supported(version)) {
       return yield* new CannotStart({
-        message: `${binary} reports "${reported}", and this host was tested on smolvm ${requirements.smolvm.testedVersion}`,
+        message: `${binary} reports "${reported}", and this host needs smolvm ${minimumVersion} or later`,
       });
     }
+
+    const pin = `smolvm ${version} ${process.platform}-${process.arch}`;
 
     const status = (
       native: string
@@ -633,7 +640,7 @@ export const make = (
       });
 
     return {
-      version: requirements.smolvm.testedVersion,
+      version,
       publishAddress: settings.publishAddress,
       pin,
       stopResumes: true,

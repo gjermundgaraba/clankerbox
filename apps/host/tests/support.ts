@@ -3,7 +3,6 @@ import path from "node:path";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { requirements } from "@gjermundgaraba/clankerbox-sdk";
 import type { Kind } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { Context, Duration, Effect, Exit, Layer, Logger, Scope } from "effect";
@@ -22,7 +21,7 @@ import type { FakeOptions, FakeRuntime } from "./fake-runtime.ts";
 
 export { loginSetup, writeTailscaleStubs } from "./fake-runtime.ts";
 
-export const image = requirements.bases.linux.ubuntu;
+export const image = "registry.example/ubuntu@sha256:00";
 
 const sharedPorts: PortRange = { first: 21_000, last: 21_099 };
 

@@ -32,6 +32,13 @@ export class CannotStart extends Schema.TaggedError<
   message: Schema.String,
 }) {}
 
+/** Whether a runtime's reported `major.minor.patch` release is `floor` or later. */
+export const atLeast =
+  (floor: string) =>
+  (reported: string): boolean =>
+    /^\d+\.\d+\.\d+$/u.test(reported) &&
+    reported.localeCompare(floor, "en", { numeric: true }) >= 0;
+
 export type RuntimeError = Internal;
 
 export type RoomError = RuntimeError | Capacity;

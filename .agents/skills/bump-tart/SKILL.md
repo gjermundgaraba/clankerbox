@@ -17,25 +17,23 @@ operator's Tart, or commit unless asked.
 
 ## Source and scope
 
-- **Pinned in this repo:** `requirements.tart.minimumVersion` in
-  `packages/sdk/src/requirements.ts`, published for deploy tooling, is a
-  floor: `supported` accepts any `major.minor.patch` at or above it, and startup
-  refuses the rest. Why the floor is where it is lives in this skill, below,
-  and in the commit that moved it. The tested
+- **Pinned in this repo:** `minimumVersion` in
+  `apps/host/src/platform/tart/tart.ts` is a floor: `supported` accepts any
+  `major.minor.patch` at or above it, and startup refuses the rest.
+  `requirements.test.ts` fails until README states it. Why the floor is where
+  it is lives in this skill, below, and in the commit that moved it. The tested
   release also appears in README (install table, the `tart.binary` example)
-  and the tests
-  (`apps/host/tests/platform/tart/tart.test.ts`, whose fake `tart` answers as the tested
-  release; `config.test.ts`): `git grep -n '2\.41'`.
-- **Companions** pinned beside it in `requirements`, re-checked only when
-  they change: Softnet 0.25.0 (`softnet.checkedVersion`, README; the latest
-  `cirruslabs/softnet` release, read at `~/.cache/checkouts/github.com/openai/softnet`
-  as Tart's source is) and tart-guest-agent at least 0.15.0 (inside the
-  image). `requirements.test.ts` fails until README states each. A Softnet
-  bump re-checks "Softnet and the network" below on a VM run with the target
+  and the tests (`apps/host/tests/platform/tart/tart.test.ts`, whose fake
+  `tart` answers as the tested release; `config.test.ts`):
+  `git grep -n '2\.41'`.
+- **Companions**, re-checked only when they change: Softnet 0.25.0 (README;
+  the latest `cirruslabs/softnet` release, read at
+  `~/.cache/checkouts/github.com/openai/softnet` as Tart's source is) and
+  tart-guest-agent at least 0.15.0 (inside the image). A Softnet bump re-checks "Softnet and the network" below on a VM run with the target
   installed SUID root in a private directory put first on the check's `PATH`,
   which only the operator can do: `sudo install -o root -g wheel -m 4755
   <softnet> ~/.cache/bump-tart/bin/softnet`.
-- **The base**, `bases.mac.macos` (README), moves at every bump. It is now
+- **The base**, `macos` in README, moves at every bump. It is now
   Cirrus's Xcode image on macOS 27 (Golden Gate), tag `27.2`, Xcode 27.2,
   uploaded 2026-10-31, an ASIF disk:
 
@@ -377,7 +375,7 @@ times, and the disk's capacity and format)
 - Set the tested release in Notation above. Move every Tart permalink to the
   target's tag and the line its code now sits on, edit a claim only where the
   target changed it, and add claims the new release introduced.
-- Set the new base in `requirements.ts`, README (the reference, its macOS and
+- Set the new base in README (the reference, its macOS and
   Xcode, its disk's format and capacity and the `diskGib` floor they give) and
   "The base" above, and move the claims the VM check changed.
 - Tell the operator how to move: install the new release in its own versioned
@@ -389,7 +387,7 @@ times, and the disk's capacity and format)
   each paused machine before the move to keep that from happening.
 - And how the base moves: `tart pull` the new reference as the host's user,
   into its Tart home, then set it as `bases.macos` in the host's config and
-  restart the host (deploy tooling that pins from `requirements` does both).
+  restart the host.
   Machines and checkpoints made from the old base keep their disks. The base's
   image is no part of a prebuild's digest (`nameOf`, `prebuilds.ts`), so a
   create keeps restoring the prebuild made from the old base until

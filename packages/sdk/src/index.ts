@@ -10,8 +10,6 @@ export * as Client from "./client.ts";
 
 export * from "./release.ts";
 
-export * from "./requirements.ts";
-
 export * from "./profile.ts";
 
 export * from "./setup.ts";

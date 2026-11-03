@@ -6,7 +6,6 @@ import {
   formatGib,
   formatMib,
   Internal,
-  requirements,
   Unsizable,
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -25,6 +24,7 @@ import type { ChildProcessSpawner } from "effect/process";
 
 import { lastLines } from "../../guest.ts";
 import {
+  atLeast,
   CannotStart,
   changes,
   missing,
@@ -205,11 +205,10 @@ const sizeFlags = ({ cpu, ramMib, diskGib }: Sizing): readonly string[] => [
 export const stateOf = (state: typeof VmState.Type): MachineState =>
   state === "suspended" ? "paused" : state;
 
-export const supported = (reported: string): boolean =>
-  /^\d+\.\d+\.\d+$/u.test(reported) &&
-  reported.localeCompare(requirements.tart.minimumVersion, "en", {
-    numeric: true,
-  }) >= 0;
+/** The oldest Tart a mac host starts under; the `bump-tart` skill owns it. */
+export const minimumVersion = "2.41.1";
+
+export const supported = atLeast(minimumVersion);
 
 const printed = (output: string, key: string): string | undefined =>
   new RegExp(`^\\t${key} = (.+)$`, "mu").exec(output)?.[1];
@@ -267,7 +266,7 @@ export const make = (
 
     if (!supported(reported)) {
       return yield* new CannotStart({
-        message: `${settings.binary} reports version "${reported}", and this host needs Tart ${requirements.tart.minimumVersion} or later`,
+        message: `${settings.binary} reports version "${reported}", and this host needs Tart ${minimumVersion} or later`,
       });
     }
 
