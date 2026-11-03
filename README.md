@@ -371,6 +371,34 @@ await sdk.destroySandbox();
 - A tunnel that ends, say because its machine stopped, stays down until `sandbox.ensureServer(id)` or a new `SandboxAgent.start`.
 - `effect`, `@effect/platform-node` and `sandbox-agent` are peer dependencies.
 
+## Amp orb provider
+
+`@gjermundgaraba/clankerbox-amp-orbs` is the dispatch program for [Amp's self-hosted orbs](https://ampcode.com/docs/orbs/self-hosted): `amp orb provider` runs it once per job, with the job in its environment, and each orb is a clankerbox machine on a linux host.
+
+```sh
+npm install --global @gjermundgaraba/clankerbox-amp-orbs
+amp orb provider "$(command -v clankerbox-amp-orbs-dispatch)"   # a one-line script: exec clankerbox-amp-orbs --config /etc/amp-orbs.json
+```
+
+```json
+{
+  "server": "http://127.0.0.1:8484",
+  "sizes": {
+    "default": { "cpu": 4, "ramMib": 8192, "diskGib": 40 },
+    "large": { "cpu": 8, "ramMib": 16384, "diskGib": 80 }
+  },
+  "snapshotExpiry": "14 days"
+}
+```
+
+- `sizes` has an entry per orb type Amp's settings define, and `default` for a thread that picks none; a type the settings don't know gets `default` too. `user` is the image's login user, `user` as in Amp's image. `snapshotExpiry` is how long a saved project snapshot is kept, 14 days unless given.
+- A spawn makes the orb's machine run, `client.ensure` with the machine named after `ORB_ID`: started or resumed when it exists, else restored from the project snapshot `ORB_SNAPSHOT_ID` names when that checkpoint is ready, at the snapshot's sizes, else created from `ORB_IMAGE` at the orb type's sizes, with no setup. Amp's image carries what bootstrap needs, so nothing is installed, and a create without a setup needs no `admin`, `sudo` or key. Then `execMachine` starts `amp orb bootstrap` as the login user, detached, with `ORB_TOKEN` and `AMP_URL` in its environment, after ending one still running: a resumed or restored machine keeps the processes it paused with, and that bootstrap holds the previous job's token. Bootstrap logs to `~/.amp-orb-bootstrap.log` in the orb.
+- A pause with a snapshot of a running machine deletes the checkpoint of that snapshot's name, then `pauseMachine` with `capture` makes the new one, labelled `amp-orb` and `amp-snapshot` and expiring after `snapshotExpiry`, and the pause begins once the capture has. A machine that isn't running is paused without a snapshot, and a pause of an orb with no machine does nothing. A linux checkpoint holds RAM, so a restore resumes where the pause left off.
+- A delete deletes the machine; one already gone is done. Snapshots are a project's, not an orb's, so they stay until they expire or a pause replaces them.
+- An Amp ID that is a clankerbox name, as `amp-<thread id>` is, names the machine; another gets its letters and digits with a digest of it, and the machine carries the ID as its `amp-orb` label either way, `amp-orb-type` the orb type.
+- Each job is safe to repeat and fails after 4½ minutes, within the five Amp gives, saying that the control plane still acts on what was asked. Its output goes to the provider's log, and a spawn's to the thread's setup log too.
+- The image has no tailscaled, so a host that joins its machines to the tailnet reports the orb's join `missing` and nothing else; the orb needs only outbound HTTPS.
+
 ## Release
 
 A pushed tag publishes. Bump the version of every published package, commit, tag `v<version>`, and push the tag. `.github/workflows/npm.yml` checks that the tag names that version, then publishes each package whose version npm doesn't have yet, through npm trusted publishing. A new package's first version is published by hand with `vp pm publish`, then trusted with `npm trust github <package> --repo <repo> --file npm.yml`.

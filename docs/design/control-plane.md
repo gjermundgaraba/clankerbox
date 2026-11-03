@@ -32,6 +32,8 @@ The goal is that a client talks to one server, IDs carry no host, and adding a h
 13. **A pause may capture first, and the capture's lease orders them.** (0.35) `pauseMachine` takes a `capture`. The control plane records the capture, waits for its operation to begin, then records the pause with `after` naming the checkpoint. The pause's step owns the machine and the capture's shares it, so the pause's begin finds the lease taken and waits for the capture to end, across a restart too, as leases are rows. A read that finds the capture recorded but not begun, as a restart between the two can leave it, holds the pause until the next recheck, so the checkpoint always holds the machine as it ran.
 14. **A checkpoint may expire.** (0.35) `captureCheckpoint` takes `expiresAt`. A sweep at each recheck deletes every ready checkpoint past it, through the same delete a client asks for. A prebuild never carries one.
 
+15. **Amp orbs come back as a package beside the control plane, not in it.** `packages/amp-orbs` is the dispatch program `amp orb provider` runs once per job. It is a client of the contract: `ensure` for a spawn, `pauseMachine` with `capture` for a pause that saves the project snapshot, `deleteMachine` for a delete, and `execMachine` to start `amp orb bootstrap` in the orb, as Amp's image ships no sshd. The control plane knows nothing of Amp: the orb's ID and type and the snapshot's ID ride on labels. The script that starts bootstrap goes to the shell on stdin, so the `pkill` ending the previous bootstrap finds no command line holding its own pattern.
+
 Everything below this section follows from these.
 
 ### Where the code lives
@@ -44,6 +46,7 @@ Everything below this section follows from these.
 | `packages/sdk` | The client contract and the client. Published. | Imported by the CLI, the provider and the server |
 | `packages/host-contract` | The host contract. Private. | Imported by the server and the host |
 | `packages/rivet-sandbox-agent` | The provider | Imported by its users |
+| `packages/amp-orbs` | The dispatch program for Amp's self-hosted orbs. Published, a bin. | `amp orb provider`, beside the control plane |
 
 `packages/host` goes away, and each app's `package.json` is its boundary. The three apps publish as separate packages at one version. The CLI's end-to-end tests reach the other two through their `./testing` exports, which stay unpublished.
 

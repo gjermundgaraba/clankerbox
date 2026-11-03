@@ -1,0 +1,41 @@
+{
+  "name": "@gjermundgaraba/clankerbox-amp-orbs",
+  "version": "0.35.1",
+  "description": "Self-hosted Amp orbs as clankerbox machines: the program `amp orb provider` runs",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gjermundgaraba/clankerbox.git",
+    "directory": "packages/amp-orbs"
+  },
+  "bin": {
+    "clankerbox-amp-orbs": "./dist/clankerbox-amp-orbs.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "test": "vp test"
+  },
+  "dependencies": {
+    "@effect/platform-node": "catalog:",
+    "@gjermundgaraba/effect-actions": "catalog:",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@gjermundgaraba/clankerbox-sdk": "workspace:*",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plus": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=26.13.0"
+  }
+}
