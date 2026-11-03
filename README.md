@@ -401,7 +401,7 @@ amp orb provider "$(command -v clankerbox-amp-orbs-dispatch)"   # a one-line scr
 
 ## Release
 
-A pushed tag publishes. Bump the version of every published package, commit, tag `v<version>`, and push the tag. `.github/workflows/npm.yml` checks that the tag names that version, then publishes each package whose version npm doesn't have yet, through npm trusted publishing. A new package's first version is published by hand with `vp pm publish`, then trusted with `npm trust github <package> --repo <repo> --file npm.yml`.
+A pushed tag publishes. Bump the version of every published package, commit, tag `v<version>`, and push the tag. `.github/workflows/npm.yml` checks that the tag names that version, then publishes each package whose version npm doesn't have yet, through npm trusted publishing. A new package's first version is published by hand with `vp pm publish`, then trusted with `npm trust github <package> --repo <repo> --file npm.yml --allow-publish`, which confirms at a terminal and signs in through the browser.
 
 ## License
 
