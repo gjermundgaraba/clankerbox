@@ -1,5 +1,4 @@
 #!/bin/sh
-# Usage: RUN=$(launch.sh [linux|mac] [ram-budget-mib] [hosts])
 set -eu
 . "$(dirname "$0")/common.sh"
 run=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/verify-clankerbox.XXXXXX")" && pwd)

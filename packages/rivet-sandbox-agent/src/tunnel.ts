@@ -74,10 +74,7 @@ const listening = (port: number): Effect.Effect<boolean> =>
     return Effect.sync(() => socket.destroy());
   });
 
-/**
- * No connection master, which would outlive the forward, and keepalives that end it when the
- * guest stops answering. These precede `extra`: OpenSSH keeps an option's first value.
- */
+/** These precede `extra`: OpenSSH keeps an option's first value. */
 export const forwarding = (
   port: number,
   extra: readonly string[]

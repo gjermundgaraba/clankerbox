@@ -34,12 +34,8 @@ if [ -s agent.env ]; then
   install -m 600 -o admin -g staff agent.env /etc/sandbox-agent.env
 fi
 
-# Claude Code at its latest release, and its adapter at the version the server pins. Other
-# agents install the same way; `install-agent codex` hangs in its own check at this version, so
-# give it a time limit too, and end what it leaves running. macOS has no timeout(1): perl's alarm
-# is the limit. Claude's install takes about 20 s; 300 s leaves room for a slow mirror. It runs in
-# admin's home: sudo keeps the working directory, and the recipe's own, root's alone, is one npm
-# can't read.
+# macOS has no timeout(1): perl's alarm is the limit. sudo keeps the working directory, and the
+# recipe's own, root's alone, is one npm can't read.
 (cd /Users/admin && sudo -n -u admin -H env PATH="$PATH" perl -e 'alarm 300; exec @ARGV' \
   sandbox-agent install-agent claude) >/var/tmp/install-agent.log 2>&1 || {
   tail -n 15 /var/tmp/install-agent.log

@@ -35,7 +35,6 @@ export const hostKey =
 export const reachable = (id: string, fields?: Partial<Machine>) =>
   machine(id, { ssh: login, hostKey, ...fields });
 
-/** What the control plane was asked, without the reads a wait or a tunnel makes. */
 export const requests = (stub: StubServer) =>
   stub.calls.filter((call) => call !== "machine.get");
 
@@ -80,7 +79,6 @@ const decodeCall = Schema.decodeSync(Schema.fromJsonString(Call));
 
 export const setup = async (
   server: Pick<StubServerOptions, "machines" | "checkpoints" | "refuse"> & {
-    /** What the reads of a machine this provider creates see. */
     readonly created?: readonly MachineStep[];
   } = {},
   options: Omit<Options, "server" | "from"> & {

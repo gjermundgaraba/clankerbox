@@ -8,7 +8,6 @@ export interface ServerSettings {
   readonly hosts: readonly Member[];
   /** How often what no request wakes is looked at again. */
   readonly recheck: Duration.Duration;
-  /** How long a failed create's or capture's row stays to tell why. */
   readonly failedRowsLast: Duration.Duration;
 }
 

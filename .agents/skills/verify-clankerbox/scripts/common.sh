@@ -1,11 +1,7 @@
-# Sourced by the other helpers.
 repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 cli=$repo/apps/cli/dist/clankerbox.mjs
-# Vite+'s node shim sets itself up again under any HOME it hasn't seen.
 node=$(node -p process.execPath)
 
-# The tree of the sources the build and the processes load, and of what resolves and builds them,
-# as they are on disk.
 sources() {
   index=$(mktemp)
   rm "$index"
@@ -29,7 +25,6 @@ use_run() {
   evidence=$run/evidence
 }
 
-# The live process behind a pid file, if its command line still serves this run.
 serving() {
   [ -r "$1" ] || return 1
   pid=$(cat "$1")
@@ -45,7 +40,6 @@ host_pid() {
   serving "$run/hosts/${1:?host id}.pid"
 }
 
-# Starts a host on the port of the run's URL file for it, if any, and waits until it serves.
 start_host() {
   id=${1:?host id}
   rm -f "$run/hosts/$id.pid"
@@ -67,7 +61,6 @@ start_host() {
   done
 }
 
-# Starts the control plane over the hosts in the run, and waits until it serves.
 start_server() {
   rm -f "$run/server.ready"
   (

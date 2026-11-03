@@ -1,5 +1,4 @@
 #!/bin/sh
-# Usage: tlc.sh <dir> <config>
 set -eu
 [ $# -eq 2 ] || { echo "usage: tlc.sh <dir> <config>" >&2; exit 2; }
 dir=$(cd "$1" && pwd)

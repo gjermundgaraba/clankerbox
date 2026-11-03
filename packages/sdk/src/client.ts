@@ -48,7 +48,6 @@ const ServerUrl = Schema.String.check(
 
 type Actions = typeof actions;
 
-/** An action of the client contract, by name. */
 export type ServerAction = keyof Actions;
 
 type Success<N extends ServerAction> = Actions[N]["success"]["Type"];
@@ -85,7 +84,6 @@ export interface Options {
   readonly replyTimeout?: Duration.Duration | undefined;
   /** Answer a mutation as soon as the server has recorded it, instead of waiting for its rest. */
   readonly noWait?: boolean | undefined;
-  /** How often a wait reads the resource. */
   readonly pollEvery?: Duration.Duration | undefined;
 }
 
@@ -95,7 +93,6 @@ export type Deleted = "deleted" | "absent";
 export interface CreateOptions {
   /** Run the setup even when a host holds a prebuild of the spec. */
   readonly fresh?: boolean | undefined;
-  /** What the machine carries, to find it again. */
   readonly labels?: Labels | undefined;
 }
 
@@ -149,7 +146,6 @@ export type EnsureError =
 
 export interface Interface extends Calls {
   readonly hosts: Effect.Effect<readonly Host[], ErrorOf<"listHosts">>;
-  /** Every machine; `listMachines` takes a filter. */
   readonly machines: Effect.Effect<readonly Machine[], ErrorOf<"listMachines">>;
   /** Every ready checkpoint; `listCheckpoints` takes a filter. */
   readonly checkpoints: Effect.Effect<
@@ -185,11 +181,9 @@ export interface Interface extends Calls {
   readonly prebuild: (
     spec: MachineSpec & { readonly setup: Setup }
   ) => Effect.Effect<Build, WaitErrorOf<"prebuildCheckpoint">>;
-  /** A delete of a resource that is already gone is `absent`: done either way. */
   readonly deleteMachine: (
     input: Input<"deleteMachine">
   ) => Effect.Effect<Deleted, WaitErrorOf<"deleteMachine">>;
-  /** A delete of a checkpoint that is already gone is `absent`: done either way. */
   readonly deleteCheckpoint: (
     input: Input<"deleteCheckpoint">
   ) => Effect.Effect<Deleted, WaitErrorOf<"deleteCheckpoint">>;

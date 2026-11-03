@@ -541,7 +541,7 @@ as it is.
   `/bin/true` in the guest before it returns (`probe_restored_guest`,
   src/agent/fork.rs). Ours: `pin`, so a RAM state is restored only under the
   release that saved it, and a machine is captured or forked only when its VM
-  booted under the host's (`pinnedOn`, `apps/host/src/refs.ts`); under it a
+  booted under the host's (`resumable`, `restorable`, `copyable`, `apps/host/src/operations.ts`); under it a
   restore's digest is the installed rootfs's, so the store stays empty. If
   smolvm starts enforcing the engine build itself, the pin could go.
 - Store mode: `--store` with `--history 0` (the default keeps 32 generations, so

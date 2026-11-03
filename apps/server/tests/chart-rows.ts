@@ -8,7 +8,6 @@ export const freshBoot = Brand.nominal<FreshBoot>();
 
 export const failure = new Internal({ message: "krun busy" });
 
-/** When a report's step ended. */
 export const when = DateTime.makeUnsafe(7);
 
 /** What the chart's table and its tests take a row to hold, but for what each sets. */

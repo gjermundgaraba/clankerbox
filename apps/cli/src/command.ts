@@ -155,7 +155,6 @@ export const parsed = <A>(
 
 const pairPattern = /^(?<key>[^=]+)=(?<value>.*)$/su;
 
-/** `KEY=VALUE` pairs a repeated flag gave, or undefined when it wasn't given. */
 export const parsePairs = (
   flag: string,
   texts: readonly string[]
@@ -198,7 +197,6 @@ export const labelFilterFlag = Flag.String("label").pipe(
   Flag.atLeast(0)
 );
 
-/** `{ labels }` when any `--label` was given, else nothing, as a request leaves them out. */
 export const labelled = (
   texts: readonly string[]
 ): Effect.Effect<{ readonly labels?: Labels }, Invalid> =>
@@ -214,7 +212,6 @@ export const expiresFlag = Flag.String("expires").pipe(
   Flag.optional
 );
 
-/** `{ expiresAt }` from `--expires`, else nothing. */
 export const expiring = (
   flag: Option.Option<string>
 ): Effect.Effect<{ readonly expiresAt?: DateTime.Utc }, Invalid> =>
@@ -354,7 +351,6 @@ export const listCommand = <A>(
     )
   ).pipe(Command.withDescription(options.description));
 
-/** A list of what carries every `--label` given. */
 export const filteredListCommand = <A>(
   options: Listing<A> & {
     readonly name: string;

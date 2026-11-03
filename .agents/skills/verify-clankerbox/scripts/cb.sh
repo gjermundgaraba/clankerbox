@@ -1,5 +1,4 @@
 #!/bin/sh
-# Usage: cb.sh <run-dir> <clankerbox args...>
 set -u
 . "$(dirname "$0")/common.sh"
 use_run "$@"

@@ -9,14 +9,12 @@ type HostError = NonNullable<CheckpointFacts["error"]>;
 
 export interface Done {
   readonly status: "done";
-  /** When what a failed capture left went, should this end its discarding. */
   readonly at: NonNullable<CheckpointFacts["failedAt"]>;
 }
 
 export interface NotDone {
   readonly status: "failed" | "cancelled";
   readonly error: HostError;
-  /** When a capture failed, should it have left nothing. */
   readonly at: Done["at"];
   /** A failed capture left nothing on its host, so a delete would find nothing. */
   readonly cleared: boolean;

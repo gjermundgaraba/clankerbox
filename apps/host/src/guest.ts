@@ -109,11 +109,6 @@ const runInGuest = (
     return text;
   });
 
-/**
- * Runs `argv` in a running machine, as `user` or root, with `env` set through `env(1)` and `stdin`
- * written whole, and answers its exit code and the last `outputLimit` characters of its output.
- * Past `timeoutSeconds` the command is ended and the exit code is `timedOutExitCode`.
- */
 export const runCommand = (
   runtime: Runtime,
   { machine, argv, user, env, stdin, timeoutSeconds }: ExecCommand

@@ -54,26 +54,20 @@ export type Refusals = {
 };
 
 export interface StubServerOptions {
-  /** What the stub's one host offers, `ubuntu` by default, and any image reference on linux. */
   readonly bases?: readonly string[];
   readonly kind?: Kind;
   readonly runtimeVersion?: string;
-  /** What `listHosts` answers, instead of the one host. */
   readonly hosts?: readonly Host[];
   readonly capacity?: CapacityReport;
   readonly machines?: readonly Machine[];
   readonly checkpoints?: readonly Checkpoint[];
-  /** An action that always answers this error. */
   readonly refuse?: Refusals;
-  /** Replaces what a create records. */
   readonly create?: (
     request: CreateRequest
   ) => Effect.Effect<Machine, Declared<"createMachine">>;
-  /** Replaces what a prebuild records. */
   readonly prebuild?: (
     request: PrebuildRequest
   ) => Effect.Effect<Build, Declared<"prebuildCheckpoint">>;
-  /** What a command answers; by default exit 0 with no output. */
   readonly exec?: (
     request: ExecRequest
   ) => Effect.Effect<Executed, Declared<"execMachine">>;

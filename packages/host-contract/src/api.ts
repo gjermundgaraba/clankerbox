@@ -43,7 +43,6 @@ export const NewMachine = Schema.Struct({
 
 export type NewMachine = typeof NewMachine.Type;
 
-/** What a delete needs of a machine, which may never have got a port. */
 export const Native = Schema.Struct({
   name: Name,
   instance: Schema.String,
@@ -51,7 +50,6 @@ export const Native = Schema.Struct({
 
 export type Native = typeof Native.Type;
 
-/** A checkpoint as a runtime knows it, by the fields of the machine it holds. */
 export const CheckpointRef = MachineRef;
 
 export type CheckpointRef = MachineRef;
@@ -62,7 +60,6 @@ export type MachineState = typeof MachineState.Type;
 
 const pinned = { pin: Schema.optionalKey(Schema.String) };
 
-/** Where a make's disk comes from. A copy holds what a setup did, so only a base has one to run. */
 export const Source = Schema.Union([
   Schema.TaggedStruct("base", {
     base: Schema.String,
@@ -134,7 +131,6 @@ export const Operation = Schema.Struct({
 
 export type Operation = typeof Operation.Type;
 
-/** What a step leaves that only the host can tell. */
 export const Outcome = Schema.Struct({
   port: Schema.optionalKey(Port),
   hostKey: Schema.optionalKey(Schema.String),
@@ -182,7 +178,6 @@ const Machines = Schema.Struct({ machines: Schema.Array(MachineRef) });
 
 const { id: _machine, ...command } = ExecRequest.fields;
 
-/** A command for a machine the control plane names in full, as `ExecRequest` names it by ID. */
 export const ExecCommand = Schema.Struct({ machine: MachineRef, ...command });
 
 export type ExecCommand = typeof ExecCommand.Type;

@@ -32,7 +32,6 @@ export interface Resource<R extends { readonly state: string }> {
   readonly looking: (
     row: R
   ) => Effect.Effect<Advanced<R>, Internal | Unreachable>;
-  /** One look at the row's operation, which a wake cuts short, so it must store nothing. */
   readonly polling: (row: R, op: Operation) => Effect.Effect<Polled, Internal>;
   /** Stores what a look found, which no wake cuts short, so a stored report is always collected. */
   readonly following: (

@@ -78,10 +78,10 @@ export class Conflict extends Schema.TaggedError<
 }
 
 /**
- * What the operator asked a machine to be; the host keeps moving the machine toward it. `paused`
- * keeps its RAM, processes and disks, saved by the runtime with the VM stopped, and a start
- * resumes it; a machine that is stopped when a pause comes stays stopped, and one the runtime
- * can't save, such as a VM an older runtime booted, is stopped instead.
+ * What the operator asked a machine to be. `paused` keeps its RAM, processes and disks, saved by
+ * the runtime with the VM stopped, and a start resumes it; a machine that is stopped when a pause
+ * comes stays stopped, and one the runtime can't save, such as a VM an older runtime booted, is
+ * stopped instead.
  */
 export const Desired = Schema.Literals([
   "running",
@@ -306,7 +306,6 @@ export class Internal extends Schema.TaggedError<
   }
 }
 
-/** What the control plane may answer with; each action declares its own share. */
 export const hostErrors = [
   Invalid,
   NotFound,

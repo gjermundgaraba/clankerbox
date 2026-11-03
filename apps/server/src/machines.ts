@@ -69,7 +69,6 @@ import type { TailnetCheck } from "./tailnet.ts";
 
 export interface Settings {
   readonly recheck: Duration.Duration;
-  /** How long a failed create's row stays to tell why. */
   readonly failedRowsLast: Duration.Duration;
 }
 

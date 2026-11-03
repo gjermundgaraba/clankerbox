@@ -17,7 +17,6 @@ export type Polled =
 
 const scopeOf = (op: Operation) => `${op.resource} ${op.name}`;
 
-/** What a step cut short says, as its host doesn't. */
 export const cutShort = ({ kind, name }: Operation) =>
   new Internal({ message: `the ${kind} of ${name} ended on its host` });
 

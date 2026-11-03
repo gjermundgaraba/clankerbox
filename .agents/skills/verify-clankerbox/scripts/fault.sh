@@ -1,5 +1,4 @@
 #!/bin/sh
-# Usage: fault.sh <run-dir> kill-server | start-server | kill-host <id> | start-host <id> | freeze-host <id> | thaw-host <id> | hold-capture <id> | setup-go
 set -eu
 . "$(dirname "$0")/common.sh"
 use_run "$@"

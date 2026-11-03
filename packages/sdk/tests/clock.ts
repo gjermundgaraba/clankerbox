@@ -15,7 +15,6 @@ export const elapsing = <A, E>(
     return yield* Fiber.join(fiber);
   });
 
-/** Runs `effect` while the test clock moves on ten seconds at a time, until it ends. */
 export const ticking = <A, E>(effect: Effect.Effect<A, E>) =>
   Effect.gen(function* () {
     const fiber = yield* Effect.forkChild(effect);

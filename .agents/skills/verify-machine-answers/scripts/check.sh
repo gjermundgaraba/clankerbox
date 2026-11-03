@@ -1,5 +1,4 @@
 #!/bin/sh
-# Usage: check.sh [--quick]
 set -eu
 case ${1:-} in
   '' | --quick) ;;

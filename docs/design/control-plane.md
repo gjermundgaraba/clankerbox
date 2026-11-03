@@ -84,7 +84,7 @@ The server records the desire and answers with the machine. The write also takes
 The client waits. The SDK's methods keep their shape: `client.stopMachine` polls `getMachine` until `phase` rests, then answers success, or `Superseded` when `desired` has moved on, or the failure the row records. `--no-wait` and `--timeout` stop waiting without changing what happens on the server. The server never answers `Superseded`.
 
 - A machine's `phase` names the step it is in, or rests at `settled`, `failed` or `lost`.
-- `waiting` is read, never stored: a read that finds the VM `unknown` shows it, on any row that hasn't failed. The client's wait fails at once with `Unavailable`, `readOnly: false`, and says the request is saved.
+- `waiting` is read, never stored: a read that finds the VM `unknown` shows it, on any row that hasn't failed.
 - A client rides out a control plane outage of about 2 minutes (`outageLimit`).
 - A make that fails, in the copy or the setup, goes `undoing`, deletes the VM and rests `undone`. The row stays as `failed` with state `missing` and its error. Requests other than `get`, `delete` and `create` answer `NotFound`. It expires after `failedRowsLast`, one day.
 - Fork, restore, capture and resize follow the same pattern. A prebuild answers a `Build`, which `getPrebuild` reads, and builds live in memory.
@@ -133,7 +133,6 @@ Each duty has exactly one home. "Before" is the code at `adcacee`. "Deleted" is 
 | Find or restore a prebuild | `Prebuild.create` (`prebuild.ts:75`) | Server: `Machines.create`, with `fresh` on the request | `Prebuild.create` |
 | Build a prebuild | `checkpoints.ts:180`, a host builds and captures | Server: `server/checkpoints.ts` `prebuild`, over `make`, `capture` and `remove` steps | `Prebuild.build` |
 | Amp find, resume, restore, create, delete, snapshot | `apps/clankerbox/src/amp-orb.ts` | Nowhere. Deleted. | All of `amp-orb.ts` and its tests |
-| Run a command in a machine | `execMachine` (`packages/sdk/src/api.ts:154`), `machines.ts:1140`, `apps/clankerbox/src/machines/commands.ts:261` | Nowhere. Deleted. `clankerbox ssh dev -- <command>` covers it by hand. | The action, the service method, the command and `Executed`. `Runtime.exec` stays for guest scripts. |
 | Provider cleanup after a failed create | `discard` (`packages/rivet-sandbox-agent/src/sandboxes.ts:76`) | Provider: unchanged | Nothing. `error.made` is the bare name. |
 | Read a target and dial SSH | `sshTarget` (`packages/sdk/src/ssh.ts:18`), `ssh.ts:76,130,168` | Client: over `getMachine` | Nothing |
 | Keep the SSH config | `apps/clankerbox/src/ssh-config.ts:10-22`, one block per host | CLI: `apps/cli/src/ssh-config.ts`, one `Host *.cbx` block | The per-host blocks |
@@ -207,7 +206,7 @@ A create whose make reached its host keeps running there. The loop finds it by I
 
 The machine reads `unknown` and `waiting`, which no row stores, and a lease stays held if an operation was running. Placement skips the host, and new creates go elsewhere. Lists and reads keep answering, with state `unknown`.
 
-A request on such a machine is recorded and answered as usual. The client's wait fails at once and says the request is saved. The last desire applies when the host returns, so a `stop` from yesterday can run today unless a later request replaces it.
+A request on such a machine is recorded and answered as usual. The last desire applies when the host returns, so a `stop` from yesterday can run today unless a later request replaces it.
 
 A host that is gone for good has no clean exit yet. Its rows stay, reading `unknown`, and a delete of one waits for a host that will not come. A forget action is unbuilt.
 

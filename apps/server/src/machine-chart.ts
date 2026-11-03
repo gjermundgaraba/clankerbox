@@ -49,12 +49,10 @@ export interface Read extends Begins {
 export interface Done {
   readonly status: "done";
   readonly outcome: Outcome;
-  /** When a failed create's VM went, should this end its undoing. */
   readonly at: NonNullable<Facts["undoneAt"]>;
   readonly move?: Move;
 }
 
-/** `error` also says what cut a cancelled make short, which its host doesn't. */
 export interface NotDone {
   readonly status: "failed" | "cancelled";
   readonly outcome: Outcome;

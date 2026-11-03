@@ -83,7 +83,6 @@ export const Operation = Schema.Struct({
 
 export type Operation = typeof Operation.Type;
 
-/** `waiting` is never stored: a read tells it, as it tells the state. */
 export type MachinePhase = Exclude<Phase, "waiting">;
 
 const made = {
@@ -106,7 +105,6 @@ const made = {
 export const Facts = Schema.Struct({
   ...made,
   port: UndefinedFromNull(Schema.Int),
-  /** What was asked. A delete is the `deleting` region, so the wire's `deleted` is no wish. */
   desired: Desired.pick(["running", "stopped", "paused"]),
   prepared: Schema.BooleanFromBit,
   /** The resize still owed. One that runs is on its operation. */

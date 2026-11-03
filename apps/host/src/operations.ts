@@ -63,7 +63,6 @@ import { Tailnet } from "./tailnet.ts";
 export interface Interface {
   readonly boot: string;
   readonly run: (operation: Operation) => Effect.Effect<Report, Conflict>;
-  /** Reports an operation, once it ends or after `reportWait`. */
   readonly wait: (id: string) => Effect.Effect<Report>;
   readonly cancel: (id: string) => Effect.Effect<void>;
   readonly collect: (id: string) => Effect.Effect<void>;
@@ -73,10 +72,6 @@ export interface Interface {
   readonly capacity: (
     machines: readonly MachineRef[]
   ) => ReturnType<Runtime["Service"]["capacity"]>;
-  /**
-   * Runs a command in a running machine, once a step in its scope has ended, and for as long as
-   * the request does. Nothing of it is kept.
-   */
   readonly exec: (
     command: ExecCommand
   ) => Effect.Effect<Executed, Missing | WrongState | Internal>;

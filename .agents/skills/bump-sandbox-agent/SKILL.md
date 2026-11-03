@@ -116,8 +116,7 @@ publish, change production hosts, or commit unless asked.
   a stand-in ssh.
 - Each recipe's downloads against their pins: run `recipes/ubuntu/setup.sh` in
   a throwaway `linux/amd64` `ubuntu:24.04` container. It needs no keys: the
-  host installs the operator's after a setup, which the host's tests cover
-  (`apps/host/tests/machines.test.ts`), not this run.
+  host installs the operator's after a setup.
 
 ## After
 

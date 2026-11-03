@@ -24,7 +24,6 @@ export type {
   Native,
 } from "@clankerbox/host-contract";
 
-/** A host that can't serve at all, before it listens. */
 export class CannotStart extends Schema.TaggedError<
   CannotStart,
   { readonly brand: unique symbol }
@@ -130,9 +129,7 @@ export interface Interface {
     to: Sizes,
     live: boolean
   ) => Effect.Effect<void, Unsizable>;
-  /** What the host clears when it starts, knowing no machines yet. */
   readonly startup: Effect.Effect<void, RuntimeError>;
-  /** What the runtime keeps beside each VM, once the control plane says which it holds. */
   readonly adopt: (
     machines: readonly MachineRef[]
   ) => Effect.Effect<void, RuntimeError>;

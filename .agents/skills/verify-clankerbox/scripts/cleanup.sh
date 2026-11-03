@@ -1,5 +1,4 @@
 #!/bin/sh
-# Usage: cleanup.sh <run-dir>
 set -eu
 . "$(dirname "$0")/common.sh"
 use_run "$@"

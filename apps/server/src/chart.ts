@@ -240,9 +240,8 @@ const isRead = <E extends EventObject>(event: E): event is ReadOf<E> =>
 
 /**
  * One event on one row: the row rebuilds a snapshot, `transition` runs once, and the snapshot goes
- * with the call, as a threaded one retains every step before it. A leaf with a `step` begins an
- * operation when none is in flight, and one without finishes the operation that is. An event the
- * leaf doesn't take answers the same row.
+ * with the call. A leaf with a `step` begins an operation when none is in flight, and one without
+ * finishes the operation that is. An event the leaf doesn't take answers the same row.
  */
 export const applied = <
   S extends Snapshot<L>,

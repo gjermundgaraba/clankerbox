@@ -18,7 +18,6 @@ export const loginUser = "admin";
 
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
 
-/** How many labels a machine or checkpoint may carry. */
 export const maxLabels = 16;
 
 const maxLabelLength = 63;
@@ -89,7 +88,6 @@ export type Phase = typeof Phase.Type;
 export const isResting = (phase: Phase): boolean =>
   phase === "settled" || phase === "failed" || phase === "lost";
 
-/** A TCP port. */
 export const Port = Schema.Int.check(
   Schema.isBetween({ minimum: 1, maximum: 65_535 })
 );
@@ -255,7 +253,6 @@ export const Usage = Schema.Union([
 
 export type Usage = typeof Usage.Type;
 
-/** Each host's `Usage`, and the hosts that gave none. */
 export const CapacityReport = Schema.Struct({
   usage: Schema.Array(Usage),
   unreachable: Schema.Array(HostId),
