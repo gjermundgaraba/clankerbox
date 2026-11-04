@@ -1102,21 +1102,49 @@ export const make = (
       restore: Effect.fn("Smolvm.restore")((checkpoint, machine) =>
         Effect.gen(function* () {
           const base = baseOf(nativeName(checkpoint));
+          const native = nativeName(machine);
 
-          if ((yield* status(base)) !== "frozen") {
-            return yield* restoreRam(
-              checkpointDir(checkpoint),
-              checkpoint,
-              machine
-            );
+          const frozen = Effect.matchEffect(status(base), {
+            onFailure: (error) =>
+              Effect.as(
+                Effect.logWarning(
+                  `couldn't read ${base}, so ${native} restores the copy: ${error.message}`
+                ),
+                false
+              ),
+            onSuccess: (recorded) => Effect.succeed(recorded === "frozen"),
+          });
+
+          const restored = restoreRam(
+            checkpointDir(checkpoint),
+            checkpoint,
+            machine
+          );
+
+          if (!(yield* frozen)) {
+            return yield* restored;
           }
 
-          yield* branched(base, machine);
-          yield* grown(
-            nativeName(machine),
-            checkpoint,
-            changes(checkpoint, machine)
+          const went = yield* branched(base, machine).pipe(
+            Effect.as(false),
+            Effect.catch((error) =>
+              Effect.flatMap(frozen, (still) =>
+                still
+                  ? Effect.fail(error)
+                  : Effect.as(removeNative(native), true)
+              )
+            )
           );
+
+          if (went) {
+            yield* Effect.logWarning(
+              `${base} went before ${native} could branch it, so ${native} restores the copy`
+            );
+
+            return yield* restored;
+          }
+
+          yield* grown(native, checkpoint, changes(checkpoint, machine));
         })
       ),
       fork: Effect.fn("Smolvm.fork")((source, machine) => {

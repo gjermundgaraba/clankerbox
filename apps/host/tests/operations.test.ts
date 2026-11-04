@@ -2572,6 +2572,80 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a create restores the build when its base can't be read or goes before the branch, and fails when the branch fails beside a frozen base",
+    () =>
+      Effect.gen(function* () {
+        const { model, operations, pin } = yield* onSmolvm;
+        const host = { operations };
+        const builder = ref("building-1", { port: 11_001 });
+        const build = checkpoint("built-abc123");
+        const base = `base_b00710ad_${Smolvm.nativeName(build)}`;
+
+        const created = (name: string) =>
+          Effect.map(
+            finished(
+              host,
+              makes(name, {
+                source: { _tag: "checkpoint", checkpoint: build, pin },
+              })
+            ),
+            ({ status }) => ({
+              status,
+              parent: model.vms.get(Smolvm.nativeName(ref(name)))?.parent,
+            })
+          );
+
+        model.vms.set(Smolvm.nativeName(builder), {
+          state: "running",
+          forwards: [`${builder.port}:22`],
+        });
+
+        yield* finished(host, {
+          _tag: "capture",
+          machine: builder,
+          checkpoint: build,
+          pin,
+        });
+        model.vms.delete(Smolvm.nativeName(builder));
+
+        model.faults.reply = ({ args }) =>
+          args[1] === "status" && args.includes(base)
+            ? { exitCode: 1, stderr: "Error: database is locked\n" }
+            : undefined;
+
+        const unread = yield* created("web-1");
+
+        model.faults.reply = ({ args }) =>
+          args[1] === "branch" && !args.includes(`${base}_freeze`)
+            ? { exitCode: 1, stderr: "Error: port 10001 is already in use\n" }
+            : undefined;
+
+        const refused = yield* created("web-2");
+
+        model.faults.reply = ({ args }) => {
+          if (args[1] !== "branch") {
+            return undefined;
+          }
+
+          model.vms.delete(base);
+
+          return {
+            exitCode: 1,
+            stderr: `Error: machine '${base}' not found\n`,
+          };
+        };
+
+        const gone = yield* created("web-3");
+
+        expect([unread, refused, gone]).toStrictEqual([
+          { status: "done", parent: undefined },
+          { status: "failed", parent: undefined },
+          { status: "done", parent: undefined },
+        ]);
+      })
+  );
+
+  it.effect(
     "a host that boots again parks each build it keeps anew, and drops the old base with its last child",
     () =>
       Effect.gen(function* () {
