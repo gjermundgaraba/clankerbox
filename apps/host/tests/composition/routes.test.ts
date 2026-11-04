@@ -91,23 +91,26 @@ const finished = (url: string, id: string) =>
   );
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
-  it.effect("a host tells the control plane what it needs of it", () =>
-    Effect.gen(function* () {
-      const { url, operations } = yield* serve();
-      const answer = yield* post(url, "readHost", {});
+  it.effect(
+    "a host tells the control plane what it needs of it, the image each base names included",
+    () =>
+      Effect.gen(function* () {
+        const { url, operations } = yield* serve();
+        const answer = yield* post(url, "readHost", {});
 
-      expect(decodeHost(answer.body)).toStrictEqual({
-        id: "linux",
-        kind: "linux",
-        version,
-        runtimeVersion: "fake",
-        bases: ["ubuntu"],
-        boot: operations.boot,
-        pin: "fake 1",
-        publishAddress: "127.0.0.1",
-        joins: false,
-      });
-    })
+        expect(decodeHost(answer.body)).toStrictEqual({
+          id: "linux",
+          kind: "linux",
+          version,
+          runtimeVersion: "fake",
+          bases: ["ubuntu"],
+          images: { ubuntu: image },
+          boot: operations.boot,
+          pin: "fake 1",
+          publishAddress: "127.0.0.1",
+          joins: false,
+        });
+      })
   );
 
   it.effect(

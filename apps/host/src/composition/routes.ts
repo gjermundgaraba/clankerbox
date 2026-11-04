@@ -27,6 +27,7 @@ const app = (config: Served) =>
             version,
             runtimeVersion: runtime.version,
             bases: [...config.bases.keys()],
+            images: Object.fromEntries(config.bases),
             boot: operations.boot,
             ...(runtime.pin === undefined ? {} : { pin: runtime.pin }),
             publishAddress: runtime.publishAddress,

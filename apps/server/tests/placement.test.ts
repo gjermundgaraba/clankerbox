@@ -20,6 +20,7 @@ const info = (id: string, bases: readonly string[]): HostInfo => ({
   version: "0",
   runtimeVersion: "fake",
   bases,
+  images: Object.fromEntries(bases.map((base) => [base, `image/${base}`])),
   boot: "boot",
   publishAddress: "127.0.0.1",
   joins: false,

@@ -161,13 +161,17 @@ export const Report = Schema.Struct({
 
 export type Report = typeof Report.Type;
 
-/** What the control plane needs to know of a host. `boot` is new each time its process starts. */
+/**
+ * What the control plane needs to know of a host. `images` is the image each of `bases` names
+ * there, and `boot` is new each time its process starts.
+ */
 export const HostInfo = Schema.Struct({
   id: Schema.String,
   kind: Kind,
   version: Schema.String,
   runtimeVersion: Schema.String,
   bases: Schema.Array(Schema.String),
+  images: Schema.Record(Schema.String, Schema.String),
   boot: Schema.String,
   pin: Schema.optionalKey(Schema.String),
   publishAddress: Schema.String,
