@@ -308,6 +308,29 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a build number names one build only, past a delete of its template",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* withClient();
+        const { client } = served;
+
+        yield* client.buildTemplate(web());
+        yield* client.buildTemplate(rebuild());
+        yield* client.deleteTemplate({ id: "web" });
+
+        const built = yield* client.buildTemplate(web());
+
+        const pinned = yield* Effect.flip(
+          client.create("dev", { template: "web@1" })
+        );
+
+        expect(built).toMatchObject({ id: "web@3", phase: "ready" });
+        expect(yield* phases(served)).toStrictEqual([["web@3", "ready"]]);
+        expect(pinned).toMatchObject({ _tag: "NotBuilt", template: "web" });
+      })
+  );
+
+  it.effect(
     "a build captures a copy from a machine of its own, setup and all, records where and from what, and deletes the machine after",
     () =>
       Effect.gen(function* () {

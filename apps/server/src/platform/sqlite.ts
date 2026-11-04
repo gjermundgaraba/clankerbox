@@ -131,6 +131,10 @@ export const migrations: readonly string[] = [
     pin TEXT,
     image TEXT NOT NULL,
     PRIMARY KEY (template, number)
+  ) STRICT;
+  CREATE TABLE build_numbers (
+    template TEXT PRIMARY KEY,
+    last INTEGER NOT NULL
   ) STRICT`,
 ];
 
@@ -318,6 +322,10 @@ const operationColumns = Schema.encodeSync(Operation);
 
 const templateFactsOf = Schema.decodeUnknownSync(StoredTemplate);
 
+const decodeLastBuild = Schema.decodeUnknownSync(
+  Schema.Struct({ last: Schema.Int })
+);
+
 const buildOf = Schema.decodeUnknownSync(StoredBuild);
 
 const templateColumns = Schema.encodeSync(StoredTemplate);
@@ -483,6 +491,15 @@ export const open = (
 
     const deleteBuilds = yield* prepare(
       "DELETE FROM builds WHERE template = ?"
+    );
+
+    const selectLastBuild = yield* prepare(
+      "SELECT last FROM build_numbers WHERE template = ?"
+    );
+
+    const raiseLastBuild = yield* prepare(
+      `INSERT INTO build_numbers (template, last) VALUES (?, ?)
+      ON CONFLICT (template) DO UPDATE SET last = MAX(last, excluded.last)`
     );
 
     const selectBoot = yield* prepare("SELECT boot FROM hosts WHERE id = ?");
@@ -696,7 +713,12 @@ export const open = (
       ),
       advanceTemplate: (name, decide) =>
         transaction(db, `change template ${name}`, () => {
-          const decided = decide(foundTemplate(name));
+          const stored = selectLastBuild.get(name);
+
+          const decided = decide(
+            foundTemplate(name),
+            stored === undefined ? 0 : decodeLastBuild(stored).last
+          );
 
           if (Result.isSuccess(decided)) {
             deleteTemplate.run(name);
@@ -711,6 +733,7 @@ export const open = (
 
               for (const build of builds) {
                 insertBuild.run(buildColumns({ template: name, ...build }));
+                raiseLastBuild.run(name, build.number);
               }
             }
           }

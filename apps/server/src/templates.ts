@@ -112,7 +112,10 @@ type Begun = TemplateRow & {
 
 const begun =
   (name: string, asked: Facts, host: HostInfo, now: DateTime.Utc) =>
-  (found: Option.Option<TemplateRow>): Result.Result<Begun, Conflict> => {
+  (
+    found: Option.Option<TemplateRow>,
+    lastBuild: number
+  ): Result.Result<Begun, Conflict> => {
     const before = Option.getOrUndefined(found);
     const running = before === undefined ? undefined : building(before);
 
@@ -137,7 +140,7 @@ const begun =
       name,
       createdAt: before?.createdAt ?? now,
       builds: Arr.append(earlier, {
-        number: (earlier.at(-1)?.number ?? 0) + 1,
+        number: lastBuild + 1,
         createdAt: now,
         phase: "building",
         error: undefined,

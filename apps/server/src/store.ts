@@ -226,7 +226,10 @@ export interface Interface {
   ) => Effect.Effect<Option.Option<TemplateRow>, Internal>;
   readonly advanceTemplate: <A extends TemplateRow | "removed", E>(
     name: string,
-    decide: (found: Option.Option<TemplateRow>) => Result.Result<A, E>
+    decide: (
+      found: Option.Option<TemplateRow>,
+      lastBuild: number
+    ) => Result.Result<A, E>
   ) => Effect.Effect<A, E | Internal>;
   /** The oldest operation in flight on a resource. Every lease is an operation in flight here. */
   readonly operationOn: (
