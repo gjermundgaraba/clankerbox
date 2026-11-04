@@ -2,6 +2,8 @@ import {
   checkpointKinds,
   formatGib,
   formatMib,
+  NotBuilt,
+  templateRef,
   Unsizable,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
@@ -78,13 +80,13 @@ export const cloned = (
 };
 
 /**
- * Why a copy can't be made: its source went before it began, or it can't be at the sizes it was
- * asked, as its source may have grown since.
+ * Why a copy can't be made: its source went before it began, which for a template's build is
+ * `NotBuilt`, or it can't be at the sizes it was asked, as its source may have grown since.
  */
 export const refusedBySource = (
   store: Store,
   found: MachineRow
-): Effect.Effect<NotFound | Unsizable | undefined, Internal> =>
+): Effect.Effect<NotFound | NotBuilt | Unsizable | undefined, Internal> =>
   Effect.gen(function* () {
     const { source } = found;
 
@@ -97,12 +99,19 @@ export const refusedBySource = (
         ? yield* store.findMachine(source.name)
         : yield* store.findCheckpoint(source.name);
 
-    return Option.isNone(from)
-      ? notFound(source.kind, source.name)
-      : yield* copied(found.name, from.value, found, found.kind).pipe(
-          Effect.match({
-            onFailure: (refusal) => refusal,
-            onSuccess: () => undefined,
-          })
-        );
+    if (Option.isNone(from)) {
+      return found.template === undefined
+        ? notFound(source.kind, source.name)
+        : new NotBuilt({
+            message: `build ${found.template} went before machine ${found.name} could clone it`,
+            template: templateRef(found.template).template,
+          });
+    }
+
+    return yield* copied(found.name, from.value, found, found.kind).pipe(
+      Effect.match({
+        onFailure: (refusal) => refusal,
+        onSuccess: () => undefined,
+      })
+    );
   });

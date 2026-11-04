@@ -4,7 +4,7 @@ import { image } from "@gjermundgaraba/clankerbox-host/testing";
 import type { TestHost } from "@gjermundgaraba/clankerbox-host/testing";
 import { Conflict, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import type { BuildRequest, Kind } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, Fiber } from "effect";
+import { Duration, Effect, Fiber, Option } from "effect";
 import { expect } from "vite-plus/test";
 
 import {
@@ -193,6 +193,49 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(yield* client.getTemplate({ id: "web" })).toMatchObject({
           current: "web@3",
           cpu: 2,
+        });
+      })
+  );
+
+  it.effect(
+    "a clone whose build's copy went before it began fails NotBuilt, naming the build and not its copy",
+    () =>
+      Effect.gen(function* () {
+        const planned = yield* plane();
+        const first = yield* planned.start();
+        const client = yield* clientOf(first.url);
+
+        yield* client.buildTemplate(web());
+        yield* client.create("dev", { template: "web" });
+
+        const dev = Option.getOrThrow(yield* first.store.findMachine("dev"));
+
+        yield* first.store.insertMachine({
+          ...dev,
+          name: "copy",
+          instance: "unsent",
+          port: undefined,
+          state: "making.due",
+          prepared: false,
+          hostKey: undefined,
+        });
+        yield* client.deleteTemplate({ id: "web" });
+        yield* eventually(copiesOf(first), (copies) => copies.length === 0);
+        yield* first.crash;
+
+        const second = yield* planned.start();
+
+        yield* Effect.addFinalizer(() => second.crash);
+
+        const copy = yield* eventually(
+          (yield* clientOf(second.url)).getMachine({ id: "copy" }),
+          ({ phase }) => phase === "failed"
+        );
+
+        expect(copy.error).toMatchObject({
+          _tag: "NotBuilt",
+          template: "web",
+          message: "build web@1 went before machine copy could clone it",
         });
       })
   );
