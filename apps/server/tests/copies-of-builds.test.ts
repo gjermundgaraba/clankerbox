@@ -5,7 +5,7 @@ import type {
   startHost,
   TestHost,
 } from "@gjermundgaraba/clankerbox-host/testing";
-import { Internal } from "@gjermundgaraba/clankerbox-sdk";
+import { Internal, isBuildCopy } from "@gjermundgaraba/clankerbox-sdk";
 import type { BuildRequest } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect } from "effect";
 import { expect } from "vite-plus/test";
@@ -82,6 +82,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         "web@1 one ready",
         "web@1 two ready",
       ]);
+      expect(
+        (yield* served.store.checkpoints).map(({ name }) => isBuildCopy(name))
+      ).toStrictEqual([true, true]);
       expect(callsTo(served.two, "install")).toHaveLength(1);
       expect(callsTo(served.one, "install")).toHaveLength(0);
       expect(

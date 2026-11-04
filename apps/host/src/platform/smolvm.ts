@@ -133,9 +133,14 @@ const storedObject = (file: string): string | undefined => {
     : undefined;
 };
 
+const instanceChars = 8;
+
 export const nativeName = (
   resource: Pick<MachineRef, "name" | "instance">
-): string => `${resource.name}-${resource.instance.slice(0, 8)}`;
+): string => `${resource.name}-${resource.instance.slice(0, instanceChars)}`;
+
+const nameOf = (native: string): string =>
+  native.slice(0, -(instanceChars + 1));
 
 const observeConcurrency = 8;
 
@@ -965,7 +970,7 @@ export const make = (
             ? entry.slice(0, -checkpointSuffix.length)
             : "";
 
-          return isBuildCopy(build) ? [build] : [];
+          return isBuildCopy(nameOf(build)) ? [build] : [];
         })
     );
 

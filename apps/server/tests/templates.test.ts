@@ -2,7 +2,11 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { image } from "@gjermundgaraba/clankerbox-host/testing";
 import type { TestHost } from "@gjermundgaraba/clankerbox-host/testing";
-import { Conflict, Internal } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  Conflict,
+  Internal,
+  isBuildCopy,
+} from "@gjermundgaraba/clankerbox-sdk";
 import type { BuildRequest, Kind } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Fiber, Option } from "effect";
 import { expect } from "vite-plus/test";
@@ -351,7 +355,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         });
         expect(built.pin).toBeDefined();
         expect(copy).toMatchObject({ build: "web@1", kind: "linux" });
-        expect(copy?.name).toMatch(/^built-[0-9a-f]{16}$/u);
+        expect(isBuildCopy(copy?.name ?? "")).toBe(true);
         expect(copy?.machine).toMatch(/^building-[0-9a-f]{16}$/u);
         expect(opsOf(host).slice(2)).toStrictEqual([
           "admit",

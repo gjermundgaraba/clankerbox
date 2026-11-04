@@ -1504,7 +1504,7 @@ layer(NodeServices.layer)((it) => {
         const model = smolvmModel(1024 * 1024 * 1024);
         const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
         const builder = { ...machine, name: "building-1" };
-        const build = { ...machine, name: "built-abc123" };
+        const build = { ...machine, name: "built-0123456789abcdef" };
 
         model.vms.set(nativeName(builder), {
           state: "running",
@@ -1544,7 +1544,7 @@ layer(NodeServices.layer)((it) => {
         const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
         const target = { ...machine, name: "next", ramMib: 4096 - 1024 + 1 };
 
-        model.vms.set("base_b00710ad_built-abc123-fedcba98", {
+        model.vms.set("base_b00710ad_built-0123456789abcdef-fedcba98", {
           state: "frozen",
           forwards: [],
         });
@@ -1828,6 +1828,43 @@ layer(NodeServices.layer)((it) => {
             "snap-fedcba98.checkpoint"
           )
         );
+      })
+  );
+
+  it.effect(
+    "a host's start parks a base for a build's copy, and none for a checkpoint a client named as one begins, whose copies restore it",
+    () =>
+      Effect.gen(function* () {
+        const model = smolvmModel();
+        const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
+        const builder = { ...machine, name: "building-1" };
+        const build = { ...ramCheckpoint, name: "built-0123456789abcdef" };
+        const named = { ...ramCheckpoint, name: "built" };
+
+        const others = ["fetched", "built-x"].map((name) => ({
+          ...ramCheckpoint,
+          name,
+        }));
+
+        model.vms.set(nativeName(builder), {
+          state: "running",
+          forwards: [`${builder.port}:22`],
+        });
+
+        for (const checkpoint of [build, named, ...others]) {
+          yield* runtime.capture(builder, checkpoint);
+        }
+
+        yield* runtime.bases?.settle ?? Effect.die("smolvm parks bases");
+
+        const bases = [...model.vms.keys()].filter((vm) =>
+          vm.startsWith("base_")
+        );
+
+        yield* runtime.restore(named, copy);
+
+        expect(bases).toStrictEqual([`base_b00710ad_${nativeName(build)}`]);
+        expect(model.vms.get(nativeName(copy))?.parent).toBeUndefined();
       })
   );
 

@@ -2246,7 +2246,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const { model, operations, pin } = yield* onSmolvm;
       const host = { operations };
       const builder = ref("building-1");
-      const build = checkpoint("built-abc123");
+      const build = checkpoint("built-0123456789abcdef");
       const base = `base_b00710ad_${Smolvm.nativeName(build)}`;
       const child = Smolvm.nativeName(ref("web-1"));
 
@@ -2309,7 +2309,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         });
 
         const captures = yield* Effect.forEach(
-          ["snap", "built-abc123"],
+          ["snap", "built-0123456789abcdef"],
           (name) =>
             Effect.gen(function* () {
               const before = unkeyed();
@@ -2340,7 +2340,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             status: "done",
             unkeyed: 1,
             bases: [
-              `base_b00710ad_${Smolvm.nativeName(checkpoint("built-abc123"))}`,
+              `base_b00710ad_${Smolvm.nativeName(checkpoint("built-0123456789abcdef"))}`,
             ],
           },
         ]);
@@ -2354,8 +2354,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const fs = yield* FileSystem.FileSystem;
         const { layer: shared } = memoryBuildStore();
         const builder = ref("building-1");
-        const built = checkpoint("built-abc123");
-        const fetched = checkpoint("fetched-def456");
+        const built = checkpoint("built-0123456789abcdef");
+        const fetched = checkpoint("fetched-fedcba9876543210");
         const base = `base_5bfae059_${Smolvm.nativeName(fetched)}`;
         const building = smolvmModel();
         const other = smolvmModel();
@@ -2440,7 +2440,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const fs = yield* FileSystem.FileSystem;
         const { model, stateDir, operations, pin } = yield* onSmolvm;
         const builder = ref("building-1");
-        const build = checkpoint("built-abc123");
+        const build = checkpoint("built-0123456789abcdef");
         const base = `base_b00710ad_${Smolvm.nativeName(build)}`;
 
         const index = path.join(
@@ -2517,7 +2517,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { model, operations, pin } = yield* onSmolvm;
         const host = { operations };
         const builder = ref("building-1");
-        const build = checkpoint("built-abc123");
+        const build = checkpoint("built-0123456789abcdef");
         const base = `base_b00710ad_${Smolvm.nativeName(build)}`;
 
         model.vms.set(Smolvm.nativeName(builder), {
@@ -2578,7 +2578,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { model, operations, pin } = yield* onSmolvm;
         const host = { operations };
         const builder = ref("building-1", { port: 11_001 });
-        const build = checkpoint("built-abc123");
+        const build = checkpoint("built-0123456789abcdef");
         const base = `base_b00710ad_${Smolvm.nativeName(build)}`;
 
         const created = (name: string) =>
@@ -2680,7 +2680,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             ? { exitCode: 1, stderr: "Error: database is locked\n" }
             : undefined;
 
-        const failing = checkpoint("built-abc123");
+        const failing = checkpoint("built-0123456789abcdef");
 
         const failed = yield* finished(host, {
           _tag: "capture",
@@ -2694,7 +2694,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             ? { hangs: true }
             : undefined;
 
-        const cut = checkpoint("built-def456");
+        const cut = checkpoint("built-fedcba9876543210");
 
         const operation = delivery({
           _tag: "capture",
@@ -2730,7 +2730,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const { model, stateDir, operations, pin } = yield* onSmolvm;
         const builder = ref("building-1");
-        const build = checkpoint("built-abc123");
+        const build = checkpoint("built-0123456789abcdef");
         const before = `base_b00710ad_${Smolvm.nativeName(build)}`;
         const after = `base_5bfae059_${Smolvm.nativeName(build)}`;
 

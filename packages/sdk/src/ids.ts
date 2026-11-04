@@ -26,15 +26,22 @@ export const Name = Schema.String.check(
 /** How the control plane begins the name of a template build's copy, made or fetched. */
 export const copyPrefixes = { built: "built-", fetched: "fetched-" } as const;
 
-/** Whether a checkpoint, by its name or a host's name for it, is a template build's copy. */
+const prefixes = Object.values(copyPrefixes);
+
+const buildCopyPattern = new RegExp(
+  `^(?:${prefixes.join("|")})[0-9a-f]{16}$`,
+  "u"
+);
+
+/** Whether a checkpoint's name is one the control plane mints for a template build's copy. */
 export const isBuildCopy = (name: string): boolean =>
-  Object.values(copyPrefixes).some((prefix) => name.startsWith(prefix));
+  buildCopyPattern.test(name);
 
 /** A name a client gives a checkpoint, which never begins as a build's copy does. */
 export const CheckpointName = Name.check(
   Schema.makeFilter(
     (name: string) =>
-      !isBuildCopy(name) ||
-      `a checkpoint's name doesn't begin ${Object.values(copyPrefixes).join(" or ")}, which name template builds' copies`
+      !prefixes.some((prefix) => name.startsWith(prefix)) ||
+      `a checkpoint's name doesn't begin ${prefixes.join(" or ")}, which name template builds' copies`
   )
 );

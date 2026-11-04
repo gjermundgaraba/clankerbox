@@ -60,18 +60,23 @@ describe("ids", () => {
     expect(isName("a".repeat(63))).toBe(false);
   });
 
-  it("a checkpoint's name never begins as a build's copy does, and every copy's name does", () => {
+  it("a checkpoint's name never begins as a build's copy does, and only a name the control plane mints is a copy", () => {
     const isCheckpointName = Schema.is(CheckpointName);
 
-    for (const name of ["dev", "builtin", "built", "fetch-1", "pre-built-1"]) {
+    for (const name of ["dev", "builtin", "built", "fetched", "pre-built-1"]) {
       expect(isCheckpointName(name), name).toBe(true);
       expect(isBuildCopy(name), name).toBe(false);
     }
 
-    for (const name of ["built-x", "fetched-0123456789abcdef"]) {
+    for (const name of ["built-x", "fetched-0123456789ABCDEF"]) {
+      expect(isCheckpointName(name), name).toBe(false);
+      expect(isBuildCopy(name), name).toBe(false);
+    }
+
+    for (const name of ["built-0123456789abcdef", "fetched-fedcba9876543210"]) {
       expect(isCheckpointName(name), name).toBe(false);
       expect(isBuildCopy(name), name).toBe(true);
-      expect(isBuildCopy(`${name}-0f3a9c1e`), name).toBe(true);
+      expect(isBuildCopy(`${name}-0f3a9c1e`), name).toBe(false);
     }
   });
 
