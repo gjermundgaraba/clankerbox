@@ -41,7 +41,6 @@ export interface Interface {
   readonly get: (
     id: string
   ) => Effect.Effect<Template, Declared<"getTemplate">>;
-  /** Records a build and answers at once. Its end is written to its template. */
   readonly build: (
     request: BuildRequest
   ) => Effect.Effect<Build, Declared<"buildTemplate">>;
@@ -179,7 +178,7 @@ export const make: Effect.Effect<
     number: number,
     end: Pick<BuildRow, "phase" | "error">
   ) =>
-    store.changeTemplate(name, (found) =>
+    store.advanceTemplate(name, (found) =>
       Result.succeed(
         Option.match(found, {
           onNone: () => "removed" as const,
@@ -294,7 +293,7 @@ export const make: Effect.Effect<
         placing(yield* hosts.reachAll, base)
       );
 
-      const row = yield* store.changeTemplate(
+      const row = yield* store.advanceTemplate(
         name,
         begun(request, base, host, yield* DateTime.now)
       );
@@ -326,7 +325,7 @@ export const make: Effect.Effect<
 
   const remove = (name: string) =>
     Effect.andThen(
-      store.changeTemplate(
+      store.advanceTemplate(
         name,
         (found): Result.Result<"removed", NotFound | Conflict> => {
           if (Option.isNone(found)) {

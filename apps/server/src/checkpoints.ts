@@ -65,15 +65,10 @@ export interface Interface {
   readonly delete: (
     id: string
   ) => Effect.Effect<void, Declared<"deleteCheckpoint">>;
-  /**
-   * Captures `machine` as a copy of template build `build`, which no client reaches as a
-   * checkpoint, and waits for the capture to end, failing with its error.
-   */
   readonly copy: (
     machine: string,
     build: string
   ) => Effect.Effect<void, HostError>;
-  /** Deletes a copy of a template build, if it is there. */
   readonly discard: (name: string) => Effect.Effect<void, Internal>;
 }
 

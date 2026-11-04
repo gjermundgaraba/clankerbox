@@ -58,7 +58,6 @@ export const copied = (
     return spec;
   });
 
-/** The spec of a clone of `build`'s copy, `from`, which takes no size below the build's. */
 export const cloned = (
   name: string,
   build: string,

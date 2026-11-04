@@ -111,7 +111,6 @@ export const Facts = Schema.Struct({
   resize: UndefinedFromNull(Schema.fromJsonString(Sizing)),
   ephemeral: Schema.BooleanFromBit,
   source: Schema.fromJsonString(Source),
-  /** The template build a create cloned, from the checkpoint its source names. */
   template: UndefinedFromNull(Schema.String),
   hostKey: UndefinedFromNull(Schema.String),
   undoneAt: UndefinedFromNull(Schema.DateTimeUtcFromString),
@@ -132,13 +131,11 @@ export const CheckpointFacts = Schema.Struct({
   failedAt: UndefinedFromNull(Schema.DateTimeUtcFromString),
   /** When the control plane deletes it, once ready. */
   expiresAt: UndefinedFromNull(Schema.DateTimeUtcFromString),
-  /** The template build this is a copy of, which no client reaches as a checkpoint. */
   build: UndefinedFromNull(Schema.String),
 });
 
 export type CheckpointFacts = typeof CheckpointFacts.Type;
 
-/** A build of a template, by its number. Its copy is the checkpoint whose `build` names it. */
 export const BuildRow = Schema.Struct({
   number: Schema.Int,
   createdAt: Schema.DateTimeUtcFromString,
@@ -151,7 +148,6 @@ export const BuildRow = Schema.Struct({
 
 export type BuildRow = typeof BuildRow.Type;
 
-/** What a template's row holds but for its builds: what its next build is made from. */
 export const TemplateFacts = Schema.Struct({
   name: Schema.String,
   createdAt: Schema.DateTimeUtcFromString,
@@ -162,7 +158,6 @@ export const TemplateFacts = Schema.Struct({
   setupTimeoutSeconds: UndefinedFromNull(Schema.Int),
 });
 
-/** A template's row, and its builds, oldest first. */
 export type TemplateRow = typeof TemplateFacts.Type & {
   readonly builds: readonly BuildRow[];
 };
@@ -229,12 +224,7 @@ export interface Interface {
   readonly findTemplate: (
     name: string
   ) => Effect.Effect<Option.Option<TemplateRow>, Internal>;
-  /**
-   * One write of a template's row and its builds, decided inside it, as `advance` decides: `decide`
-   * reads them, or that there is none, and answers what they are to be, or `removed`, or why
-   * nothing is written.
-   */
-  readonly changeTemplate: <A extends TemplateRow | "removed", E>(
+  readonly advanceTemplate: <A extends TemplateRow | "removed", E>(
     name: string,
     decide: (found: Option.Option<TemplateRow>) => Result.Result<A, E>
   ) => Effect.Effect<A, E | Internal>;

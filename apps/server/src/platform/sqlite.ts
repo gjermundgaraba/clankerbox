@@ -694,7 +694,7 @@ export const open = (
       findTemplate: Effect.fn("Store.findTemplate")((name) =>
         sql(`read template ${name}`, () => foundTemplate(name))
       ),
-      changeTemplate: (name, decide) =>
+      advanceTemplate: (name, decide) =>
         transaction(db, `change template ${name}`, () => {
           const decided = decide(foundTemplate(name));
 
@@ -718,7 +718,7 @@ export const open = (
           return decided;
         }).pipe(
           Effect.flatMap(Effect.fromResult),
-          Effect.withSpan("Store.changeTemplate")
+          Effect.withSpan("Store.advanceTemplate")
         ),
       operationOn: Effect.fn("Store.operationOn")((resource, name) =>
         sql(`read the operation on ${name}`, () => {

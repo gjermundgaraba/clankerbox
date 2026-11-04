@@ -118,7 +118,6 @@ export const build = (id: string, fields?: Partial<Build>): Build => ({
   ...fields,
 });
 
-/** A template whose builds are `builds`, oldest first, or one ready build, `<id>@1`. */
 export const template = (
   id: string,
   fields?: Partial<Omit<Template, "current" | "state">>

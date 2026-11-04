@@ -90,7 +90,6 @@ const strictly = { onExcessProperty: "error", errors: "all" } as const;
 const refused = (command: string) => (error: Schema.SchemaError) =>
   new Invalid({ message: `${command}: ${describeIssues(error, specNames)}` });
 
-/** The spec the flags ask for: a template's build, or a base with its setup read. */
 export const flagsSpec = (command: string, flags: SpecFlags) =>
   Effect.gen(function* () {
     const path = yield* Path.Path;

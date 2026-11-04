@@ -74,11 +74,6 @@ export const placing = (
   );
 };
 
-/**
- * The hosts that hold one of `copies`, of `build` of `template`, by host, and can take a clone of
- * it, in config order, each with its copy, to try in turn as `placing`'s are. With none, a holder
- * that gave no reply is `Unavailable`, and `NotBuilt` otherwise.
- */
 export const holding = <A>(
   reached: readonly Reached[],
   copies: ReadonlyMap<string, A>,

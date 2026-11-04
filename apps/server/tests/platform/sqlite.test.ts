@@ -1648,11 +1648,11 @@ layer(NodeServices.layer)((it) => {
 
         const [refused, unchanged] = yield* withStore(stateDir, (store) =>
           Effect.gen(function* () {
-            yield* store.changeTemplate("web", () => Result.succeed(web));
-            yield* store.changeTemplate("api", () => Result.succeed(api));
+            yield* store.advanceTemplate("web", () => Result.succeed(web));
+            yield* store.advanceTemplate("api", () => Result.succeed(api));
 
             const failed = yield* Effect.flip(
-              store.changeTemplate("web", () =>
+              store.advanceTemplate("web", () =>
                 Result.fail(new Conflict({ message: "building", id: "web" }))
               )
             );
@@ -1665,8 +1665,10 @@ layer(NodeServices.layer)((it) => {
           Effect.gen(function* () {
             const read = yield* store.templates;
 
-            yield* store.changeTemplate("web", () => Result.succeed("removed"));
-            yield* store.changeTemplate("web", () =>
+            yield* store.advanceTemplate("web", () =>
+              Result.succeed("removed")
+            );
+            yield* store.advanceTemplate("web", () =>
               Result.succeed({ ...web, builds: [] })
             );
 
