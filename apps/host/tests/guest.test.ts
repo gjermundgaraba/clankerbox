@@ -9,6 +9,7 @@ import {
   outputOf,
   read as readFile,
   readBytes,
+  readDirectory,
   remove,
   scratch,
   stat,
@@ -508,13 +509,57 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(code, output).toBe(0);
         expect(yield* calls(where.root)).toStrictEqual([
           `perl ${where.root}/dev/urandom`,
-          "ssh-keygen -A",
+          `ssh-keygen -q -t ed25519 -N  -f ${where.root}/etc/ssh/ssh_host_ed25519_key`,
         ]);
         expect(printed).toMatch(/^ssh-ed25519 AAAA[0-9a-f]+$/u);
         expect(`${printed} root@stub\n`).toBe(
           yield* read(where.root, "etc/ssh/ssh_host_ed25519_key.pub")
         );
       })
+  );
+
+  it.effect("a new identity leaves one new Ed25519 host key and no other", () =>
+    Effect.gen(function* () {
+      const where = yield* guest();
+      const ssh = path.join(where.root, "etc", "ssh");
+
+      yield* remove(path.join(where.bin, "ssh-keygen"));
+      yield* symlink(
+        "/usr/bin/ssh-keygen",
+        path.join(where.root, "usr", "bin", "ssh-keygen")
+      );
+      yield* mkdir(ssh);
+
+      for (const type of ["rsa", "ecdsa", "ed25519"]) {
+        yield* write(path.join(ssh, `ssh_host_${type}_key`), "old private\n");
+        yield* write(
+          path.join(ssh, `ssh_host_${type}_key.pub`),
+          `ssh-${type} AAAAold root@old\n`
+        );
+      }
+
+      yield* write(path.join(ssh, "ssh_host_rsa_key-cert.pub"), "old cert\n");
+      yield* write(path.join(ssh, "sshd_config"), "Port 22\n");
+
+      const { code, output } = yield* prepare(where, "aaaa1111");
+
+      const derived = yield* outputOf("/usr/bin/ssh-keygen", [
+        "-y",
+        "-f",
+        path.join(ssh, "ssh_host_ed25519_key"),
+      ]);
+
+      expect(code, output).toBe(0);
+      expect([...(yield* readDirectory(ssh))].toSorted()).toStrictEqual([
+        "ssh_host_ed25519_key",
+        "ssh_host_ed25519_key.pub",
+        "sshd_config",
+      ]);
+      expect(hostKeyIn(output)).toMatch(/^ssh-ed25519 /u);
+      expect(derived.stdout.split(" ").slice(0, 2).join(" ")).toBe(
+        hostKeyIn(output)
+      );
+    })
   );
 
   it.effect(

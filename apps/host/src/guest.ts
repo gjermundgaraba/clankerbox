@@ -333,7 +333,7 @@ export const identityScript = [
   ...dropNode.map((line) => `  ${line}`),
   `  if ls "$root"/etc/ssh/ssh_host_*_key >/dev/null 2>&1; then`,
   `    rm -f "$root"/etc/ssh/ssh_host_*`,
-  "    ssh-keygen -A >/dev/null",
+  `    ssh-keygen -q -t ed25519 -N '' -f "$root/etc/ssh/ssh_host_ed25519_key"`,
   "  fi",
   `  pid=$(cat "$root/run/sshd.pid" 2>/dev/null || true)`,
   `  if [ -n "$pid" ] && [ "$(cat "$root/proc/$pid/comm" 2>/dev/null || true)" = sshd ]; then`,

@@ -6,7 +6,7 @@ clankerbox runs machines (VMs) for coding agents and reports where each one is r
 - Two kinds of host: `linux`, Linux guests on a Linux host under smolvm, with RAM forks and RAM checkpoints, and `mac`, macOS guests on a Mac under Tart, with disk copies.
 - A client talks to one control plane, `clankerbox-server`, by machine name. It never learns which host a machine is on. Adding a host is one line in the control plane's config.
 - A profile is a client-side file: a base, sizes and a setup script. A prebuild is a checkpoint of a machine whose setup has run, which later creates of the same profile restore.
-- Each machine exposes only SSH, reported as a `host:port` with the guest's host key. A host can also join its machines to the tailnet, each as its own node, so their ports are reachable there.
+- Each machine exposes only SSH, reported as a `host:port` with the guest's host key. That key is Ed25519 only: each new machine, fork or restore replaces the image's host keys with one new Ed25519 key. A host can also join its machines to the tailnet, each as its own node, so their ports are reachable there.
 - The control plane, the hosts and the clients share a Tailscale tailnet, and its policy is the only gate: the APIs have no keys and no TLS.
 
 ## How it fits together
