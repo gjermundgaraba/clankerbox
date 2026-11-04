@@ -108,7 +108,7 @@ const prepared = (expanded: readonly string[] = templates) =>
       ramBudgetMib: 4096,
       stateDir,
       arch: "x64",
-      boot: "b00710ad",
+      bootId: "b00710ad",
     };
 
     return settings;

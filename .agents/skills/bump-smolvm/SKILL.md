@@ -612,12 +612,12 @@ as it is.
   (`manifest.checkpoint.network.ports`; `INDEX`,
   crates/smolvm-checkpoint/src/store.rs; `CheckpointNetwork`,
   crates/smolvm-pack/src/format.rs). Ours: a linux host parks a base of each
-  template build's copy it keeps, `base_<boot>_<copy>`: created from the copy,
+  template build's copy it keeps, `base_<boot ID>_<copy>`: created from the copy,
   its forwards removed with `machine update --remove-port`, started
   `--branchable` and frozen by a child, `<base>_freeze`, deleted at once. A
   create from the build branches the base with `--freeze-source --branchable
   -p <port>:22`, and restores the copy while no base is frozen. A base goes
-  once its copy is deleted and its last child is; the host's boot in its name
+  once its copy is deleted and its last child is; the kernel's boot ID in its name
   lets a new base park beside one a reboot left dead. The RAM budget counts a
   base by its scope's `MemoryCurrent`. A build's builder loses its host key
   files before the capture, so no child's re-mint runs `ssh-keygen -A`, and

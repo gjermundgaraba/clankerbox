@@ -108,7 +108,7 @@ const smolvmIn = (stateDir: string) => {
       ramBudgetMib: 4096,
       stateDir,
       arch: "x64",
-      boot: "b00710ad",
+      bootId: "b00710ad",
     },
     0
   ).pipe(Effect.provide(Layer.merge(NodeServices.layer, spawner.layer)));

@@ -357,6 +357,7 @@ export const tailnetIn = (output: string): TailnetReport | undefined => {
 
 const keyWanted = "$state/host-key-wanted";
 
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/agent/fork.rs#L3618
 /**
  * Runs just before a build is captured. Its copies then hold no host key, so smolvm's re-mint of
  * each skips `ssh-keygen -A`, and their new identity mints the one key each keeps.

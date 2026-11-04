@@ -76,8 +76,7 @@ export interface Settings {
   readonly ramBudgetMib: number;
   readonly stateDir: string;
   readonly arch: string;
-  /** The host's boot, which names its parked bases, since a base from another boot is dead. */
-  readonly boot: string;
+  readonly bootId: string;
 }
 
 const bootIdFile = "/proc/sys/kernel/random/boot_id";
@@ -286,22 +285,22 @@ const decodeIndex = Schema.decodeUnknownEffect(
 );
 
 interface BaseName {
-  readonly boot: string;
+  readonly bootId: string;
   readonly build: string;
 }
 
-const baseName = ({ boot, build }: BaseName) => `base_${boot}_${build}`;
+const baseName = ({ bootId, build }: BaseName) => `base_${bootId}_${build}`;
 
 const freezerOf = (base: string) => `${base}_freeze`;
 
-const basePattern = /^base_(?<boot>[^_]+)_(?<build>[^_]+)(?:_freeze)?$/u;
+const basePattern = /^base_(?<bootId>[^_]+)_(?<build>[^_]+)(?:_freeze)?$/u;
 
 const baseParts = (name: string): BaseName | undefined => {
-  const { boot, build } = basePattern.exec(name)?.groups ?? {};
+  const { bootId, build } = basePattern.exec(name)?.groups ?? {};
 
-  return boot === undefined || build === undefined
+  return bootId === undefined || build === undefined
     ? undefined
-    : { boot, build };
+    : { bootId, build };
 };
 
 // https://github.com/smol-machines/smolvm/blob/v1.33.0/src/cli/vm_common.rs#L3522
@@ -738,7 +737,8 @@ export const make = (
         yield* grown(native, source, changes(source, machine));
       });
 
-    const baseOf = (build: string) => baseName({ boot: settings.boot, build });
+    const baseOf = (build: string) =>
+      baseName({ bootId: settings.bootId, build });
 
     const locks = new Map<string, Semaphore.Semaphore>();
 
@@ -909,7 +909,7 @@ export const make = (
         ? Effect.void
         : alone(parent)(
             Effect.flatMap(stored(named.build), (kept) =>
-              kept && named.boot === settings.boot
+              kept && named.bootId === settings.bootId
                 ? Effect.void
                 : Effect.asVoid(retire(parent))
             )
@@ -1128,13 +1128,13 @@ export const make = (
       deleteCheckpoint: Effect.fn("Smolvm.deleteCheckpoint")((checkpoint) => {
         const objects = path.join(paths.store, "objects");
 
-        // https://github.com/smol-machines/smolvm/blob/v1.33.0/crates/smolvm-checkpoint/src/store.rs#L1666
         const base = baseOf(nativeName(checkpoint));
 
         return alone(base)(
           Effect.gen(function* () {
             yield* removeAll(checkpointDir(checkpoint));
 
+            // https://github.com/smol-machines/smolvm/blob/v1.33.0/crates/smolvm-checkpoint/src/store.rs#L1666
             if (yield* files(`couldn't check ${objects}`, fs.exists(objects))) {
               yield* call(
                 ["machine", "checkpoint-prune", "--store", paths.store],
@@ -1411,7 +1411,7 @@ export const layer = (
       const fs = yield* FileSystem.FileSystem;
       const ramBudgetMib = yield* ramBudget(config.linux.ramBudgetMib);
 
-      const boot = yield* files(
+      const bootId = yield* files(
         `couldn't read the host's boot ID from ${bootIdFile}`,
         fs.readFileString(bootIdFile)
       );
@@ -1423,7 +1423,7 @@ export const layer = (
           ramBudgetMib,
           stateDir: config.stateDir,
           arch: process.arch,
-          boot: boot.replaceAll("-", "").slice(0, 8),
+          bootId: bootId.replaceAll("-", "").slice(0, 8),
         },
         process.getuid?.()
       );

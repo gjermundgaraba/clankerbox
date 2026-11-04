@@ -116,7 +116,7 @@ type Runner = Effect.Success<ReturnType<typeof runner>>;
 const smolvmHost = (
   model: ReturnType<typeof smolvmModel>,
   stateDir: string,
-  boot: string
+  bootId: string
 ) =>
   Effect.gen(function* () {
     const prefix = path.join(yield* scratch, "smolvm");
@@ -137,7 +137,7 @@ const smolvmHost = (
             ramBudgetMib: 8192,
             stateDir,
             arch: "x64",
-            boot,
+            bootId,
           },
           0
         ),
