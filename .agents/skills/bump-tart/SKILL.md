@@ -388,10 +388,10 @@ times, and the disk's capacity and format)
 - And how the base moves: `tart pull` the new reference as the host's user,
   into its Tart home, then set it as `bases.macos` in the host's config and
   restart the host.
-  Machines and checkpoints made from the old base keep their disks. The base's
-  image is no part of a prebuild's digest (`nameOf`, `prebuilds.ts`), so a
-  create keeps restoring the prebuild made from the old base until
-  `clankerbox prebuild` runs its profile again; a `fresh` create takes the new
+  Machines and checkpoints made from the old base keep their disks. A template
+  keeps cloning its current build, made from the old base, until
+  `clankerbox template build NAME PATH` runs again; `template get` shows each
+  build's `image`. A create from the base, with no template, takes the new
   base at once. The old image stays in the Tart home's OCI cache until
   `tart delete` or `tart prune` removes it.
 - Report the tag transition, exact executable provenance, the base transition
