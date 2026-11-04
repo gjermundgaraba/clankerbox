@@ -14,6 +14,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
 import {
+  mkdir,
   read,
   scratch,
   write,
@@ -1633,6 +1634,32 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "--",
           "true",
         ]);
+      })
+  );
+
+  it.effect(
+    "startup removes what a fetch staged and never installed, and leaves the VMs",
+    () =>
+      Effect.gen(function* () {
+        const tartHome = yield* scratch;
+
+        const staged = path.join(
+          tartHome,
+          "cbx-fetching",
+          "cbx-mac-c-web-01234567"
+        );
+
+        const kept = path.join(tartHome, "vms", "cbx-mac-c-dev-01234567");
+
+        yield* mkdir(staged);
+        yield* write(path.join(staged, "disk.img"), "half a disk");
+        yield* mkdir(kept);
+        yield* write(path.join(kept, "disk.img"), "a whole disk");
+
+        yield* runtimeOn({ settings: { tartHome } });
+
+        expect(existsSync(path.join(tartHome, "cbx-fetching"))).toBe(false);
+        expect(yield* read(path.join(kept, "disk.img"))).toBe("a whole disk");
       })
   );
 

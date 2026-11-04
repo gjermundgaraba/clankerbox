@@ -114,6 +114,9 @@ export const checkpointName = (
 export const vmsDir = (settings: Pick<Settings, "tartHome">): string =>
   path.join(settings.tartHome ?? path.join(homedir(), ".tart"), "vms");
 
+const fetchingDir = (settings: Pick<Settings, "tartHome">): string =>
+  path.join(path.dirname(vmsDir(settings)), "cbx-fetching");
+
 export const jobsDir = (stateDir: string): string =>
   path.join(stateDir, "launchd");
 
@@ -674,9 +677,15 @@ export const make = (
       pin: undefined,
       stopResumes: false,
       growsLive: false,
-      startup: files(
-        `couldn't create ${jobs}`,
-        fs.makeDirectory(jobs, { recursive: true, mode: 0o700 })
+      startup: Effect.andThen(
+        files(
+          `couldn't create ${jobs}`,
+          fs.makeDirectory(jobs, { recursive: true, mode: 0o700 })
+        ),
+        files(
+          `couldn't remove ${fetchingDir(settings)}`,
+          fs.remove(fetchingDir(settings), { recursive: true, force: true })
+        )
       ),
       adopt: Effect.fn("Tart.adopt")((machines) =>
         Effect.forEach(
@@ -862,11 +871,7 @@ export const make = (
       }),
       held: () => Effect.undefined,
       staging: (checkpoint) =>
-        path.join(
-          path.dirname(vmsDir(settings)),
-          "cbx-fetching",
-          checkpointVm(checkpoint)
-        ),
+        path.join(fetchingDir(settings), checkpointVm(checkpoint)),
       install: Effect.fn("Tart.install")((checkpoint, staged) =>
         files(
           `couldn't install checkpoint ${checkpoint.name}`,
