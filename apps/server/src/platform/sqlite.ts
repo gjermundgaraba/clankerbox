@@ -526,7 +526,8 @@ export const open = (
           answer.at === "written" && answer.moved
             ? told(resource, name)
             : Effect.void
-        )
+        ),
+        Effect.uninterruptible
       );
 
     const findMachine = Effect.fn("Store.findMachine")((name: string) =>
@@ -559,7 +560,10 @@ export const open = (
         inserting("machine", row.name, () => {
           deleteUndone.run(row.name);
           insertMachine.run(machineColumns(row));
-        }).pipe(Effect.andThen(told("machine", row.name)))
+        }).pipe(
+          Effect.andThen(told("machine", row.name)),
+          Effect.uninterruptible
+        )
       ),
       advance: (resource, name, decide) =>
         advanced(resource, tables[resource], name, decide).pipe(
