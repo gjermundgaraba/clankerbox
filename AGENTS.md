@@ -77,7 +77,9 @@ the whole CLI span domains on purpose.
 - `templates.ts`: the `Templates` service, with its `make` and `layer`. A build
   makes a builder, runs its setup, copies it and deletes it, then ends the build
   in its template's row, keeping the last 2 ready builds; a create from a
-  template is `Machines`'s.
+  template is `Machines`'s. A host with a build store publishes the copy before
+  the build ends ready, and a recheck has every other host of the kind fetch each
+  ready build it lacks, as a checkpoint row of the build on that host.
 - `steps.ts`: what a host is sent for an operation, built afresh from the rows at
   each delivery.
 - `copies.ts`: a copy's spec, and why its source refuses it.
@@ -107,19 +109,23 @@ or `composition/`.
 - `guest.ts`: setup and preparation, run in the guest.
 - `usage.ts`: the machines in use, for the RAM budget and capacity.
 - `settings.ts`: what a host runs on.
+- `builds.ts`: `publish`, `fetch` and `unpublish` of a checkpoint through the
+  `BuildStore` port, objects by key and a manifest per build, written last.
 - Ports: `Runtime` (`runtime.ts`), `PortProbe` (`machine-ports.ts`), `Tailnet`
   (`tailnet.ts`), which mints a machine's tailnet key, provided only on a host
-  that joins a tailnet.
+  that joins a tailnet, and `BuildStore` (`builds.ts`), provided only on a host
+  with a `builds` setting.
 
 Adapters live in `platform/`: `bind-probe.ts` (`PortProbe`), `tailscale.ts`
-(`Tailnet`, over Tailscale's API), the runtimes `smolvm.ts` (`linux`) and `tart/`
+(`Tailnet`, over Tailscale's API), `s3.ts` (`BuildStore`, over S3, path-style
+and signed), the runtimes `smolvm.ts` (`linux`) and `tart/`
 (`mac`), and what they share, `process.ts`. A domain file never
 imports `platform/` or `composition/`.
 
 `composition/` assembles the host: `config.ts` reads the config file,
 `runtimes.ts` picks the kind's runtime Layer, `routes.ts` serves the host
 contract, and `host.ts` builds the host over a runtime Layer and a server Layer
-it is given, with the config's tailnet, if any.
+it is given, with the config's tailnet and build store, if any.
 
 **Host contract** (`packages/host-contract/src`). `api.ts`: `HostHttp`, the
 `Step`s, `Operation`, `Report`, `HostInfo`.
@@ -222,7 +228,9 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
 - **Leases are rows.** They are the `operations` table: what changes a resource
   owns it, what copies or reads it shares it, taken in the write that begins the
   operation, and a lease that refuses leaves that write undone. They survive a
-  restart, as the steps they guard do.
+  restart, as the steps they guard do. The build store is one lease too,
+  `builds/`: a publish shares it, and the delete that unpublishes owns it, so its
+  sweep of unreferenced objects never meets a publish that skipped one.
 - **Setup scripts stay in memory, on both sides.** They may carry secrets, and
   are never stored or logged. A make that hasn't reached its host when the
   control plane ends can't be sent again, and is undone.

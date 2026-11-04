@@ -575,6 +575,21 @@ as it is.
   the kernel `boot_id` is not re-minted. Ours: preparation reseeds the RNG
   (`/dev/random` plus `RNDRESEEDCRNG`), re-mints the keys and SIGHUPs sshd on
   every runtime, whatever smolvm did.
+- The checkpoint store (crates/smolvm-checkpoint/src/store.rs) keeps each
+  checkpoint as `<store>/<name>.checkpoint/`, its `checkpoint.json` beside hard
+  links into `<store>/objects/`, each object named by the SHA-256 of its
+  plaintext (`object_name`, #L85) and holding that chunk compressed, so an
+  object's name tells its bytes on every host. A capture in progress leaves
+  `.capture-owner` in the directory (#L28). `checkpoint-prune` removes each
+  object with one link left (#L1666), and adopting objects into the store takes
+  one that is there already as done (#L3021). Ours: a publish uploads each
+  object under `smolvm/<name>` only when the bucket lacks it, and the rest of a
+  checkpoint's files whole; a fetch links an object the host's store holds
+  already, downloads the rest into `<native>.fetching/`, links each object into
+  `objects/` and renames the directory into place, and a host start removes any
+  `.fetching/` left; a delete prunes after removing the directory. A store whose
+  objects are named or linked otherwise would make every fetch download all of
+  it, or a prune drop what a fetch linked.
 
 **Why things are avoided** (re-check whether the reason still holds)
 
