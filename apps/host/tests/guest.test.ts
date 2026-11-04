@@ -29,6 +29,7 @@ import {
   runSetup,
   tailnetIn,
   tailnetScript,
+  unkeyScript,
 } from "../src/guest.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
@@ -565,6 +566,69 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         hostKeyIn(output)
       );
     })
+  );
+
+  it.effect(
+    "a build is captured with no host key files, and a child gets one new Ed25519 key",
+    () =>
+      Effect.gen(function* () {
+        const build = yield* guest();
+        const keyless = yield* guest();
+        const ssh = path.join(build.root, "etc", "ssh");
+
+        for (const where of [build, keyless]) {
+          yield* remove(path.join(where.bin, "ssh-keygen"));
+          yield* symlink(
+            "/usr/bin/ssh-keygen",
+            path.join(where.root, "usr", "bin", "ssh-keygen")
+          );
+        }
+
+        yield* mkdir(ssh);
+        yield* write(path.join(ssh, "sshd_config"), "Port 22\n");
+
+        for (const type of ["rsa", "ed25519"]) {
+          yield* write(path.join(ssh, `ssh_host_${type}_key`), "old private\n");
+          yield* write(
+            path.join(ssh, `ssh_host_${type}_key.pub`),
+            `ssh-${type} AAAAold root@old\n`
+          );
+        }
+
+        const unkeyed = yield* outputOf(
+          "/bin/sh",
+          ["-c", unkeyScript, "unkey"],
+          {
+            env: { CLANKERBOX_ROOT: build.root, PATH: "/nowhere" },
+            extendEnv: true,
+          }
+        );
+
+        const captured = [...(yield* readDirectory(ssh))];
+        const child = yield* prepare(build, "child111");
+        const plain = yield* prepare(keyless, "child111");
+
+        const derived = yield* outputOf("/usr/bin/ssh-keygen", [
+          "-y",
+          "-f",
+          path.join(ssh, "ssh_host_ed25519_key"),
+        ]);
+
+        expect(unkeyed.code, unkeyed.stderr).toBe(0);
+        expect(captured).toStrictEqual(["sshd_config"]);
+        expect(child.code, child.output).toBe(0);
+        expect([...(yield* readDirectory(ssh))].toSorted()).toStrictEqual([
+          "ssh_host_ed25519_key",
+          "ssh_host_ed25519_key.pub",
+          "sshd_config",
+        ]);
+        expect(hostKeyIn(child.output)).toMatch(/^ssh-ed25519 /u);
+        expect(derived.stdout.split(" ").slice(0, 2).join(" ")).toBe(
+          hostKeyIn(child.output)
+        );
+        expect(plain.code, plain.output).toBe(0);
+        expect(hostKeyIn(plain.output)).toBeUndefined();
+      })
   );
 
   it.effect(

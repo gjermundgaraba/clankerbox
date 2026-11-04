@@ -355,6 +355,25 @@ export const tailnetIn = (output: string): TailnetReport | undefined => {
   );
 };
 
+const keyWanted = "$state/host-key-wanted";
+
+/**
+ * Runs just before a build is captured. Its copies then hold no host key, so smolvm's re-mint of
+ * each skips `ssh-keygen -A`, and their new identity mints the one key each keeps.
+ */
+export const unkeyScript = [
+  "set -eu",
+  "root=${CLANKERBOX_ROOT-}",
+  "PATH=$root/usr/local/sbin:$root/usr/local/bin:$root/usr/sbin:$root/usr/bin:$root/sbin:$root/bin",
+  "state=$root/var/lib/clankerbox",
+  `if ls "$root"/etc/ssh/ssh_host_*_key >/dev/null 2>&1; then`,
+  `  mkdir -p "$state"`,
+  `  : >"${keyWanted}"`,
+  `  rm -f "$root"/etc/ssh/ssh_host_*`,
+  "fi",
+  "",
+].join("\n");
+
 export const identityScript = [
   "set -eu",
   "instance=$1",
@@ -372,9 +391,10 @@ export const identityScript = [
   `    perl -e 'open(my $f, "<", $ARGV[0]) or die "$ARGV[0]: $!\\n"; ioctl($f, 0x5207, 0) or die "RNDRESEEDCRNG: $!\\n"' "$root/dev/urandom"`,
   "  fi",
   ...dropNode.map((line) => `  ${line}`),
-  `  if ls "$root"/etc/ssh/ssh_host_*_key >/dev/null 2>&1; then`,
+  `  if ls "$root"/etc/ssh/ssh_host_*_key >/dev/null 2>&1 || [ -e "${keyWanted}" ]; then`,
   `    rm -f "$root"/etc/ssh/ssh_host_*`,
   `    ssh-keygen -q -t ed25519 -N '' -f "$root/etc/ssh/ssh_host_ed25519_key"`,
+  `    rm -f "${keyWanted}"`,
   "  fi",
   `  pid=$(cat "$root/run/sshd.pid" 2>/dev/null || true)`,
   `  if [ -n "$pid" ] && [ "$(cat "$root/proc/$pid/comm" 2>/dev/null || true)" = sshd ]; then`,
@@ -442,6 +462,20 @@ export const identify = (
         ],
         stdin: globalThis.crypto.getRandomValues(new Uint8Array(seedBytes)),
       },
+      preparationTimeout
+    )
+  );
+
+export const unkey = (
+  runtime: Runtime,
+  machine: MachineRef
+): Effect.Effect<void, RuntimeError | ScriptFailed> =>
+  Effect.asVoid(
+    runInGuest(
+      runtime,
+      "preparation",
+      machine,
+      { argv: ["/bin/sh", "-c", unkeyScript, "clankerbox-unkey"] },
       preparationTimeout
     )
   );
