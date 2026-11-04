@@ -2283,6 +2283,62 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a capture of a build's copy drops the guest's host keys and parks a base, and one of any other checkpoint does neither",
+    () =>
+      Effect.gen(function* () {
+        const { model, operations, pin } = yield* onSmolvm;
+        const builder = ref("building-1");
+
+        const unkeyed = () =>
+          model.spawner.calls.filter(({ args }) =>
+            args.includes("clankerbox-unkey")
+          ).length;
+
+        model.vms.set(Smolvm.nativeName(builder), {
+          state: "running",
+          forwards: [`${builder.port}:22`],
+        });
+
+        const captures = yield* Effect.forEach(
+          ["snap", "built-abc123"],
+          (name) =>
+            Effect.gen(function* () {
+              const before = unkeyed();
+
+              const { status } = yield* finished(
+                { operations },
+                {
+                  _tag: "capture",
+                  machine: builder,
+                  checkpoint: checkpoint(name),
+                  pin,
+                }
+              );
+
+              return {
+                status,
+                unkeyed: unkeyed() - before,
+                bases: [...model.vms.keys()].filter((vm) =>
+                  vm.startsWith("base_")
+                ),
+              };
+            })
+        );
+
+        expect(captures).toStrictEqual([
+          { status: "done", unkeyed: 0, bases: [] },
+          {
+            status: "done",
+            unkeyed: 1,
+            bases: [
+              `base_b00710ad_${Smolvm.nativeName(checkpoint("built-abc123"))}`,
+            ],
+          },
+        ]);
+      })
+  );
+
+  it.effect(
     "a host that boots again parks each build it keeps anew, and drops the old base with its last child",
     () =>
       Effect.gen(function* () {

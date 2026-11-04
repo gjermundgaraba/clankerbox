@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 
 import { Desired, HostError } from "./errors.ts";
-import { HostId, Name } from "./ids.ts";
+import { CheckpointName, HostId, Name } from "./ids.ts";
 
 /** What a host's machines are: `linux` guests on smolvm, or `mac` guests on Tart. */
 export const Kind = Schema.Literals(["linux", "mac"]);
@@ -445,11 +445,10 @@ export const CreateRequest = Schema.Union([
 
 export type CreateRequest = typeof CreateRequest.Type;
 
-const FromMachine = { machine: Name, name: Name };
-
 /** A copy of a machine, `machine`, to a new `name`, with the sizes given or its source's. */
 export const ForkRequest = Schema.Struct({
-  ...FromMachine,
+  machine: Name,
+  name: Name,
   ...labelled,
 });
 
@@ -466,7 +465,8 @@ export type RestoreRequest = typeof RestoreRequest.Type;
 
 /** A checkpoint `name` of `machine`, deleted once `expiresAt` has passed, if given. */
 export const CaptureRequest = Schema.Struct({
-  ...FromMachine,
+  machine: Name,
+  name: CheckpointName,
   ...labelled,
   ...expiring,
 });
@@ -480,7 +480,7 @@ export type CaptureRequest = typeof CaptureRequest.Type;
 export const PauseRequest = Schema.Struct({
   id: Name,
   capture: Schema.optionalKey(
-    Schema.Struct({ name: Name, ...labelled, ...expiring })
+    Schema.Struct({ name: CheckpointName, ...labelled, ...expiring })
   ),
 });
 

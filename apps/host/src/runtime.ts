@@ -128,12 +128,6 @@ export interface CheckpointFile {
   readonly key?: string | undefined;
 }
 
-const buildCheckpointPrefix = "built-";
-
-/** Whether a checkpoint, by its name or a native name made from it, is a template build's copy. */
-export const isBuild = (name: string): boolean =>
-  name.startsWith(buildCheckpointPrefix);
-
 /**
  * A runtime that copies a build by branching a parked base of it, a VM kept from the build's
  * checkpoint, so a copy takes no restore. Its restore of a build branches once the base is parked.

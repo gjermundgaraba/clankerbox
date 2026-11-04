@@ -653,6 +653,38 @@ describe("client", () => {
     );
 
     it.effect(
+      "a checkpoint named as a build's copy is Invalid and sends nothing",
+      () =>
+        Effect.gen(function* () {
+          const stub = server();
+
+          const errors = yield* withClient(stub, (client) =>
+            Effect.all([
+              Effect.flip(
+                client.captureCheckpoint({ machine: "dev", name: "built-x" })
+              ),
+              Effect.flip(
+                client.pauseMachine({
+                  id: "dev",
+                  capture: { name: "fetched-x" },
+                })
+              ),
+            ])
+          );
+
+          expect(errors.map(({ _tag }) => _tag)).toStrictEqual([
+            "Invalid",
+            "Invalid",
+          ]);
+          expect(errors.map(({ action }) => action)).toStrictEqual([
+            "captureCheckpoint",
+            "pauseMachine",
+          ]);
+          expect(stub.calls).toStrictEqual([]);
+        })
+    );
+
+    it.effect(
       "a malformed ID is Invalid naming the action and sends nothing",
       () =>
         Effect.gen(function* () {

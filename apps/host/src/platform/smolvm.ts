@@ -5,6 +5,7 @@ import {
   formatMib,
   Internal,
   Invalid,
+  isBuildCopy,
   Unsizable,
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -24,7 +25,6 @@ import {
   atLeast,
   CannotStart,
   changes,
-  isBuild,
   missing,
   Runtime,
   stateReadWait,
@@ -936,7 +936,7 @@ export const make = (
             ? entry.slice(0, -checkpointSuffix.length)
             : "";
 
-          return isBuild(build) ? [build] : [];
+          return isBuildCopy(build) ? [build] : [];
         })
     );
 

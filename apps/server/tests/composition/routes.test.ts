@@ -276,6 +276,34 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a raw capture or pause that names its checkpoint as a build's copy is InvalidInput, and captures nothing",
+    () =>
+      Effect.gen(function* () {
+        const { url, hosts, store } = yield* running();
+        const calls = [...hosts[0]!.fake.calls];
+
+        const answers = [
+          yield* post(url, "captureCheckpoint", {
+            machine: "dev",
+            name: "built-0123456789abcdef",
+          }),
+          yield* post(url, "pauseMachine", {
+            id: "dev",
+            capture: { name: "fetched-0123456789abcdef" },
+          }),
+        ];
+
+        for (const answer of answers) {
+          expect(answer.status).toBe(400);
+          expect(answer.body).toContain('"_tag":"InvalidInput"');
+        }
+
+        expect(yield* store.checkpoints).toStrictEqual([]);
+        expect(hosts[0]!.fake.calls).toStrictEqual(calls);
+      })
+  );
+
+  it.effect(
     "a request of another release, or with no version, is Invalid and runs nothing",
     () =>
       Effect.gen(function* () {

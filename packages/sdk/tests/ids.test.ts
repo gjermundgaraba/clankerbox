@@ -2,7 +2,7 @@ import { it } from "@effect/vitest";
 import { Schema } from "effect";
 import { describe, expect } from "vite-plus/test";
 
-import { HostId, Name } from "../src/index.ts";
+import { CheckpointName, HostId, isBuildCopy, Name } from "../src/index.ts";
 
 // https://github.com/smol-machines/smolvm/blob/v1.33.0/src/data/mod.rs#L58
 const smolvmAccepts = (name: string): boolean =>
@@ -58,6 +58,21 @@ describe("ids", () => {
 
     expect(isName("a".repeat(62))).toBe(true);
     expect(isName("a".repeat(63))).toBe(false);
+  });
+
+  it("a checkpoint's name never begins as a build's copy does, and every copy's name does", () => {
+    const isCheckpointName = Schema.is(CheckpointName);
+
+    for (const name of ["dev", "builtin", "built", "fetch-1", "pre-built-1"]) {
+      expect(isCheckpointName(name), name).toBe(true);
+      expect(isBuildCopy(name), name).toBe(false);
+    }
+
+    for (const name of ["built-x", "fetched-0123456789abcdef"]) {
+      expect(isCheckpointName(name), name).toBe(false);
+      expect(isBuildCopy(name), name).toBe(true);
+      expect(isBuildCopy(`${name}-0f3a9c1e`), name).toBe(true);
+    }
   });
 
   it("smolvm accepts <name>-<inst> for valid names, and would refuse the names Name rules out", () => {

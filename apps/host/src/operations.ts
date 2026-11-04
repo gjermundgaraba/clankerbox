@@ -15,6 +15,7 @@ import {
   formatGib,
   formatMib,
   Internal,
+  isBuildCopy,
   PinMismatch,
   Unsizable,
   WrongState,
@@ -55,7 +56,6 @@ import {
 import type { TailnetReport } from "./guest.ts";
 import { pickPort, PortProbe } from "./machine-ports.ts";
 import {
-  isBuild,
   missing,
   Runtime,
   sizedBy,
@@ -220,7 +220,7 @@ export const make = (
     const { bases } = runtime;
 
     const parked = (build: CheckpointRef) =>
-      bases === undefined || !isBuild(build.name)
+      bases === undefined || !isBuildCopy(build.name)
         ? Effect.void
         : bases
             .park(build)
@@ -618,7 +618,7 @@ export const make = (
           const { machine, checkpoint, pin } = step;
 
           const keyless =
-            bases !== undefined && isBuild(checkpoint.name)
+            bases !== undefined && isBuildCopy(checkpoint.name)
               ? unkey(runtime, machine)
               : Effect.void;
 

@@ -22,3 +22,19 @@ export const HostId = Schema.String.check(
 export const Name = Schema.String.check(
   Schema.makeFilter((name: string) => isName(name) || nameRule)
 );
+
+/** How the control plane begins the name of a template build's copy, made or fetched. */
+export const copyPrefixes = { built: "built-", fetched: "fetched-" } as const;
+
+/** Whether a checkpoint, by its name or a host's name for it, is a template build's copy. */
+export const isBuildCopy = (name: string): boolean =>
+  Object.values(copyPrefixes).some((prefix) => name.startsWith(prefix));
+
+/** A name a client gives a checkpoint, which never begins as a build's copy does. */
+export const CheckpointName = Name.check(
+  Schema.makeFilter(
+    (name: string) =>
+      !isBuildCopy(name) ||
+      `a checkpoint's name doesn't begin ${Object.values(copyPrefixes).join(" or ")}, which name template builds' copies`
+  )
+);

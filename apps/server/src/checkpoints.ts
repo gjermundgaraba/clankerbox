@@ -1,6 +1,7 @@
 import type { Report } from "@clankerbox/host-contract";
 import {
   checkpointKinds,
+  copyPrefixes,
   Internal,
   labelledWith,
   readTimeout,
@@ -373,7 +374,7 @@ export const make = (settings: {
         Effect.andThen(row(id), remove(id))
       ),
       copy: Effect.fn("Checkpoints.copy")((machine, build) => {
-        const name = `built-${newId().slice(0, 16)}`;
+        const name = `${copyPrefixes.built}${newId().slice(0, 16)}`;
 
         return capturing({ machine, name }, build).pipe(
           Effect.andThen(rested(name)),
@@ -388,7 +389,7 @@ export const make = (settings: {
       ),
       fetch: Effect.fn("Checkpoints.fetch")((published, host) =>
         Effect.gen(function* () {
-          const name = `fetched-${newId().slice(0, 16)}`;
+          const name = `${copyPrefixes.fetched}${newId().slice(0, 16)}`;
 
           yield* store.insertCheckpoint({
             ...published,
