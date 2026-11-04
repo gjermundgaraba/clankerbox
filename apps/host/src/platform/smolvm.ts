@@ -24,6 +24,7 @@ import {
   atLeast,
   CannotStart,
   changes,
+  isBuild,
   missing,
   Runtime,
   stateReadWait,
@@ -75,7 +76,11 @@ export interface Settings {
   readonly ramBudgetMib: number;
   readonly stateDir: string;
   readonly arch: string;
+  /** The host's boot, which names its parked bases, since a base from another boot is dead. */
+  readonly boot: string;
 }
+
+const bootIdFile = "/proc/sys/kernel/random/boot_id";
 
 // https://github.com/smol-machines/smolvm/blob/v1.33.0/src/agent/live_resize.rs#L325
 const ramStepMib = 128;
@@ -236,9 +241,68 @@ const RecordState = Schema.Literals([
 
 type RecordState = typeof RecordState.Type;
 
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/cli/vm_common.rs#L3562
 const decodeStatus = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(Schema.Struct({ state: RecordState }))
+  Schema.fromJsonString(
+    Schema.Struct({
+      state: RecordState,
+      parent_machine: Schema.optionalKey(Schema.NullOr(Schema.String)),
+    })
+  )
 );
+
+const decodeList = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Array(Schema.Struct({ name: Schema.String })))
+);
+
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/cli/vm_common.rs#L2952
+const pinnedRefusal = "is the fork base for";
+
+const checkpointSuffix = ".checkpoint";
+
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/crates/smolvm-checkpoint/src/store.rs#L20
+const checkpointIndex = "checkpoint.json";
+
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/crates/smolvm-pack/src/format.rs#L463
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/crates/smolvm-pack/src/format.rs#L612
+const decodeIndex = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      manifest: Schema.Struct({
+        checkpoint: Schema.Struct({
+          network: Schema.optionalKey(
+            Schema.Struct({
+              ports: Schema.optionalKey(
+                Schema.Array(
+                  Schema.Struct({ host: Schema.Int, guest: Schema.Int })
+                )
+              ),
+            })
+          ),
+        }),
+      }),
+    })
+  )
+);
+
+interface BaseName {
+  readonly boot: string;
+  readonly build: string;
+}
+
+const baseName = ({ boot, build }: BaseName) => `base_${boot}_${build}`;
+
+const freezerOf = (base: string) => `${base}_freeze`;
+
+const basePattern = /^base_(?<boot>[^_]+)_(?<build>[^_]+)(?:_freeze)?$/u;
+
+const baseParts = (name: string): BaseName | undefined => {
+  const { boot, build } = basePattern.exec(name)?.groups ?? {};
+
+  return boot === undefined || build === undefined
+    ? undefined
+    : { boot, build };
+};
 
 // https://github.com/smol-machines/smolvm/blob/v1.33.0/src/cli/vm_common.rs#L3522
 const decodeSizes = Schema.decodeUnknownEffect(
@@ -343,18 +407,25 @@ export const make = (
 
     const pin = `smolvm ${version} ${process.platform}-${process.arch}`;
 
-    const status = (
-      native: string
-    ): Effect.Effect<RecordState | "missing", Internal> =>
+    const recordOf = (native: string) =>
       Effect.flatMap(
         smolvm(
           ["machine", "status", "--name", native, "--json"],
           `machine status ${native}`
         ),
-        (ran) => {
+        (
+          ran
+        ): Effect.Effect<
+          | { readonly state: RecordState; readonly parent: string | undefined }
+          | "missing",
+          Internal
+        > => {
           if (ran.exitCode === 0) {
             return decodeStatus(ran.stdout).pipe(
-              Effect.map(({ state }) => state),
+              Effect.map(({ state, parent_machine }) => ({
+                state,
+                parent: parent_machine ?? undefined,
+              })),
               Effect.mapError(
                 (error) =>
                   new Internal({
@@ -368,6 +439,11 @@ export const make = (
             ? Effect.succeed("missing" as const)
             : Effect.fail(failure(`smolvm machine status ${native}`, ran));
         }
+      );
+
+    const status = (native: string) =>
+      Effect.map(recordOf(native), (found) =>
+        found === "missing" ? found : found.state
       );
 
     const state = (native: string): Effect.Effect<MachineState, Internal> =>
@@ -439,8 +515,11 @@ export const make = (
         }
       );
 
+    const storedAt = (native: string) =>
+      path.join(paths.store, `${native}${checkpointSuffix}`);
+
     const checkpointDir = (checkpoint: CheckpointRef) =>
-      path.join(paths.store, `${nativeName(checkpoint)}.checkpoint`);
+      storedAt(nativeName(checkpoint));
 
     const captureRam = (machine: MachineRef, store: string, output: string) => {
       const native = nativeName(machine);
@@ -462,23 +541,21 @@ export const make = (
       );
     };
 
-    const removeVm = (machine: Native) =>
+    const removing = (native: string, recorded: RecordState | "missing") =>
       Effect.gen(function* () {
-        const native = nativeName(machine);
         const scope = scopeName(native);
-        const observed = yield* state(native);
 
-        if (observed === "missing") {
+        if (recorded === "missing") {
           return;
         }
 
-        if (observed === "running") {
+        if (stateOf(recorded) === "running") {
           yield* call(
             ["machine", "stop", "--name", native, "--timeout", "0"],
             `machine stop ${native}`
           ).pipe(
             Effect.catch((error) =>
-              Effect.logWarning(`delete ${machine.name}: ${error.message}`)
+              Effect.logWarning(`delete ${native}: ${error.message}`)
             )
           );
         }
@@ -508,6 +585,9 @@ export const make = (
           );
         }
       });
+
+    const removeNative = (native: string) =>
+      Effect.flatMap(status(native), (recorded) => removing(native, recorded));
 
     const updated = (native: string, to: Sizing) => {
       const flags = [
@@ -658,12 +738,310 @@ export const make = (
         yield* grown(native, source, changes(source, machine));
       });
 
+    const baseOf = (build: string) => baseName({ boot: settings.boot, build });
+
+    const locks = new Map<string, Semaphore.Semaphore>();
+
+    const alone = (base: string) => {
+      const lock = locks.get(base) ?? Semaphore.makeUnsafe(1);
+
+      locks.set(base, lock);
+
+      return lock.withPermits(1);
+    };
+
+    const parked = new Set<string>();
+
+    const stored = (native: string) =>
+      files(`couldn't check ${storedAt(native)}`, fs.exists(storedAt(native)));
+
+    const retire = (base: string) =>
+      Effect.gen(function* () {
+        if ((yield* status(base)) === "missing") {
+          parked.delete(base);
+
+          return true;
+        }
+
+        const ran = yield* smolvm(
+          ["machine", "delete", "--name", base, "--force"],
+          `machine delete ${base}`
+        );
+
+        if (ran.exitCode !== 0) {
+          return ran.stderr.includes(pinnedRefusal)
+            ? false
+            : yield* failure(`smolvm machine delete ${base}`, ran);
+        }
+
+        parked.delete(base);
+        yield* Effect.ignore(
+          systemctl(
+            ["reset-failed", scopeName(base)],
+            `reset-failed ${scopeName(base)}`
+          )
+        );
+
+        return true;
+      });
+
+    const freeze = (base: string) =>
+      Effect.andThen(
+        call(
+          [
+            "machine",
+            "branch",
+            "--from",
+            base,
+            "--name",
+            freezerOf(base),
+            "--freeze-source",
+          ],
+          `machine branch ${freezerOf(base)}`
+        ),
+        removeNative(freezerOf(base))
+      );
+
+    const forwardsOf = (build: string) =>
+      Effect.gen(function* () {
+        const index = path.join(storedAt(build), checkpointIndex);
+
+        const read = yield* files(
+          `couldn't read ${index}`,
+          fs.readFileString(index)
+        );
+
+        const { manifest } = yield* Effect.mapError(
+          decodeIndex(read),
+          (error) =>
+            new Internal({
+              message: `${index} holds something unexpected: ${error.message}`,
+            })
+        );
+
+        return manifest.checkpoint.network?.ports ?? [];
+      });
+
+    const parkAnew = (base: string, build: string) =>
+      Effect.gen(function* () {
+        const [took] = yield* Effect.timed(
+          Effect.gen(function* () {
+            const forwards = yield* forwardsOf(build);
+
+            yield* call(
+              [
+                "machine",
+                "create",
+                "--name",
+                base,
+                "--from",
+                storedAt(build),
+                "--restore-cache-entries",
+                "0",
+              ],
+              `machine create ${base}`
+            );
+
+            if (forwards.length > 0) {
+              yield* call(
+                [
+                  "machine",
+                  "update",
+                  "--name",
+                  base,
+                  ...forwards.flatMap(({ host, guest }) => [
+                    "--remove-port",
+                    `${host}:${guest}`,
+                  ]),
+                ],
+                `machine update ${base}`
+              );
+            }
+
+            parked.add(base);
+            yield* boot(base);
+            yield* freeze(base);
+          })
+        );
+
+        yield* Effect.logInfo(`parked ${base} in ${Duration.format(took)}`);
+      });
+
+    const settled = (base: string, build: string) =>
+      Effect.gen(function* () {
+        yield* removeNative(freezerOf(base));
+
+        const recorded = yield* status(base);
+
+        if (recorded === "frozen") {
+          parked.add(base);
+
+          return;
+        }
+
+        if (recorded === "running") {
+          parked.add(base);
+          yield* freeze(base);
+
+          return;
+        }
+
+        if (recorded !== "missing" && !(yield* retire(base))) {
+          return yield* Effect.logWarning(
+            `${base} is ${recorded}, and the copies branched from it keep it: copies of its build restore until they go`
+          );
+        }
+
+        yield* parkAnew(base, build);
+      });
+
+    const parking = (build: string) =>
+      alone(baseOf(build))(
+        Effect.flatMap(stored(build), (kept) =>
+          kept ? settled(baseOf(build), build) : Effect.void
+        )
+      );
+
+    const orphaned = (parent: string) => {
+      const named = baseParts(parent);
+
+      return named === undefined
+        ? Effect.void
+        : alone(parent)(
+            Effect.flatMap(stored(named.build), (kept) =>
+              kept && named.boot === settings.boot
+                ? Effect.void
+                : Effect.asVoid(retire(parent))
+            )
+          );
+    };
+
+    const listed = Effect.flatMap(
+      call(["machine", "ls", "--json"], "machine ls"),
+      (ran) =>
+        Effect.mapError(
+          decodeList(ran.stdout),
+          (error) =>
+            new Internal({
+              message: `smolvm machine ls answered something unexpected: ${error.message}`,
+            })
+        )
+    );
+
+    const builds = Effect.map(
+      files(`couldn't list ${paths.store}`, fs.readDirectory(paths.store)),
+      (entries) =>
+        entries.flatMap((entry) => {
+          const build = entry.endsWith(checkpointSuffix)
+            ? entry.slice(0, -checkpointSuffix.length)
+            : "";
+
+          return isBuild(build) ? [build] : [];
+        })
+    );
+
+    const bases = {
+      park: Effect.fn("Smolvm.park")((build: CheckpointRef) =>
+        parking(nativeName(build))
+      ),
+      settle: Effect.gen(function* () {
+        const kept = yield* builds;
+
+        const current = new Set(kept.map(baseOf));
+
+        const gone = new Set(
+          (yield* listed).flatMap(({ name }) => {
+            const named = baseParts(name);
+
+            return named === undefined || current.has(baseName(named))
+              ? []
+              : [baseName(named)];
+          })
+        );
+
+        yield* Effect.forEach(
+          gone,
+          (base) =>
+            alone(base)(
+              Effect.andThen(removeNative(freezerOf(base)), retire(base))
+            ).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning(`retire ${base}: ${error.message}`)
+              )
+            ),
+          { discard: true }
+        );
+
+        yield* Effect.forEach(
+          kept,
+          (build) =>
+            parking(build).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning(`park ${baseOf(build)}: ${error.message}`)
+              )
+            ),
+          { discard: true }
+        );
+      }),
+    };
+
+    const heldMib = Effect.gen(function* () {
+      if (parked.size === 0) {
+        return 0;
+      }
+
+      const shown = yield* systemctl(
+        [
+          "show",
+          "--property=MemoryCurrent",
+          "--value",
+          ...[...parked].map(scopeName),
+        ],
+        "show the parked bases' memory"
+      );
+
+      const bytes = shown.stdout
+        .split("\n")
+        .filter((line) => /^\d+$/u.test(line))
+        .reduce((sum, line) => sum + Number(line), 0);
+
+      return Math.ceil(bytes / mib);
+    });
+
+    const branched = (base: string, machine: MachineRef) =>
+      Effect.gen(function* () {
+        const native = nativeName(machine);
+
+        const [took] = yield* Effect.timed(
+          call(
+            [
+              "machine",
+              "branch",
+              "--from",
+              base,
+              "--name",
+              native,
+              "--freeze-source",
+              "--branchable",
+              "-p",
+              `${machine.port}:22`,
+            ],
+            `machine branch ${native}`
+          )
+        );
+
+        yield* Effect.logInfo(
+          `branched ${native} from ${base} in ${Duration.format(took)}`
+        );
+      });
+
     return {
       version,
       publishAddress: settings.publishAddress,
       pin,
       stopResumes: true,
       growsLive: true,
+      bases,
       startup: Effect.gen(function* () {
         yield* removeAll(paths.forks);
 
@@ -686,7 +1064,9 @@ export const make = (
       adopt: () => Effect.void,
       observe: Effect.fn("Smolvm.observe")(observe),
       admit: Effect.fn("Smolvm.admit")((activation) =>
-        checkRamBudget(settings.ramBudgetMib, activation, observe, 0)
+        Effect.flatMap(heldMib, (held) =>
+          checkRamBudget(settings.ramBudgetMib, activation, observe, held)
+        )
       ),
       capacity: Effect.fn("Smolvm.capacity")((machines) =>
         Effect.map(inUse(machines, observe), ({ running, unread }) =>
@@ -703,7 +1083,24 @@ export const make = (
         )
       ),
       restore: Effect.fn("Smolvm.restore")((checkpoint, machine) =>
-        restoreRam(checkpointDir(checkpoint), checkpoint, machine)
+        Effect.gen(function* () {
+          const base = baseOf(nativeName(checkpoint));
+
+          if ((yield* status(base)) !== "frozen") {
+            return yield* restoreRam(
+              checkpointDir(checkpoint),
+              checkpoint,
+              machine
+            );
+          }
+
+          yield* branched(base, machine);
+          yield* grown(
+            nativeName(machine),
+            checkpoint,
+            changes(checkpoint, machine)
+          );
+        })
       ),
       fork: Effect.fn("Smolvm.fork")((source, machine) => {
         const store = path.join(paths.forks, nativeName(machine));
@@ -732,16 +1129,22 @@ export const make = (
         const objects = path.join(paths.store, "objects");
 
         // https://github.com/smol-machines/smolvm/blob/v1.33.0/crates/smolvm-checkpoint/src/store.rs#L1666
-        return Effect.gen(function* () {
-          yield* removeAll(checkpointDir(checkpoint));
+        const base = baseOf(nativeName(checkpoint));
 
-          if (yield* files(`couldn't check ${objects}`, fs.exists(objects))) {
-            yield* call(
-              ["machine", "checkpoint-prune", "--store", paths.store],
-              "machine checkpoint-prune"
-            );
-          }
-        });
+        return alone(base)(
+          Effect.gen(function* () {
+            yield* removeAll(checkpointDir(checkpoint));
+
+            if (yield* files(`couldn't check ${objects}`, fs.exists(objects))) {
+              yield* call(
+                ["machine", "checkpoint-prune", "--store", paths.store],
+                "machine checkpoint-prune"
+              );
+            }
+
+            yield* retire(base);
+          })
+        );
       }),
       create: Effect.fn("Smolvm.create")((machine, image) =>
         Effect.gen(function* () {
@@ -886,7 +1289,22 @@ export const make = (
             )
         );
       }),
-      delete: Effect.fn("Smolvm.delete")(removeVm),
+      delete: Effect.fn("Smolvm.delete")((machine) =>
+        Effect.gen(function* () {
+          const native = nativeName(machine);
+          const found = yield* recordOf(native);
+
+          if (found === "missing") {
+            return;
+          }
+
+          yield* removing(native, found.state);
+
+          if (found.parent !== undefined) {
+            yield* orphaned(found.parent);
+          }
+        })
+      ),
       exec: Effect.fn("Smolvm.exec")((machine, { argv, stdin, user }) => {
         const native = nativeName(machine);
 
@@ -989,16 +1407,25 @@ export const layer = (
 > =>
   Layer.effect(
     Runtime,
-    Effect.flatMap(ramBudget(config.linux.ramBudgetMib), (ramBudgetMib) =>
-      make(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const ramBudgetMib = yield* ramBudget(config.linux.ramBudgetMib);
+
+      const boot = yield* files(
+        `couldn't read the host's boot ID from ${bootIdFile}`,
+        fs.readFileString(bootIdFile)
+      );
+
+      return yield* make(
         {
           prefix: config.linux.prefix,
           publishAddress: config.listen.address,
           ramBudgetMib,
           stateDir: config.stateDir,
           arch: process.arch,
+          boot: boot.replaceAll("-", "").slice(0, 8),
         },
         process.getuid?.()
-      )
-    )
+      );
+    })
   );

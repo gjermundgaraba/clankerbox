@@ -128,12 +128,33 @@ export interface CheckpointFile {
   readonly key?: string | undefined;
 }
 
+const buildCheckpointPrefix = "built-";
+
+/** Whether a checkpoint, by its name or a native name made from it, is a template build's copy. */
+export const isBuild = (name: string): boolean =>
+  name.startsWith(buildCheckpointPrefix);
+
+/**
+ * A runtime that copies a build by branching a parked base of it, a VM kept from the build's
+ * checkpoint, so a copy takes no restore. Its restore of a build branches once the base is parked.
+ */
+export interface Bases {
+  /** Parks `build`'s base, from whatever an earlier try left, unless the build is gone. */
+  readonly park: (build: CheckpointRef) => Effect.Effect<void, RuntimeError>;
+  /**
+   * Parks a base for each build the host keeps, and deletes each base whose build or boot is gone
+   * once no copy is branched from it, by what the runtime reads.
+   */
+  readonly settle: Effect.Effect<void, RuntimeError>;
+}
+
 export interface Interface {
   readonly version: string;
   readonly publishAddress: string;
   readonly pin: string | undefined;
   readonly stopResumes: boolean;
   readonly growsLive: boolean;
+  readonly bases?: Bases | undefined;
   readonly sizable: (
     machine: Pick<MachineRef, "name">,
     from: Sizes,

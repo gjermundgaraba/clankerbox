@@ -1,4 +1,5 @@
 import type {
+  CheckpointRef,
   ExecCommand,
   MachineRef,
   Native,
@@ -49,10 +50,12 @@ import {
   prepare,
   runCommand,
   runSetup,
+  unkey,
 } from "./guest.ts";
 import type { TailnetReport } from "./guest.ts";
 import { pickPort, PortProbe } from "./machine-ports.ts";
 import {
+  isBuild,
   missing,
   Runtime,
   sizedBy,
@@ -213,6 +216,30 @@ export const make = (
     const boot = Hex.encode(
       globalThis.crypto.getRandomValues(new Uint8Array(8))
     );
+
+    const { bases } = runtime;
+
+    const parked = (build: CheckpointRef) =>
+      bases === undefined || !isBuild(build.name)
+        ? Effect.void
+        : bases
+            .park(build)
+            .pipe(
+              Effect.catch((error) =>
+                Effect.logWarning(`park build ${build.name}: ${error.message}`)
+              )
+            );
+
+    if (bases !== undefined) {
+      yield* Effect.forkIn(
+        bases.settle.pipe(
+          Effect.catch((error) =>
+            Effect.logWarning(`settle the parked bases: ${error.message}`)
+          )
+        ),
+        hostScope
+      );
+    }
 
     const entries = new Map<string, Entry>();
     const scopes = new Map<string, { sequence: number; id: string }>();
@@ -480,6 +507,10 @@ export const make = (
           )
         );
 
+        if (source._tag === "checkpoint") {
+          yield* Effect.forkIn(parked(source.checkpoint), hostScope);
+        }
+
         if (source._tag === "base" && source.setup !== undefined) {
           yield* runSetup(runtime, ref, source.setup, authorizedKeys);
         } else if (authorizedKeys !== undefined) {
@@ -586,19 +617,26 @@ export const make = (
         case "capture": {
           const { machine, checkpoint, pin } = step;
 
+          const keyless =
+            bases !== undefined && isBuild(checkpoint.name)
+              ? unkey(runtime, machine)
+              : Effect.void;
+
           return Effect.andThen(
-            Effect.tapError(copyable(machine.name, pin), () => cleared),
-            runtime
-              .capture(machine, checkpoint)
-              .pipe(
-                Effect.onExit((exit) =>
-                  Exit.isSuccess(exit)
-                    ? Effect.void
-                    : runtime
-                        .deleteCheckpoint(checkpoint)
-                        .pipe(Effect.andThen(cleared), Effect.ignore)
-                )
-              )
+            Effect.tapError(
+              Effect.andThen(copyable(machine.name, pin), keyless),
+              () => cleared
+            ),
+            runtime.capture(machine, checkpoint).pipe(
+              Effect.onExit((exit) =>
+                Exit.isSuccess(exit)
+                  ? Effect.void
+                  : runtime
+                      .deleteCheckpoint(checkpoint)
+                      .pipe(Effect.andThen(cleared), Effect.ignore)
+              ),
+              Effect.andThen(parked(checkpoint))
+            )
           );
         }
 

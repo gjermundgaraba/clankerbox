@@ -592,16 +592,48 @@ as it is.
   host start removes any `.fetching/` left; a delete prunes after removing the
   directory. A store whose objects are named or linked otherwise would make
   every fetch download all of it, or a prune drop what a fetch linked.
+- `machine branch --from B --name C` needs `B` started `--branchable`. Its
+  first `--freeze-source` pauses `B`'s VMM for good, holding its RAM, and keeps
+  the RAM state each later branch reuses; `B` then reads `frozen`
+  (`ForkSourcePolicy::Freeze`, `retained_fork_snapshot`, src/agent/fork.rs).
+  No command freezes a source without a child, and a frozen source with no
+  child deletes. `-p` gives the child exactly those TCP forwards
+  (`pinned_ports`, src/agent/fork.rs), where without it each of `B`'s is
+  remapped (`port_remaps`). The child keeps `B`'s sizes and network, and is
+  branchable only with `--branchable`. `status --json` and `ls --json` name
+  its source in `parent_machine` (src/cli/vm_common.rs). `delete --force`
+  refuses a source with any child, a stopped or dead one too ("is the fork
+  base for", `ensure_fork_base_delete_is_safe`, src/cli/vm_common.rs). Each
+  child's re-mint runs `ssh-keygen -A` only when `/etc/ssh/ssh_host_*_key`
+  exists, and sets the guest's clock, never the host's (`date -u -s`,
+  `build_rejuvenation_script`, src/agent/fork.rs). `create --from` a
+  checkpoint refuses `-p` (`topology_overridden`, src/cli/machine.rs) and
+  restores the forwards its `checkpoint.json` holds
+  (`manifest.checkpoint.network.ports`; `INDEX`,
+  crates/smolvm-checkpoint/src/store.rs; `CheckpointNetwork`,
+  crates/smolvm-pack/src/format.rs). Ours: a linux host parks a base of each
+  template build's copy it keeps, `base_<boot>_<copy>`: created from the copy,
+  its forwards removed with `machine update --remove-port`, started
+  `--branchable` and frozen by a child, `<base>_freeze`, deleted at once. A
+  create from the build branches the base with `--freeze-source --branchable
+  -p <port>:22`, and restores the copy while no base is frozen. A base goes
+  once its copy is deleted and its last child is; the host's boot in its name
+  lets a new base park beside one a reboot left dead. The RAM budget counts a
+  base by its scope's `MemoryCurrent`. A build's builder loses its host key
+  files before the capture, so no child's re-mint runs `ssh-keygen -A`, and
+  preparation mints the one key each child keeps.
 
 **Why things are avoided** (re-check whether the reason still holds)
 
-- `machine branch`: branch children pin their source. `stop` refuses a frozen
-  source while any child's VMM runs, a stopped source never starts again while
-  it has a child, and `delete` and a disk resize refuse one with any child
-  (`has_frozen_fork_state`, src/agent/state_probe.rs; "is the fork base for"
-  in `stop_vm_named`, `stop_blocking_dependent_clones`, src/agent/fork.rs;
+- `machine branch` of a client's machine: branch children pin their source.
+  `stop` refuses a frozen source while any child's VMM runs, a stopped source
+  never starts again while it has a child, and `delete` and a disk resize
+  refuse one with any child (`has_frozen_fork_state`,
+  src/agent/state_probe.rs; "is the fork base for" in `stop_vm_named`,
+  `stop_blocking_dependent_clones`, src/agent/fork.rs;
   `ensure_fork_base_delete_is_safe`, `expand_disks`, src/cli/vm_common.rs).
-  Ours: fork is a checkpoint plus a restore.
+  Ours: a fork is a checkpoint plus a restore, and only a build's parked base,
+  which no client reaches, is branched.
 - Bare VMs: copied-up files gave `Stale file handle` after a cold boot, from
   the root overlay's `index=Y` over a virtiofs lower; the root overlay is now
   `index=off` (`setup_persistent_rootfs`, crates/smolvm-agent/src/main.rs),

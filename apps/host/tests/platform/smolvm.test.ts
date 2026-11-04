@@ -46,6 +46,7 @@ import type {
 } from "../../src/runtime.ts";
 import { scripted as scriptedSpawner } from "../scripted.ts";
 import type { Call, Reply } from "../scripted.ts";
+import { smolvmModel } from "../smolvm-model.ts";
 
 const failure = (error: HostError) => [error._tag, error.message];
 
@@ -53,14 +54,36 @@ const encoder = new TextEncoder();
 
 const image = "registry.example/ubuntu@sha256:00";
 
+const notFound = (native: string): Reply => ({
+  exitCode: 1,
+  stderr: `Error: config operation failed: machine status: machine '${native}' not found\n`,
+});
+
 const scripted = (reply: (call: Call) => Reply | undefined) =>
-  scriptedSpawner(
-    (call) =>
-      reply(call) ??
-      (call.args[0] === "--version"
-        ? { stdout: `smolvm ${minimumVersion}\n` }
-        : undefined)
-  );
+  scriptedSpawner((call) => {
+    const answer = reply(call);
+
+    if (answer !== undefined) {
+      return answer;
+    }
+
+    if (call.args[0] === "--version") {
+      return { stdout: `smolvm ${minimumVersion}\n` };
+    }
+
+    return call.args[1] === "status" &&
+      call.args[3]?.startsWith("base_") === true
+      ? notFound(call.args[3])
+      : undefined;
+  });
+
+const baseStatus = [
+  "machine",
+  "status",
+  "--name",
+  "base_b00710ad_snap-fedcba98",
+  "--json",
+];
 
 const prepared = (expanded: readonly string[] = templates) =>
   Effect.gen(function* () {
@@ -85,6 +108,7 @@ const prepared = (expanded: readonly string[] = templates) =>
       ramBudgetMib: 4096,
       stateDir,
       arch: "x64",
+      boot: "b00710ad",
     };
 
     return settings;
@@ -1468,6 +1492,45 @@ layer(NodeServices.layer)((it) => {
       })
   );
 
+  it.effect(
+    "admit counts a parked base by the memory its scope holds, and capacity leaves it out",
+    () =>
+      Effect.gen(function* () {
+        const model = smolvmModel(1024 * 1024 * 1024);
+        const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
+        const builder = { ...machine, name: "building-1" };
+        const build = { ...machine, name: "built-abc123" };
+
+        model.vms.set(nativeName(builder), {
+          state: "running",
+          forwards: [`${builder.port}:22`],
+        });
+
+        yield* runtime.capture(builder, build);
+        yield* runtime.bases?.park(build) ?? Effect.die("smolvm parks bases");
+
+        const admitNext = (ramMib: number) => {
+          const target = { ...machine, name: "next", ramMib };
+
+          return runtime.admit({
+            action: "createMachine",
+            machine: target,
+            machines: [{ machine: target, booting: true }],
+          });
+        };
+
+        yield* admitNext(4096 - 1024);
+
+        const refused = yield* Effect.flip(admitNext(4096 - 1024 + 1));
+
+        expect(refused._tag).toBe("Capacity");
+        expect(yield* runtime.capacity([])).toStrictEqual([
+          { resource: "cpu", used: 0 },
+          { resource: "ramMib", limit: 4096, used: 0 },
+        ]);
+      })
+  );
+
   const ramCheckpoint: CheckpointRef = {
     name: "snap",
     instance: "fedcba9876543210fedcba9876543210",
@@ -1655,6 +1718,7 @@ layer(NodeServices.layer)((it) => {
         yield* runtime.restore(ramCheckpoint, copy);
 
         expect(smolvmArgs(spawner.calls)).toStrictEqual([
+          baseStatus,
           [
             "machine",
             "create",
@@ -1684,6 +1748,59 @@ layer(NodeServices.layer)((it) => {
       })
   );
 
+  it.effect(
+    "a copy from a parked base branches it, and one with no base restores the build",
+    () =>
+      Effect.gen(function* () {
+        const settings = yield* prepared();
+
+        const parked = scripted((call) =>
+          call.args[1] === "status" &&
+          call.args[3]?.startsWith("base_") === true
+            ? status("frozen")
+            : undefined
+        );
+
+        const unparked = scripted(() => {});
+
+        yield* (yield* runtimeOf(settings, parked)).restore(ramCheckpoint, {
+          ...copy,
+          ramMib: 4096,
+        });
+        yield* (yield* runtimeOf(settings, unparked)).restore(
+          ramCheckpoint,
+          copy
+        );
+
+        expect(smolvmArgs(parked.calls)).toStrictEqual([
+          baseStatus,
+          [
+            "machine",
+            "branch",
+            "--from",
+            "base_b00710ad_snap-fedcba98",
+            "--name",
+            "copy-abcdefab",
+            "--freeze-source",
+            "--branchable",
+            "-p",
+            "10001:22",
+          ],
+          ["machine", "resize", "--name", "copy-abcdefab", "--mem", "4096"],
+        ]);
+        expect(smolvmArgs(unparked.calls).map((args) => args[1])).toStrictEqual(
+          ["status", "create", "update", "start"]
+        );
+        expect(smolvmArgs(unparked.calls)[1]).toContain(
+          path.join(
+            settings.stateDir,
+            "checkpoints",
+            "snap-fedcba98.checkpoint"
+          )
+        );
+      })
+  );
+
   it.effect("a ram restore that got its source's old port keeps it", () =>
     Effect.gen(function* () {
       const spawner = scripted(() => {});
@@ -1692,6 +1809,7 @@ layer(NodeServices.layer)((it) => {
       yield* runtime.restore(ramCheckpoint, { ...copy, port: 10_000 });
 
       expect(smolvmArgs(spawner.calls).map((args) => args[1])).toStrictEqual([
+        "status",
         "create",
         "start",
       ]);
@@ -1806,9 +1924,9 @@ layer(NodeServices.layer)((it) => {
         ]);
         expect(
           smolvmArgs(spawner.calls)
-            .slice(0, 3)
+            .slice(0, 4)
             .map((args) => args[1])
-        ).toStrictEqual(["create", "start", "resize"]);
+        ).toStrictEqual(["status", "create", "start", "resize"]);
       })
   );
 
@@ -1831,7 +1949,7 @@ layer(NodeServices.layer)((it) => {
             runtime.restore(ramCheckpoint, larger)
           );
 
-          const steps = ["create", "update", "start", "resize"];
+          const steps = ["status", "create", "update", "start", "resize"];
 
           expect(error.message).toBe(
             `smolvm machine ${failing} copy-abcdefab exited 1: Error: database is locked`
@@ -1954,6 +2072,7 @@ layer(NodeServices.layer)((it) => {
         expect(yield* readDirectory(store)).toStrictEqual(["objects"]);
         expect(smolvmArgs(spawner.calls)).toStrictEqual([
           ["machine", "checkpoint-prune", "--store", store],
+          baseStatus,
         ]);
       })
   );
@@ -1969,7 +2088,7 @@ layer(NodeServices.layer)((it) => {
         yield* runtime.startup;
         yield* runtime.deleteCheckpoint(ramCheckpoint);
 
-        expect(smolvmArgs(spawner.calls)).toStrictEqual([]);
+        expect(smolvmArgs(spawner.calls)).toStrictEqual([baseStatus]);
       })
   );
 });

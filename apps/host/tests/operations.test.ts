@@ -34,6 +34,7 @@ import {
   Deferred,
   Effect,
   Fiber,
+  FileSystem,
   Layer,
   Logger,
   Redacted,
@@ -45,9 +46,12 @@ import { expect } from "vite-plus/test";
 import { PortProbe } from "../src/machine-ports.ts";
 import type { Probe } from "../src/machine-ports.ts";
 import * as Operations from "../src/operations.ts";
+import * as Smolvm from "../src/platform/smolvm.ts";
+import { Runtime } from "../src/runtime.ts";
 import { Tailnet } from "../src/tailnet.ts";
 import { fakeRuntime, writeTailscaleStubs } from "./fake-runtime.ts";
-import { image, loginSetup, pause } from "./support.ts";
+import { smolvmModel } from "./smolvm-model.ts";
+import { eventually, image, loginSetup, pause } from "./support.ts";
 
 const firstPort = 10_000;
 
@@ -109,6 +113,69 @@ const runner = (options?: RunnerOptions) =>
 
 type Runner = Effect.Success<ReturnType<typeof runner>>;
 
+const smolvmHost = (
+  model: ReturnType<typeof smolvmModel>,
+  stateDir: string,
+  boot: string
+) =>
+  Effect.gen(function* () {
+    const prefix = path.join(yield* scratch, "smolvm");
+
+    yield* mkdir(prefix);
+
+    for (const template of Smolvm.templates) {
+      yield* write(path.join(prefix, template), "");
+    }
+
+    const smolvm = Layer.effect(
+      Runtime,
+      Effect.tap(
+        Smolvm.make(
+          {
+            prefix,
+            publishAddress: "127.0.0.1",
+            ramBudgetMib: 8192,
+            stateDir,
+            arch: "x64",
+            boot,
+          },
+          0
+        ),
+        (runtime) => runtime.startup
+      )
+    );
+
+    return yield* Layer.build(
+      Operations.layer({
+        id: "linux",
+        kind: "linux",
+        bases: new Map([["ubuntu", image]]),
+        machinePorts: { first: firstPort, last: firstPort + 9 },
+      }).pipe(
+        Layer.provideMerge(smolvm),
+        Layer.provide(Layer.succeed(PortProbe, allFree)),
+        Layer.provide(Layer.merge(NodeServices.layer, model.spawner.layer))
+      )
+    ).pipe(Effect.map(Context.get(Operations.Operations)));
+  });
+
+const onSmolvm = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const model = smolvmModel();
+
+  const stateDir = yield* fs.makeTempDirectoryScoped({
+    directory: "/tmp",
+    prefix: "cbx-",
+  });
+
+  return {
+    model,
+    stateDir,
+    operations: yield* smolvmHost(model, stateDir, "b00710ad"),
+    pin: `smolvm ${Smolvm.minimumVersion} ${process.platform}-${process.arch}`,
+  };
+});
+
 const ref = (name: string, fields?: Partial<MachineRef>): MachineRef => ({
   name,
   instance: `${name}-instance`,
@@ -168,10 +235,12 @@ const delivery = (step: Step, sequence = 1): Omit<Operation, "boot"> => {
   return { id: `op-${delivered}`, scope: scopeOf(step), sequence, step };
 };
 
-const deliver = ({ operations }: Runner, operation: Omit<Operation, "boot">) =>
-  operations.run({ ...operation, boot: operations.boot });
+const deliver = (
+  { operations }: Pick<Runner, "operations">,
+  operation: Omit<Operation, "boot">
+) => operations.run({ ...operation, boot: operations.boot });
 
-const ended = ({ operations }: Runner, id: string) =>
+const ended = ({ operations }: Pick<Runner, "operations">, id: string) =>
   Effect.gen(function* () {
     for (let tries = 0; tries < 200; tries += 1) {
       const report = yield* operations.wait(id);
@@ -186,7 +255,7 @@ const ended = ({ operations }: Runner, id: string) =>
     return yield* Effect.die(`operation ${id} never ended`);
   });
 
-const finished = (host: Runner, step: Step, sequence = 1) =>
+const finished = (host: Pick<Runner, "operations">, step: Step, sequence = 1) =>
   Effect.gen(function* () {
     const operation = delivery(step, sequence);
 
@@ -2161,6 +2230,107 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         joinedAs
       );
     })
+  );
+
+  it.effect("a base outlives its build until its last child is deleted", () =>
+    Effect.gen(function* () {
+      const { model, operations, pin } = yield* onSmolvm;
+      const host = { operations };
+      const builder = ref("building-1");
+      const build = checkpoint("built-abc123");
+      const base = `base_b00710ad_${Smolvm.nativeName(build)}`;
+      const child = Smolvm.nativeName(ref("web-1"));
+
+      model.vms.set(Smolvm.nativeName(builder), {
+        state: "running",
+        forwards: [`${builder.port}:22`],
+      });
+
+      const captured = yield* finished(host, {
+        _tag: "capture",
+        machine: builder,
+        checkpoint: build,
+        pin,
+      });
+
+      const parked = [...model.vms].map(([name, { state }]) => [name, state]);
+
+      const made = yield* finished(
+        host,
+        makes("web-1", {
+          source: { _tag: "checkpoint", checkpoint: build, pin },
+        })
+      );
+
+      const branched = model.vms.get(child);
+
+      yield* finished(host, { _tag: "deleteCheckpoint", checkpoint: build }, 2);
+
+      const kept = model.vms.get(base)?.state;
+
+      yield* finished(host, { _tag: "remove", machine: ref("web-1") }, 2);
+
+      expect([captured.status, made.status]).toStrictEqual(["done", "done"]);
+      expect(parked).toStrictEqual([
+        [Smolvm.nativeName(builder), "running"],
+        [base, "frozen"],
+      ]);
+      expect(branched?.parent).toBe(base);
+      expect(branched?.forwards).toStrictEqual([`${firstPort}:22`]);
+      expect(kept).toBe("frozen");
+      expect([...model.vms.keys()]).toStrictEqual([Smolvm.nativeName(builder)]);
+    })
+  );
+
+  it.effect(
+    "a host that boots again parks each build it keeps anew, and drops the old base with its last child",
+    () =>
+      Effect.gen(function* () {
+        const { model, stateDir, operations, pin } = yield* onSmolvm;
+        const builder = ref("building-1");
+        const build = checkpoint("built-abc123");
+        const before = `base_b00710ad_${Smolvm.nativeName(build)}`;
+        const after = `base_5bfae059_${Smolvm.nativeName(build)}`;
+
+        model.vms.set(Smolvm.nativeName(builder), {
+          state: "running",
+          forwards: [`${builder.port}:22`],
+        });
+
+        yield* finished(
+          { operations },
+          { _tag: "capture", machine: builder, checkpoint: build, pin }
+        );
+        yield* finished(
+          { operations },
+          makes("web-1", {
+            source: { _tag: "checkpoint", checkpoint: build, pin },
+          })
+        );
+
+        for (const vm of model.vms.values()) {
+          vm.state = "stopped";
+        }
+
+        const rebooted = {
+          operations: yield* smolvmHost(model, stateDir, "5bfae059"),
+        };
+
+        yield* eventually(
+          Effect.sync(() => model.vms.get(after)?.state),
+          (state) => state === "frozen"
+        );
+
+        const pinned = model.vms.get(before)?.state;
+
+        yield* finished(rebooted, { _tag: "remove", machine: ref("web-1") }, 2);
+
+        expect(pinned).toBe("stopped");
+        expect(model.vms.get(after)?.forwards).toStrictEqual([]);
+        expect([...model.vms.keys()].toSorted()).toStrictEqual(
+          [Smolvm.nativeName(builder), after].toSorted()
+        );
+      })
   );
 });
 
