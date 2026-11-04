@@ -7,7 +7,7 @@ The goal is that a client talks to one server, IDs carry no host, and adding a h
 ## Decisions made
 
 1. **Actors run on the control plane.** This is the direction, and the redesign may change current rules where a careful design needs it.
-2. **A host runs whole steps, as operations.** "Make `dev`" is the copy and the setup, and preparation is part of `start`. The control plane decides what happens and when.
+2. **A host runs whole steps, as operations.** "Make `dev`" is the copy and the setup. A copy's make also prepares it, and a base create prepares in its `start`. The control plane decides what happens and when.
 3. **Mutations are asynchronous on the server, and waiting is a client concern.** The server records what was asked and answers at once. One loop per resource does the work.
 4. **A failed create keeps its row.** The VM goes, and the row stays, marked failed, until it expires or a new `create` replaces it.
 5. **SSH by name is `ssh dev.cbx`, plus `clankerbox ssh dev`.** The SSH config needs one block, which never changes when a host is added.
