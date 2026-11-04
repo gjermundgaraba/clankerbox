@@ -76,8 +76,35 @@ const Pieced = Schema.Struct({
   )
 );
 
+const overlapping = (paths: readonly string[]) => {
+  const seen = new Set<string>();
+
+  for (const path of paths) {
+    if (seen.has(path)) {
+      return path;
+    }
+
+    seen.add(path);
+  }
+
+  return paths.find((path) => {
+    const parts = path.split("/");
+
+    return parts.some((_, end) => seen.has(parts.slice(0, end).join("/")));
+  });
+};
+
 const Manifest = Schema.Struct({
-  files: Schema.Array(Schema.Union([Keyed, Pieced])),
+  files: Schema.Array(Schema.Union([Keyed, Pieced])).check(
+    Schema.makeFilter((files: ReadonlyArray<{ readonly path: string }>) => {
+      const path = overlapping(files.map((file) => file.path));
+
+      return (
+        path === undefined ||
+        `each path once, and none within another file: not ${path}`
+      );
+    })
+  ),
 });
 
 type Manifest = typeof Manifest.Type;

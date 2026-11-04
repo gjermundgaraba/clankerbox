@@ -164,6 +164,8 @@ const published = (
 
 const outside = "a relative path with no empty, . or .. part";
 
+const overlap = "each path once, and none within another file";
+
 const refusedManifests: ReadonlyArray<
   readonly [string, Kind, (file: ManifestFile) => ManifestFile, string]
 > = [
@@ -185,6 +187,24 @@ const refusedManifests: ReadonlyArray<
     "linux",
     (file) => ({ ...file, path: "memory/../../../../escaped" }),
     outside,
+  ],
+  [
+    "path is another file's too",
+    "linux",
+    (file) => ({ ...file, path: "memory/one" }),
+    overlap,
+  ],
+  [
+    "file's path is the directory of a later file",
+    "linux",
+    (file) => ({ ...file, path: "memory" }),
+    overlap,
+  ],
+  [
+    "file's path is within a later file",
+    "linux",
+    (file) => ({ ...file, path: "memory/one/inner" }),
+    overlap,
   ],
   [
     "key isn't a runtime's name and a SHA-256",
