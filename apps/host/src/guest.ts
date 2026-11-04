@@ -151,7 +151,7 @@ const addingMissingKeys = [
   "    PATH=$root/usr/local/sbin:$root/usr/local/bin:$root/usr/sbin:$root/usr/bin:$root/sbin:$root/bin",
   `    sudo -n -u "$login" -H sh -c 'umask 077 && mkdir -p "$HOME/.ssh" && for key do grep -qxF -e "$key" "$HOME/.ssh/authorized_keys" 2>/dev/null || printf "\\n%s\\n" "$key" >>"$HOME/.ssh/authorized_keys" || exit 1; done' clankerbox-keys "$@"`,
   "  ) || {",
-  `    echo "couldn't install the authorized keys for $login: setup must leave that user, and sudo"`,
+  `    echo "couldn't install the authorized keys for $login: the machine's image, from its setup or its prebuild, must have that user, and sudo"`,
   "    exit 1",
   "  }",
   "fi",

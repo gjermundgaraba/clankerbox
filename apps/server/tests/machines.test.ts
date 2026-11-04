@@ -1731,7 +1731,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(error).toMatchObject({ script: "setup" });
         expect(error.message).toContain("sudo: unknown user admin");
         expect(error.message).toContain(
-          "couldn't install the authorized keys for admin: setup must leave that user, and sudo"
+          "couldn't install the authorized keys for admin: the machine's image, from its setup or its prebuild, must have that user, and sudo"
         );
         expect(fake.machines.size).toBe(0);
       })
