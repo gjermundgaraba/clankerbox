@@ -268,6 +268,7 @@ const decodeIndex = Schema.decodeUnknownEffect(
   Schema.fromJsonString(
     Schema.Struct({
       manifest: Schema.Struct({
+        smolvm_version: Schema.optionalKey(Schema.String),
         checkpoint: Schema.Struct({
           network: Schema.optionalKey(
             Schema.Struct({
@@ -802,7 +803,7 @@ export const make = (
         removeNative(freezerOf(base))
       );
 
-    const forwardsOf = (build: string) =>
+    const indexOf = (build: string) =>
       Effect.gen(function* () {
         const index = path.join(storedAt(build), checkpointIndex);
 
@@ -819,14 +820,17 @@ export const make = (
             })
         );
 
-        return manifest.checkpoint.network?.ports ?? [];
+        return {
+          capturedUnder: manifest.smolvm_version,
+          forwards: manifest.checkpoint.network?.ports ?? [],
+        };
       });
 
     const parkAnew = (base: string, build: string) =>
       Effect.gen(function* () {
         const [took] = yield* Effect.timed(
           Effect.gen(function* () {
-            const forwards = yield* forwardsOf(build);
+            const { forwards } = yield* indexOf(build);
 
             yield* call(
               [
@@ -895,25 +899,59 @@ export const make = (
         yield* parkAnew(base, build);
       });
 
+    const capturedHere = (build: string) =>
+      Effect.map(
+        indexOf(build),
+        ({ capturedUnder }) => capturedUnder === version
+      );
+
     const parking = (build: string) =>
       alone(baseOf(build))(
-        Effect.flatMap(stored(build), (kept) =>
-          kept ? settled(baseOf(build), build) : Effect.void
+        Effect.gen(function* () {
+          if (!(yield* stored(build))) {
+            return;
+          }
+
+          if (!(yield* capturedHere(build))) {
+            return yield* Effect.logWarning(
+              `${build} was captured under another smolvm than this host's ${version}, so it parks no base and its copies restore`
+            );
+          }
+
+          yield* settled(baseOf(build), build);
+        })
+      );
+
+    const stale = ({ bootId, build }: BaseName) =>
+      Effect.gen(function* () {
+        if (bootId !== settings.bootId || !(yield* stored(build))) {
+          return true;
+        }
+
+        return !(yield* capturedHere(build));
+      });
+
+    const retireStale = (named: BaseName) => {
+      const base = baseName(named);
+
+      return alone(base)(
+        Effect.gen(function* () {
+          if (yield* stale(named)) {
+            yield* removeNative(freezerOf(base));
+            yield* retire(base);
+          }
+        })
+      ).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning(`retire ${base}: ${error.message}`)
         )
       );
+    };
 
     const orphaned = (parent: string) => {
       const named = baseParts(parent);
 
-      return named === undefined
-        ? Effect.void
-        : alone(parent)(
-            Effect.flatMap(stored(named.build), (kept) =>
-              kept && named.bootId === settings.bootId
-                ? Effect.void
-                : Effect.asVoid(retire(parent))
-            )
-          );
+      return named === undefined ? Effect.void : retireStale(named);
     };
 
     const listed = Effect.flatMap(
@@ -945,35 +983,20 @@ export const make = (
         parking(nativeName(build))
       ),
       settle: Effect.gen(function* () {
-        const kept = yield* builds;
-
-        const current = new Set(kept.map(baseOf));
-
-        const gone = new Set(
+        const listedBases = new Map(
           (yield* listed).flatMap(({ name }) => {
             const named = baseParts(name);
 
-            return named === undefined || current.has(baseName(named))
-              ? []
-              : [baseName(named)];
+            return named === undefined ? [] : [[baseName(named), named]];
           })
         );
 
-        yield* Effect.forEach(
-          gone,
-          (base) =>
-            alone(base)(
-              Effect.andThen(removeNative(freezerOf(base)), retire(base))
-            ).pipe(
-              Effect.catch((error) =>
-                Effect.logWarning(`retire ${base}: ${error.message}`)
-              )
-            ),
-          { discard: true }
-        );
+        yield* Effect.forEach(listedBases.values(), retireStale, {
+          discard: true,
+        });
 
         yield* Effect.forEach(
-          kept,
+          yield* builds,
           (build) =>
             parking(build).pipe(
               Effect.catch((error) =>

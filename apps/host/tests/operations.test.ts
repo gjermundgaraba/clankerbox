@@ -2432,6 +2432,85 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a host that starts under another smolvm than a build was captured under drops the build's base and parks none, so its copies restore",
+    () => {
+      const logged: string[] = [];
+
+      return Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { model, stateDir, operations, pin } = yield* onSmolvm;
+        const builder = ref("building-1");
+        const build = checkpoint("built-abc123");
+        const base = `base_b00710ad_${Smolvm.nativeName(build)}`;
+
+        const index = path.join(
+          stateDir,
+          "checkpoints",
+          `${Smolvm.nativeName(build)}.checkpoint`,
+          "checkpoint.json"
+        );
+
+        model.vms.set(Smolvm.nativeName(builder), {
+          state: "running",
+          forwards: [`${builder.port}:22`],
+        });
+
+        yield* finished(
+          { operations },
+          { _tag: "capture", machine: builder, checkpoint: build, pin }
+        );
+
+        const parked = model.vms.get(base)?.state;
+
+        model.vms.delete(Smolvm.nativeName(builder));
+
+        yield* fs.writeFileString(
+          index,
+          (yield* fs.readFileString(index)).replace(
+            `"smolvm_version":"${Smolvm.minimumVersion}"`,
+            '"smolvm_version":"1.32.0"'
+          )
+        );
+
+        const upgraded = {
+          operations: yield* smolvmHost(model, stateDir, "b00710ad"),
+        };
+
+        yield* eventually(
+          Effect.sync(() => model.vms.has(base)),
+          (kept) => !kept
+        );
+
+        const made = yield* finished(
+          upgraded,
+          makes("web-1", {
+            source: { _tag: "checkpoint", checkpoint: build, pin },
+          })
+        );
+
+        yield* eventually(
+          Effect.sync(
+            () =>
+              logged.filter((line) =>
+                line.includes("captured under another smolvm")
+              ).length
+          ),
+          (skipped) => skipped === 2
+        );
+
+        expect(parked).toBe("frozen");
+        expect(made.status).toBe("done");
+        expect(
+          model.vms.get(Smolvm.nativeName(ref("web-1")))?.parent
+        ).toBeUndefined();
+        expect(
+          [...model.vms.keys()].filter((vm) => vm.startsWith("base_"))
+        ).toStrictEqual([]);
+      }).pipe(Effect.provide(Logger.layer([capturing(logged)])));
+    }
+  );
+
+  it.effect(
     "a host that boots again parks each build it keeps anew, and drops the old base with its last child",
     () =>
       Effect.gen(function* () {

@@ -181,6 +181,7 @@ export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
       JSON.stringify({
         version: 1,
         manifest: {
+          smolvm_version: minimumVersion,
           checkpoint: {
             network: {
               enabled: true,
