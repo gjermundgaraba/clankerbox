@@ -34,15 +34,50 @@ const manifests = "builds/";
 
 const concurrency = 16;
 
+const Within = Schema.String.check(
+  Schema.makeFilter(
+    (path: string) =>
+      path
+        .split("/")
+        .every((part) => part !== "" && part !== "." && part !== "..") ||
+      "a relative path with no empty, . or .. part"
+  )
+);
+
+const Size = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
+
+const Sha256 = Schema.String.check(
+  Schema.isPattern(/^[0-9a-f]{64}$/u, { message: "a SHA-256 in hex" })
+);
+
+const Key = Schema.String.check(
+  Schema.isPattern(/^[a-z]+\/[0-9a-f]{64}$/u, {
+    message: "a runtime's name, / and a SHA-256 in hex",
+  })
+);
+
+const Keyed = Schema.Struct({ path: Within, size: Size, key: Key });
+
+const Pieced = Schema.Struct({
+  path: Within,
+  size: Size,
+  pieces: Schema.Array(Schema.NullOr(Sha256)),
+}).check(
+  Schema.makeFilter(
+    ({
+      size,
+      pieces,
+    }: {
+      readonly size: number;
+      readonly pieces: readonly unknown[];
+    }) =>
+      pieces.length === Math.ceil(size / pieceBytes) ||
+      `one piece for each ${pieceBytes} bytes of its size`
+  )
+);
+
 const Manifest = Schema.Struct({
-  files: Schema.Array(
-    Schema.Struct({
-      path: Schema.String,
-      size: Schema.Int,
-      key: Schema.optionalKey(Schema.String),
-      pieces: Schema.optionalKey(Schema.Array(Schema.NullOr(Schema.String))),
-    })
-  ),
+  files: Schema.Array(Schema.Union([Keyed, Pieced])),
 });
 
 type Manifest = typeof Manifest.Type;
@@ -90,12 +125,12 @@ const onFile =
     );
 
 const referenced = (manifest: Manifest) =>
-  manifest.files.flatMap(({ key, pieces }) =>
-    key === undefined
-      ? (pieces ?? []).flatMap((piece) =>
+  manifest.files.flatMap((file) =>
+    "key" in file
+      ? [file.key]
+      : file.pieces.flatMap((piece) =>
           piece === null ? [] : [pieceKey(piece)]
         )
-      : [key]
   );
 
 const readManifest = (store: Interface, name: string) =>
@@ -219,19 +254,19 @@ export const fetch = (
         })
       );
 
-    const placed = ({ path, size, key, pieces }: Manifest["files"][number]) =>
+    const placed = (file: Manifest["files"][number]) =>
       Effect.gen(function* () {
-        const target = paths.join(staged, path);
+        const target = paths.join(staged, file.path);
         const writing = onFile(`couldn't write ${target}`);
 
         yield* writing(
           fs.makeDirectory(paths.dirname(target), { recursive: true })
         );
 
-        if (key !== undefined) {
-          const local = yield* runtime.held(key);
+        if ("key" in file) {
+          const local = yield* runtime.held(file.key);
 
-          const fromStore = Effect.flatMap(object(key), (bytes) =>
+          const fromStore = Effect.flatMap(object(file.key), (bytes) =>
             writing(fs.writeFile(target, bytes))
           );
 
@@ -244,7 +279,7 @@ export const fetch = (
           Effect.gen(function* () {
             const handle = yield* writing(fs.open(target, { flag: "w" }));
 
-            for (const [index, piece] of (pieces ?? []).entries()) {
+            for (const [index, piece] of file.pieces.entries()) {
               if (piece !== null) {
                 const bytes = yield* gzipped(
                   yield* object(pieceKey(piece)),
@@ -258,7 +293,7 @@ export const fetch = (
               }
             }
 
-            yield* writing(handle.truncate(size));
+            yield* writing(handle.truncate(file.size));
           })
         );
       });
