@@ -763,7 +763,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
     heldCheckpoints: () => [...checkpoints.keys()],
     row: (id: string) => machines.get(id),
     routes,
-    handler: async (request: Request) => {
+    handler: async (request: Request): Promise<Response> => {
       versions.push(request.headers.get(versionHeader));
 
       const response = await web.handler(request);
