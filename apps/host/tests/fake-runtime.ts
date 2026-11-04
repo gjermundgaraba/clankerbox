@@ -503,7 +503,7 @@ export const fakeRuntime = (options: FakeOptions) => {
               activation.machine,
               options.ramBudgetMib === undefined
                 ? Effect.void
-                : checkRamBudget(options.ramBudgetMib, activation, states)
+                : checkRamBudget(options.ramBudgetMib, activation, states, 0)
             )
           ),
         capacity,

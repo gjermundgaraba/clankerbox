@@ -26,7 +26,8 @@ type Placed = Held & { readonly state: MachineState };
 const admits = (
   target: number,
   others: ReadonlyArray<typeof Machine.Type>,
-  budgetMib: number
+  budgetMib: number,
+  heldMib = 0
 ) =>
   Effect.gen(function* () {
     const machine = ref(0, target);
@@ -58,7 +59,8 @@ const admits = (
       checkRamBudget(
         budgetMib,
         { action: "startMachine", machine, machines },
-        observe
+        observe,
+        heldMib
       )
     );
 
@@ -115,5 +117,20 @@ it.effect.prop(
       );
 
       expect(after).toBe(before);
+    })
+);
+
+it.effect.prop(
+  "a parked base does not take a machine's share of the budget",
+  {
+    target: Ram,
+    held: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 65_536 })),
+    budget: Budget,
+  },
+  ({ target, held, budget }) =>
+    Effect.gen(function* () {
+      expect(yield* admits(target, [], budget, held)).toBe(
+        target + held <= budget
+      );
     })
 );

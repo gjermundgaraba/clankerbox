@@ -686,7 +686,7 @@ export const make = (
       adopt: () => Effect.void,
       observe: Effect.fn("Smolvm.observe")(observe),
       admit: Effect.fn("Smolvm.admit")((activation) =>
-        checkRamBudget(settings.ramBudgetMib, activation, observe)
+        checkRamBudget(settings.ramBudgetMib, activation, observe, 0)
       ),
       capacity: Effect.fn("Smolvm.capacity")((machines) =>
         Effect.map(inUse(machines, observe), ({ running, unread }) =>

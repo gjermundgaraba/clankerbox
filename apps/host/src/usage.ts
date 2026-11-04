@@ -64,17 +64,22 @@ export const allotted = (
       );
 };
 
+/**
+ * Refuses an activation past the budget. Each machine counts its whole RAM; `heldMib` is what the
+ * runtime holds beside them, such as smolvm's parked bases, counted by what it uses.
+ */
 export const checkRamBudget = (
   budgetMib: number,
   activation: Activation,
-  observe: Observe
+  observe: Observe,
+  heldMib: number
 ): Effect.Effect<void, Capacity> =>
   Effect.gen(function* () {
     const { running, unread } = yield* inUse(activation.machines, observe);
 
     const total = [...running, ...unread].reduce(
       (sum, { ramMib }) => sum + ramMib,
-      0
+      heldMib
     );
 
     if (total > budgetMib) {
