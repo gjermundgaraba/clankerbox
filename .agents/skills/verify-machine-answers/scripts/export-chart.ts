@@ -79,6 +79,15 @@ const events: ReadonlyArray<readonly [string, MachineEvent]> = [
     { type: "reported", status: "done", outcome: {}, at: when },
   ],
   [
+    "reported:prepared",
+    {
+      type: "reported",
+      status: "done",
+      outcome: { prepared: true },
+      at: when,
+    },
+  ],
+  [
     "reported:failed",
     { type: "reported", status: "failed", outcome: {}, error },
   ],

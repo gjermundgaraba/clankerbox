@@ -87,11 +87,14 @@ A pass covers this scope, and only it:
 
 - **One machine**, created once. Copies (fork, restore, capture), resize and
   the tailnet join are out, so a resize's `Operation.to`, and a failing step
-  giving way to a resize owed, rest on `apps/server/tests`.
+  giving way to a resize owed, rest on `apps/server/tests`. A make's report may
+  say it prepared the machine, as a copy's does, so the row rests with no start;
+  the make is otherwise the scripted one below.
 - **The table holds what the model holds of a row**: its leaf, wish, `prepared`
-  and whether it has an error. A key it lacks is an event the chart leaves
-  unhandled. `resize`, `sized`, `refused`, `ran`, a report's `move` and what a
-  report tells rest on `machine-chart.test.ts`.
+  and whether it has an error, and a make's report that it prepared the
+  machine. A key it lacks is an event the chart leaves unhandled. `resize`,
+  `sized`, `refused`, `ran`, a report's `move` and the rest of what a report
+  tells rest on `machine-chart.test.ts`.
 - **`MachineAnswers.cfg`**: one client beside the creator, with one of each
   fault: a step or read that fails, a control plane crash, a partition, a host
   restart and a lost delivery, and nine operations. Every invariant and
@@ -147,7 +150,7 @@ for this code:
 | `Send`, `Cut`                    | `apps/server/src/operations.ts` `poll`                                     |
 | `Collect`                        | `machine-chart.ts` `reported`, `lost`; `machines.ts` `following`; `operations.ts` `poll`, `collect`; `store.advance` |
 | `Deliver`, `Repeat`, `Lose`      | `apps/host/src/operations.ts` `run`, its boot and sequence fence           |
-| `HostStep`, `HostFail`           | `apps/host/src/operations.ts` `perform`, and `picking`, `made` for a make  |
+| `HostStep`, `HostFail`           | `apps/host/src/operations.ts` `perform`, and `picking`, `made` for a make, which may report it prepared |
 | `HostCancel`                     | `apps/host/src/operations.ts` `cancel`, `ended`                            |
 | `HostRestart`                    | a new process: `Operations.boot`, empty `entries` and `scopes`             |
 | `Crash`, `Revive`                | a new process: the store stays, `creates` goes; `machines.ts` start-up     |
@@ -187,6 +190,7 @@ change.
 | `ask` leaves the row at rest                                 | chart | `RestTrue`         |
 | A start's report rests the row settled without a new read    | chart | `RestTrue`         |
 | A read that fails writes a rest                              | chart | `RestTrue`         |
+| A prepared make's report rests the row settled without a read | chart | `RestTrue`         |
 | A failed make skips undoing and rests undone                 | chart | `NoOrphan`         |
 | Failing a step records no error                              | chart | `FailedSays`       |
 | A report enters a leaf with a step                           | chart | `OpIsState`        |

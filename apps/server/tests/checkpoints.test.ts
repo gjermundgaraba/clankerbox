@@ -131,7 +131,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(host.fake.calls).toStrictEqual([
           "admit copy",
           "fork copy",
-          "start copy",
           "exec copy",
           "exec copy",
         ]);
@@ -316,7 +315,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a fork or restore that fails only in preparation leaves its machine made, and a start prepares it again",
+    "a fork or restore that fails in preparation is undone, and its copy deleted",
     () =>
       Effect.gen(function* () {
         const { client, host, store } = yield* withSource();
@@ -334,20 +333,18 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             "exec",
             new Internal({ message: "sshd didn't start" })
           );
-          yield* Effect.flip(make);
-
+          const error = yield* Effect.flip(make);
           const row = Option.getOrThrow(yield* store.findMachine(name));
 
-          host.fake.calls.length = 0;
-
-          const started = yield* client.startMachine({ id: name });
-
-          expect(row.state).toBe("made.failed");
-          expect(at(started)).toStrictEqual(["running", "running", "settled"]);
-          expect(callsTo(host, "exec")).toStrictEqual([
-            `exec ${name}`,
-            `exec ${name}`,
+          expect([error._tag, error.message]).toStrictEqual([
+            "Internal",
+            "sshd didn't start",
           ]);
+          expect([row.state, row.error?.message]).toStrictEqual([
+            "undone",
+            "sshd didn't start",
+          ]);
+          expect(host.fake.machines.has(name)).toBe(false);
         }
       })
   );
@@ -1074,7 +1071,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(host.fake.calls).toStrictEqual([
           "admit dev",
           "restore dev",
-          "start dev",
           "exec dev",
           "exec dev",
         ]);

@@ -430,7 +430,20 @@ export const make = (
         )
       );
 
+    const readied = (progress: Progress, machine: MachineRef) =>
+      Effect.gen(function* () {
+        yield* identify(runtime, machine);
+
+        const hostKey = yield* prepare(runtime, machine);
+
+        progress.outcome = {
+          ...progress.outcome,
+          ...(hostKey === undefined ? {} : { hostKey }),
+        };
+      });
+
     const made = (
+      progress: Progress,
       { machine, source, authorizedKeys, machines }: Make,
       port: number
     ): Effect.Effect<void, HostError> =>
@@ -457,6 +470,11 @@ export const make = (
           yield* runSetup(runtime, ref, source.setup, authorizedKeys);
         } else if (authorizedKeys !== undefined) {
           yield* addMissingKeys(runtime, ref, authorizedKeys);
+        }
+
+        if (source._tag !== "base") {
+          yield* readied(progress, ref);
+          progress.outcome = { ...progress.outcome, prepared: true };
         }
       });
 
@@ -488,23 +506,7 @@ export const make = (
                   runtime.start(machine)
                 );
 
-            yield* identify(runtime, machine);
-
-            if (Option.isSome(tailnet) && step.hostname !== undefined) {
-              const status = yield* joined(
-                tailnet.value,
-                machine,
-                step.hostname
-              );
-
-              progress.outcome = { ...progress.outcome, tailnet: status };
-            }
-
-            const hostKey = yield* prepare(runtime, machine);
-
-            if (hostKey !== undefined) {
-              progress.outcome = { ...progress.outcome, hostKey };
-            }
+            yield* readied(progress, machine);
           });
         }
 
@@ -622,7 +624,7 @@ export const make = (
           onSuccess: (port) => {
             progress.outcome = { port };
 
-            return made(step, port);
+            return made(progress, step, port);
           },
         }
       );

@@ -335,15 +335,14 @@ export const make = (
               reportedBy(found, op, report, yield* DateTime.now)
             );
 
-            if (written && (op.kind === "join" || op.kind === "start")) {
+            if (written && op.kind === "start") {
+              tailnets.delete(name);
+            }
+
+            if (written && op.kind === "join") {
               tailnets.set(
                 name,
-                checked(
-                  op.kind === "start"
-                    ? unchecked
-                    : (tailnets.get(name) ?? unchecked),
-                  report.outcome.tailnet
-                )
+                checked(tailnets.get(name) ?? unchecked, report.outcome.tailnet)
               );
             }
 

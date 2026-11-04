@@ -1,7 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, layer } from "@effect/vitest";
 import type { Machine, TailnetStatus } from "@gjermundgaraba/clankerbox-sdk";
-import { Deferred, Duration, Effect, Layer, Redacted } from "effect";
+import { Deferred, Duration, Effect, Layer, Option, Redacted } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
 import {
@@ -15,6 +15,7 @@ import {
 import {
   clientOf,
   eventually,
+  loginSetup,
   pause,
   plane,
   request,
@@ -198,53 +199,59 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     );
   });
 
-  it.effect(
-    "a machine joins before its start settles, and shows the name without another join",
-    () =>
-      Effect.gen(function* () {
-        const minted: string[] = [];
+  it.effect("a create answers settled, then joins in its own step", () =>
+    Effect.gen(function* () {
+      const minted: string[] = [];
+      const hold = yield* Deferred.make<undefined>();
+      const entered = yield* Deferred.make<undefined>();
 
-        const { client, hosts } = yield* served(joining(tailscaleApi(minted)));
+      const { client, hosts, shown, store } = yield* served(
+        joining(tailscaleApi(minted, { hold, entered }))
+      );
 
-        const created = yield* client.create("dev", request("dev"));
+      yield* client.buildTemplate({
+        ...request("unused"),
+        template: "web",
+        setup: { script: `#!/bin/sh\n${loginSetup}`, timeoutSeconds: 30 },
+      });
 
-        expect([created.state, created.phase]).toStrictEqual([
-          "running",
-          "settled",
-        ]);
-        expect(created.tailnet).toStrictEqual(joinedName);
-        expect(
-          hosts[0]?.fake.calls.filter((call) => call === "exec dev")
-        ).toHaveLength(4);
-        expect(minted).toHaveLength(1);
-      })
-  );
+      const created = yield* client.create("box", { template: "web" });
 
-  it.effect(
-    "a create stays starting while it joins, and answers with its tailnet status",
-    () =>
-      Effect.gen(function* () {
-        const hold = yield* Deferred.make<undefined>();
-        const entered = yield* Deferred.make<undefined>();
+      yield* Deferred.await(entered);
 
-        const { asking, shown } = yield* served(
-          joining(tailscaleApi([], { hold, entered }))
-        );
+      const joiningNow = yield* store.operationOn("machine", "box");
 
-        yield* asking.create("dev", request("dev"));
-        yield* Deferred.await(entered);
+      expect([created.state, created.phase, created.tailnet]).toStrictEqual([
+        "running",
+        "settled",
+        undefined,
+      ]);
+      expect(Option.map(joiningNow, ({ kind }) => kind)).toStrictEqual(
+        Option.some("join")
+      );
+      expect((yield* shown("box")).phase).toBe("settled");
 
-        expect((yield* shown()).phase).toBe("starting");
+      yield* Deferred.succeed(hold, undefined);
 
-        yield* Deferred.succeed(hold, undefined);
+      const joined = yield* eventually(
+        shown("box"),
+        (machine: Machine) => machine.tailnet !== undefined
+      );
 
-        const settled = yield* eventually(
-          shown(),
-          (machine) => machine.phase === "settled"
-        );
-
-        expect(settled.tailnet).toStrictEqual(joinedName);
-      })
+      expect(joined.tailnet).toStrictEqual(joinedName);
+      expect(minted).toHaveLength(1);
+      expect(
+        hosts[0]?.fake.calls.filter((call) => call.endsWith(" box"))
+      ).toStrictEqual([
+        "admit box",
+        "restore box",
+        "exec box",
+        "exec box",
+        "exec box",
+        "exec box",
+        "exec box",
+      ]);
+    })
   );
 
   it.effect(
@@ -405,7 +412,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a stop sent while the start joins cuts it short, and is the answer",
+    "a stop sent while a machine joins cuts the join short, and is the answer",
     () =>
       Effect.gen(function* () {
         const hold = yield* Deferred.make<undefined>();
@@ -417,7 +424,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* asking.create("dev", request("dev"));
         yield* eventually(
           store.operationOn("machine", "dev"),
-          (found) => found._tag === "Some" && found.value.kind === "start"
+          (found) => found._tag === "Some" && found.value.kind === "join"
         );
         yield* pause;
 

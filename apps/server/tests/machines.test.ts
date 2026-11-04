@@ -3399,6 +3399,36 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     })
   );
 
+  it.effect("a copy whose preparation fails is undone", () =>
+    Effect.gen(function* () {
+      const { client, fake, row } = yield* built();
+
+      fake.failNext("exec", new Internal({ message: "sshd didn't start" }));
+
+      const error = yield* Effect.flip(
+        client.create("box", { template: "web" })
+      );
+
+      const undone = yield* row("box");
+
+      expect([error._tag, error.message]).toStrictEqual([
+        "Internal",
+        "sshd didn't start",
+      ]);
+      expect([undone.state, undone.error?.message]).toStrictEqual([
+        "undone",
+        "sshd didn't start",
+      ]);
+      expect(fake.calls.filter((call) => call.endsWith(" box"))).toStrictEqual([
+        "admit box",
+        "restore box",
+        "exec box",
+        "delete box",
+      ]);
+      expect(fake.machines.has("box")).toBe(false);
+    })
+  );
+
   it.effect("a pinned build is cloned", () =>
     Effect.gen(function* () {
       const { client, dir, row, store } = yield* built();

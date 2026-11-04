@@ -149,7 +149,6 @@ export const machineStep = (
           machine: ref,
           ...pinned(found.pin),
           machines,
-          ...(found.ephemeral ? {} : { hostname: `cbx-${name}` }),
         };
       }
 

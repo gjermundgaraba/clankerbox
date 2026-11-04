@@ -602,6 +602,36 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
+  it.effect("a create from a template sends no setup and no start", () =>
+    Effect.gen(function* () {
+      const { dir, hosts, run } = yield* setUp();
+      const script = yield* countedSetup(dir);
+
+      yield* run(["template", "build", "web", script, ...sizes]);
+
+      const created = yield* run(["create", "box", "--template", "web"]);
+
+      const got = yield* decodeJson(
+        MachineJson,
+        (yield* run(["get", "box", "--json"])).stdout
+      );
+
+      expect([created.code, created.stdout]).toStrictEqual([0, "box"]);
+      expect([got.state, got.phase]).toStrictEqual(["running", "settled"]);
+      expect(got.hostKey).toMatch(/^ssh-ed25519 /u);
+      expect(
+        hosts[0]?.fake.calls.filter((call) => call.endsWith(" box"))
+      ).toStrictEqual([
+        "admit box",
+        "restore box",
+        "exec box",
+        "exec box",
+        "exec box",
+      ]);
+      expect(yield* setupRuns(dir)).toBe(1);
+    })
+  );
+
   it.effect(
     "a create from a template whose only holder is full fails Capacity, and never moves to a host without the build",
     () =>

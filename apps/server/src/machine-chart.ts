@@ -32,6 +32,7 @@ export interface Outcome {
   readonly port?: number;
   readonly hostKey?: string;
   readonly sizes?: Pick<Facts, "cpu" | "ramMib" | "diskGib">;
+  readonly prepared?: true;
 }
 
 /** Where a failed create goes next, past a host that hadn't the capacity. */
@@ -40,7 +41,7 @@ export type Move = Pick<Facts, "host" | "kind" | "pin" | "source">;
 export interface Read extends Begins {
   readonly seen: MachineState;
   readonly pin: string | undefined;
-  /** Whether a tailnet recheck is due, accounting for the start's join report. */
+  /** Whether a tailnet check is due: once a machine is made or started, then as rechecks wait. */
   readonly joins: boolean;
   /** Whether the capture a pause comes `after` is recorded but not yet begun. */
   readonly awaiting: boolean;
@@ -246,7 +247,10 @@ export const machine = setup({
               event.status === "done"
                 ? {
                     target: "#machine.made.observing",
-                    context: { ...told(context, event), prepared: false },
+                    context: {
+                      ...told(context, event),
+                      prepared: event.outcome.prepared === true,
+                    },
                   }
                 : {
                     target: "#machine.undoing.due",

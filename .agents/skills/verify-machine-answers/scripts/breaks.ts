@@ -76,6 +76,27 @@ const breaks: readonly Break[] = [
     violated: "RestTrue",
   },
   {
+    name: "prepared-make-rests",
+    config: "TwoClients.cfg",
+    file: chart,
+    edits: [
+      [
+        `                    target: "#machine.made.observing",
+                    context: {
+                      ...told(context, event),
+                      prepared: event.outcome.prepared === true,`,
+        `                    target:
+                      event.outcome.prepared === true
+                        ? "#machine.made.settled"
+                        : "#machine.made.observing",
+                    context: {
+                      ...told(context, event),
+                      prepared: event.outcome.prepared === true,`,
+      ],
+    ],
+    violated: "RestTrue",
+  },
+  {
     name: "skip-undo",
     config: "MachineAnswers.cfg",
     file: chart,

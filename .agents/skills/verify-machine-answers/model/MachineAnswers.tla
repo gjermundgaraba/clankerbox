@@ -7,7 +7,8 @@ CONSTANTS Clients, Creator, Desires,
 None == "none"
 Everyone == Clients \cup {Creator}
 NoOp == [id |-> 0, kind |-> None, boot |-> 0]
-NoRun == [id |-> 0, kind |-> None, status |-> None, pc |-> None]
+NoRun == [id |-> 0, kind |-> None, status |-> None, pc |-> None,
+          prepared |-> FALSE]
 Absent == [state |-> "absent", desired |-> None, prepared |-> FALSE, err |-> FALSE,
            op |-> NoOp]
 
@@ -184,7 +185,8 @@ Collect ==
   /\ LET id == row.op.id
          held == runs.id = id
      IN \/ /\ held /\ runs.status = "done"
-           /\ row' = Row(row, "reported:done", NoOp)
+           /\ row' = Row(row, IF runs.prepared THEN "reported:prepared"
+                                               ELSE "reported:done", NoOp)
            /\ runs' = NoRun
         \/ /\ held /\ runs.status = "failed"
            /\ row' = Row(row, "reported:failed", NoOp)
@@ -207,7 +209,7 @@ Deliver ==
        /\ IF m.boot = boot /\ m.id > high
           THEN /\ high' = m.id
                /\ runs' = [id |-> m.id, kind |-> m.kind, status |-> "running",
-                           pc |-> "begin"]
+                           pc |-> "begin", prepared |-> FALSE]
           ELSE UNCHANGED <<high, runs>>
   /\ UNCHANGED <<row, up, script, read, known, linked, vm, boot, cut, applied,
                  cl, nextOp>>
@@ -219,7 +221,7 @@ Repeat ==
        /\ m.boot = boot /\ m.id > high
        /\ high' = m.id
        /\ runs' = [id |-> m.id, kind |-> m.kind, status |-> "running",
-                   pc |-> "begin"]
+                   pc |-> "begin", prepared |-> FALSE]
   /\ UNCHANGED <<row, up, script, read, known, linked, vm, boot, net, cut,
                  applied, cl, nextOp>>
   /\ UNCHANGED worldVars
@@ -244,7 +246,8 @@ HostStep ==
             ELSE /\ runs' = [runs EXCEPT !.status = "failed"]
                  /\ UNCHANGED <<vm, applied>>
        [] k = "make" ->
-            /\ runs' = [runs EXCEPT !.status = "done"]
+            /\ \E p \in BOOLEAN :
+                 runs' = [runs EXCEPT !.status = "done", !.prepared = p]
             /\ UNCHANGED <<vm, applied>>
        [] k = "start" ->
             IF vm = "missing"

@@ -79,7 +79,7 @@ const others = { machines: Schema.Array(MachineRef) };
  * `machines` the host's other machines, which admission counts beside the one a step boots. A step
  * that acts by what its VM is doing reads it from the runtime as it begins. A make's
  * `authorizedKeys` go to the login user once the machine is made, after its setup if it has one,
- * beside the keys already there.
+ * beside the keys already there. A copy's make then prepares it, as a start does.
  */
 export const Step = Schema.Union([
   Schema.TaggedStruct("make", {
@@ -91,7 +91,6 @@ export const Step = Schema.Union([
   }),
   Schema.TaggedStruct("start", {
     machine: MachineRef,
-    hostname: Schema.optionalKey(Schema.String),
     ...pinned,
     ...others,
   }),
@@ -140,6 +139,8 @@ export const Outcome = Schema.Struct({
   hostKey: Schema.optionalKey(Schema.String),
   sizes: Schema.optionalKey(Schema.Struct(sizes)),
   tailnet: Schema.optionalKey(TailnetStatus),
+  /** A copy's make that gave it its own identity and prepared it, so it needs no start. */
+  prepared: Schema.optionalKey(Schema.Literal(true)),
   /** A capture that failed and left nothing on its host, so a delete would find nothing. */
   cleared: Schema.optionalKey(Schema.Literal(true)),
 });

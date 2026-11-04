@@ -989,6 +989,12 @@ const factsWritten: readonly Write[] = [
     { state: "made.observing", prepared: false, port: 2222 },
   ],
   [
+    "a make done prepared tells its host key, and its machine needs no start",
+    rowAt("making.sent"),
+    report("done", { port: 2222, hostKey: "key", prepared: true }),
+    { state: "made.observing", prepared: true, port: 2222, hostKey: "key" },
+  ],
+  [
     "a start done prepares its machine and tells its host key",
     rowAt("made.stepping.starting"),
     report("done", { hostKey: "key" }),
@@ -1138,6 +1144,13 @@ const factsWritten: readonly Write[] = [
   ],
 ];
 
+const told = report("done", { hostKey: "key" });
+
+const toldPrepared = report("done", { hostKey: "key", prepared: true });
+
+const madeFrom = (desired: Wish) =>
+  after(rowAt("making.sent", { desired }), toldPrepared);
+
 const representatives: readonly MachineEvent[] = [
   ...wishes.map(ask),
   removal,
@@ -1146,6 +1159,7 @@ const representatives: readonly MachineEvent[] = [
   { type: "refused", error },
   { type: "ran", port: 2222 },
   done,
+  toldPrepared,
   failed,
   cancelled,
   gone,
@@ -1234,6 +1248,40 @@ describe("the chart", () => {
     expect(table.filter(({ chart, named }) => chart !== named)).toStrictEqual(
       []
     );
+  });
+
+  it("a make that reports prepared settles with no start, checked with every event from every leaf", () => {
+    const apart = fixtures.flatMap(({ row, op }) => {
+      const { next: plain } = applied(machineChart, row, told, op);
+      const { next: flagged } = applied(machineChart, row, toldPrepared, op);
+
+      const expected =
+        row.state === "making.sent" && plain !== "removed"
+          ? { ...plain, prepared: true }
+          : plain;
+
+      return JSON.stringify(flagged) === JSON.stringify(expected)
+        ? []
+        : [[row.state, row.desired, row.prepared]];
+    });
+
+    const decided = wishes.flatMap((desired) =>
+      flags.map((joins) => [
+        desired,
+        joins,
+        leafOf(madeFrom(desired), read("running", joins)),
+      ])
+    );
+
+    expect(apart).toStrictEqual([]);
+    expect(decided).toStrictEqual([
+      ["running", false, "made.settled"],
+      ["running", true, "made.stepping.joining.sent"],
+      ["stopped", false, "made.stepping.stopping"],
+      ["stopped", true, "made.stepping.stopping"],
+      ["paused", false, "made.stepping.pausing"],
+      ["paused", true, "made.stepping.pausing"],
+    ]);
   });
 
   it("takes the sizes a read gives on every leaf, and writes nothing else", () => {
