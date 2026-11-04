@@ -2025,8 +2025,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const rebuilding = yield* Effect.forkChild(client.prebuild(prebuild()));
 
         yield* eventually(
-          Effect.sync(() => callsTo(host, "exec")),
-          (execs) => execs.length === 2
+          client.getCheckpoint({ id: first.id }),
+          ({ phase }) => phase === "deleting"
         );
         yield* pause;
 
