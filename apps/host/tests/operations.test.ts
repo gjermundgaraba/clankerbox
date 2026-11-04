@@ -2646,6 +2646,85 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a capture of a build whose park fails ends done, and one cut short in its park ends cancelled, and both keep the checkpoint",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { model, stateDir, operations, pin } = yield* onSmolvm;
+        const host = { operations };
+        const builder = ref("building-1");
+
+        const parks = (build: MachineRef) =>
+          model.spawner.calls.some(
+            ({ args }) =>
+              args[1] === "create" &&
+              args.includes(`base_b00710ad_${Smolvm.nativeName(build)}`)
+          );
+
+        const kept = (build: MachineRef) =>
+          fs.exists(
+            path.join(
+              stateDir,
+              "checkpoints",
+              `${Smolvm.nativeName(build)}.checkpoint`
+            )
+          );
+
+        model.vms.set(Smolvm.nativeName(builder), {
+          state: "running",
+          forwards: [`${builder.port}:22`],
+        });
+
+        model.faults.reply = ({ args }) =>
+          args[1] === "create" && args.some((arg) => arg.startsWith("base_"))
+            ? { exitCode: 1, stderr: "Error: database is locked\n" }
+            : undefined;
+
+        const failing = checkpoint("built-abc123");
+
+        const failed = yield* finished(host, {
+          _tag: "capture",
+          machine: builder,
+          checkpoint: failing,
+          pin,
+        });
+
+        model.faults.reply = ({ args }) =>
+          args[1] === "create" && args.some((arg) => arg.startsWith("base_"))
+            ? { hangs: true }
+            : undefined;
+
+        const cut = checkpoint("built-def456");
+
+        const operation = delivery({
+          _tag: "capture",
+          machine: builder,
+          checkpoint: cut,
+          pin,
+        });
+
+        yield* deliver(host, operation);
+        yield* eventually(
+          Effect.sync(() => parks(cut)),
+          (parking) => parking
+        );
+        yield* operations.cancel(operation.id);
+
+        const cancelled = yield* ended(host, operation.id);
+
+        expect([failed.status, cancelled.status]).toStrictEqual([
+          "done",
+          "cancelled",
+        ]);
+        expect(cancelled.outcome.cleared).toBeUndefined();
+        expect([yield* kept(failing), yield* kept(cut)]).toStrictEqual([
+          true,
+          true,
+        ]);
+      })
+  );
+
+  it.effect(
     "a host that boots again parks each build it keeps anew, and drops the old base with its last child",
     () =>
       Effect.gen(function* () {
