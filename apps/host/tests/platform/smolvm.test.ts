@@ -71,6 +71,10 @@ const scripted = (reply: (call: Call) => Reply | undefined) =>
       return { stdout: `smolvm ${minimumVersion}\n` };
     }
 
+    if (call.args[1] === "ls") {
+      return { stdout: "[]" };
+    }
+
     return call.args[1] === "status" &&
       call.args[3]?.startsWith("base_") === true
       ? notFound(call.args[3])
@@ -1528,6 +1532,31 @@ layer(NodeServices.layer)((it) => {
           { resource: "cpu", used: 0 },
           { resource: "ramMib", limit: 4096, used: 0 },
         ]);
+      })
+  );
+
+  it.effect(
+    "a host that starts beside a parked base counts its memory before parking anything",
+    () =>
+      Effect.gen(function* () {
+        const model = smolvmModel(1024 * 1024 * 1024);
+        const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
+        const target = { ...machine, name: "next", ramMib: 4096 - 1024 + 1 };
+
+        model.vms.set("base_b00710ad_built-abc123-fedcba98", {
+          state: "frozen",
+          forwards: [],
+        });
+
+        const refused = yield* Effect.flip(
+          runtime.admit({
+            action: "createMachine",
+            machine: target,
+            machines: [{ machine: target, booting: true }],
+          })
+        );
+
+        expect(refused._tag).toBe("Capacity");
       })
   );
 

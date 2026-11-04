@@ -751,16 +751,12 @@ export const make = (
       return lock.withPermits(1);
     };
 
-    const parked = new Set<string>();
-
     const stored = (native: string) =>
       files(`couldn't check ${storedAt(native)}`, fs.exists(storedAt(native)));
 
     const retire = (base: string) =>
       Effect.gen(function* () {
         if ((yield* status(base)) === "missing") {
-          parked.delete(base);
-
           return true;
         }
 
@@ -775,7 +771,6 @@ export const make = (
             : yield* failure(`smolvm machine delete ${base}`, ran);
         }
 
-        parked.delete(base);
         yield* Effect.ignore(
           systemctl(
             ["reset-failed", scopeName(base)],
@@ -862,7 +857,6 @@ export const make = (
               );
             }
 
-            parked.add(base);
             yield* boot(base);
             yield* freeze(base);
           })
@@ -878,13 +872,10 @@ export const make = (
         const recorded = yield* status(base);
 
         if (recorded === "frozen") {
-          parked.add(base);
-
           return;
         }
 
         if (recorded === "running") {
-          parked.add(base);
           yield* freeze(base);
 
           return;
@@ -1009,17 +1000,16 @@ export const make = (
     };
 
     const heldMib = Effect.gen(function* () {
-      if (parked.size === 0) {
+      const held = (yield* listed).flatMap(({ name }) =>
+        baseParts(name) === undefined ? [] : [scopeName(name)]
+      );
+
+      if (held.length === 0) {
         return 0;
       }
 
       const shown = yield* systemctl(
-        [
-          "show",
-          "--property=MemoryCurrent",
-          "--value",
-          ...[...parked].map(scopeName),
-        ],
+        ["show", "--property=MemoryCurrent", "--value", ...held],
         "show the parked bases' memory"
       );
 
