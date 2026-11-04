@@ -266,9 +266,17 @@ export const fetch = (
         if ("key" in file) {
           const local = yield* runtime.held(file.key);
 
-          const fromStore = Effect.flatMap(object(file.key), (bytes) =>
-            writing(fs.writeFile(target, bytes))
-          );
+          const fromStore = Effect.gen(function* () {
+            const bytes = yield* object(file.key);
+
+            if (bytes.length !== file.size) {
+              return yield* new Internal({
+                message: `build object ${file.key} of ${file.path} holds ${bytes.length} bytes, not the manifest's ${file.size}`,
+              });
+            }
+
+            yield* writing(fs.writeFile(target, bytes));
+          });
 
           return yield* local === undefined
             ? fromStore
@@ -281,10 +289,27 @@ export const fetch = (
 
             for (const [index, piece] of file.pieces.entries()) {
               if (piece !== null) {
+                const length = Math.min(
+                  pieceBytes,
+                  file.size - index * pieceBytes
+                );
+
                 const bytes = yield* gzipped(
                   yield* object(pieceKey(piece)),
                   new DecompressionStream("gzip")
                 );
+
+                if (bytes.length !== length) {
+                  return yield* new Internal({
+                    message: `build piece ${index} of ${file.path} holds ${bytes.length} bytes, not ${length}`,
+                  });
+                }
+
+                if ((yield* sha256(bytes)) !== piece) {
+                  return yield* new Internal({
+                    message: `build piece ${index} of ${file.path} doesn't hash to ${piece}`,
+                  });
+                }
 
                 yield* writing(
                   handle.seek(BigInt(index * pieceBytes), "start")
