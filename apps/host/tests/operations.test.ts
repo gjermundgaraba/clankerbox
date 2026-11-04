@@ -2511,6 +2511,67 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a child's delete that can't retire its base still ends done, and a delete again retires it",
+    () =>
+      Effect.gen(function* () {
+        const { model, operations, pin } = yield* onSmolvm;
+        const host = { operations };
+        const builder = ref("building-1");
+        const build = checkpoint("built-abc123");
+        const base = `base_b00710ad_${Smolvm.nativeName(build)}`;
+
+        model.vms.set(Smolvm.nativeName(builder), {
+          state: "running",
+          forwards: [`${builder.port}:22`],
+        });
+
+        yield* finished(host, {
+          _tag: "capture",
+          machine: builder,
+          checkpoint: build,
+          pin,
+        });
+        model.vms.delete(Smolvm.nativeName(builder));
+        yield* finished(
+          host,
+          makes("web-1", {
+            source: { _tag: "checkpoint", checkpoint: build, pin },
+          })
+        );
+        yield* finished(
+          host,
+          { _tag: "deleteCheckpoint", checkpoint: build },
+          2
+        );
+
+        model.faults.reply = ({ args }) =>
+          args[1] === "delete" && args.includes(base)
+            ? { exitCode: 1, stderr: "Error: database is locked\n" }
+            : undefined;
+
+        const first = yield* finished(
+          host,
+          { _tag: "remove", machine: ref("web-1") },
+          2
+        );
+
+        const kept = model.vms.has(base);
+
+        model.faults.reply = undefined;
+
+        const again = yield* finished(
+          host,
+          { _tag: "remove", machine: ref("web-1") },
+          3
+        );
+
+        expect([first.status, again.status]).toStrictEqual(["done", "done"]);
+        expect(kept).toBe(true);
+        expect([...model.vms.keys()]).toStrictEqual([]);
+      })
+  );
+
+  it.effect(
     "a host that boots again parks each build it keeps anew, and drops the old base with its last child",
     () =>
       Effect.gen(function* () {

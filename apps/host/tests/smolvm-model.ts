@@ -13,6 +13,10 @@ export interface Vm {
   forwards: readonly string[];
 }
 
+export interface Faults {
+  reply?: ((call: Call) => Reply | undefined) | undefined;
+}
+
 const scopeOf = /^smolvm-vm-(?<name>.+)\.scope$/u;
 
 const live = new Set(["running", "frozen"]);
@@ -261,7 +265,15 @@ export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
     }
   };
 
+  const faults: Faults = {};
+
   const spawner = scripted((call) => {
+    const fault = faults.reply?.(call);
+
+    if (fault !== undefined) {
+      return fault;
+    }
+
     if (call.args[0] === "--version") {
       return { stdout: `smolvm ${minimumVersion}\n` };
     }
@@ -269,5 +281,5 @@ export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
     return call.file === "systemctl" ? systemctl(call) : smolvm(call);
   });
 
-  return { vms, spawner };
+  return { vms, spawner, faults };
 };

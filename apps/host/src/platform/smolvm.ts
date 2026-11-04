@@ -969,22 +969,26 @@ export const make = (
         })
     );
 
+    const retireAllStale = Effect.gen(function* () {
+      const listedBases = new Map(
+        (yield* listed).flatMap(({ name }) => {
+          const named = baseParts(name);
+
+          return named === undefined ? [] : [[baseName(named), named]];
+        })
+      );
+
+      yield* Effect.forEach(listedBases.values(), retireStale, {
+        discard: true,
+      });
+    });
+
     const bases = {
       park: Effect.fn("Smolvm.park")((build: CheckpointRef) =>
         parking(nativeName(build))
       ),
       settle: Effect.gen(function* () {
-        const listedBases = new Map(
-          (yield* listed).flatMap(({ name }) => {
-            const named = baseParts(name);
-
-            return named === undefined ? [] : [[baseName(named), named]];
-          })
-        );
-
-        yield* Effect.forEach(listedBases.values(), retireStale, {
-          discard: true,
-        });
+        yield* retireAllStale;
 
         yield* Effect.forEach(
           yield* builds,
@@ -1308,7 +1312,13 @@ export const make = (
           const found = yield* recordOf(native);
 
           if (found === "missing") {
-            return;
+            return yield* retireAllStale.pipe(
+              Effect.catch((error) =>
+                Effect.logWarning(
+                  `retire the bases ${native} may have kept: ${error.message}`
+                )
+              )
+            );
           }
 
           yield* removing(native, found.state);

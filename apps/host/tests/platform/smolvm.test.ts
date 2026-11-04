@@ -1095,7 +1095,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "delete of a machine smolvm doesn't know touches nothing native",
+    "delete of a machine smolvm doesn't know changes nothing native, and only reads for bases to retire",
     () =>
       Effect.gen(function* () {
         const spawner = scripted((call) =>
@@ -1108,6 +1108,7 @@ layer(NodeServices.layer)((it) => {
 
         expect(smolvmArgs(spawner.calls)).toStrictEqual([
           ["machine", "status", "--name", "dev-01234567", "--json"],
+          ["machine", "ls", "--json"],
         ]);
       })
   );
