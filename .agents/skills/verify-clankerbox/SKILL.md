@@ -43,7 +43,8 @@ Hosts are named `<kind>-<n>`: `linux-1`, `linux-2`. The budget applies to each.
 
 While it serves, the run directory holds `server.ready` and `server.url` (the
 control plane's URL), `server.pid`, `hosts/<id>.url` and `hosts/<id>.pid`, `home`
-(the path of the scratch HOME), `server-state` and `evidence/`. `evidence/` holds:
+(the path of the scratch HOME), `recipes/`, `server-state` and `evidence/`.
+`evidence/` holds:
 
 | File                | What                                                                  |
 | ------------------- | --------------------------------------------------------------------- |
@@ -61,10 +62,11 @@ config names no keys.
 
 IDs are bare names. The base is `ubuntu` on linux and `macos` on mac. The recheck
 runs every 2 seconds. The optional budget is the RAM, in MiB, that a host refuses
-to pass. The HOME's config has two profiles, each with the kind's base, 1 vCPU,
-1G RAM and 10G disk. `web` has the setup `web-recipe.sh`, which writes
-`$RUN/recipe-ran`. `slow` has a setup that touches `$RUN/setup-began` and waits
-for `fault.sh <run> setup-go`, so a create can be caught mid-make.
+to pass. The run has two recipes, each a directory with a `setup.sh`, to pass
+as `--setup` or as a template build's `PATH` with the kind's base and sizes.
+`$RUN/recipes/web` writes `$RUN/recipe-ran`. `$RUN/recipes/slow` touches
+`$RUN/setup-began` and waits for `fault.sh <run> setup-go`, so a create or a
+template build can be caught mid-make.
 
 ## Doctor
 
@@ -90,7 +92,7 @@ launch a new run. A control plane that is down answers `Unavailable`, exit 1.
   `CLANKERBOX_ROOT` as the guest's root and your own `HOME`. Only touch paths
   under `$CLANKERBOX_ROOT`.
 - A setup must leave the login user `admin` and `sudo`, as on a real stock
-  image (README's setup section). Start one from `web-recipe.sh`.
+  image (README's setup section). Start one from `$RUN/recipes/web/setup.sh`.
 
 ## Faults
 
@@ -103,7 +105,7 @@ times out while it keeps its machines and steps, and `fault.sh <run> thaw-host
 <id>` sends `CONT`.
 `fault.sh <run> hold-capture <id>` makes a host hold its next capture until it
 dies, as the fake's captures are too quick for a kill to catch one.
-`fault.sh <run> setup-go` lets the `slow` profile's setup finish. Each is written
+`fault.sh <run> setup-go` lets the `slow` recipe's setup finish. Each is written
 to the transcript.
 
 The make a kill catches decides the outcome:

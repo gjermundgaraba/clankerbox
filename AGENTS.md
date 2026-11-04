@@ -36,7 +36,7 @@ release. Add a tool name to select part of the graph. For example, run
 
 | Path                            | Holds                                                                  |
 | ------------------------------- | ---------------------------------------------------------------------- |
-| `packages/sdk/`                 | The client contract, its schemas and errors, the client, profiles      |
+| `packages/sdk/`                 | The client contract, its schemas and errors, the client                |
 | `packages/host-contract/`       | The host contract, private: shared by the server and the host alone    |
 | `apps/server/`                  | The control plane: rows, charts, leases, the loops, placement          |
 | `apps/host/`                    | A host: runs operations on the two runtimes, and keeps no database     |
@@ -69,11 +69,15 @@ the whole CLI span domains on purpose.
 - `machine-chart.ts`, `checkpoint-chart.ts`: the xstate charts. Each leaf's `meta`
   holds its `phase`, its `step` and the `activity` its loop runs there.
 - `driver.ts`: `driver`, the loops of one resource, at most one per name, with
-  the activity of a row's leaf picking each turn; `untilRest`, a prebuild's wait.
+  the activity of a row's leaf picking each turn; `untilRest`, a build's wait.
 - `machines.ts`, `checkpoints.ts`: the `Machines` and `Checkpoints` services,
   one per resource, each with its `make` and `layer`. `Machines` takes the
   requests, places a create and starts the recheck; `Checkpoints` captures,
-  deletes and prebuilds. Each gives `driver` its reads and its writes.
+  deletes, and keeps a build's copy. Each gives `driver` its reads and its writes.
+- `templates.ts`: the `Templates` service, with its `make` and `layer`. A build
+  makes a builder, runs its setup, copies it and deletes it, then ends the build
+  in its template's row, keeping the last 2 ready builds; a create from a
+  template is `Machines`'s.
 - `steps.ts`: what a host is sent for an operation, built afresh from the rows at
   each delivery.
 - `copies.ts`: a copy's spec, and why its source refuses it.
@@ -87,8 +91,7 @@ the whole CLI span domains on purpose.
 - `hosts.ts`: the members, the one file that calls a host, and the log of a host
   that stops answering.
 - `placement.ts`: which hosts can take a create, in order.
-- `prebuilds.ts`: a prebuild's digest. `tailnet.ts`: when a join is due.
-  `settings.ts`: what the server runs on.
+- `tailnet.ts`: when a join is due. `settings.ts`: what the server runs on.
 - `store.ts`: the `Store` port, the rows, the operations and their leases.
 
 `platform/sqlite.ts` is the `Store`, and loads each chart's `leaves` at runtime to
@@ -124,12 +127,12 @@ it is given, with the config's tailnet, if any.
 **SDK** (`packages/sdk/src`). A library. Its root modules are the client
 contract and the vocabulary everything else imports: `api.ts`, `resources.ts`,
 `errors.ts`, `ids.ts`, `release.ts` (with `versionCheck`, for a server of either
-contract), `sizes.ts`, `describe.ts`. The rest are `client.ts`,
-`profile.ts`, `setup.ts` and `ssh.ts`. The `.` entry loads no Node; `./node`
-(`node.ts`) holds what needs it.
+contract), `sizes.ts`, `describe.ts`. The rest are `client.ts`, `setup.ts`
+and `ssh.ts`. The `.` entry loads no Node; `./node` (`node.ts`) holds what
+needs it.
 
 **App** (`apps/cli/src`). One file or folder per command group
-(`machines/`, `checkpoints.ts`, `hosts.ts`, `profiles.ts`, `prebuilds.ts`,
+(`machines/`, `checkpoints.ts`, `templates.ts`, `hosts.ts`,
 `ssh.ts` and `ssh-config.ts`, the SSH config it keeps) over the CLI's shared kit
 (`command.ts`), the client config (`config.ts`) and flag units (`units.ts`).
 `clankerbox.ts` is the command tree.
@@ -184,9 +187,10 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
   and drops it, so no snapshot outlives the write. A chart has no `invoke`, no
   timers and no actors, and what it needs from the world rides on its event.
   Fibers do what takes time: a `driver` loop reads a host, sends a step and polls
-  it, and tells the chart what it found as an event. A prebuild is no chart: it
-  is an Effect sequence in `checkpoints.ts`, kept in memory. A leaf's name is
-  stored, so renaming one is a migration.
+  it, and tells the chart what it found as an event. A template's build is no
+  chart: it is an Effect sequence in `templates.ts` over a machine and a
+  checkpoint, and its row says only that it runs or how it ended. A leaf's name
+  is stored, so renaming one is a migration.
 - **A machine's row is intent and progress; the VM is always read.** The row, on
   the control plane, keeps what was asked (`desired`), its chart's leaf (`state`),
   which holds how far it is and the `phase` a client waits on, and the progress no
@@ -226,7 +230,7 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
   `undoing`, deletes the VM, again at each recheck while that fails, and rests
   `undone` with its error for `failedRowsLast`. A delete clears it at once and a
   create of the name replaces it. A `Capacity` failure moves the create to the
-  next host instead, once its VM is gone, while the control plane that took the create runs; after a restart it rests `undone`. Nothing ambiguous ever moves one.
+  next host instead, for a template's the next that holds its build, once its VM is gone, while the control plane that took the create runs; after a restart it rests `undone`. Nothing ambiguous ever moves one.
 - **A start starts the machine, also when it runs already, or resumes it when it
   is paused, and prepares it.** A pause saves a running machine and stops its
   VM, leaving a stopped one stopped, and stops one the runtime can't save: a VM
@@ -236,8 +240,9 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
   host's pin; the step carries the pin and the host compares. A resize is a step
   too, and the row keeps the sizes the runtime reads after it, also after one
   that failed part way. A checkpoint is usable only `ready`, and never changes; a
-  prebuild replaces the checkpoint of its name once its setup has run, and its
-  builder, ephemeral, is deleted by a control plane that restarts.
+  template's current build moves to a build only once its setup has run and its
+  copy is ready, and a control plane that restarts ends a build that ran failed
+  and deletes its builder, which is ephemeral.
 - **Shell comments.** Lint doesn't read the recipes' shell scripts; a comment
   there states only a platform or upstream fact the script can't show.
 - **A lint fence** (`tools/lint-fence`, each rule with its tests; settings in

@@ -5,7 +5,7 @@ clankerbox runs machines (VMs) for coding agents and reports where each one is r
 - Lifecycle: create, start, stop, pause, resize, delete, fork, checkpoint capture and restore.
 - Two kinds of host: `linux`, Linux guests on a Linux host under smolvm, with RAM forks and RAM checkpoints, and `mac`, macOS guests on a Mac under Tart, with disk copies.
 - A client talks to one control plane, `clankerbox-server`, by machine name. It never learns which host a machine is on. Adding a host is one line in the control plane's config.
-- A profile is a client-side file: a base, sizes and a setup script. A prebuild is a checkpoint of a machine whose setup has run, which later creates of the same profile restore.
+- A template lives on the control plane: a base, sizes and builds, each a copy of a machine its setup ran on. A create from a template clones its current build, so no setup runs.
 - Each machine exposes only SSH, reported as a `host:port` with the guest's host key. That key is Ed25519 only: each new machine, fork or restore replaces the image's host keys with one new Ed25519 key. A host can also join its machines to the tailnet, each as its own node, so their ports are reachable there.
 - The control plane, the hosts and the clients share a Tailscale tailnet, and its policy is the only gate: the APIs have no keys and no TLS.
 
@@ -38,7 +38,7 @@ What happens when something fails:
 | The control plane comes back | It finds each step in flight on its host, and carries on. A create whose setup hadn't reached its host is undone and fails, since a setup is never stored. |
 | A host is unreachable | Its machines read `unknown`, phase `waiting`. A request on one stays saved, and its wait reads on as through an outage of the control plane, ending `Unavailable` once the host has been unreachable for two minutes; it acts when the host is back. A create goes to another host, and only fails if no host could take it. |
 | A host restarts | Its VMs stay up. A step it held ends, and the control plane decides afresh from the VM's state. A create it held is undone, and a capture it held fails and leaves no checkpoint. |
-| A prebuild's host stops answering | The build rides out a fault shorter than a recheck, 30 s, and fails `Unavailable` past that. Its builder goes once the host is back. |
+| A template build's host stops answering | The build rides out a fault shorter than a recheck, 30 s, and fails `Unavailable` past that, and the template's current build stays as it was. Its builder goes once the host is back. |
 | A create fails | The VM is deleted, again at each recheck while that fails, and the row stays `failed` to say why, for a day once the VM is gone. `delete` clears it. A create of the name replaces it once the VM is gone, and answers `Conflict` until then. |
 | A host has no room for a create | The create moves to the next host. |
 
@@ -127,10 +127,10 @@ One process runs from one JSON config file:
 ```
 
 - `listen.address` is a tailnet address or loopback: this API can change every machine, and takes no key.
-- `hosts` is in placement order: a create goes to the first that offers its base and has room, or to one holding the setup's prebuild first.
+- `hosts` is in placement order: a create goes to the first that offers its base and has room, and a create from a template to the first that holds a copy of its build and has room.
 - `draining: true` on a host passes it over for new machines, and leaves what it runs alone.
 - `stateDir`, relative to the config, holds `server.db`. One process holds it at a time.
-- `authorizedKeys`, relative to the config, is a public-key file, such as an `id_ed25519.pub`, or several concatenated: each line that isn't blank is `<type> <base64> [comment]`, so a private key or any other file is refused. The control plane reads the file as it starts and sends the keys with every create that runs a setup or restores a prebuild, and the host installs those it lacks for the login user once the setup exits 0 or the prebuild is restored. A prebuild holds none, so creates from every client share it. A create without a setup gets none, and a fork or restore of a checkpoint only those its source had. The keys are never stored or logged. To change them, edit the file and restart the control plane: machines made after it take the new set, and those made before keep theirs.
+- `authorizedKeys`, relative to the config, is a public-key file, such as an `id_ed25519.pub`, or several concatenated: each line that isn't blank is `<type> <base64> [comment]`, so a private key or any other file is refused. The control plane reads the file as it starts and sends the keys with every create that runs a setup or clones a template's build, and the host installs those it lacks for the login user once the setup exits 0 or the clone is made. A template's build holds none. A create without a setup gets none, and a fork or restore of a checkpoint only those its source had. The keys are never stored or logged. To change them, edit the file and restart the control plane: machines made after it take the new set, and those made before keep theirs.
 - To add a host, add its line and restart the control plane. Machines keep running through the restart, and clients need nothing.
 
 ```sh
@@ -145,7 +145,9 @@ Hosts and the control plane start fresh: 0.30's machines aren't carried over. Be
 
 ### Upgrading from 0.35
 
-State carries over, but the host contract changed: a host's make now carries the authorized keys, so upgrade hosts and the control plane together, since a create placed on a host of the other release fails. The authorized keys moved from each client config to the server config: gather the public keys of every client config's `authorizedKeys` into one file, name it in the server config's `authorizedKeys`, and delete `authorizedKeys` from each client config, which a client now refuses, and from the Sandbox Agent provider's options. Every machine made with a setup, or from a prebuild, then takes every key in that file, and a create sends none. A prebuild's name no longer covers the keys, so 0.35's prebuilds serve no create: run `prebuild` once from any client, and delete the old ones with `checkpoint delete`, since each holds the keys of the client that made it. Machines already made keep the keys they have. A client config that still names `authorizedKeys` fails every command, `ssh-proxy` and `ssh-known-hosts` included, so `ssh <name>.cbx` stops working until the key is deleted from that config.
+State carries over, but the host contract changed: a host's make now carries the authorized keys, so upgrade hosts and the control plane together, since a create placed on a host of the other release fails. The authorized keys moved from each client config to the server config: gather the public keys of every client config's `authorizedKeys` into one file, name it in the server config's `authorizedKeys`, and delete `authorizedKeys` from each client config, which a client now refuses, and from the Sandbox Agent provider's options. Every machine made with a setup, or from a template, then takes every key in that file, and a create sends none. Machines already made keep the keys they have. A client config that still names `authorizedKeys` fails every command, `ssh-proxy` and `ssh-known-hosts` included, so `ssh <name>.cbx` stops working until the key is deleted from that config.
+
+Templates replace profiles and prebuilds. The control plane migrates its database on its first start: it drops the profile from each machine and checkpoint and the prebuild from each machine, and adds the tables templates and their builds take. For each profile you create from, run `clankerbox template build NAME PATH --base BASE --cpu N --ram SIZE --disk SIZE`, with the profile's setup as `PATH`, once from any client, then create with `--template NAME` instead of `--profile NAME`. Delete `profiles` from each client config, which a client now refuses, and in the Sandbox Agent provider's options give `from: { template }` for `from: { profile }`, and drop `fresh`. `profiles`, `prebuild`, `prebuild get`, `--profile` and `--fresh` are gone. 0.35's prebuilds stay as plain checkpoints, named `prebuilt-<digest>`, which no create restores: delete them with `checkpoint delete`.
 
 ### Upgrading from 0.34
 
@@ -157,30 +159,16 @@ The client config is `$XDG_CONFIG_HOME/clankerbox/config.json` (`~/.config` when
 
 ```json
 {
-  "server": "http://100.64.0.1:8484",
-  "profiles": "profiles"
+  "server": "http://100.64.0.1:8484"
 }
 ```
 
-Machines of either kind are logged in to as `admin`, with the keys of the server config's `authorizedKeys`. A path in the config, as `profiles`, is under `~/` or else relative to the config. `profiles` is read only by `profiles` and by commands given `--profile NAME`. `--profile NAME` reads `NAME.json` from the profiles directory; a value with a `/` or ending in `.json` is a path:
-
-```json
-{
-  "base": "ubuntu",
-  "cpu": 2,
-  "ramMib": 4096,
-  "diskGib": 20,
-  "setup": { "path": "dev", "timeoutSeconds": 900 }
-}
-```
-
-`setup.path`, relative to the profile, is a script or a recipe directory with a `setup.sh`. A profile may leave out `base` for each create to name, with `--base`.
+Machines of either kind are logged in to as `admin`, with the keys of the server config's `authorizedKeys`.
 
 ```sh
-clankerbox create dev --profile dev        # waits until it runs, prints dev
+clankerbox create dev --template web       # waits until it runs, prints dev
 clankerbox create review --base macos --cpu 4 --ram 8G --disk 150G
-clankerbox prebuild --profile dev          # run dev's setup now; later creates of dev restore it
-clankerbox prebuild get prebuilt-<digest>  # a build --no-wait left going, or how it ended, until the control plane restarts
+clankerbox create box --base ubuntu --cpu 2 --ram 4G --disk 20G --setup ./recipes/web
 clankerbox machines
 clankerbox get dev
 clankerbox ssh dev -- uptime
@@ -203,7 +191,8 @@ clankerbox hosts                           # for an operator: each host, its sta
 clankerbox capacity                        # for an operator: each host's resources and limits
 ```
 
-- A name is unique across every host, per resource type. `create` flags override the profile's fields.
+- A name is unique across every host, per resource type.
+- `create` makes a machine from a template's build (see Templates), or from `--base` with `--cpu`, `--ram` and `--disk`, running `--setup`, a script or a recipe directory with a `setup.sh`, if given.
 - A command waits until the machine rests. `--no-wait` answers once the request is recorded, and `--timeout 10m` bounds the wait; either way the request stays saved and acts. A wait goes on through a short restart of the control plane.
 - Sizes and durations carry their unit: `--ram 8G`, `--disk 60G`, `--setup-timeout 15m`.
 - `fork` copies a running linux machine with its RAM, or a stopped mac machine's disk. `fork` and `restore` take `--cpu`, `--ram` and `--disk` for the copy, its source's by default: a linux copy, holding its source's RAM, only grows, live once it runs; a mac copy takes any vCPUs and RAM; a disk only grows. `checkpoint capture` does the same, so a linux checkpoint is `ram` and a mac one `disk`.
@@ -219,12 +208,34 @@ clankerbox capacity                        # for an operator: each host's resour
 - A checkpoint is `ready` until its delete begins, and a delete that fails runs again.
 - `exec` runs a command in a running machine through its host, as root or `--user`, with `--env NAME=VALUE` set and, with `--stdin`, this stdin sent whole. It prints the command's output, its last 65,536 characters, saying on stderr when it was cut, and exits with the command's code. It waits for a step under way on the machine first, and a stop, pause or delete asked meanwhile ends it. `--timeout 90s` ends the command and exits 124. Nothing of a command is stored or logged, so a secret may go on its stdin.
 - `--label KEY=VALUE`, repeated for more, tags a machine or checkpoint when it is made: on `create`, `fork`, `restore`, `checkpoint capture` and `pause --capture`. Labels never change after that, and a copy takes only the labels its own request gives. `machines --label KEY=VALUE` and `checkpoint list --label KEY=VALUE` list what carries every pair given. A resource takes at most 16 labels; a key is a name like a resource's, and a value up to 63 characters.
-- `--expires 7d` on `checkpoint capture` or `pause --capture` has the control plane delete the checkpoint once it is ready and that long has passed, at its next check; `checkpoint get` shows `EXPIRES`. A prebuild never expires.
+- `--expires 7d` on `checkpoint capture` or `pause --capture` has the control plane delete the checkpoint once it is ready and that long has passed, at its next check; `checkpoint get` shows `EXPIRES`.
 - `pause --capture NAME` records the capture first, and the pause begins once the capture has, so the checkpoint holds the machine as it ran; `--label` and `--expires` go on the checkpoint. The machine must be running: a stopped or paused one answers `WrongState`, so capture it with `checkpoint capture` instead. A capture that fails fails the command with its error once the machine has paused; `checkpoint get NAME` says why.
-- A prebuild matches the profile, its setup, and the host it was built on and its runtime release; any change runs the setup again until a new `prebuild`. It serves a create at sizes a `restore` of it takes: on linux vCPUs, RAM and disk each at least its own, and on a Mac any vCPUs and RAM and a disk at least its own. A smaller create runs the setup, so prebuild at the smallest sizes you create. A linux create grows the restored VM while it runs, so smolvm's limits on a live grow hold: RAM grows in 128M steps, and a create past that fails `Unsizable`, which `--fresh` avoids by running the setup. Each host keeps its own: a create uses a prebuild held by any host that can take it. Each `prebuild` runs the setup again and replaces the one that matches, at any sizes, once it has run, so a setup that installs latest releases picks up today's; creates restore the old one until then. A capture that fails leaves none. Prebuilds that match nothing any more stay until deleted: `checkpoint list` shows them. A create with a setup that no prebuild serves says so on stderr as it begins, naming the profile's newest prebuild and why it was passed over: sizes it can't grow from, or else another setup or host release.
 - `ssh` pins the machine's host key and logs in as `admin`.
 - Plain OpenSSH reaches machines as `<name>.cbx`, so `ssh dev.cbx`, scp, rsync and tools that run ssh work. A command on the default client config keeps `~/.ssh/clankerbox` with one `Host *.cbx` block, as `admin`, and ends `~/.ssh/config` with `Match all` and `Include clankerbox`, so your own entries come first and win. Each connection runs `clankerbox ssh-proxy` and `clankerbox ssh-known-hosts` for the machine's current endpoint and host key, so nothing goes stale when a port changes or a machine is recreated, and the connection goes straight to the machine's host. Both run through your login shell, `$SHELL` as of the command that wrote the file (`/bin/sh` without one), so `clankerbox` must be on the `PATH` that shell sets up, even for an app started outside a terminal. `CLANKERBOX_SSH_CONFIG=false` removes both.
 - `--json` prints the resource or `{"error": {...}}`.
+
+### Templates
+
+A template is a base, sizes and builds, kept by the control plane, so every client sees the same ones. `template build` creates a machine from the base, runs the setup in it, captures a copy of it on its host, and deletes the machine. A create from the template clones that copy, so no setup runs.
+
+```sh
+clankerbox template build web ./recipes/web --base ubuntu --cpu 2 --ram 4G --disk 20G  # prints web@1
+clankerbox template build web ./recipes/web     # prints web@2, with web's base and sizes
+clankerbox template list                        # each template's base, current build and state
+clankerbox template get web                     # its sizes, and each build kept
+clankerbox create box --template web            # clones web's current build
+clankerbox create old --template web@1 --ram 8G # clones that build, with more RAM
+clankerbox template delete web
+```
+
+- `PATH` is a setup script or a recipe directory with a `setup.sh`, read by the client and sent with the build. The control plane holds it in memory for that build only, and never stores or logs it, so each build sends it again.
+- A first build gives `--base`, `--cpu`, `--ram` and `--disk`, and `--setup-timeout` when the host's default won't do. A rebuild takes the template's for each it leaves out, and keeps each it gives.
+- A build's ID is the template's name, `@` and its number, such as `web@2`. `template build` waits until the build ends and prints its ID; `--no-wait` prints it at once, and `template get` follows the build.
+- The current build is the newest that is ready: it moves to a build only once its setup has run and its copy is made, so a build that fails leaves the one before it current. The control plane keeps the last 2 ready builds, and deletes an older one's copy once the creates cloning it are done.
+- One build of a template runs at a time: a build or a delete asked meanwhile fails `Conflict`. A control plane that restarts during a build ends it failed and deletes its builder.
+- `create --template NAME` clones the current build, and `--template NAME@N` that build while it is kept; one with no ready build to clone fails `NotBuilt`. A create from a template takes no `--base`, `--setup` or `--setup-timeout`. It takes the build's sizes, or larger ones from `--cpu`, `--ram` and `--disk`; smaller ones fail `Unsizable`. A linux create grows the clone while it runs, so smolvm's limits on a live grow hold: RAM grows in 128M steps.
+- A build's copy stays on the host that built it, and creates from it go only to a host that holds it: when that host has no room the create fails `Capacity`, and runs no setup elsewhere. A build goes to the first host that offers the base. On a Mac the build stops its machine before the copy, so a clone boots from the disk.
+- A build's copy is no checkpoint: `checkpoint list` leaves it out, and `restore` can't reach it. `get` shows the build a machine was cloned from as `TEMPLATE`. `template delete` deletes a template and its builds' copies, once the creates cloning them are done, and leaves the machines cloned from it.
 
 ### Joining machines to the tailnet
 
@@ -235,7 +246,7 @@ A host with `tailnet` joins each machine whose guest has `tailscale` and `tailsc
 - The login user, and no other user but root, may fetch the node's certificates from that `tailscaled`: `/localapi/v0/cert/<domain>` through its socket, granted by `TS_PERMIT_CERT_UID`. No operator is set, so nothing else on the daemon is open to it; reading its status is open to every local user.
 - After resetting a new instance’s identity and before running `/etc/clankerbox/start`, the host joins the tailnet: it starts `tailscaled` from its saved state if it isn't running, and a node that needs a login gets a key. The host mints one per join: single-use, ephemeral, preauthorized, for the configured tags, expiring in 10 minutes, and passes it on stdin. A request that arrives meanwhile cuts the check short. A failed join is reported in `TAILNET` and still runs the start hook; the control plane retries it with backoff. The hook keeps its own 60-second timeout, separate from the join. The tailnet credentials stay on the host.
 - The node is named `cbx-<name>`. A fork or restore kills the daemon its source left and drops the node first, so it joins as its own node.
-- `get` shows `TAILNET`, while the machine runs: the MagicDNS name Tailscale gave the node, why the last check failed, or that the guest has no `tailscaled`. The status is the control plane's memory only, never stored. A joined machine is checked again every 60 rechecks (half an hour at the default 30 seconds), which restarts a daemon that died; a failed one after 1 recheck, then 2, 4 and so on up to 64. A guest without `tailscaled` is checked again at its next start. A prebuild's builder joins nothing.
+- `get` shows `TAILNET`, while the machine runs: the MagicDNS name Tailscale gave the node, why the last check failed, or that the guest has no `tailscaled`. The status is the control plane's memory only, never stored. A joined machine is checked again every 60 rechecks (half an hour at the default 30 seconds), which restarts a daemon that died; a failed one after 1 recheck, then 2, 4 and so on up to 64. A guest without `tailscaled` is checked again at its next start. A template build's builder joins nothing.
 - Nodes are ephemeral, so a deleted machine's node goes once it has been offline a while; a machine of the same name made again before then gets a suffixed name.
 
 `clankerbox COMMAND --help` documents each command.
@@ -252,9 +263,9 @@ Setup runs once, as root, after the machine's first boot; forks and restores car
 
 A service of the login user that serves TLS on the tailnet can take the node's certificate from clankerbox's `tailscaled` (see above). On a successful join, the tailnet is up before `/etc/clankerbox/start` runs.
 
-Once a setup exits 0, and once a create restores a prebuild of it, the host adds each key of the server config's `authorizedKeys` that the login user's `~/.ssh/authorized_keys` lacks, as that user through `sudo`, beside the keys already there. A prebuild's own setup installs none. A setup that leaves no login user, or no `sudo`, fails then, as does each create from its prebuild, and the machine is deleted. Put no key in root's: nothing logs in as root.
+Once a setup exits 0, and once a create clones a template's build, the host adds each key of the server config's `authorizedKeys` that the login user's `~/.ssh/authorized_keys` lacks, as that user through `sudo`, beside the keys already there. A template build's own setup installs none. A setup that leaves no login user, or no `sudo`, fails then, as does each create from a build of it, and the machine is deleted. Put no key in root's: nothing logs in as root.
 
-Linux guests need `perl`. On mac, Softnet blocks gateway DNS, so set public resolvers. A checkpoint, prebuilds included, holds everything the machine had, credentials too.
+Linux guests need `perl`. On mac, Softnet blocks gateway DNS, so set public resolvers. A checkpoint, like a template's build, holds everything the machine had, credentials too.
 
 ## Deploy
 
@@ -340,7 +351,7 @@ program.pipe(
 
 - Every action is a method named as in the contract (`api.ts`), such as `client.forkMachine({ machine, name })`, and fails with tagged errors (`errors.ts`); `retryable(error)` says whether to try again.
 - A mutation answers once recorded, and the client waits until the resource rests: a machine with what was asked, its `phase` and `error` saying how it got there. `Client.make(url, { noWait: true })` skips the wait, and `timeout` bounds it. One whose reply is lost fails `Unavailable`: it may have run, so read the resource.
-- `client.prebuild` does what `clankerbox prebuild` does, and answers the `Build`. `client.create` restores a prebuild when a host holds one at sizes the create can grow from, unless `{ fresh: true }`, and `machine.prebuild` names it. `{ recorded }` runs once the server has recorded the create, before the wait, with the machine it recorded.
+- `client.buildTemplate({ template, setup, base, cpu, ramMib, diskGib })` does what `clankerbox template build` does, and answers the `Build` once it ends; `client.templates`, `getTemplate` and `deleteTemplate` do the rest. `client.create(name, { template: "web" })` clones a template's current build, or the one `web@N` names, with the sizes given, and `machine.template` names the build. `{ recorded }` runs once the server has recorded the create, before the wait, with the machine it recorded.
 - `client.ensure(name, { spec, checkpoint, sizing, labels })` answers a machine of `name` that runs: the one that exists, started or resumed; else one restored from `checkpoint` when that is ready, at `sizing` or its own; else one created from `spec`. A failed create's row that still answers `Conflict` is deleted and the make tried once more, and a make whose reply was lost reads the machine and decides again, once. `labels` go on what it makes.
 - `client.pauseMachine({ id, capture })` waits for the machine to pause and then for the checkpoint to be ready, failing with the capture's error when it failed.
 - `client.execMachine({ id, argv, user, env, stdin, timeoutSeconds })` runs a command and answers `{ exitCode, output, truncated }`; the client waits as long as the command runs, or `timeoutSeconds` and the reply timeout. `client.listMachines({ labels })` and `client.listCheckpoints({ labels })` filter by labels; `client.machines` and `client.checkpoints` list everything.
@@ -355,7 +366,7 @@ import { SandboxAgent } from "sandbox-agent";
 
 const sandbox = clankerbox({
   server: "http://100.64.0.1:8484",
-  from: { profile: "profiles/agent.json" },
+  from: { template: "agent" },
   sshArguments: ["-i", "/path/to/key"],
 });
 
@@ -366,7 +377,7 @@ await session.prompt([{ type: "text", text: "Summarize README.md" }]);
 await sdk.destroySandbox();
 ```
 
-- A sandbox comes from a profile (`{ profile }`), a checkpoint (`{ checkpoint }`) or a fork (`{ machine }`), and a profile's prebuild is used when there is one. Any source may add `cpu`, `ramMib` and `diskGib`: over a profile's, as `create`'s flags do, or for the copy, as `restore` and `fork` take them. The key the tunnel logs in with must be in the server config's `authorizedKeys`.
+- A sandbox comes from a template (`{ template }`, `agent` or `agent@3`), a checkpoint (`{ checkpoint }`) or a fork (`{ machine }`). Build the template from a recipe below once, with `clankerbox template build agent recipes/ubuntu --base ubuntu --cpu 2 --ram 4G --disk 20G`. Any source may add `cpu`, `ramMib` and `diskGib`: larger than the build's, as `create --template` takes them, or for the copy, as `restore` and `fork` take them. The key the tunnel logs in with must be in the server config's `authorizedKeys`.
 - `sandbox.resize(id, sizes)` resizes a sandbox's machine as `resize` does, and answers its sizes; `id` is the machine's name, `sdk.sandboxId` without its `clankerbox/`. For what a running machine can't take, `pauseSandbox`, resize, then `sandbox.ensureServer(id)`.
 - A sandbox's ID is `clankerbox/<machine name>`; `pauseSandbox` stops the machine and `destroySandbox` deletes it. Stop a sandbox's machine rather than `clankerbox pause` it: a reconnect resumes a paused one with its old agents, which then run beside the sessions the SDK replays into new ones, and a paused one can't be forked. A create that fails deletes the row it may have left, unless the answer is `Conflict`, as the name is another machine's, `Superseded`, as a later request owns it, or `Unavailable`, as the server may still act on it: the error's `made` names the machine to read or delete.
 - `recipes/ubuntu/` (linux) and `recipes/macos/` (mac) install the server, Node and Claude Code, and run the server as the login user, whose home, `/home/admin` on Linux, is the default `cwd`; on macOS, give `cwd: "/Users/admin"`. Each takes an optional `agent.env` beside its `setup.sh`, of `NAME=value` lines, such as `ANTHROPIC_API_KEY=…`, so keep a recipe with one private.

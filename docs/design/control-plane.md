@@ -33,6 +33,7 @@ The goal is that a client talks to one server, IDs carry no host, and adding a h
 14. **A checkpoint may expire.** (0.35) `captureCheckpoint` takes `expiresAt`. A sweep at each recheck deletes every ready checkpoint past it, through the same delete a client asks for. A prebuild never carries one.
 
 15. **Amp orbs come back as a package beside the control plane, not in it.** `packages/amp-orbs` is the dispatch program `amp orb provider` runs once per job. It is a client of the contract: `ensure` for a spawn, `pauseMachine` with `capture` for a pause that saves the project snapshot, `deleteMachine` for a delete, and `execMachine` to start `amp orb bootstrap` in the orb, as Amp's image ships no sshd. The control plane knows nothing of Amp: the orb's ID and type and the snapshot's ID ride on labels. The script that starts bootstrap goes to the shell on stdin, so the `pkill` ending the previous bootstrap finds no command line holding its own pattern.
+16. **Templates replace profiles and prebuilds.** (after 0.35) A template lives on the control plane: a base, sizes and its builds, in the `templates` and `builds` tables. `buildTemplate` takes the setup, which the control plane holds in memory for that build and never stores. The build makes an ephemeral builder, runs the setup, captures a copy of it as a checkpoint row with a `build` column, hidden from every client read, and deletes the builder. Its end is written to the template's row: the current build is the newest ready one, so it moves only once a build has succeeded, and the last 2 ready builds are kept. A create names `template` or `template@N` and clones that build on a host holding its copy, with no setup and no client-side check; a smaller size than the build's is `Unsizable`, and no ready build is `NotBuilt`. A restart ends a running build failed and deletes its builder. Placement, the digest and `--fresh` go: the D9 bullets above describe 0.35. Profiles go entirely, since a template on the server covers what a client file did, and one place to build it from keeps every client's creates the same.
 
 Everything below this section follows from these.
 
@@ -40,7 +41,7 @@ Everything below this section follows from these.
 
 | Path | Holds | Runs on |
 | --- | --- | --- |
-| `apps/cli` | Commands, profiles and the SSH config. Still publishes `clankerbox`. | Client machines |
+| `apps/cli` | Commands and the SSH config. Still publishes `clankerbox`. | Client machines |
 | `apps/server` | Rows, the charts, the loops, placement, the store, the client routes | The control plane |
 | `apps/host` | Runtimes, the operation runner, guest scripts, the host routes | Each host |
 | `packages/sdk` | The client contract and the client. Published. | Imported by the CLI, the provider and the server |
@@ -87,7 +88,7 @@ The client waits. The SDK's methods keep their shape: `client.stopMachine` polls
 - `waiting` is read, never stored: a read that finds the VM `unknown` shows it, on any row that hasn't failed.
 - A client rides out a control plane outage of about 2 minutes (`outageLimit`).
 - A make that fails, in the copy or the setup, goes `undoing`, deletes the VM and rests `undone`. The row stays as `failed` with state `missing` and its error. Requests other than `get`, `delete` and `create` answer `NotFound`. It expires after `failedRowsLast`, one day.
-- Fork, restore, capture and resize follow the same pattern. A prebuild answers a `Build`, which `getPrebuild` reads, and builds live in memory.
+- Fork, restore, capture and resize follow the same pattern. A template build answers a `Build`, which `getTemplate` reads with its template, and builds are rows (decision 16).
 - Polling is the default. A watch can come later.
 
 A chart decides each write. `machine-chart.ts` and `checkpoint-chart.ts` are xstate charts with no `invoke`, timers or actors. `applied` (`chart.ts`) rebuilds a snapshot from the row, takes one event inside the SQLite write and drops the snapshot, as a threaded one retains every step before it. Fibers do what takes time: a loop per resource (`driver.ts`) reads a host, sends a step and polls it, and a prebuild is an Effect sequence in `checkpoints.ts`, with its builds in memory. `MachineAnswers.tla` checks the same chart, through the table `Chart.tla` exports from it.
