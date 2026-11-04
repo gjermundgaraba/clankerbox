@@ -43,6 +43,7 @@ import {
 import { TestClock } from "effect/testing";
 import { expect } from "vite-plus/test";
 
+import type { BuildStore } from "../src/builds.ts";
 import { PortProbe } from "../src/machine-ports.ts";
 import type { Probe } from "../src/machine-ports.ts";
 import * as Operations from "../src/operations.ts";
@@ -51,7 +52,13 @@ import { Runtime } from "../src/runtime.ts";
 import { Tailnet } from "../src/tailnet.ts";
 import { fakeRuntime, writeTailscaleStubs } from "./fake-runtime.ts";
 import { smolvmModel } from "./smolvm-model.ts";
-import { eventually, image, loginSetup, pause } from "./support.ts";
+import {
+  eventually,
+  image,
+  loginSetup,
+  memoryBuildStore,
+  pause,
+} from "./support.ts";
 
 const firstPort = 10_000;
 
@@ -116,7 +123,8 @@ type Runner = Effect.Success<ReturnType<typeof runner>>;
 const smolvmHost = (
   model: ReturnType<typeof smolvmModel>,
   stateDir: string,
-  bootId: string
+  bootId: string,
+  builds: Layer.Layer<never> | Layer.Layer<BuildStore> = Layer.empty
 ) =>
   Effect.gen(function* () {
     const prefix = path.join(yield* scratch, "smolvm");
@@ -154,6 +162,7 @@ const smolvmHost = (
       }).pipe(
         Layer.provideMerge(smolvm),
         Layer.provide(Layer.succeed(PortProbe, allFree)),
+        Layer.provide(builds),
         Layer.provide(Layer.merge(NodeServices.layer, model.spawner.layer))
       )
     ).pipe(Effect.map(Context.get(Operations.Operations)));
@@ -2335,6 +2344,90 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             ],
           },
         ]);
+      })
+  );
+
+  it.effect(
+    "a host that fetches a build's copy parks its base before the fetch ends, so its first create branches, and parks one again when it starts",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const { layer: shared } = memoryBuildStore();
+        const builder = ref("building-1");
+        const built = checkpoint("built-abc123");
+        const fetched = checkpoint("fetched-def456");
+        const base = `base_5bfae059_${Smolvm.nativeName(fetched)}`;
+        const building = smolvmModel();
+        const other = smolvmModel();
+        const pin = `smolvm ${Smolvm.minimumVersion} ${process.platform}-${process.arch}`;
+
+        const scratchDir = () =>
+          fs.makeTempDirectoryScoped({ directory: "/tmp", prefix: "cbx-" });
+
+        const builds = {
+          operations: yield* smolvmHost(
+            building,
+            yield* scratchDir(),
+            "b00710ad",
+            shared
+          ),
+        };
+
+        const otherDir = yield* scratchDir();
+
+        const fetches = {
+          operations: yield* smolvmHost(other, otherDir, "5bfae059", shared),
+        };
+
+        building.vms.set(Smolvm.nativeName(builder), {
+          state: "running",
+          forwards: [`${builder.port}:22`],
+        });
+
+        yield* finished(builds, {
+          _tag: "capture",
+          machine: builder,
+          checkpoint: built,
+          pin,
+        });
+        yield* finished(
+          builds,
+          { _tag: "publish", checkpoint: built, as: built.name },
+          2
+        );
+
+        const fetch = yield* finished(fetches, {
+          _tag: "fetch",
+          checkpoint: fetched,
+          from: built.name,
+          build: "web@1",
+        });
+
+        const parked = other.vms.get(base)?.state;
+
+        const made = yield* finished(
+          fetches,
+          makes("web-1", {
+            source: { _tag: "checkpoint", checkpoint: fetched, pin },
+          })
+        );
+
+        yield* smolvmHost(other, otherDir, "c0ffee00", shared);
+
+        yield* eventually(
+          Effect.sync(
+            () =>
+              other.vms.get(`base_c0ffee00_${Smolvm.nativeName(fetched)}`)
+                ?.state
+          ),
+          (state) => state === "frozen"
+        );
+
+        expect([fetch.status, made.status]).toStrictEqual(["done", "done"]);
+        expect(parked).toBe("frozen");
+        expect(other.vms.get(Smolvm.nativeName(ref("web-1")))?.parent).toBe(
+          base
+        );
       })
   );
 

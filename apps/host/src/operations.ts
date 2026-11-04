@@ -687,7 +687,7 @@ export const make = (
               fetch(store, runtime, checkpoint, from, build)
             ),
             () => cleared
-          );
+          ).pipe(Effect.andThen(parked(checkpoint)));
         }
       }
     };
