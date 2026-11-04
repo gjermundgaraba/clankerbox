@@ -2646,6 +2646,66 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a create whose base goes before its branch, and whose half-made VM can't be removed, fails with the branch's error and logs the removal's",
+    () => {
+      const logged: string[] = [];
+
+      return Effect.gen(function* () {
+        const { model, operations, pin } = yield* onSmolvm;
+        const builder = ref("building-1", { port: 11_001 });
+        const build = checkpoint("built-0123456789abcdef");
+        const base = `base_b00710ad_${Smolvm.nativeName(build)}`;
+        const native = Smolvm.nativeName(ref("web-1"));
+        let branched = false;
+
+        model.vms.set(Smolvm.nativeName(builder), {
+          state: "running",
+          forwards: [`${builder.port}:22`],
+        });
+
+        yield* finished(
+          { operations },
+          { _tag: "capture", machine: builder, checkpoint: build, pin }
+        );
+        model.vms.delete(Smolvm.nativeName(builder));
+
+        model.faults.reply = ({ args }) => {
+          if (args[1] === "branch") {
+            branched = true;
+            model.vms.delete(base);
+
+            return {
+              exitCode: 1,
+              stderr: `Error: machine '${base}' not found\n`,
+            };
+          }
+
+          return branched && args[1] === "status" && args.includes(native)
+            ? { exitCode: 1, stderr: "Error: database is locked\n" }
+            : undefined;
+        };
+
+        const report = yield* finished(
+          { operations },
+          makes("web-1", {
+            source: { _tag: "checkpoint", checkpoint: build, pin },
+          })
+        );
+
+        expect(report.status).toBe("failed");
+        expect(report.error?.message).toContain(`machine '${base}' not found`);
+        expect(
+          logged.filter(
+            (line) =>
+              line.includes(`${native} couldn't be removed`) &&
+              line.includes("database is locked")
+          )
+        ).toHaveLength(1);
+      }).pipe(Effect.provide(Logger.layer([capturing(logged)])));
+    }
+  );
+
+  it.effect(
     "a capture of a build whose park fails ends done, and one cut short in its park ends cancelled, and both keep the checkpoint",
     () =>
       Effect.gen(function* () {

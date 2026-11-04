@@ -1136,7 +1136,17 @@ export const make = (
               Effect.flatMap(frozen, (still) =>
                 still
                   ? Effect.fail(error)
-                  : Effect.as(removeNative(native), true)
+                  : removeNative(native).pipe(
+                      Effect.as(true),
+                      Effect.catch((error_) =>
+                        Effect.andThen(
+                          Effect.logWarning(
+                            `${base} went before ${native} could branch it, and ${native} couldn't be removed to restore the copy: ${error_.message}`
+                          ),
+                          Effect.fail(error)
+                        )
+                      )
+                    )
               )
             )
           );
