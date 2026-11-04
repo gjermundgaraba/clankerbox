@@ -12,8 +12,9 @@ const nonEmpty = Schema.String.check(Schema.isNonEmpty());
 
 export const BuildsSettings = Schema.Struct({
   endpoint: Schema.String.check(
-    Schema.isPattern(/^https?:\/\/[^/?#]+$/u, {
-      message: "an http(s) URL with no path, such as http://127.0.0.1:8333",
+    Schema.isPattern(/^https?:\/\/[^/?#@]+$/u, {
+      message:
+        "an http(s) URL with no path and no credentials, such as http://127.0.0.1:8333",
     })
   ),
   bucket: nonEmpty,

@@ -366,6 +366,40 @@ layer(NodeServices.layer)((it) => {
       })
   );
 
+  it.effect(
+    "a builds endpoint with credentials in it is Invalid, and one without is kept",
+    () =>
+      Effect.gen(function* () {
+        const builds = {
+          bucket: "builds",
+          region: "us-east-1",
+          accessKeyId: "id",
+          secretAccessKey: "secret",
+        };
+
+        const { loaded } = yield* load({
+          ...config,
+          builds: { ...builds, endpoint: "http://id:secret@127.0.0.1:8333" },
+        });
+
+        const error = yield* Effect.flip(loaded);
+
+        expect(error._tag).toBe("Invalid");
+        expect(error.message).toContain(
+          "an http(s) URL with no path and no credentials"
+        );
+
+        const kept = yield* load({
+          ...config,
+          builds: { ...builds, endpoint: "http://127.0.0.1:8333" },
+        });
+
+        expect(yield* kept.loaded).toMatchObject({
+          builds: { endpoint: "http://127.0.0.1:8333" },
+        });
+      })
+  );
+
   it.effect("a missing config file is Invalid, naming it", () =>
     Effect.gen(function* () {
       const missing = path.join(yield* scratch, "nope.json");

@@ -103,7 +103,7 @@ A host process runs one kind from one JSON config file:
 - The kind's block: `linux: {prefix, ramBudgetMib?}`, smolvm's install, or `mac: {binary}`, the `tart` executable of a versioned install.
 - `machinePorts: {first, last}`, optional, is the range machines' SSH ports come from, 10000–19999 by default; `listen.port` lies outside it.
 - `tailnet: {oauthClient: {id, secret}, tags}`, optional, joins the host's machines to the tailnet (see below). The client needs the `auth_keys` scope and the tags; its secret never leaves the host.
-- `builds: {endpoint, bucket, region, accessKeyId, secretAccessKey}`, optional, is the S3 bucket template builds are copied through, so a create from a template can land on any host of its kind (see Templates). `endpoint` is an `http(s)` URL with no path, such as `http://127.0.0.1:8333`, and addressed path-style. Every host of a kind names the same bucket; the secret never leaves the host. A host without it keeps its builds to itself.
+- `builds: {endpoint, bucket, region, accessKeyId, secretAccessKey}`, optional, is the S3 bucket template builds are copied through, so a create from a template can land on any host of its kind (see Templates). `endpoint` is an `http(s)` URL with no path and no credentials, such as `http://127.0.0.1:8333`, and addressed path-style. Every host of a kind names the same bucket; the secret never leaves the host. A host without it keeps its builds to itself.
 
 ```sh
 clankerbox-host --config /etc/clankerbox/linux.json
