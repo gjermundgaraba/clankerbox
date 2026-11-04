@@ -266,8 +266,9 @@ export const keptBuilds = 2;
  * A setup the control plane builds once, from `base` at the sizes given, and that a create clones
  * with no setup run. Each build is sent its own setup, which is never kept. `current` is the newest
  * ready build, which a create clones unless it pins another, at its sizes or larger ones. `state`
- * is `building` while a build runs, else `ready` once one is, else `failed`. A rebuild takes the
- * base, the sizes and the setup timeout of the build before for each it leaves out.
+ * is `building` while a build runs, else `ready` once one is, else `failed`. `base`, the sizes and
+ * `setupTimeoutSeconds` are the current build's, or the newest build's while none is ready, and a
+ * rebuild takes each it leaves out from them.
  */
 export const Template = Schema.Struct({
   id: Name,

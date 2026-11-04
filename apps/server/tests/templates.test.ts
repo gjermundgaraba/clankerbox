@@ -131,6 +131,73 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a failed rebuild leaves the template its current build's base, sizes and setup timeout, which a create takes",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* withClient();
+        const { client } = served;
+
+        yield* client.buildTemplate(web({ cpu: 2, ramMib: 2048 }));
+        yield* Effect.flip(
+          client.buildTemplate(
+            rebuild({
+              base: "docker.io/library/debian:12",
+              cpu: 1,
+              ramMib: 1024,
+              diskGib: 20,
+              setup: { ...exits3, timeoutSeconds: 60 },
+            })
+          )
+        );
+        yield* noMachines(served);
+
+        const read = yield* client.getTemplate({ id: "web" });
+        const { cpu, ramMib, diskGib } = read;
+
+        const made = yield* client.create("dev", {
+          template: "web",
+          cpu,
+          ramMib,
+          diskGib,
+        });
+
+        expect(read).toMatchObject({
+          current: "web@1",
+          base: "ubuntu",
+          cpu: 2,
+          ramMib: 2048,
+          diskGib: 10,
+          setupTimeoutSeconds: 30,
+        });
+        expect(made).toMatchObject({ template: "web@1", cpu: 2, diskGib: 10 });
+      })
+  );
+
+  it.effect(
+    "a template's first builds that fail show the newest's sizes, and a rebuild takes them",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* withClient();
+        const { client } = served;
+
+        yield* Effect.flip(client.buildTemplate(web({ setup: exits3 })));
+        yield* Effect.flip(
+          client.buildTemplate(rebuild({ cpu: 2, setup: exits3 }))
+        );
+
+        const failed = yield* client.getTemplate({ id: "web" });
+
+        yield* client.buildTemplate(rebuild());
+
+        expect(failed).toMatchObject({ state: "failed", cpu: 2 });
+        expect(yield* client.getTemplate({ id: "web" })).toMatchObject({
+          current: "web@3",
+          cpu: 2,
+        });
+      })
+  );
+
+  it.effect(
     "a restart ends a running build failed and deletes its builder",
     () =>
       Effect.gen(function* () {
