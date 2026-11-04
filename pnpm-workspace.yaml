@@ -7,19 +7,18 @@ catalogMode: prefer
 saveExact: true
 catalog:
   "@effect/platform-node": 4.1.2
-  "@clanker-stuff/oxlint-config": 0.4.0
-  "@effect/tsgo": 0.64.1
+  "@clanker-stuff/oxlint-config": 0.5.0
+  "@effect/tsgo": 0.67.1
   "@effect/vitest": 4.1.2
   "@gjermundgaraba/effect-actions": 0.29.0
   "@types/node": 26.6.6
   effect: 4.1.2
   sandbox-agent: 0.5.4
   typescript: 7.0.2
-  vite: npm:@voidzero-dev/vite-plus-core@1.4.0
-  vite-plus: 1.4.0
-  vitest: 5.0.5
-  ultracite: 8.1.0
-  oxfmt: 0.74.0
+  vite: npm:@voidzero-dev/vite-plus-core@1.5.0
+  vite-plus: 1.5.0
+  vitest: 5.1.0
+  ultracite: 8.1.1
   xstate: 6.0.0-alpha.71
 
 ignoredOptionalDependencies:

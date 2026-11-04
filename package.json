@@ -12,7 +12,6 @@
     "@clanker-stuff/oxlint-config": "catalog:",
     "@effect/tsgo": "catalog:",
     "@types/node": "catalog:",
-    "oxfmt": "catalog:",
     "typescript": "catalog:",
     "ultracite": "catalog:",
     "vite": "catalog:",
