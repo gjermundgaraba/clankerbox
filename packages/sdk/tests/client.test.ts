@@ -952,14 +952,19 @@ describe("client", () => {
     );
 
     it.effect(
-      "a wait holds its reads on a server that takes a hold, and polls one that does not",
+      "a wait holds its reads on a server that takes a hold, past a reply that names no version, and polls one that does not",
       () =>
         Effect.gen(function* () {
           const holding = server({ takesHold: true, machines: [stoppedDev] });
           const polling = server({ machines: [stoppedDev] });
 
           for (const stub of [holding, polling]) {
-            stub.script("dev", ["observing", "starting", "settled"]);
+            stub.script("dev", [
+              "observing",
+              "versionless",
+              "starting",
+              "settled",
+            ]);
           }
 
           const held = yield* withClient(
@@ -978,11 +983,11 @@ describe("client", () => {
 
           expect([held.phase, holding.holds]).toStrictEqual([
             "settled",
-            [5, 5, 5],
+            [5, 5, 5, 5],
           ]);
           expect([polled.phase, polling.holds]).toStrictEqual([
             "settled",
-            [undefined, undefined, undefined],
+            [undefined, undefined, undefined, undefined],
           ]);
           expect(Duration.toMinutes(elapsed)).toBeGreaterThanOrEqual(2);
         })

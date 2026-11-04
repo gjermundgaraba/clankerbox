@@ -228,7 +228,12 @@ const serverApi = (url: string, served: Ref.Ref<Option.Option<string>>) =>
           HttpClientRequest.setHeader(versionHeader, version)
         ),
         HttpClient.tap((response) =>
-          Ref.set(served, Headers.get(response.headers, versionHeader))
+          Ref.update(served, (known) =>
+            Option.orElse(
+              Headers.get(response.headers, versionHeader),
+              () => known
+            )
+          )
         )
       ),
   });

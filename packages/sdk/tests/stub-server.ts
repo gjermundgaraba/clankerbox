@@ -44,7 +44,7 @@ import type {
  */
 export type Step<Row, Stage> = Stage | Partial<Row> | "gone" | "down";
 
-export type MachineStep = Step<Machine, Phase>;
+export type MachineStep = Step<Machine, Phase> | "versionless";
 
 export type CheckpointStep = Step<Checkpoint, Checkpoint["phase"]>;
 
@@ -183,6 +183,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
   const versions: Array<string | null> = [];
   const holds: Array<number | undefined> = [];
   let replyDropped = false;
+  let replyVersionless = false;
 
   for (const held of options.machines ?? []) {
     machines.set(held.id, held);
@@ -264,6 +265,12 @@ export const stubServer = (options: StubServerOptions = {}) => {
 
       if (step === "down") {
         replyDropped = true;
+
+        return Effect.succeed(found);
+      }
+
+      if (step === "versionless") {
+        replyVersionless = true;
 
         return Effect.succeed(found);
       }
@@ -766,6 +773,19 @@ export const stubServer = (options: StubServerOptions = {}) => {
 
         throw new TypeError("fetch failed", {
           cause: new Error("connect ECONNREFUSED"),
+        });
+      }
+
+      if (replyVersionless) {
+        replyVersionless = false;
+
+        const headers = new Headers(response.headers);
+
+        headers.delete(versionHeader);
+
+        return new Response(response.body, {
+          status: response.status,
+          headers,
         });
       }
 
