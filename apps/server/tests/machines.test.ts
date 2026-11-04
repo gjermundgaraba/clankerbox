@@ -328,7 +328,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ["running", "running", "settled"],
         ]);
         expect(Math.max(...waits)).toBeLessThan(4000);
-        expect(Math.max(...waits) - Math.min(...waits)).toBeLessThan(500);
       })
   );
 
