@@ -22,10 +22,7 @@ export const release = (of: string): string =>
  */
 export const versionHeader = "clankerbox-version";
 
-/**
- * Whether a control plane that named `served` on its last reply holds a read of a machine. One from
- * before the hold names nothing, and refuses `holdSeconds` as a field it doesn't know.
- */
+/** A control plane from before the hold names no version on its replies, and refuses `holdSeconds`. */
 export const takesHold = (served: Option.Option<string>): boolean =>
   Option.isSome(served);
 

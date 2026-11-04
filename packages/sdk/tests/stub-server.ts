@@ -63,7 +63,6 @@ export interface StubServerOptions {
   readonly machines?: readonly Machine[];
   readonly checkpoints?: readonly Checkpoint[];
   readonly refuse?: Refusals;
-  /** Names its version on each reply, as a control plane that takes a held read does. */
   readonly takesHold?: boolean;
   readonly create?: (
     request: CreateRequest

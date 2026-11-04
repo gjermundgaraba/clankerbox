@@ -25,7 +25,7 @@ import {
   Operation,
   Store,
 } from "../store.ts";
-import type { Advanced, Interface, Lease, Rows, Written } from "../store.ts";
+import type { Advanced, Interface, Lease, Rows } from "../store.ts";
 
 export const databaseFile = "server.db";
 
@@ -474,7 +474,10 @@ export const open = (
       },
     };
 
-    const written = yield* PubSub.unbounded<Written>();
+    const written = yield* PubSub.unbounded<{
+      readonly resource: Lease["resource"];
+      readonly name: string;
+    }>();
 
     const told = (resource: Lease["resource"], name: string) =>
       Effect.asVoid(PubSub.publish(written, { resource, name }));
@@ -526,18 +529,32 @@ export const open = (
         )
       );
 
+    const findMachine = Effect.fn("Store.findMachine")((name: string) =>
+      sql(`read ${name}`, () => {
+        const row = selectMachine.get(name);
+
+        return row === undefined ? Option.none() : Option.some(rowOf(row));
+      })
+    );
+
     const store: Interface = {
-      writes: PubSub.subscribe(written),
+      watchMachine: Effect.fn("Store.watchMachine")(function* (name) {
+        const writes = yield* PubSub.subscribe(written);
+
+        const next = PubSub.take(writes).pipe(
+          Effect.repeat({
+            until: (write) =>
+              write.resource === "machine" && write.name === name,
+          }),
+          Effect.andThen(findMachine(name))
+        );
+
+        return { now: yield* findMachine(name), next };
+      }),
       machines: sql("list machines", () =>
         selectMachines.all().map((raw) => rowOf(raw))
       ).pipe(Effect.withSpan("Store.machines")),
-      findMachine: Effect.fn("Store.findMachine")((name) =>
-        sql(`read ${name}`, () => {
-          const row = selectMachine.get(name);
-
-          return row === undefined ? Option.none() : Option.some(rowOf(row));
-        })
-      ),
+      findMachine,
       insertMachine: Effect.fn("Store.insertMachine")((row) =>
         inserting("machine", row.name, () => {
           deleteUndone.run(row.name);

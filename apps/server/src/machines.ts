@@ -30,7 +30,6 @@ import {
   Effect,
   Layer,
   Option,
-  PubSub,
   Schedule,
 } from "effect";
 import type { Scope } from "effect";
@@ -81,10 +80,6 @@ export interface Interface {
   readonly list: (
     filter: ListFilter
   ) => Effect.Effect<readonly Machine[], Internal>;
-  /**
-   * Reads a machine, its host once. `holdSeconds` holds the read until the machine rests, is gone
-   * or is made again, as a write tells, or until that many seconds pass.
-   */
   readonly get: (
     id: string,
     holdSeconds?: number
@@ -705,26 +700,22 @@ export const make = (
     const held = (id: string, bound: Duration.Duration) =>
       Effect.scoped(
         Effect.gen(function* () {
-          const writes = yield* store.writes;
-          const first = yield* row(id);
+          const { now, next } = yield* store.watchMachine(id);
+
+          const first = yield* Effect.fromOption(now, () =>
+            notFound("machine", id)
+          );
 
           const answers = Option.match({
             onNone: () => true,
-            onSome: (now: MachineRow) =>
-              now.instance !== first.instance || isResting(phaseOf(now.state)),
+            onSome: (found: MachineRow) =>
+              found.instance !== first.instance ||
+              isResting(phaseOf(found.state)),
           });
 
-          const written = PubSub.take(writes).pipe(
-            Effect.repeat({
-              until: ({ resource, name }) =>
-                resource === "machine" && name === id,
-            }),
-            Effect.andThen(store.findMachine(id))
-          );
-
-          if (!answers(Option.some(first))) {
+          if (!answers(now)) {
             yield* Effect.timeoutOption(
-              Effect.repeat(written, { until: answers }),
+              Effect.repeat(next, { until: answers }),
               bound
             );
           }

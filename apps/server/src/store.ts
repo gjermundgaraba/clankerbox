@@ -14,7 +14,7 @@ import type {
   Phase,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, Schema, SchemaGetter } from "effect";
-import type { DateTime, Effect, Option, PubSub, Scope } from "effect";
+import type { DateTime, Effect, Option, Scope } from "effect";
 import { Hex } from "effect/encoding";
 
 import type { Decision } from "./chart.ts";
@@ -155,22 +155,15 @@ export type Advanced<R> =
   | { readonly at: "absent" }
   | { readonly at: "busy"; readonly by: Operation };
 
-/** A row a write moved, inserted or removed. */
-export interface Written {
-  readonly resource: Lease["resource"];
-  readonly name: string;
+export interface Watched {
+  readonly now: Option.Option<MachineRow>;
+  readonly next: Effect.Effect<Option.Option<MachineRow>, Internal>;
 }
 
 export interface Interface {
-  /**
-   * Every row `advance` moves and `insertMachine` writes from when this is taken, in order, while
-   * its scope lasts. Take it before reading a row, so no write comes between.
-   */
-  readonly writes: Effect.Effect<
-    PubSub.Subscription<Written>,
-    never,
-    Scope.Scope
-  >;
+  readonly watchMachine: (
+    name: string
+  ) => Effect.Effect<Watched, Internal, Scope.Scope>;
   readonly machines: Effect.Effect<readonly MachineRow[], Internal>;
   readonly findMachine: (
     name: string
