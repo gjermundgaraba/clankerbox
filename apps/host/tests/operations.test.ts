@@ -2492,7 +2492,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           Effect.sync(
             () =>
               logged.filter((line) =>
-                line.includes("captured under another smolvm")
+                line.includes("captured under smolvm 1.32.0, not this host's")
               ).length
           ),
           (skipped) => skipped === 2

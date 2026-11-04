@@ -1868,6 +1868,57 @@ layer(NodeServices.layer)((it) => {
       })
   );
 
+  it.effect(
+    "a build whose index names no smolvm version parks no base, and its warning says so",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const settings = yield* prepared();
+        const model = smolvmModel();
+        const runtime = yield* runtimeOf(settings, model.spawner);
+        const builder = { ...machine, name: "building-1" };
+        const build = { ...ramCheckpoint, name: "built-0123456789abcdef" };
+        const logged: unknown[] = [];
+
+        const index = path.join(
+          settings.stateDir,
+          "checkpoints",
+          `${nativeName(build)}.checkpoint`,
+          "checkpoint.json"
+        );
+
+        model.vms.set(nativeName(builder), {
+          state: "running",
+          forwards: [`${builder.port}:22`],
+        });
+
+        yield* runtime.capture(builder, build);
+
+        yield* fs.writeFileString(
+          index,
+          (yield* fs.readFileString(index)).replace(
+            `"smolvm_version":"${minimumVersion}",`,
+            ""
+          )
+        );
+
+        yield* (runtime.bases?.settle ?? Effect.die("smolvm parks bases")).pipe(
+          Effect.provide(
+            Logger.layer([Logger.make(({ message }) => logged.push(message))])
+          )
+        );
+
+        expect(
+          [...model.vms.keys()].filter((vm) => vm.startsWith("base_"))
+        ).toStrictEqual([]);
+        expect(logged).toStrictEqual([
+          [
+            `${nativeName(build)}'s checkpoint.json names no smolvm version, so it parks no base and its copies restore`,
+          ],
+        ]);
+      })
+  );
+
   it.effect("a ram restore that got its source's old port keeps it", () =>
     Effect.gen(function* () {
       const spawner = scripted(() => {});

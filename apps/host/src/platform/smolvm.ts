@@ -908,9 +908,16 @@ export const make = (
             return;
           }
 
-          if (!(yield* capturedHere(build))) {
+          const { capturedUnder } = yield* indexOf(build);
+
+          if (capturedUnder !== version) {
+            const why =
+              capturedUnder === undefined
+                ? `${build}'s ${checkpointIndex} names no smolvm version`
+                : `${build} was captured under smolvm ${capturedUnder}, not this host's ${version}`;
+
             return yield* Effect.logWarning(
-              `${build} was captured under another smolvm than this host's ${version}, so it parks no base and its copies restore`
+              `${why}, so it parks no base and its copies restore`
             );
           }
 
