@@ -44,7 +44,7 @@ import type {
 } from "../../runtime.ts";
 import type { HostSettings } from "../../settings.ts";
 import { allotted, inUse } from "../../usage.ts";
-import { cliIn, expect, files } from "../process.ts";
+import { cliIn, expect, files, regularFiles } from "../process.ts";
 import * as Forwarder from "./forwarder.ts";
 
 export const TartSettings = Schema.Struct({
@@ -110,6 +110,9 @@ export const checkpointName = (
   checkpoint: Pick<CheckpointRef, "name" | "instance">
 ): string =>
   `cbx-${host}-c-${checkpoint.name}-${checkpoint.instance.slice(0, 8)}`;
+
+export const vmsDir = (settings: Pick<Settings, "tartHome">): string =>
+  path.join(settings.tartHome ?? path.join(homedir(), ".tart"), "vms");
 
 export const jobsDir = (stateDir: string): string =>
   path.join(stateDir, "launchd");
@@ -850,6 +853,32 @@ export const make = (
           `tart exec ${vm}`
         );
       }),
+      checkpointFiles: Effect.fn("Tart.checkpointFiles")((checkpoint) => {
+        const dir = path.join(vmsDir(settings), checkpointVm(checkpoint));
+
+        return Effect.map(regularFiles(fs, dir), (found) =>
+          found.map((file) => ({ path: file, file: path.join(dir, file) }))
+        );
+      }),
+      held: () => Effect.undefined,
+      staging: (checkpoint) =>
+        path.join(
+          path.dirname(vmsDir(settings)),
+          "cbx-fetching",
+          checkpointVm(checkpoint)
+        ),
+      install: Effect.fn("Tart.install")((checkpoint, staged) =>
+        files(
+          `couldn't install checkpoint ${checkpoint.name}`,
+          Effect.andThen(
+            fs.makeDirectory(vmsDir(settings), { recursive: true }),
+            fs.rename(
+              staged,
+              path.join(vmsDir(settings), checkpointVm(checkpoint))
+            )
+          )
+        )
+      ),
     } satisfies Interface;
   });
 

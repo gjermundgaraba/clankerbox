@@ -136,6 +136,7 @@ export const migrations: readonly string[] = [
     template TEXT PRIMARY KEY,
     last INTEGER NOT NULL
   ) STRICT`,
+  "ALTER TABLE checkpoints ADD COLUMN published TEXT",
 ];
 
 const isSqliteError = (

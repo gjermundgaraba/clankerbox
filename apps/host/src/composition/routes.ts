@@ -4,6 +4,7 @@ import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Effect, Layer, Option } from "effect";
 
+import { BuildStore } from "../builds.ts";
 import { Operations } from "../operations.ts";
 import { Runtime, stateIn, sizedBy } from "../runtime.ts";
 import type { HostSettings } from "../settings.ts";
@@ -18,6 +19,7 @@ const app = (config: Served) =>
       const operations = yield* Operations;
       const runtime = yield* Runtime;
       const tailnet = yield* Effect.serviceOption(Tailnet);
+      const builds = yield* Effect.serviceOption(BuildStore);
 
       return {
         readHost: () =>
@@ -32,6 +34,7 @@ const app = (config: Served) =>
             ...(runtime.pin === undefined ? {} : { pin: runtime.pin }),
             publishAddress: runtime.publishAddress,
             joins: Option.isSome(tailnet),
+            builds: Option.isSome(builds),
           }),
         readMachines: ({ machines }) =>
           Effect.map(operations.read(machines), (observed) =>

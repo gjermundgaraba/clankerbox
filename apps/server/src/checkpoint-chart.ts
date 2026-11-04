@@ -25,9 +25,56 @@ const events = {
   read: types<Read>(),
   reported: types<Done | NotDone>(),
   lost: types<{ readonly error: HostError }>(),
+  publish: types<{ readonly as: string }>(),
 };
 
 export type CheckpointEvent = InferEvents<typeof events>;
+
+const makingRegion = <const Step extends "capture" | "fetch">(step: Step) =>
+  ({
+    initial: "due",
+    states: {
+      due: {
+        meta: { phase: "capturing", activity: "read" },
+        on: {
+          read: { target: "sent" },
+          delete: { target: "#checkpoint.deleting.due" },
+        },
+      },
+      sent: {
+        meta: { phase: "capturing", step, activity: "follow" },
+        on: {
+          reported: ({ event }: { readonly event: Done | NotDone }) => {
+            if (event.status === "done") {
+              return { target: "#checkpoint.ready" } as const;
+            }
+
+            const { error, at, cleared } = event;
+
+            return cleared
+              ? ({
+                  target: "#checkpoint.failed",
+                  context: { error, failedAt: at },
+                } as const)
+              : ({
+                  target: "#checkpoint.discarding.due",
+                  context: { error },
+                } as const);
+          },
+          lost: ({
+            event,
+          }: {
+            readonly event: { readonly error: HostError };
+          }) =>
+            ({
+              target: "#checkpoint.discarding.due",
+              context: { error: event.error },
+            }) as const,
+          delete: { target: "#checkpoint.deleting.draining" },
+        },
+      },
+    },
+  }) as const;
 
 export const checkpoint = setup({
   schemas: {
@@ -41,7 +88,19 @@ export const checkpoint = setup({
   context: ({ input }) => input,
   initial: "capturing",
   states: {
-    capturing: {
+    capturing: makingRegion("capture"),
+    fetching: makingRegion("fetch"),
+    ready: {
+      meta: { phase: "ready", activity: "none" },
+      on: {
+        delete: { target: "#checkpoint.deleting.due" },
+        publish: ({ event }) => ({
+          target: "#checkpoint.publishing.due",
+          context: { published: event.as },
+        }),
+      },
+    },
+    publishing: {
       initial: "due",
       states: {
         due: {
@@ -52,25 +111,15 @@ export const checkpoint = setup({
           },
         },
         sent: {
-          meta: { phase: "capturing", step: "capture", activity: "follow" },
+          meta: { phase: "capturing", step: "publish", activity: "follow" },
           on: {
-            reported: ({ event }) => {
-              if (event.status === "done") {
-                return { target: "#checkpoint.ready" };
-              }
-
-              const { error, at, cleared } = event;
-
-              return cleared
-                ? {
-                    target: "#checkpoint.failed",
-                    context: { error, failedAt: at },
-                  }
+            reported: ({ event }) =>
+              event.status === "done"
+                ? { target: "#checkpoint.ready" }
                 : {
                     target: "#checkpoint.discarding.due",
-                    context: { error },
-                  };
-            },
+                    context: { error: event.error },
+                  },
             lost: ({ event }) => ({
               target: "#checkpoint.discarding.due",
               context: { error: event.error },
@@ -79,10 +128,6 @@ export const checkpoint = setup({
           },
         },
       },
-    },
-    ready: {
-      meta: { phase: "ready", activity: "none" },
-      on: { delete: { target: "#checkpoint.deleting.due" } },
     },
     discarding: undoingRegion(
       "checkpoint",
@@ -114,14 +159,34 @@ export const { leaves, metaOf, phaseOf, activityOf } = rowLeavesOf<
   ShownPhase
 >(checkpoint);
 
+/**
+ * What every publish shares and a delete of what was published owns, so a delete that removes the
+ * objects no other build holds never runs beside a publish that found one there and skipped it.
+ */
+export const buildStoreLease = "builds/";
+
+const storeLease = (mode: Lease["mode"]): Lease => ({
+  resource: "checkpoint",
+  name: buildStoreLease,
+  mode,
+});
+
 const leasesOf = (
   row: CheckpointRow,
   kind: Operation["kind"]
 ): readonly Lease[] => {
   const self: Lease = { resource: "checkpoint", name: row.name, mode: "own" };
 
-  return kind === "capture"
-    ? [{ resource: "machine", name: row.machine, mode: "share" }, self]
+  if (kind === "capture") {
+    return [{ resource: "machine", name: row.machine, mode: "share" }, self];
+  }
+
+  if (kind === "publish") {
+    return [self, storeLease("share")];
+  }
+
+  return kind === "deleteCheckpoint" && row.published === row.name
+    ? [self, storeLease("own")]
     : [self];
 };
 

@@ -185,7 +185,12 @@ const portRange = () => {
 };
 
 export const plane = (options?: {
-  readonly hosts?: ReadonlyArray<{ readonly id: string; readonly kind?: Kind }>;
+  readonly hosts?: ReadonlyArray<{
+    readonly id: string;
+    readonly kind?: Kind;
+    /** This host's own, over `runtime`. */
+    readonly options?: Parameters<typeof startHost>[1];
+  }>;
   readonly draining?: readonly string[];
   readonly recheck?: Duration.Duration;
   readonly failedRowsLast?: Duration.Duration;
@@ -199,7 +204,7 @@ export const plane = (options?: {
     const dir = yield* scratch;
     const members = options?.hosts ?? [{ id: "linux" }];
 
-    const hosts = yield* Effect.forEach(members, ({ id, kind }) =>
+    const hosts = yield* Effect.forEach(members, ({ id, kind, options: own }) =>
       Effect.suspend(() => {
         if (options?.tailscaled === true) {
           writeTailscaleStubs(path.join(dir, id, "bin"));
@@ -210,6 +215,7 @@ export const plane = (options?: {
           ...(kind === undefined ? {} : { kind }),
           ports: portRange(),
           ...options?.runtime,
+          ...own,
         });
       })
     );

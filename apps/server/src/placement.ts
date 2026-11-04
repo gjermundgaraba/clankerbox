@@ -74,11 +74,43 @@ export const placing = (
   );
 };
 
+/** What a template build was made under, which a host's copy of it needs to restore. */
+export interface BuiltUnder {
+  readonly id: string;
+  readonly base: string;
+  readonly pin: string | undefined;
+  readonly image: string;
+}
+
+/**
+ * Why a host's copy of `build` takes no create, if it doesn't: the host runs another runtime pin,
+ * or its base names another image, than the build was made under.
+ */
+export const outdated = (
+  info: HostInfo,
+  build: BuiltUnder
+): string | undefined => {
+  const image = info.images[build.base] ?? build.base;
+
+  if (info.pin !== build.pin) {
+    return `runs runtime pin ${info.pin ?? "none"}, and ${build.id} was built under ${build.pin ?? "none"}`;
+  }
+
+  return image === build.image
+    ? undefined
+    : `names image ${image} for base ${build.base}, and ${build.id} was built from ${build.image}`;
+};
+
+/**
+ * The hosts that hold one of `copies`, of `build` of `template`, by host, and can take a clone of
+ * it, in config order, each with its copy, to try in turn as `placing`'s are. An outdated copy is
+ * passed over. With none, a holder that gave no reply is `Unavailable`, and `NotBuilt` otherwise.
+ */
 export const holding = <A>(
   reached: readonly Reached[],
   copies: ReadonlyMap<string, A>,
   template: string,
-  build: string
+  made: BuiltUnder
 ): Result.Result<
   Arr.NonEmptyReadonlyArray<readonly [HostInfo, A]>,
   NotBuilt | Unavailable
@@ -87,10 +119,15 @@ export const holding = <A>(
     reached.filter(({ member }) => copies.has(member.id)),
     (info) => {
       const copy = copies.get(info.id);
+      const why = outdated(info, made);
 
-      return copy === undefined
-        ? Result.fail(`holds no copy of ${build}`)
-        : Result.succeed([info, copy] as const);
+      if (copy === undefined) {
+        return Result.fail(`holds no copy of ${made.id}`);
+      }
+
+      return why === undefined
+        ? Result.succeed([info, copy] as const)
+        : Result.fail(`holds an outdated copy: it ${why}`);
     }
   );
 
@@ -101,11 +138,11 @@ export const holding = <A>(
   return Result.fail(
     noReply
       ? new Unavailable({
-          message: `no host that holds build ${build} answered: ${reasons}`,
+          message: `no host that holds build ${made.id} answered: ${reasons}`,
           readOnly: true,
         })
       : new NotBuilt({
-          message: `no host that holds build ${build} can take a clone of it${reasons === "" ? "" : `: ${reasons}`}; run clankerbox template build ${template} to build it again`,
+          message: `no host that holds build ${made.id} can take a clone of it${reasons === "" ? "" : `: ${reasons}`}; run clankerbox template build ${template} to build it again`,
           template,
         })
   );

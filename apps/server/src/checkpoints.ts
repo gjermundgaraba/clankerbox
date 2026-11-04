@@ -15,6 +15,7 @@ import type {
   ListFilter,
   Machine,
   PauseRequest,
+  Conflict,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Cause,
@@ -65,10 +66,22 @@ export interface Interface {
   readonly delete: (
     id: string
   ) => Effect.Effect<void, Declared<"deleteCheckpoint">>;
+  /**
+   * Captures `machine` as a copy of template build `build`, which no client reaches as a
+   * checkpoint, and waits for the capture to end, failing with its error. Answers the copy's name.
+   */
   readonly copy: (
     machine: string,
     build: string
-  ) => Effect.Effect<void, HostError>;
+  ) => Effect.Effect<string, HostError>;
+  /** Publishes a build's copy to the build store, and waits for that to end, failing with its error. */
+  readonly publish: (name: string) => Effect.Effect<void, HostError>;
+  /** Records a copy of `published`, a build's published copy, fetched by `host`, and answers at once. */
+  readonly fetch: (
+    published: CheckpointRow,
+    host: string
+  ) => Effect.Effect<void, Conflict | Internal>;
+  /** Deletes a copy of a template build, if it is there. */
   readonly discard: (name: string) => Effect.Effect<void, Internal>;
 }
 
@@ -214,6 +227,7 @@ export const make = (settings: {
           failedAt: undefined,
           expiresAt,
           build,
+          published: undefined,
         };
 
         yield* store.insertCheckpoint(record);
@@ -361,11 +375,34 @@ export const make = (settings: {
       copy: Effect.fn("Checkpoints.copy")((machine, build) => {
         const name = `built-${newId().slice(0, 16)}`;
 
-        return Effect.andThen(
-          capturing({ machine, name }, build),
-          rested(name)
+        return capturing({ machine, name }, build).pipe(
+          Effect.andThen(rested(name)),
+          Effect.as(name)
         );
       }),
+      publish: Effect.fn("Checkpoints.publish")((name) =>
+        applying(name, { type: "publish", as: name }).pipe(
+          Effect.andThen(drive(name)),
+          Effect.andThen(rested(name))
+        )
+      ),
+      fetch: Effect.fn("Checkpoints.fetch")((published, host) =>
+        Effect.gen(function* () {
+          const name = `fetched-${newId().slice(0, 16)}`;
+
+          yield* store.insertCheckpoint({
+            ...published,
+            name,
+            instance: newId(),
+            createdAt: yield* DateTime.now,
+            host,
+            state: "fetching.due",
+            error: undefined,
+            failedAt: undefined,
+          });
+          yield* drive(name);
+        })
+      ),
       discard: Effect.fn("Checkpoints.discard")((name) =>
         remove(name).pipe(Effect.catchTag("NotFound", () => Effect.void))
       ),

@@ -117,6 +117,17 @@ export const missing = (
     machine: machine.name,
   });
 
+/**
+ * A file of a checkpoint, as a build store copies it: `path` within the checkpoint, and `file` where
+ * it lies on this host. A runtime that names a file by its content gives that name as `key`, which
+ * `held` finds again on any host that holds it; any other file is copied in pieces.
+ */
+export interface CheckpointFile {
+  readonly path: string;
+  readonly file: string;
+  readonly key?: string | undefined;
+}
+
 export interface Interface {
   readonly version: string;
   readonly publishAddress: string;
@@ -177,6 +188,18 @@ export interface Interface {
     machine: MachineRef,
     command: Command
   ) => Effect.Effect<Execution, RuntimeError, Scope.Scope>;
+  readonly checkpointFiles: (
+    checkpoint: CheckpointRef
+  ) => Effect.Effect<readonly CheckpointFile[], RuntimeError>;
+  /** Where a file of `key` lies on this host, in any of its checkpoints, if one does. */
+  readonly held: (key: string) => Effect.Effect<string | undefined>;
+  /** Where a copy of `checkpoint` is put together, on the filesystem it will lie on. */
+  readonly staging: (checkpoint: CheckpointRef) => string;
+  /** Makes `checkpoint` of the files put together in `staged`, which it takes. */
+  readonly install: (
+    checkpoint: CheckpointRef,
+    staged: string
+  ) => Effect.Effect<void, RuntimeError>;
 }
 
 export class Runtime extends Context.Service<Runtime, Interface>()(

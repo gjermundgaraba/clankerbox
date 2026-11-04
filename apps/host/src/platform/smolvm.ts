@@ -41,7 +41,7 @@ import type {
 } from "../runtime.ts";
 import type { HostSettings } from "../settings.ts";
 import { allotted, checkRamBudget, inUse } from "../usage.ts";
-import { cliIn, expect, failure, files } from "./process.ts";
+import { cliIn, expect, failure, files, regularFiles } from "./process.ts";
 
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
 
@@ -109,6 +109,25 @@ export const pathsIn = (stateDir: string) => ({
 export const minimumVersion = "1.33.0";
 
 const supported = atLeast(minimumVersion);
+
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/crates/smolvm-checkpoint/src/store.rs#L28
+const captureOwner = ".capture-owner";
+
+// https://github.com/smol-machines/smolvm/blob/v1.33.0/crates/smolvm-checkpoint/src/store.rs#L85
+const objectName = /^[0-9a-f]{64}$/u;
+
+const objectKeyPrefix = "smolvm/";
+
+const storedObject = (file: string): string | undefined => {
+  const [dir, name, ...rest] = file.split("/");
+
+  return dir === "objects" &&
+    name !== undefined &&
+    rest.length === 0 &&
+    objectName.test(name)
+    ? name
+    : undefined;
+};
 
 export const nativeName = (
   resource: Pick<MachineRef, "name" | "instance">
@@ -654,6 +673,15 @@ export const make = (
             fs.makeDirectory(dir, { recursive: true, mode: 0o700 })
           );
         }
+
+        for (const entry of yield* files(
+          `couldn't list ${paths.store}`,
+          fs.readDirectory(paths.store)
+        )) {
+          if (entry.endsWith(".fetching")) {
+            yield* removeAll(path.join(paths.store, entry));
+          }
+        }
       }),
       adopt: () => Effect.void,
       observe: Effect.fn("Smolvm.observe")(observe),
@@ -879,6 +907,74 @@ export const make = (
           `smolvm machine exec ${native}`
         );
       }),
+      checkpointFiles: Effect.fn("Smolvm.checkpointFiles")((checkpoint) =>
+        Effect.map(regularFiles(fs, checkpointDir(checkpoint)), (found) =>
+          found.flatMap((file) => {
+            const object = storedObject(file);
+
+            return file === captureOwner
+              ? []
+              : [
+                  {
+                    path: file,
+                    file: path.join(checkpointDir(checkpoint), file),
+                    ...(object === undefined
+                      ? {}
+                      : { key: `${objectKeyPrefix}${object}` }),
+                  },
+                ];
+          })
+        )
+      ),
+      held: (key) => {
+        const hash = key.slice(objectKeyPrefix.length);
+        const file = path.join(paths.store, "objects", hash);
+
+        return key.startsWith(objectKeyPrefix) && objectName.test(hash)
+          ? Effect.map(
+              Effect.orElseSucceed(fs.exists(file), () => false),
+              (exists) => (exists ? file : undefined)
+            )
+          : Effect.undefined;
+      },
+      staging: (checkpoint) =>
+        path.join(paths.store, `${nativeName(checkpoint)}.fetching`),
+      install: Effect.fn("Smolvm.install")((checkpoint, staged) =>
+        Effect.gen(function* () {
+          const objects = path.join(paths.store, "objects");
+
+          yield* files(
+            `couldn't create ${objects}`,
+            fs.makeDirectory(objects, { recursive: true, mode: 0o700 })
+          );
+
+          // Prune removes every store object with one link, so each takes the store's name too.
+          // https://github.com/smol-machines/smolvm/blob/v1.33.0/crates/smolvm-checkpoint/src/store.rs#L3021
+          for (const file of yield* regularFiles(fs, staged)) {
+            const object = storedObject(file);
+
+            if (object !== undefined) {
+              yield* files(
+                `couldn't add object ${object} to the store`,
+                fs
+                  .link(path.join(staged, file), path.join(objects, object))
+                  .pipe(
+                    Effect.catchReason(
+                      "PlatformError",
+                      "AlreadyExists",
+                      () => Effect.void
+                    )
+                  )
+              );
+            }
+          }
+
+          yield* files(
+            `couldn't install checkpoint ${checkpoint.name}`,
+            fs.rename(staged, checkpointDir(checkpoint))
+          );
+        })
+      ),
     } satisfies Interface;
   });
 

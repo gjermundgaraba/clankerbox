@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -5,7 +6,15 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { access, cp, mkdir, rm } from "node:fs/promises";
+import {
+  access,
+  cp,
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+} from "node:fs/promises";
 import path from "node:path";
 
 import { Internal, WrongState } from "@gjermundgaraba/clankerbox-sdk";
@@ -43,7 +52,8 @@ export type Operation =
   | "capture"
   | "restore"
   | "fork"
-  | "deleteCheckpoint";
+  | "deleteCheckpoint"
+  | "install";
 
 export interface FakeOptions {
   readonly dir: string;
@@ -89,7 +99,7 @@ export const furnish = (root: string, stubs: string): void => {
   const bin = path.join(root, "usr", "bin");
 
   mkdirSync(path.join(root, "usr", "local"), { recursive: true });
-  mkdirSync(bin);
+  mkdirSync(bin, { recursive: true });
   symlinkSync(stubs, path.join(root, "usr", "local", "bin"));
   symlinkSync(bin, path.join(root, "bin"));
 
@@ -239,6 +249,28 @@ type FailureOf<O extends Operation> = Interface[O] extends (
   ? E
   : never;
 
+const keyOf = async (file: string) => {
+  const bytes = await readFile(file);
+
+  return `fake/${createHash("sha256").update(bytes).digest("hex")}`;
+};
+
+const filesIn = async (root: string): Promise<readonly string[]> => {
+  const found: string[] = [];
+
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    const file = path.join(root, entry.name);
+
+    if (entry.isDirectory()) {
+      found.push(...(await filesIn(file)));
+    } else if (entry.isFile()) {
+      found.push(file);
+    }
+  }
+
+  return found;
+};
+
 export const fakeRuntime = (options: FakeOptions) => {
   const machines = new Map<string, FakeMachine>();
   const images = new Map<string, string>();
@@ -261,6 +293,7 @@ export const fakeRuntime = (options: FakeOptions) => {
     restore: [],
     fork: [],
     deleteCheckpoint: [],
+    install: [],
   };
 
   const observeFailures: Array<RuntimeError | "hang" | "die"> = [];
@@ -642,6 +675,44 @@ export const fakeRuntime = (options: FakeOptions) => {
                 recursive: true,
                 force: true,
               });
+            })
+          ),
+        checkpointFiles: (checkpoint) =>
+          Effect.promise(async () => {
+            const root = checkpointRoot(checkpoint);
+            const found = await filesIn(root);
+
+            return await Promise.all(
+              found.map(async (file) => ({
+                path: path.relative(root, file),
+                file,
+                ...(kind === "linux" ? { key: await keyOf(file) } : {}),
+              }))
+            );
+          }),
+        held: (key) =>
+          Effect.promise(async () => {
+            const all = path.join(options.dir, "checkpoints");
+
+            for (const file of existsSync(all) ? await filesIn(all) : []) {
+              if (!file.includes(".fetching") && (await keyOf(file)) === key) {
+                return file;
+              }
+            }
+
+            return undefined;
+          }),
+        staging: (checkpoint) => `${checkpointRoot(checkpoint)}.fetching`,
+        install: (checkpoint, staged) =>
+          call(
+            "install",
+            checkpoint,
+            Effect.promise(async () => {
+              const root = checkpointRoot(checkpoint);
+
+              await rename(staged, root);
+              await mkdir(path.join(root, "dev"), { recursive: true });
+              furnish(root, bin);
             })
           ),
         exec: (machine, command) =>

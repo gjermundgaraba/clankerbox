@@ -31,14 +31,17 @@ import {
   Duration,
   Effect,
   Exit,
+  FileSystem,
   Fiber,
   Layer,
   Option,
+  Path,
   Semaphore,
 } from "effect";
 import type { Scope } from "effect";
 import { Hex } from "effect/encoding";
 
+import { BuildStore, fetch, publish, unpublish } from "./builds.ts";
 import {
   checkTailnet,
   identify,
@@ -187,10 +190,21 @@ type Settings = Pick<HostSettings, "id" | "kind" | "bases" | "machinePorts">;
 
 export const make = (
   config: Settings
-): Effect.Effect<Interface, never, Runtime | PortProbe | Scope.Scope> =>
+): Effect.Effect<
+  Interface,
+  never,
+  Runtime | PortProbe | FileSystem.FileSystem | Path.Path | Scope.Scope
+> =>
   Effect.gen(function* () {
     const runtime = yield* Runtime;
     const tailnet = yield* Effect.serviceOption(Tailnet);
+    const builds = yield* Effect.serviceOption(BuildStore);
+
+    const files = Context.make(
+      FileSystem.FileSystem,
+      yield* FileSystem.FileSystem
+    ).pipe(Context.add(Path.Path, yield* Path.Path));
+
     const probe = yield* PortProbe;
     const hostScope = yield* Effect.scope;
     const admission = yield* Semaphore.make(1);
@@ -478,10 +492,30 @@ export const make = (
         }
       });
 
+    const withBuilds = <A>(
+      what: string,
+      work: (
+        store: BuildStore["Service"]
+      ) => Effect.Effect<A, HostError, FileSystem.FileSystem | Path.Path>
+    ) =>
+      Option.match(builds, {
+        onNone: () =>
+          Effect.fail(
+            new Internal({
+              message: `host ${config.id} has no builds setting, so it can't ${what}`,
+            })
+          ),
+        onSome: (store) => Effect.provideContext(work(store), files),
+      });
+
     const perform = (
       progress: Progress,
       step: Exclude<Step, Make>
     ): Effect.Effect<void, HostError> => {
+      const cleared = Effect.sync(() => {
+        progress.outcome = { ...progress.outcome, cleared: true };
+      });
+
       switch (step._tag) {
         case "start": {
           const { machine, pin, machines } = step;
@@ -552,10 +586,6 @@ export const make = (
         case "capture": {
           const { machine, checkpoint, pin } = step;
 
-          const cleared = Effect.sync(() => {
-            progress.outcome = { ...progress.outcome, cleared: true };
-          });
-
           return Effect.andThen(
             Effect.tapError(copyable(machine.name, pin), () => cleared),
             runtime
@@ -573,7 +603,23 @@ export const make = (
         }
 
         case "deleteCheckpoint": {
-          return runtime.deleteCheckpoint(step.checkpoint);
+          const { checkpoint, published } = step;
+
+          const unpublished =
+            published === undefined
+              ? Effect.void
+              : Option.match(builds, {
+                  onNone: () =>
+                    Effect.logWarning(
+                      `delete ${checkpoint.name}: host ${config.id} has no builds setting, so what it published as ${published} stays in the build store`
+                    ),
+                  onSome: (store) => unpublish(store, published),
+                });
+
+          return Effect.andThen(
+            unpublished,
+            runtime.deleteCheckpoint(checkpoint)
+          );
         }
 
         case "join": {
@@ -587,6 +633,23 @@ export const make = (
                 }
               ),
           });
+        }
+
+        case "publish": {
+          return withBuilds(`publish ${step.checkpoint.name}`, (store) =>
+            publish(store, runtime, step.checkpoint, step.as)
+          );
+        }
+
+        case "fetch": {
+          const { checkpoint, from, build } = step;
+
+          return Effect.tapError(
+            withBuilds(`fetch build ${build}`, (store) =>
+              fetch(store, runtime, checkpoint, from, build)
+            ),
+            () => cleared
+          );
         }
       }
     };
@@ -794,5 +857,8 @@ export const make = (
 
 export const layer = (
   config: Settings
-): Layer.Layer<Operations, never, Runtime | PortProbe> =>
-  Layer.effect(Operations, make(config));
+): Layer.Layer<
+  Operations,
+  never,
+  Runtime | PortProbe | FileSystem.FileSystem | Path.Path
+> => Layer.effect(Operations, make(config));

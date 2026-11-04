@@ -74,12 +74,18 @@ export type Source = typeof Source.Type;
 
 const others = { machines: Schema.Array(MachineRef) };
 
+const published = { published: Schema.optionalKey(Schema.String) };
+
 /**
  * What a host runs. `pin` is the runtime pin a VM booted under, compared with the host's own, and
  * `machines` the host's other machines, which admission counts beside the one a step boots. A step
  * that acts by what its VM is doing reads it from the runtime as it begins. A make's
  * `authorizedKeys` go to the login user once the machine is made, after its setup if it has one,
- * beside the keys already there. A copy's make then prepares it, as a start does.
+ * beside the keys already there. A copy's make then prepares it, as a start does. A `publish`
+ * copies a checkpoint's files to the build store under the name `as`, and a `fetch` makes a
+ * checkpoint from what was published as `from`, of template build `build`, downloading only what
+ * this host doesn't hold. A delete of a checkpoint `published` also removes it from the build
+ * store, with every key no other published checkpoint holds.
  */
 export const Step = Schema.Union([
   Schema.TaggedStruct("make", {
@@ -107,10 +113,22 @@ export const Step = Schema.Union([
     checkpoint: CheckpointRef,
     ...pinned,
   }),
-  Schema.TaggedStruct("deleteCheckpoint", { checkpoint: CheckpointRef }),
+  Schema.TaggedStruct("deleteCheckpoint", {
+    checkpoint: CheckpointRef,
+    ...published,
+  }),
   Schema.TaggedStruct("join", {
     machine: MachineRef,
     hostname: Schema.String,
+  }),
+  Schema.TaggedStruct("publish", {
+    checkpoint: CheckpointRef,
+    as: Schema.String,
+  }),
+  Schema.TaggedStruct("fetch", {
+    checkpoint: CheckpointRef,
+    from: Schema.String,
+    build: Schema.String,
   }),
 ]);
 
@@ -164,7 +182,8 @@ export type Report = typeof Report.Type;
 
 /**
  * What the control plane needs to know of a host. `images` is the image each of `bases` names
- * there, and `boot` is new each time its process starts.
+ * there, `boot` is new each time its process starts, and `builds` tells a host that copies template
+ * builds through the build store.
  */
 export const HostInfo = Schema.Struct({
   id: Schema.String,
@@ -177,6 +196,7 @@ export const HostInfo = Schema.Struct({
   pin: Schema.optionalKey(Schema.String),
   publishAddress: Schema.String,
   joins: Schema.Boolean,
+  builds: Schema.Boolean,
 }).annotate({ identifier: "HostInfo" });
 
 export type HostInfo = typeof HostInfo.Type;

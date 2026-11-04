@@ -24,6 +24,7 @@ const info = (id: string, bases: readonly string[]): HostInfo => ({
   boot: "boot",
   publishAddress: "127.0.0.1",
   joins: false,
+  builds: false,
 });
 
 const up = (id: string, bases: readonly string[] = ["ubuntu"]): Reached => ({
@@ -134,7 +135,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     ]);
 
     const holders = (reached: readonly Reached[]) =>
-      holding(reached, copies, "web", "web@1");
+      holding(reached, copies, "web", {
+        id: "web@1",
+        base: "ubuntu",
+        pin: undefined,
+        image: "image/ubuntu",
+      });
 
     it.effect(
       "offers the hosts holding a copy of the build in config order, each with its copy",

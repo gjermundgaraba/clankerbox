@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
 
@@ -16,7 +16,8 @@ import { HttpServer } from "effect/http";
 import { serverLayer } from "../src/composition/server.ts";
 import { defaultFailedRowsLast } from "../src/settings.ts";
 
-const usage = "usage: serve.ts <run-dir>, with hosts in <run-dir>/hosts";
+const usage =
+  "usage: serve.ts <run-dir>, with hosts in <run-dir>/hosts, each draining while <run-dir>/hosts/<id>.draining exists";
 
 const [runArg] = process.argv.slice(2);
 
@@ -38,11 +39,17 @@ while [ ! -e "${run}/setup-go" ]; do sleep 0.05; done
 echo slow-recipe >"${run}/recipe-ran"
 `;
 
-const memberOf = (run: string) => (file: string) => ({
-  id: path.basename(file, ".url"),
-  url: readFileSync(path.join(run, "hosts", file), "utf8").trim(),
-  draining: false,
-});
+const memberOf = (run: string) => (file: string) => {
+  const id = path.basename(file, ".url");
+
+  return {
+    id,
+    url: readFileSync(path.join(run, "hosts", file), "utf8").trim(),
+    get draining() {
+      return existsSync(path.join(run, "hosts", `${id}.draining`));
+    },
+  };
+};
 
 const clientFiles = (run: string, url: string) =>
   Effect.gen(function* () {

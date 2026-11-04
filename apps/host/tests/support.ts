@@ -3,16 +3,19 @@ import path from "node:path";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import type { Kind } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { Context, Duration, Effect, Exit, Layer, Logger, Scope } from "effect";
 import { HttpClient, HttpServer } from "effect/http";
 import { expect } from "vite-plus/test";
 
+import { BuildStore } from "../src/builds.ts";
 import { hostLayer } from "../src/composition/host.ts";
 import type { PortRange } from "../src/machine-ports.ts";
 import { Operations } from "../src/operations.ts";
 import type { Interface as OperationsInterface } from "../src/operations.ts";
+import type { BuildsSettings } from "../src/platform/s3.ts";
 import type { TailnetSettings } from "../src/platform/tailscale.ts";
 import type { HostSettings } from "../src/settings.ts";
 import type { Tailnet } from "../src/tailnet.ts";
@@ -74,6 +77,8 @@ export const startHost = (
     readonly ports?: PortRange;
     readonly tailnet?: Layer.Layer<Tailnet>;
     readonly tailnetSettings?: TailnetSettings;
+    readonly builds?: Layer.Layer<BuildStore>;
+    readonly buildsSettings?: BuildsSettings;
     readonly http?: Layer.Layer<HttpClient.HttpClient>;
   }
 ) =>
@@ -93,11 +98,13 @@ export const startHost = (
           ...hostConfig(stateDir, options?.ports, options?.kind, options?.id),
           ...(options?.bases === undefined ? {} : { bases: options.bases }),
           tailnet: options?.tailnetSettings,
+          builds: options?.buildsSettings,
         },
         fake.layer,
         loopbackServer(options?.port)
       ).pipe(
         Layer.provide(options?.tailnet ?? Layer.empty),
+        Layer.provide(options?.builds ?? Layer.empty),
         Layer.provide(options?.http ?? noHttp),
         Layer.provideMerge(
           Logger.layer(options?.logger === undefined ? [] : [options.logger])
@@ -131,6 +138,46 @@ export const hostOn =
         ...options,
       });
     });
+
+/** A build store in memory, which every host given it shares, and what was downloaded from it. */
+export const memoryBuildStore = () => {
+  const objects = new Map<string, Uint8Array>();
+  const downloaded: string[] = [];
+
+  const layer = Layer.succeed(
+    BuildStore,
+    BuildStore.of({
+      list: (prefix) =>
+        Effect.sync(() =>
+          [...objects.keys()].filter((key) => key.startsWith(prefix))
+        ),
+      get: (key) =>
+        Effect.suspend(() => {
+          const found = objects.get(key);
+
+          downloaded.push(key);
+
+          return found === undefined
+            ? Effect.fail(
+                new Internal({ message: `the build store has no ${key}` })
+              )
+            : Effect.succeed(found);
+        }),
+      put: (key, body) =>
+        Effect.sync(() => {
+          objects.set(key, body);
+        }),
+      remove: (keys) =>
+        Effect.sync(() => {
+          for (const key of keys) {
+            objects.delete(key);
+          }
+        }),
+    })
+  );
+
+  return { layer, objects, downloaded };
+};
 
 export const pause = Effect.sleep(Duration.millis(50));
 

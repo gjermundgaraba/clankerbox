@@ -132,6 +132,11 @@ export const CheckpointFacts = Schema.Struct({
   /** When the control plane deletes it, once ready. */
   expiresAt: UndefinedFromNull(Schema.DateTimeUtcFromString),
   build: UndefinedFromNull(Schema.String),
+  /**
+   * The name a copy's files have in the build store: the builder's copy publishes them under its
+   * own name, and a copy on another host is fetched from it.
+   */
+  published: UndefinedFromNull(Schema.String),
 });
 
 export type CheckpointFacts = typeof CheckpointFacts.Type;

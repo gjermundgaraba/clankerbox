@@ -174,13 +174,18 @@ export const machineStep = (
       }
 
       case "capture":
-      case "deleteCheckpoint": {
+      case "deleteCheckpoint":
+      case "publish":
+      case "fetch": {
         return undefined;
       }
     }
   });
 
-/** What a host is sent for a checkpoint's operation, or undefined when its machine went. */
+/**
+ * What a host is sent for a checkpoint's operation, or undefined when its machine went. A delete of
+ * the copy a build was published from also removes it from the build store.
+ */
 export const checkpointStep = (
   store: Store,
   record: CheckpointRow,
@@ -188,9 +193,24 @@ export const checkpointStep = (
 ): Effect.Effect<Step | undefined, Internal> =>
   Effect.gen(function* () {
     const checkpoint = checkpointRefOf(record);
+    const { name, published, build } = record;
 
     if (op.kind === "deleteCheckpoint") {
-      return { _tag: "deleteCheckpoint", checkpoint };
+      return {
+        _tag: "deleteCheckpoint",
+        checkpoint,
+        ...(published === name ? { published } : {}),
+      };
+    }
+
+    if (op.kind === "publish") {
+      return { _tag: "publish", checkpoint, as: published ?? name };
+    }
+
+    if (op.kind === "fetch") {
+      return published === undefined || build === undefined
+        ? undefined
+        : { _tag: "fetch", checkpoint, from: published, build };
     }
 
     const from = copyOf(yield* store.findMachine(record.machine));

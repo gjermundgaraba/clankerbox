@@ -104,7 +104,9 @@ export const wants = (kind: Operation["kind"], desired: Asked): boolean => {
     case "remove":
     case "resize":
     case "capture":
-    case "deleteCheckpoint": {
+    case "deleteCheckpoint":
+    case "publish":
+    case "fetch": {
       return true;
     }
   }

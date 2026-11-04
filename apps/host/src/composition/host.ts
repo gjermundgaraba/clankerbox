@@ -13,6 +13,7 @@ import type {
 
 import * as Operations from "../operations.ts";
 import * as BindProbe from "../platform/bind-probe.ts";
+import * as S3 from "../platform/s3.ts";
 import * as Tailscale from "../platform/tailscale.ts";
 import { Runtime } from "../runtime.ts";
 import type { CannotStart } from "../runtime.ts";
@@ -30,6 +31,7 @@ export type ServerLayer = Layer.Layer<
 
 export interface HostLayerConfig extends HostSettings {
   readonly tailnet?: Tailscale.TailnetSettings | undefined;
+  readonly builds?: S3.BuildsSettings | undefined;
 }
 
 const startedUp = Layer.effectDiscard(
@@ -43,7 +45,7 @@ export const hostLayer = <E, R>(
 ): Layer.Layer<
   HttpServer.HttpServer | Operations.Operations | Runtime,
   HostError | CannotStart | E,
-  R | FileSystem.FileSystem | HttpClient.HttpClient
+  R | FileSystem.FileSystem | Path.Path | HttpClient.HttpClient
 > =>
   HttpRouter.serve(routes(config)).pipe(
     Layer.provideMerge(
@@ -64,5 +66,8 @@ export const hostLayer = <E, R>(
       config.tailnet === undefined
         ? Layer.empty
         : Tailscale.layer(config.tailnet)
+    ),
+    Layer.provide(
+      config.builds === undefined ? Layer.empty : S3.layer(config.builds)
     )
   );

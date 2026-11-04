@@ -158,7 +158,7 @@ const makes = (
 let delivered = 0;
 
 const scopeOf = (step: Step) =>
-  step._tag === "capture" || step._tag === "deleteCheckpoint"
+  "checkpoint" in step
     ? `checkpoint ${step.checkpoint.name}`
     : `machine ${step.machine.name}`;
 

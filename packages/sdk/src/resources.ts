@@ -242,10 +242,27 @@ export const checkpointKinds = {
 const BuildPhase = Schema.Literals(["building", "ready", "failed"]);
 
 /**
+ * A build's copy on one host. A host of the build's kind that copies builds fetches each ready
+ * build: the copy is `fetching` until it holds it, then `ready` for a create, or `failed` with its
+ * error, which the next recheck fetches again. It is `outdated`, and takes no create, while its host
+ * runs another runtime pin or names another image for the base than the build was made under, as
+ * `reason` says.
+ */
+export const BuildCopy = Schema.Struct({
+  host: Schema.String,
+  phase: Schema.Literals(["fetching", "ready", "failed", "outdated"]),
+  reason: Schema.optionalKey(Schema.String),
+  error: Schema.optionalKey(HostError),
+}).annotate({ identifier: "BuildCopy" });
+
+export type BuildCopy = typeof BuildCopy.Type;
+
+/**
  * One build of a template: a machine made from its base on `host`, its setup run, captured under
  * the runtime `pin`, and deleted. `image` is what the base named on that host. A create clones a
  * build only `ready`, and a ready build never changes. A failed one, also one a restart of the
- * control plane ended, keeps its `error` until a later build ends.
+ * control plane ended, keeps its `error` until a later build ends. `copies` are where it is, by
+ * host: a create clones it on a host whose copy is ready.
  */
 export const Build = Schema.Struct({
   id: BuildId,
@@ -255,6 +272,7 @@ export const Build = Schema.Struct({
   host: Schema.String,
   pin: Schema.optionalKey(Schema.String),
   image: Schema.String,
+  copies: Schema.Array(BuildCopy),
 }).annotate({ identifier: "Build" });
 
 export type Build = typeof Build.Type;

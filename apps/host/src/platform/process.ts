@@ -1,6 +1,6 @@
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Stream } from "effect";
-import type { PlatformError, Scope } from "effect";
+import type { FileSystem, PlatformError, Scope } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { lastLines } from "../guest.ts";
@@ -8,6 +8,28 @@ import type { Execution } from "../runtime.ts";
 
 export const describe = (error: PlatformError.PlatformError): string =>
   `${error.reason._tag}: ${error.reason.method}${error.reason.description === undefined ? "" : `: ${error.reason.description}`}`;
+
+/** The regular files under `directory`, by their paths within it; no link or directory. */
+export const regularFiles = (
+  fs: FileSystem.FileSystem,
+  directory: string
+): Effect.Effect<readonly string[], Internal> =>
+  Effect.mapError(
+    Effect.flatMap(
+      fs.readDirectory(directory, { recursive: true }),
+      (entries) =>
+        Effect.filter(entries, (entry) =>
+          Effect.map(
+            fs.lstat(`${directory}/${entry}`),
+            ({ type }) => type === "File"
+          )
+        )
+    ),
+    (error) =>
+      new Internal({
+        message: `couldn't list ${directory}: ${describe(error)}`,
+      })
+  );
 
 export interface Ran {
   readonly exitCode: number;

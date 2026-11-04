@@ -1,10 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Internal } from "@gjermundgaraba/clankerbox-sdk";
+import { Internal, Name } from "@gjermundgaraba/clankerbox-sdk";
+import { Schema } from "effect";
 import { adjacencyMapToArray, getAdjacencyMap } from "xstate/graph";
 
 import { applied, leavesOf } from "../src/chart.ts";
 import {
   activityOf,
+  buildStoreLease,
   checkpoint,
   checkpointChart,
   leaves,
@@ -93,7 +95,9 @@ const cancelled: CheckpointEvent = {
 
 const gone: CheckpointEvent = { type: "lost", error };
 
-const events = { removal, read, done, failed, cancelled, gone };
+const publish: CheckpointEvent = { type: "publish", as: "snap" };
+
+const events = { removal, read, done, failed, cancelled, gone, publish };
 
 const names = [
   "removal",
@@ -102,6 +106,7 @@ const names = [
   "failed",
   "cancelled",
   "gone",
+  "publish",
 ] as const;
 
 type Edge = (typeof names)[number];
@@ -117,7 +122,23 @@ const edges: Readonly<
     cancelled: "discarding.due",
     gone: "discarding.due",
   },
-  ready: { removal: "deleting.due" },
+  "fetching.due": { removal: "deleting.due", read: "fetching.sent" },
+  "fetching.sent": {
+    removal: "deleting.draining",
+    done: "ready",
+    failed: "discarding.due",
+    cancelled: "discarding.due",
+    gone: "discarding.due",
+  },
+  ready: { removal: "deleting.due", publish: "publishing.due" },
+  "publishing.due": { removal: "deleting.due", read: "publishing.sent" },
+  "publishing.sent": {
+    removal: "deleting.draining",
+    done: "ready",
+    failed: "discarding.due",
+    cancelled: "discarding.due",
+    gone: "discarding.due",
+  },
   "discarding.due": { removal: "deleting.due", read: "discarding.sent" },
   "discarding.sent": {
     removal: "deleting.sent",
@@ -149,7 +170,11 @@ const edges: Readonly<
 const phases: Readonly<Record<Leaf, ShownPhase>> = {
   "capturing.due": "capturing",
   "capturing.sent": "capturing",
+  "fetching.due": "capturing",
+  "fetching.sent": "capturing",
   ready: "ready",
+  "publishing.due": "capturing",
+  "publishing.sent": "capturing",
   "discarding.due": "failed",
   "discarding.sent": "failed",
   "discarding.held": "failed",
@@ -161,6 +186,15 @@ const phases: Readonly<Record<Leaf, ShownPhase>> = {
 };
 
 const representatives = Object.values(events);
+
+const storeLease = (mode: string) => ({
+  resource: "checkpoint",
+  name: buildStoreLease,
+  mode,
+});
+
+const leasesAt = (state: Leaf, fields?: Partial<CheckpointFacts>) =>
+  applied(checkpointChart, rowAt(state, fields), read, undefined).begin?.leases;
 
 const clearing: readonly Leaf[] = [
   "discarding.due",
@@ -270,14 +304,21 @@ describe("the chart", () => {
     ).toStrictEqual([]);
   });
 
-  it("reaches every leaf, with these events from a capture", () => {
-    const adjacency = getAdjacencyMap(checkpoint, {
-      input: checkpointFacts(),
-      events: [...representatives],
-    });
-
-    const reached = adjacencyMapToArray(adjacency).map(
-      ({ nextState }) => nextState
+  it("reaches every leaf, with these events from a capture or a fetch", () => {
+    const reached = [
+      undefined,
+      checkpoint.resolveState({
+        value: { fetching: "due" },
+        context: checkpointFacts(),
+      }),
+    ].flatMap((fromState) =>
+      adjacencyMapToArray(
+        getAdjacencyMap(checkpoint, {
+          input: checkpointFacts(),
+          events: [...representatives],
+          fromState,
+        })
+      ).map(({ nextState }) => nextState)
     );
 
     expect(
@@ -316,7 +357,9 @@ describe("the chart", () => {
       Object.entries(edges).filter(
         ([state, taken]) =>
           (state === "ready" || state === "failed") &&
-          Object.keys(taken).some((edge) => edge !== "removal")
+          Object.keys(taken).some(
+            (edge) => edge !== "removal" && edge !== "publish"
+          )
       )
     ).toStrictEqual([]);
   });
@@ -343,6 +386,29 @@ describe("the chart", () => {
         return [begun.begin?.kind, begun.begin?.leases];
       })
     ).toStrictEqual(clearing.map(() => ["deleteCheckpoint", [self]]));
+  });
+
+  it("the build store's lease is a name no checkpoint can take", () => {
+    expect(Schema.is(Name)(buildStoreLease)).toBe(false);
+  });
+
+  it("a publish shares the build store, and only a delete of what was published owns it", () => {
+    const self = { resource: "checkpoint", name: "snap", mode: "own" };
+
+    expect(leasesAt("publishing.due", { published: "snap" })).toStrictEqual([
+      self,
+      storeLease("share"),
+    ]);
+    expect(leasesAt("deleting.due", { published: "snap" })).toStrictEqual([
+      self,
+      storeLease("own"),
+    ]);
+    expect(
+      leasesAt("deleting.due", { published: "built-other" })
+    ).toStrictEqual([self]);
+    expect(
+      leasesAt("fetching.due", { published: "built-other" })
+    ).toStrictEqual([self]);
   });
 });
 

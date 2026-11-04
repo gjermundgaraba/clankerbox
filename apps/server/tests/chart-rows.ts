@@ -75,5 +75,6 @@ export const checkpointFacts = (
   labels: undefined,
   expiresAt: undefined,
   build: undefined,
+  published: undefined,
   ...fields,
 });

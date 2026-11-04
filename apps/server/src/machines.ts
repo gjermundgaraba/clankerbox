@@ -63,7 +63,7 @@ import {
 } from "./machine-view.ts";
 import { collect, cutShort, poll } from "./operations.ts";
 import { holding, placing } from "./placement.ts";
-import type { Candidate } from "./placement.ts";
+import type { BuiltUnder, Candidate } from "./placement.ts";
 import { machineStep, refOf } from "./steps.ts";
 import { newId, notFound, Store } from "./store.ts";
 import type { Operation, TemplateRow } from "./store.ts";
@@ -151,7 +151,7 @@ type BaseCreate = Exclude<CreateRequest, TemplateCreate>;
 const readyBuild = (
   found: Option.Option<TemplateRow>,
   { template, number }: ReturnType<typeof templateRef>
-): Result.Result<string, NotBuilt> => {
+): Result.Result<BuiltUnder, NotBuilt> => {
   const ready = Option.match(found, {
     onNone: () => [],
     onSome: ({ builds }) => builds.filter(({ phase }) => phase === "ready"),
@@ -162,8 +162,13 @@ const readyBuild = (
       ? ready.at(-1)
       : ready.find((each) => each.number === number);
 
-  if (build !== undefined) {
-    return Result.succeed(buildId(template, build.number));
+  if (build !== undefined && Option.isSome(found)) {
+    return Result.succeed({
+      id: buildId(template, build.number),
+      base: found.value.base,
+      pin: build.pin,
+      image: build.image,
+    });
   }
 
   const kept = ready.map((each) => buildId(template, each.number));
@@ -552,9 +557,11 @@ export const make = (
         const pinned = templateRef(ref);
         const { template } = pinned;
 
-        const build = yield* Effect.fromResult(
+        const made = yield* Effect.fromResult(
           readyBuild(yield* store.findTemplate(template), pinned)
         );
+
+        const build = made.id;
 
         const copies = new Map(
           (yield* store.checkpoints).flatMap((record) =>
@@ -565,7 +572,7 @@ export const make = (
         );
 
         const [first, ...rest] = yield* Effect.fromResult(
-          holding(yield* hosts.reachAll, copies, template, build)
+          holding(yield* hosts.reachAll, copies, template, made)
         );
 
         const onCopy = ([{ id }, held]: (typeof rest)[number]): Candidate => ({

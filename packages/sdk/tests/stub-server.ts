@@ -115,6 +115,10 @@ export const build = (id: string, fields?: Partial<Build>): Build => ({
   phase: "ready",
   host: "stub",
   image: "ubuntu",
+  copies:
+    (fields?.phase ?? "ready") === "ready"
+      ? [{ host: "stub", phase: "ready" }]
+      : [],
   ...fields,
 });
 

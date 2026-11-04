@@ -74,6 +74,18 @@ const templateText = (template: Template, now: DateTime.Utc) =>
         failure(build.error),
       ]),
     ]),
+    "",
+    table([
+      ["BUILD", "COPY", "PHASE", "REASON"],
+      ...template.builds.flatMap((build) =>
+        build.copies.map((copy) => [
+          build.id,
+          copy.host,
+          copy.phase,
+          copy.reason ?? failure(copy.error),
+        ])
+      ),
+    ]),
   ].join("\n");
 
 export const buildTemplate = Command.make(

@@ -53,7 +53,7 @@ export const serverLayer = (
         )
       )
     ),
-    Layer.provideMerge(Templates.layer),
+    Layer.provideMerge(Templates.layer(config)),
     Layer.provideMerge(Checkpoints.layer(config)),
     Layer.provideMerge(Machines.layer(config)),
     Layer.provideMerge(Hosts.layer(config.hosts)),
