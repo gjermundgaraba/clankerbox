@@ -611,17 +611,27 @@ as it is.
   restores the forwards its `checkpoint.json` holds
   (`manifest.checkpoint.network.ports`; `INDEX`,
   crates/smolvm-checkpoint/src/store.rs; `CheckpointNetwork`,
-  crates/smolvm-pack/src/format.rs). Ours: a linux host parks a base of each
-  template build's copy it keeps, `base_<boot ID>_<copy>`: created from the copy,
-  its forwards removed with `machine update --remove-port`, started
-  `--branchable` and frozen by a child, `<base>_freeze`, deleted at once. A
+  crates/smolvm-pack/src/format.rs). `checkpoint.json` records the smolvm that
+  captured it in `manifest.smolvm_version` (`PackManifest::new`,
+  crates/smolvm-pack/src/format.rs; `capture_with_completion`,
+  src/portable_checkpoint.rs). `create --from` a stored checkpoint with
+  `--restore-cache-entries 0` only reads the checkpoint's directory
+  (`materialize_with_base`, crates/smolvm-checkpoint/src/store.rs). Ours: a
+  linux host parks a base of each template build's copy it keeps, built or
+  fetched, `base_<boot ID>_<copy>`, when the copy's `smolvm_version` is the
+  host's: created from the copy, its forwards removed with `machine update
+  --remove-port`, started `--branchable` and frozen by a child,
+  `<base>_freeze`, deleted at once. A capture and a fetch of a copy park it
+  before the step ends, and a publish reads the copy after that park. A
   create from the build branches the base with `--freeze-source --branchable
-  -p <port>:22`, and restores the copy while no base is frozen. A base goes
-  once its copy is deleted and its last child is; the kernel's boot ID in its name
-  lets a new base park beside one a reboot left dead. The RAM budget counts a
-  base by its scope's `MemoryCurrent`. A build's builder loses its host key
-  files before the capture, so no child's re-mint runs `ssh-keygen -A`, and
-  preparation mints the one key each child keeps.
+  -p <port>:22`, and restores the copy while no base is frozen, or when the
+  base can't be read or goes before the branch. A base goes once its last
+  child is and its copy is deleted, its kernel boot has ended or its copy's
+  smolvm is another; the kernel's boot ID in its name lets a new base park
+  beside one a reboot left dead. The RAM budget counts each VM `machine ls`
+  names as a base by its scope's `MemoryCurrent`. A build's builder loses its
+  host key files before the capture, so no child's re-mint runs `ssh-keygen
+  -A`, and preparation mints the one key each child keeps.
 
 **Why things are avoided** (re-check whether the reason still holds)
 
