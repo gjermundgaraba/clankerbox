@@ -583,13 +583,15 @@ as it is.
   `.capture-owner` in the directory (#L28). `checkpoint-prune` removes each
   object with one link left (#L1666), and adopting objects into the store takes
   one that is there already as done (#L3021). Ours: a publish uploads each
-  object under `smolvm/<name>` only when the bucket lacks it, and the rest of a
-  checkpoint's files whole; a fetch links an object the host's store holds
-  already, downloads the rest into `<native>.fetching/`, links each object into
-  `objects/` and renames the directory into place, and a host start removes any
-  `.fetching/` left; a delete prunes after removing the directory. A store whose
-  objects are named or linked otherwise would make every fetch download all of
-  it, or a prune drop what a fetch linked.
+  `objects/<64-hex>` file under `objects/smolvm/<name>` only when the bucket
+  lacks it, and every other file, `checkpoint.json` and `generations/*`
+  included, as 16 MiB gzip pieces under `objects/pieces/<sha>`, the SHA-256 of
+  the piece's plaintext, skipping each piece of zeros; a fetch links an object
+  the host's store holds already, downloads the rest into `<native>.fetching/`,
+  links each object into `objects/` and renames the directory into place, and a
+  host start removes any `.fetching/` left; a delete prunes after removing the
+  directory. A store whose objects are named or linked otherwise would make
+  every fetch download all of it, or a prune drop what a fetch linked.
 
 **Why things are avoided** (re-check whether the reason still holds)
 
