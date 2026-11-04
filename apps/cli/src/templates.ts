@@ -83,7 +83,7 @@ export const buildTemplate = Command.make(
     template: templateArgument,
     setup: Argument.String("path").pipe(
       Argument.withDescription(
-        "A setup script, or a recipe directory holding setup.sh. The server runs it and keeps only the machine it made."
+        "A setup script, or a recipe directory holding setup.sh. The server runs it once, on a machine it copies and then deletes, and never keeps it."
       )
     ),
     base: Flag.String("base").pipe(
@@ -131,7 +131,7 @@ export const buildTemplate = Command.make(
     })
 ).pipe(
   Command.withDescription(
-    `${actionsByName.buildTemplate.description} A first build needs --base, --cpu, --ram and --disk, and a rebuild reuses each one it leaves out. Waits until the build ends, unless --no-wait, and prints its ID, such as web@1.`
+    `${actionsByName.buildTemplate.description} A first build needs --base, --cpu, --ram and --disk, and a rebuild takes each one it leaves out from what template get shows. Waits until the build ends, unless --no-wait, and prints its ID, such as web@1.`
   )
 );
 

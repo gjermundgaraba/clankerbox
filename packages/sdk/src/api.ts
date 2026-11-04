@@ -217,7 +217,7 @@ export const Http = ActionHttp.make(
     Action.make("buildTemplate", {
       ...write,
       error: [Invalid, Conflict, NotOffered, Unavailable, Internal] as const,
-      description: `Build a template and answer at once with the build, which a read of the template follows: a machine made from its base, its setup run, captured and deleted. A first build gives the base and the sizes, which a rebuild takes for each it leaves out. The template's current build moves to this one only once its setup has run, and it keeps its last ${keptBuilds} ready builds. Conflict refuses a build of a template whose build still runs.`,
+      description: `Build a template: a machine made from its base, its setup run, then copied and deleted. A first build gives the base and the sizes, and a rebuild takes each it leaves out from the template. The template's current build moves to this one only once its setup has run, and it keeps its last ${keptBuilds} ready builds. Conflict refuses a build of a template whose build still runs.`,
       input: BuildRequest,
       success: Build,
     }),
