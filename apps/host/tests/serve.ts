@@ -9,9 +9,18 @@ import {
   scratch,
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { Console, Effect, FileSystem, Logger } from "effect";
+import {
+  Console,
+  Duration,
+  Effect,
+  FileSystem,
+  Layer,
+  Logger,
+  Redacted,
+} from "effect";
 
-import { image as ubuntu, startHost } from "./support.ts";
+import { Tailnet } from "../src/tailnet.ts";
+import { image as ubuntu, startHost, writeTailscaleStubs } from "./support.ts";
 
 const usage =
   "usage: serve.ts <run-dir> <host-id> [linux|mac] [ram-budget-mib]";
@@ -41,6 +50,15 @@ const parsed = () => {
   };
 };
 
+const fakeTailnet = process.env["CLANKERBOX_FAKE_TAILNET"] === "1";
+
+const mintingAsSlowlyAsTailscale = Layer.succeed(Tailnet, {
+  mint: Effect.as(
+    Effect.sleep(Duration.seconds(1)),
+    Redacted.make("tskey-auth-fake")
+  ),
+});
+
 const offered = {
   linux: ["ubuntu", ubuntu],
   mac: ["macos", "registry.example/macos@sha256:00"],
@@ -61,8 +79,15 @@ const serve = Effect.gen(function* () {
     ? new URL((yield* fs.readFileString(url)).trim())
     : undefined;
 
-  const host = yield* startHost(path.join(yield* scratch, "host"), {
+  const dir = path.join(yield* scratch, "host");
+
+  if (fakeTailnet) {
+    writeTailscaleStubs(path.join(dir, "bin"));
+  }
+
+  const host = yield* startHost(dir, {
     id,
+    ...(fakeTailnet ? { tailnet: mintingAsSlowlyAsTailscale } : {}),
     kind,
     bases: new Map([[base, image]]),
     ...(previous === undefined ? {} : { port: Number(previous.port) }),
