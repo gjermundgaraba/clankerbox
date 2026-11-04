@@ -1,6 +1,6 @@
 {
   "name": "@gjermundgaraba/clankerbox-amp-orbs",
-  "version": "0.35.2",
+  "version": "0.36.0",
   "description": "Self-hosted Amp orbs as clankerbox machines: the program `amp orb provider` runs",
   "license": "MIT",
   "repository": {
