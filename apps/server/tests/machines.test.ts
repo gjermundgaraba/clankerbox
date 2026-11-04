@@ -262,6 +262,76 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     })
   );
 
+  it.effect(
+    "a held read answers at the write that rests the machine, and at its bound when none does",
+    () =>
+      Effect.gen(function* () {
+        const { asking, client, fake } = yield* served();
+        const setup = fake.holdNext("exec");
+
+        yield* asking.create("dev", request("dev", { setup: quickSetup }));
+        yield* setup.entered;
+
+        const readsBefore = fake.observed.length;
+
+        const [bounded, unrested] = yield* Effect.timed(
+          client.getMachine({ id: "dev", holdSeconds: 1 })
+        );
+
+        const hostReads = fake.observed.length - readsBefore;
+
+        const resting = yield* Effect.forkChild(
+          Effect.timed(client.getMachine({ id: "dev", holdSeconds: 5 }))
+        );
+
+        yield* pause;
+        yield* setup.release;
+
+        const [woken, rested] = yield* Fiber.join(resting);
+
+        expect([unrested.phase, hostReads]).toStrictEqual(["creating", 1]);
+        expect(Duration.toMillis(bounded)).toBeGreaterThanOrEqual(1000);
+        expect(at(rested)).toStrictEqual(["running", "running", "settled"]);
+        expect(Duration.toMillis(woken)).toBeLessThan(4000);
+      })
+  );
+
+  it.effect(
+    "held reads of one row each answer at the write that rests it, or at their own bound",
+    () =>
+      Effect.gen(function* () {
+        const { asking, client, fake } = yield* served();
+        const setup = fake.holdNext("exec");
+
+        yield* asking.create("dev", request("dev", { setup: quickSetup }));
+        yield* setup.entered;
+
+        const holding = (holdSeconds: number) =>
+          Effect.forkChild(
+            Effect.timed(client.getMachine({ id: "dev", holdSeconds }))
+          );
+
+        const short = yield* holding(1);
+        const long = yield* Effect.all([holding(5), holding(5), holding(5)]);
+        const [bounded, unrested] = yield* Fiber.join(short);
+
+        yield* setup.release;
+
+        const answered = yield* Effect.forEach(long, Fiber.join);
+        const waits = answered.map(([waited]) => Duration.toMillis(waited));
+
+        expect(unrested.phase).toBe("creating");
+        expect(Duration.toMillis(bounded)).toBeGreaterThanOrEqual(1000);
+        expect(answered.map(([, machine]) => at(machine))).toStrictEqual([
+          ["running", "running", "settled"],
+          ["running", "running", "settled"],
+          ["running", "running", "settled"],
+        ]);
+        expect(Math.max(...waits)).toBeLessThan(4000);
+        expect(Math.max(...waits) - Math.min(...waits)).toBeLessThan(500);
+      })
+  );
+
   it.effect("a list reads a host's machines in one read", () =>
     Effect.gen(function* () {
       const { client, fake } = yield* served();

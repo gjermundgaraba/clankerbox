@@ -50,6 +50,8 @@ const withClient = <A, E>(
 
 const everyMinute = { pollEvery: Duration.minutes(1) };
 
+const stoppedDev = machine("dev", { state: "stopped", desired: "stopped" });
+
 const clocked = <A, E>(wait: Effect.Effect<A, E>) =>
   Effect.gen(function* () {
     const started = yield* Clock.currentTimeMillis;
@@ -947,6 +949,43 @@ describe("client", () => {
           ]);
         }
       })
+    );
+
+    it.effect(
+      "a wait holds its reads on a server that takes a hold, and polls one that does not",
+      () =>
+        Effect.gen(function* () {
+          const holding = server({ takesHold: true, machines: [stoppedDev] });
+          const polling = server({ machines: [stoppedDev] });
+
+          for (const stub of [holding, polling]) {
+            stub.script("dev", ["observing", "starting", "settled"]);
+          }
+
+          const held = yield* withClient(
+            holding,
+            (client) => client.startMachine({ id: "dev" }),
+            everyMinute
+          );
+
+          const { answer: polled, elapsed } = yield* clocked(
+            withClient(
+              polling,
+              (client) => client.startMachine({ id: "dev" }),
+              everyMinute
+            )
+          );
+
+          expect([held.phase, holding.holds]).toStrictEqual([
+            "settled",
+            [5, 5, 5],
+          ]);
+          expect([polled.phase, polling.holds]).toStrictEqual([
+            "settled",
+            [undefined, undefined, undefined],
+          ]);
+          expect(Duration.toMinutes(elapsed)).toBeGreaterThanOrEqual(2);
+        })
     );
 
     it.effect("each request rests at what it asked", () =>

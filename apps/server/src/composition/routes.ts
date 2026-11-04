@@ -16,7 +16,7 @@ const app = Action.implement(
 
     return {
       listMachines: machines.list,
-      getMachine: ({ id }) => machines.get(id),
+      getMachine: ({ id, holdSeconds }) => machines.get(id, holdSeconds),
       createMachine: (request) => machines.create(request),
       startMachine: ({ id }) => machines.start(id),
       stopMachine: ({ id }) => machines.stop(id),

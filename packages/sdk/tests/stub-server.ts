@@ -15,6 +15,7 @@ import {
   offered,
   offers,
   version,
+  versionCheck,
   versionHeader,
   WrongState,
 } from "../src/index.ts";
@@ -62,6 +63,8 @@ export interface StubServerOptions {
   readonly machines?: readonly Machine[];
   readonly checkpoints?: readonly Checkpoint[];
   readonly refuse?: Refusals;
+  /** Names its version on each reply, as a control plane that takes a held read does. */
+  readonly takesHold?: boolean;
   readonly create?: (
     request: CreateRequest
   ) => Effect.Effect<Machine, Declared<"createMachine">>;
@@ -179,6 +182,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
   const execs: ExecRequest[] = [];
   const calls: string[] = [];
   const versions: Array<string | null> = [];
+  const holds: Array<number | undefined> = [];
   let replyDropped = false;
 
   for (const held of options.machines ?? []) {
@@ -596,8 +600,15 @@ export const stubServer = (options: StubServerOptions = {}) => {
           )
         )
       ),
-    getMachine: ({ id }) =>
-      recording("getMachine", "machine.get", readMachine(id)),
+    getMachine: ({ id, holdSeconds }) =>
+      recording(
+        "getMachine",
+        "machine.get",
+        Effect.andThen(
+          Effect.sync(() => holds.push(holdSeconds)),
+          readMachine(id)
+        )
+      ),
     createMachine: (request) =>
       recording(
         "createMachine",
@@ -706,7 +717,12 @@ export const stubServer = (options: StubServerOptions = {}) => {
       ),
   });
 
-  const routes = ActionHttp.layer(Http, [app]);
+  const routes =
+    options.takesHold === true
+      ? ActionHttp.layer(Http, [app]).pipe(
+          Layer.provide(versionCheck("stub control plane").layer)
+        )
+      : ActionHttp.layer(Http, [app]);
 
   const web = HttpRouter.toWebHandler(
     routes.pipe(Layer.provide(HttpServer.layerServices)),
@@ -721,6 +737,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
     execs,
     calls,
     versions,
+    holds,
     hold: (held: Machine) => {
       machines.set(held.id, held);
     },

@@ -40,7 +40,22 @@ export const readTimeout = Duration.seconds(10);
 /** How long a client waits on the control plane, past `readTimeout`, so a silent host gets named. */
 export const replyTimeout = Duration.seconds(15);
 
+/** The longest a read of a machine may be held for it to rest. */
+export const longestHold = Duration.seconds(5);
+
 const ById = Schema.Struct({ id: Name });
+
+const MachineRead = Schema.Struct({
+  id: Name,
+  holdSeconds: Schema.optionalKey(
+    Schema.Int.check(
+      Schema.isBetween({
+        minimum: 1,
+        maximum: Duration.toSeconds(longestHold),
+      })
+    )
+  ),
+});
 
 const read = { caller: Action.Anyone, readOnly: true } as const;
 
@@ -74,8 +89,9 @@ export const Http = ActionHttp.make(
     Action.make("getMachine", {
       ...read,
       error: reading,
-      description: "Read one machine.",
-      input: ById,
+      description:
+        "Read one machine. With `holdSeconds`, the read is held until the machine rests, is deleted or is made again, or that many seconds pass, and answers then. Only a control plane that names its version on its replies takes it.",
+      input: MachineRead,
       success: Machine,
     }),
     Action.make("createMachine", {

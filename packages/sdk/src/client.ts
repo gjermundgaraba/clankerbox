@@ -8,12 +8,23 @@ import {
   Layer,
   Match,
   Option,
+  Ref,
   Schedule,
   Schema,
 } from "effect";
-import { HttpClient, HttpClientError, HttpClientRequest } from "effect/http";
+import {
+  Headers,
+  HttpClient,
+  HttpClientError,
+  HttpClientRequest,
+} from "effect/http";
 
-import { actionsByName as actions, Http, replyTimeout } from "./api.ts";
+import {
+  actionsByName as actions,
+  Http,
+  longestHold,
+  replyTimeout,
+} from "./api.ts";
 import type { Declared } from "./api.ts";
 import { describeIssues } from "./describe.ts";
 import {
@@ -24,7 +35,7 @@ import {
   Unavailable,
 } from "./errors.ts";
 import type { ClankerboxError, HostError } from "./errors.ts";
-import { version, versionHeader } from "./release.ts";
+import { takesHold, version, versionHeader } from "./release.ts";
 import { isResting } from "./resources.ts";
 import type {
   Build,
@@ -84,6 +95,10 @@ export interface Options {
   readonly replyTimeout?: Duration.Duration | undefined;
   /** Answer a mutation as soon as the server has recorded it, instead of waiting for its rest. */
   readonly noWait?: boolean | undefined;
+  /**
+   * How long a wait sleeps between reads, 250 ms by default, but for a wait on a machine on a control
+   * plane that holds its reads, which reads again as soon as one answers.
+   */
   readonly pollEvery?: Duration.Duration | undefined;
 }
 
@@ -204,12 +219,18 @@ export class Client extends Context.Service<Client, Interface>()(
   "@gjermundgaraba/clankerbox-sdk/Client"
 ) {}
 
-const serverApi = (url: string) =>
+const serverApi = (url: string, served: Ref.Ref<Option.Option<string>>) =>
   ActionHttp.client(Http, {
     baseUrl: url,
-    transformClient: HttpClient.mapRequest(
-      HttpClientRequest.setHeader(versionHeader, version)
-    ),
+    transformClient: (client) =>
+      client.pipe(
+        HttpClient.mapRequest(
+          HttpClientRequest.setHeader(versionHeader, version)
+        ),
+        HttpClient.tap((response) =>
+          Ref.set(served, Headers.get(response.headers, versionHeader))
+        )
+      ),
   });
 
 type ServerApi = Effect.Success<ReturnType<typeof serverApi>>;
@@ -458,7 +479,8 @@ export const make = (
       )
     );
 
-    const api: ServerApi = yield* serverApi(url);
+    const served = yield* Ref.make(Option.none<string>());
+    const api: ServerApi = yield* serverApi(url, served);
     const methods: Methods = api;
     const pollEvery = options?.pollEvery ?? defaultPoll;
     const noWait = options?.noWait === true;
@@ -517,7 +539,8 @@ export const make = (
       read: Effect.Effect<A, ClankerboxError>,
       verdict: (value: A) => Verdict<B>,
       action: ServerAction,
-      subject: string
+      subject: string,
+      between: Effect.Effect<void> = Effect.sleep(pollEvery)
     ): Effect.Effect<B, ClankerboxError> => {
       const looked: Effect.Effect<B, ClankerboxError> = read.pipe(
         Effect.retry({
@@ -533,7 +556,7 @@ export const make = (
         ),
         Effect.flatMap((value) =>
           Option.getOrElse(verdict(value), () =>
-            Effect.andThen(Effect.sleep(pollEvery), looked)
+            Effect.andThen(between, looked)
           )
         )
       );
@@ -549,6 +572,25 @@ export const make = (
     ): Effect.Effect<A, ClankerboxError> =>
       noWait ? Effect.succeed(recorded) : wait;
 
+    const holds = Effect.map(Ref.get(served), takesHold);
+
+    const machineRead = (id: string) =>
+      Effect.flatMap(holds, (held) =>
+        held
+          ? call(
+              "getMachine",
+              { id, holdSeconds: Duration.toSeconds(longestHold) },
+              id,
+              undefined,
+              Duration.sum(longestHold, reply)
+            )
+          : call("getMachine", { id }, id)
+      );
+
+    const betweenMachineReads = Effect.flatMap(holds, (held) =>
+      held ? Effect.void : Effect.sleep(pollEvery)
+    );
+
     const machineRest = (
       recorded: Machine,
       asked: Asked,
@@ -563,7 +605,7 @@ export const make = (
       return unlessNoWait(
         recorded,
         polled(
-          call("getMachine", { id }, id).pipe(
+          machineRead(id).pipe(
             Effect.catchTag("NotFound", () =>
               Effect.fail(
                 new Superseded({
@@ -587,7 +629,8 @@ export const make = (
               ? Option.some(answerOf(machine, asked))
               : Option.none(),
           action,
-          id
+          id,
+          betweenMachineReads
         )
       );
     };
@@ -641,7 +684,7 @@ export const make = (
             undefined,
             polled(
               unlessGone(
-                call("getMachine", { id }, id).pipe(
+                machineRead(id).pipe(
                   Effect.filterOrElse(
                     (machine) => machine.desired !== "deleted",
                     heard
@@ -653,7 +696,8 @@ export const make = (
                 onSome: machineGone,
               }),
               "deleteMachine",
-              id
+              id,
+              betweenMachineReads
             )
           )
         )

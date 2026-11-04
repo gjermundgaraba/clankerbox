@@ -8,6 +8,7 @@ import {
   FileSystem,
   Layer,
   Option,
+  PubSub,
   Record,
   Result,
   Schema,
@@ -24,7 +25,7 @@ import {
   Operation,
   Store,
 } from "../store.ts";
-import type { Advanced, Interface, Lease, Rows } from "../store.ts";
+import type { Advanced, Interface, Lease, Rows, Written } from "../store.ts";
 
 export const databaseFile = "server.db";
 
@@ -473,6 +474,11 @@ export const open = (
       },
     };
 
+    const written = yield* PubSub.unbounded<Written>();
+
+    const told = (resource: Lease["resource"], name: string) =>
+      Effect.asVoid(PubSub.publish(written, { resource, name }));
+
     const advanced = <R>(
       resource: Lease["resource"],
       table: Table<R>,
@@ -512,9 +518,16 @@ export const open = (
         }
 
         return { at: "written", next, moved: next !== row };
-      });
+      }).pipe(
+        Effect.tap((answer) =>
+          answer.at === "written" && answer.moved
+            ? told(resource, name)
+            : Effect.void
+        )
+      );
 
     const store: Interface = {
+      writes: PubSub.subscribe(written),
       machines: sql("list machines", () =>
         selectMachines.all().map((raw) => rowOf(raw))
       ).pipe(Effect.withSpan("Store.machines")),
@@ -529,7 +542,7 @@ export const open = (
         inserting("machine", row.name, () => {
           deleteUndone.run(row.name);
           insertMachine.run(machineColumns(row));
-        })
+        }).pipe(Effect.andThen(told("machine", row.name)))
       ),
       advance: (resource, name, decide) =>
         advanced(resource, tables[resource], name, decide).pipe(

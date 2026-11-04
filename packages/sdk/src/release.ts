@@ -16,8 +16,18 @@ export const version: string = packageJson.version;
 export const release = (of: string): string =>
   of.split(".").slice(0, 2).join(".");
 
-/** The control plane and a host refuse a request whose `release` differs from their own, or that has none. */
+/**
+ * The control plane and a host refuse a request whose `release` differs from their own, or that has
+ * none, and name their own version in it on each reply.
+ */
 export const versionHeader = "clankerbox-version";
+
+/**
+ * Whether a control plane that named `served` on its last reply holds a read of a machine. One from
+ * before the hold names nothing, and refuses `holdSeconds` as a field it doesn't know.
+ */
+export const takesHold = (served: Option.Option<string>): boolean =>
+  Option.isSome(served);
 
 const refusal = (
   server: string,
@@ -42,7 +52,7 @@ const refusal = (
 
 const encodeInvalid = Schema.encodeSync(Invalid);
 
-/** Refuses a caller of another release, for a server of either contract. */
+/** Refuses a caller of another release, for a server of either contract, and names this version on each reply. */
 export const versionCheck = (server: string) =>
   HttpRouter.middleware((handle) =>
     Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
@@ -57,6 +67,6 @@ export const versionCheck = (server: string) =>
               })
             ),
         }
-      )
+      ).pipe(Effect.map(HttpServerResponse.setHeader(versionHeader, version)))
     )
   );

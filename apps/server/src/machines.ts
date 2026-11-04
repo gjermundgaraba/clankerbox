@@ -30,6 +30,7 @@ import {
   Effect,
   Layer,
   Option,
+  PubSub,
   Schedule,
 } from "effect";
 import type { Scope } from "effect";
@@ -46,6 +47,7 @@ import {
   activityOf,
   desiredOf,
   machineChart,
+  phaseOf,
   stageOf,
   wants,
 } from "./machine-chart.ts";
@@ -79,7 +81,14 @@ export interface Interface {
   readonly list: (
     filter: ListFilter
   ) => Effect.Effect<readonly Machine[], Internal>;
-  readonly get: (id: string) => Effect.Effect<Machine, Declared<"getMachine">>;
+  /**
+   * Reads a machine, its host once. `holdSeconds` holds the read until the machine rests, is gone
+   * or is made again, as a write tells, or until that many seconds pass.
+   */
+  readonly get: (
+    id: string,
+    holdSeconds?: number
+  ) => Effect.Effect<Machine, Declared<"getMachine">>;
   readonly create: (
     request: CreateRequest
   ) => Effect.Effect<Machine, Declared<"createMachine">>;
@@ -693,6 +702,40 @@ export const make = (
         return activityOf(found.value.state) !== "follow" && isResting(phase);
       });
 
+    const held = (id: string, bound: Duration.Duration) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const writes = yield* store.writes;
+          const first = yield* row(id);
+
+          const answers = Option.match({
+            onNone: () => true,
+            onSome: (now: MachineRow) =>
+              now.instance !== first.instance || isResting(phaseOf(now.state)),
+          });
+
+          const written = PubSub.take(writes).pipe(
+            Effect.repeat({
+              until: ({ resource, name }) =>
+                resource === "machine" && name === id,
+            }),
+            Effect.andThen(store.findMachine(id))
+          );
+
+          if (!answers(Option.some(first))) {
+            yield* Effect.timeoutOption(
+              Effect.repeat(written, { until: answers }),
+              bound
+            );
+          }
+        })
+      );
+
+    const read = (id: string) =>
+      Effect.flatMap(row(id), (found) =>
+        Effect.map(stateOf(hosts, found), (state) => shown(found, state))
+      );
+
     const rest = (name: string) =>
       Effect.andThen(
         untilRest(settings.recheck, rests(name)),
@@ -729,10 +772,10 @@ export const make = (
           return rows.map((found) => shown(found, stateIn(found, states)));
         })
       ),
-      get: Effect.fn("Machines.get")((id) =>
-        Effect.flatMap(row(id), (found) =>
-          Effect.map(stateOf(hosts, found), (state) => shown(found, state))
-        )
+      get: Effect.fn("Machines.get")((id, holdSeconds) =>
+        holdSeconds === undefined
+          ? read(id)
+          : Effect.andThen(held(id, Duration.seconds(holdSeconds)), read(id))
       ),
       create: Effect.fn("Machines.create")(create),
       build: Effect.fn("Machines.build")(build),
