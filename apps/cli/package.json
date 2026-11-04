@@ -20,18 +20,16 @@
   },
   "scripts": {
     "build": "vp pack",
-    "test": "vp test"
-  },
-  "dependencies": {
-    "@effect/platform-node": "catalog:",
-    "@gjermundgaraba/effect-actions": "catalog:",
-    "effect": "catalog:"
+    "test": "vp pack && vp test"
   },
   "devDependencies": {
+    "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
     "@gjermundgaraba/clankerbox-sdk": "workspace:*",
     "@gjermundgaraba/clankerbox-server": "workspace:*",
+    "@gjermundgaraba/effect-actions": "catalog:",
     "@types/node": "catalog:",
+    "effect": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vite-plus": "catalog:",
