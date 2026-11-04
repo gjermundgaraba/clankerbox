@@ -193,6 +193,12 @@ const refusedManifests: ReadonlyArray<
     "a runtime's name, / and a SHA-256 in hex",
   ],
   [
+    "file has both a key and pieces",
+    "linux",
+    (file) => ({ ...file, pieces: [null] }),
+    "Expected no excess property",
+  ],
+  [
     "piece isn't a SHA-256",
     "mac",
     (file) => ({ ...file, pieces: ["../escaped"] }),

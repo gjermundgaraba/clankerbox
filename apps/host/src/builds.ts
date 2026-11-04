@@ -86,7 +86,9 @@ const ManifestJson = Schema.fromJsonString(Manifest);
 
 const encodeManifest = Schema.encodeSync(ManifestJson);
 
-const decodeManifest = Schema.decodeUnknownEffect(ManifestJson);
+const decodeManifest = Schema.decodeUnknownEffect(ManifestJson, {
+  onExcessProperty: "error",
+});
 
 const manifestKey = (name: string) => `${manifests}${name}.json`;
 
