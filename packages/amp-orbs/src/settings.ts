@@ -3,7 +3,7 @@ import { Duration, Effect, FileSystem, Schema } from "effect";
 
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
 
-/** The sizes an orb type gets, as a profile gives them. */
+/** The sizes an orb type gets. */
 export const Sizes = Schema.Struct({
   cpu: Size,
   ramMib: Size,

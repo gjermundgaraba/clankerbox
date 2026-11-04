@@ -17,7 +17,6 @@ import {
   decodeJsonError,
   serverIn,
   serverUrl,
-  sizes,
   writeConfig,
 } from "./support.ts";
 
@@ -101,61 +100,30 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a config path under ~/ needs HOME only where a command uses it, and says so naming the file",
+    "a config from 0.35 that still names authorizedKeys or profiles is refused, saying where each went",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
-        const config = path.join(dir, "config.json");
-        const script = path.join(dir, "setup.sh");
-
-        const unset = (given: string) =>
-          `clankerbox: Invalid: client config ${config}: ${given} starts with ~/, and HOME is unset`;
-
-        yield* write(script, "#!/bin/sh\n");
-        yield* write(
-          config,
-          JSON.stringify({
-            server: serverUrl,
-            profiles: "~/profiles",
-          })
-        );
-
-        const run = (args: readonly string[]) =>
-          cli([...args, "--config", config], { server: server() });
-
-        const hosts = yield* run(["hosts"]);
-        const profiles = yield* run(["profiles"]);
-
-        const create = yield* run([
-          "create",
-          "box",
-          ...sizes,
-          "--setup",
-          script,
-        ]);
-
-        expect([hosts.code, create.code]).toStrictEqual([0, 0]);
-        expect(profiles.stderr).toBe(unset("~/profiles"));
-      })
-  );
-
-  it.effect(
-    "a config from 0.35 that still names authorizedKeys is refused, saying they moved to the server config",
-    () =>
-      Effect.gen(function* () {
-        const dir = yield* scratch;
-        const old = path.join(dir, "config.json");
+        const keys = path.join(dir, "keys.json");
+        const profiles = path.join(dir, "profiles.json");
 
         yield* write(
-          old,
+          keys,
           JSON.stringify({
             server: serverUrl,
             authorizedKeys: "~/.ssh/id_ed25519.pub",
           })
         );
+        yield* write(
+          profiles,
+          JSON.stringify({ server: serverUrl, profiles: "profiles" })
+        );
 
-        expect(yield* hostsStderr(old)).toBe(
-          `clankerbox: Invalid: client config ${old}: authorizedKeys: moved to the server config: delete it here, and put its keys in the file the server config's authorizedKeys names (README, Upgrading from 0.35)`
+        expect(yield* hostsStderr(keys)).toBe(
+          `clankerbox: Invalid: client config ${keys}: authorizedKeys: moved to the server config: delete it here, and put its keys in the file the server config's authorizedKeys names (README, Upgrading from 0.35)`
+        );
+        expect(yield* hostsStderr(profiles)).toBe(
+          `clankerbox: Invalid: client config ${profiles}: profiles: profiles are gone: delete it here, and build each profile's setup as a template on the server, with clankerbox template build (README, Upgrading from 0.35)`
         );
       })
   );
@@ -172,13 +140,12 @@ layer(NodeServices.layer)((it) => {
           wrong,
           JSON.stringify({
             hosts: [{ id: "linux", url: serverUrl }],
-            profiles: 7,
           })
         );
         yield* write(empty, JSON.stringify({}));
 
         expect(yield* hostsStderr(wrong)).toBe(
-          `clankerbox: Invalid: client config ${wrong}: hosts: not a known field; server: missing; profiles: Expected string`
+          `clankerbox: Invalid: client config ${wrong}: hosts: not a known field; server: missing`
         );
         expect(yield* hostsStderr(empty)).toBe(
           `clankerbox: Invalid: client config ${empty}: server: missing`

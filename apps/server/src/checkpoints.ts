@@ -1,23 +1,20 @@
 import type { Report } from "@clankerbox/host-contract";
 import {
   checkpointKinds,
-  Conflict,
   Internal,
   labelledWith,
-  NotFound,
   readTimeout,
   Unavailable,
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
-  Build,
   CaptureRequest,
   Checkpoint,
   Declared,
+  HostError,
   ListFilter,
   Machine,
   PauseRequest,
-  PrebuildRequest,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Cause,
@@ -27,7 +24,6 @@ import {
   Effect,
   Layer,
   Option,
-  Result,
   Schedule,
 } from "effect";
 import type { Scope } from "effect";
@@ -42,8 +38,6 @@ import { stageOf } from "./machine-chart.ts";
 import { stateOf } from "./machine-view.ts";
 import { Machines, unmade } from "./machines.ts";
 import { collect, cutShort, poll } from "./operations.ts";
-import { placing } from "./placement.ts";
-import { builderName, nameOf } from "./prebuilds.ts";
 import { checkpointStep } from "./steps.ts";
 import { newId, notFound, Store } from "./store.ts";
 import type { Operation } from "./store.ts";
@@ -71,10 +65,16 @@ export interface Interface {
   readonly delete: (
     id: string
   ) => Effect.Effect<void, Declared<"deleteCheckpoint">>;
-  readonly prebuild: (
-    request: PrebuildRequest
-  ) => Effect.Effect<Build, Declared<"prebuildCheckpoint">>;
-  readonly build: (id: string) => Effect.Effect<Build, Declared<"getPrebuild">>;
+  /**
+   * Captures `machine` as a copy of template build `build`, which no client reaches as a
+   * checkpoint, and waits for the capture to end, failing with its error.
+   */
+  readonly copy: (
+    machine: string,
+    build: string
+  ) => Effect.Effect<void, HostError>;
+  /** Deletes a copy of a template build, if it is there. */
+  readonly discard: (name: string) => Effect.Effect<void, Internal>;
 }
 
 export class Checkpoints extends Context.Service<Checkpoints, Interface>()(
@@ -91,7 +91,6 @@ const shown = (record: CheckpointRow): Checkpoint => ({
   ramMib: record.ramMib,
   diskGib: record.diskGib,
   phase: phaseOf(record.state),
-  ...(record.profile === undefined ? {} : { profile: record.profile }),
   ...(record.labels === undefined ? {} : { labels: record.labels }),
   ...(record.expiresAt === undefined ? {} : { expiresAt: record.expiresAt }),
   ...(record.error === undefined ? {} : { error: record.error }),
@@ -130,11 +129,12 @@ export const make = (settings: {
     const machines = yield* Machines;
     const scope = yield* Effect.scope;
 
-    const builds = new Map<string, Build>();
-
     const row = (name: string) =>
       Effect.flatMap(store.findCheckpoint(name), (found) =>
-        Effect.fromOption(found, () => notFound("checkpoint", name))
+        Effect.fromOption(
+          Option.filter(found, ({ build }) => build === undefined),
+          () => notFound("checkpoint", name)
+        )
       );
 
     const applying = (name: string, event: CheckpointEvent) =>
@@ -183,12 +183,10 @@ export const make = (settings: {
       following,
     });
 
-    const capturing = ({
-      machine: source,
-      name,
-      labels,
-      expiresAt,
-    }: CaptureRequest) =>
+    const capturing = (
+      { machine: source, name, labels, expiresAt }: CaptureRequest,
+      build?: string
+    ) =>
       Effect.gen(function* () {
         const present = yield* store.findMachine(source);
 
@@ -212,7 +210,6 @@ export const make = (settings: {
           pin: machine.pin,
           port: machine.port,
           base: machine.base,
-          profile: machine.profile,
           cpu: machine.cpu,
           ramMib: machine.ramMib,
           diskGib: machine.diskGib,
@@ -221,6 +218,7 @@ export const make = (settings: {
           error: undefined,
           failedAt: undefined,
           expiresAt,
+          build,
         };
 
         yield* store.insertCheckpoint(record);
@@ -336,96 +334,6 @@ export const make = (settings: {
       )
     );
 
-    const building = (name: string, request: PrebuildRequest, host: string) =>
-      Effect.gen(function* () {
-        const builder = builderName();
-
-        const deleted = machines.delete(builder).pipe(
-          Effect.catchTag("NotFound", () => Effect.void),
-          Effect.catch((error) =>
-            Effect.logWarning(
-              `couldn't delete prebuild ${name}'s builder ${builder}: ${error.message}`
-            )
-          )
-        );
-
-        const atRest = Effect.gen(function* () {
-          const resting = yield* machines.rest(builder);
-
-          if (Option.isNone(resting)) {
-            return yield* new Internal({
-              message: `prebuild ${name}'s builder went before its setup ended`,
-            });
-          }
-
-          if (resting.value.error !== undefined) {
-            return yield* resting.value.error;
-          }
-
-          return resting.value;
-        });
-
-        yield* Effect.gen(function* () {
-          yield* machines.build(builder, request, host);
-
-          const made = yield* atRest;
-
-          if (checkpointKinds[made.kind] === "disk") {
-            yield* machines.stop(builder);
-            yield* atRest;
-          }
-
-          const stale = yield* store.findCheckpoint(name);
-
-          if (Option.isSome(stale)) {
-            yield* remove(name);
-            yield* rested(name);
-          }
-
-          yield* capturing({ machine: builder, name });
-          yield* rested(name);
-        }).pipe(Effect.ensuring(deleted));
-
-        builds.set(name, { id: name, phase: "built" });
-      }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.sync(() => {
-            const error = Cause.findError(cause);
-
-            builds.set(name, {
-              id: name,
-              phase: "failed",
-              error: Result.isSuccess(error)
-                ? error.success
-                : new Internal({ message: Cause.pretty(cause) }),
-            });
-          })
-        )
-      );
-
-    const prebuild = (request: PrebuildRequest) =>
-      Effect.gen(function* () {
-        const [host] = yield* Effect.fromResult(
-          placing(yield* hosts.reachAll, request.base)
-        );
-
-        const name = yield* nameOf(request, host);
-
-        if (builds.get(name)?.phase === "building") {
-          return yield* new Conflict({
-            message: `prebuild ${name} is already building`,
-            id: name,
-          });
-        }
-
-        const build: Build = { id: name, phase: "building" };
-
-        builds.set(name, build);
-        yield* Effect.forkIn(building(name, request, host.id), scope);
-
-        return build;
-      });
-
     for (const record of yield* store.checkpoints) {
       yield* drive(record.name);
     }
@@ -440,6 +348,7 @@ export const make = (settings: {
         Effect.map(store.checkpoints, (records) =>
           records.flatMap((record) =>
             record.state === "ready" &&
+            record.build === undefined &&
             labelledWith(record.labels, filter.labels)
               ? [shown(record)]
               : []
@@ -447,23 +356,23 @@ export const make = (settings: {
         )
       ),
       get: Effect.fn("Checkpoints.get")((id) => Effect.map(row(id), shown)),
-      capture: Effect.fn("Checkpoints.capture")(capturing),
+      capture: Effect.fn("Checkpoints.capture")((request) =>
+        capturing(request)
+      ),
       pause: Effect.fn("Checkpoints.pause")(pausing),
-      delete: Effect.fn("Checkpoints.delete")(remove),
-      prebuild: Effect.fn("Checkpoints.prebuild")(prebuild),
-      build: Effect.fn("Checkpoints.build")((id) =>
-        Effect.suspend(() => {
-          const build = builds.get(id);
+      delete: Effect.fn("Checkpoints.delete")((id) =>
+        Effect.andThen(row(id), remove(id))
+      ),
+      copy: Effect.fn("Checkpoints.copy")((machine, build) => {
+        const name = `built-${newId().slice(0, 16)}`;
 
-          return build === undefined
-            ? Effect.fail(
-                new NotFound({
-                  message: `no prebuild ${id} is building: it ended with a restart of the control plane, or never began`,
-                  id,
-                })
-              )
-            : Effect.succeed(build);
-        })
+        return Effect.andThen(
+          capturing({ machine, name }, build),
+          rested(name)
+        );
+      }),
+      discard: Effect.fn("Checkpoints.discard")((name) =>
+        remove(name).pipe(Effect.catchTag("NotFound", () => Effect.void))
       ),
     } satisfies Interface;
   });

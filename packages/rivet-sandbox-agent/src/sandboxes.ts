@@ -2,11 +2,10 @@ import {
   Client,
   Conflict,
   Invalid,
-  loadProfile,
+  NotBuilt,
   NotFound,
   NotOffered,
   pinnedSsh,
-  specRequest,
   sshTarget,
   Superseded,
   Unavailable,
@@ -85,6 +84,7 @@ const discard = (error: ClankerboxError) =>
       !(
         error instanceof Conflict ||
         error instanceof Invalid ||
+        error instanceof NotBuilt ||
         error instanceof NotOffered ||
         error instanceof Superseded ||
         error instanceof Unavailable
@@ -236,17 +236,7 @@ export const make = (options: Options, ssh = "ssh") => {
         return yield* client.forkMachine({ ...from, name: named });
       }
 
-      const { spec } = yield* specRequest(
-        "create",
-        yield* loadProfile(from.profile),
-        {
-          cpu: from.cpu,
-          ramMib: from.ramMib,
-          diskGib: from.diskGib,
-        }
-      );
-
-      return yield* client.create(named, spec, { fresh: options.fresh });
+      return yield* client.create(named, from);
     });
 
   return {

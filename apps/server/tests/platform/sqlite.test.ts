@@ -11,7 +11,7 @@ import {
   scratch,
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { Arbitrary, DateTime, Effect, Option, Schema } from "effect";
+import { Arbitrary, DateTime, Effect, Option, Result, Schema } from "effect";
 import { expect } from "vite-plus/test";
 
 import { applied } from "../../src/chart.ts";
@@ -31,7 +31,12 @@ import {
   open,
   transaction,
 } from "../../src/platform/sqlite.ts";
-import type { Interface, Lease, Operation } from "../../src/store.ts";
+import type {
+  Interface,
+  Lease,
+  Operation,
+  TemplateRow,
+} from "../../src/store.ts";
 import { freshBoot } from "../chart-rows.ts";
 
 const earlierApplicationIds = [0x63_62_78_69, 0x63_62_78_73, 0x63_62_78_74];
@@ -143,7 +148,6 @@ const row = (name: string, fields?: Partial<MachineRow>): MachineRow => ({
   createdAt: DateTime.makeUnsafe("2026-10-04T12:00:00Z"),
   kind: "linux",
   base: "ubuntu",
-  profile: undefined,
   cpu: 1,
   ramMib: 1024,
   diskGib: 10,
@@ -156,7 +160,7 @@ const row = (name: string, fields?: Partial<MachineRow>): MachineRow => ({
   resize: undefined,
   ephemeral: false,
   source: { kind: "base", scripted: false },
-  prebuild: undefined,
+  template: undefined,
   hostKey: undefined,
   pin: undefined,
   undoneAt: undefined,
@@ -178,7 +182,6 @@ const checkpoint = (
   pin: "smolvm 0.0.0-test linux-x64",
   port: 10_000,
   base: "ubuntu",
-  profile: undefined,
   cpu: 1,
   ramMib: 1024,
   diskGib: 10,
@@ -187,6 +190,7 @@ const checkpoint = (
   failedAt: undefined,
   labels: undefined,
   expiresAt: undefined,
+  build: undefined,
   ...fields,
 });
 
@@ -324,7 +328,6 @@ layer(NodeServices.layer)((it) => {
         const rows = [
           row("dev", {
             kind: "mac",
-            profile: "small",
             port: 10_000,
             hostKey: "ssh-ed25519 AAAA",
             ephemeral: true,
@@ -333,8 +336,8 @@ layer(NodeServices.layer)((it) => {
             desired: "paused",
             error: new Internal({ message: "sshd didn't start" }),
             resize: { cpu: 2, diskGib: 20 },
-            source: { kind: "checkpoint", name: "snap" },
-            prebuild: "prebuilt-0123456789ab",
+            source: { kind: "checkpoint", name: "built-0123456789abcdef" },
+            template: "web@1",
             pin: "smolvm 0.0.0-test linux-x64",
           }),
           row("copy", {
@@ -566,7 +569,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a state dir that 96bd402 wrote opens, reads every row as it wrote it, and takes writes",
+    "a state dir that 96bd402 wrote opens, reads every row as it wrote it but for the profile and the prebuild that templates replaced, and takes writes",
     () =>
       Effect.gen(function* () {
         const stateDir = yield* stateDirAtVersion1((db) => {
@@ -648,7 +651,6 @@ layer(NodeServices.layer)((it) => {
 
         const dev = row("dev", {
           kind: "mac",
-          profile: "small",
           cpu: 2,
           ramMib: 2048,
           diskGib: 20,
@@ -660,7 +662,6 @@ layer(NodeServices.layer)((it) => {
           resize: { cpu: 4, diskGib: 40 },
           ephemeral: true,
           source: { kind: "checkpoint", name: "snap" },
-          prebuild: "prebuilt-0123456789ab",
           hostKey: "ssh-ed25519 AAAA",
           pin: "smolvm 0.0.0-test linux-x64",
         });
@@ -922,7 +923,6 @@ layer(NodeServices.layer)((it) => {
         createdAt: DateTime.makeUnsafe("2026-10-04T12:01:00Z"),
         kind: "mac",
         base: "macos",
-        profile: "large",
         cpu: 8,
         ramMib: 2048,
         diskGib: 40,
@@ -935,7 +935,7 @@ layer(NodeServices.layer)((it) => {
         resize: { cpu: 8 },
         ephemeral: true,
         source: { kind: "machine", name: "other" },
-        prebuild: "prebuilt-0123456789ab",
+        template: "web@2",
         hostKey: "key",
         pin: "fake 1",
         undoneAt: DateTime.makeUnsafe("2026-10-04T12:02:00Z"),
@@ -1468,7 +1468,7 @@ layer(NodeServices.layer)((it) => {
             ...(state === "failed" ? { error, failedAt } : {}),
             ...(state.startsWith("discarding") ? { error } : {}),
             ...(state === "ready" ? { pin: undefined, kind: "mac" } : {}),
-            ...(state === "capturing.due" ? { profile: "small" } : {}),
+            ...(state === "capturing.due" ? { build: "web@1" } : {}),
           })
         );
 
@@ -1600,6 +1600,86 @@ layer(NodeServices.layer)((it) => {
         expect(first).toStrictEqual(Option.some("boot-1"));
         expect(second).toStrictEqual(Option.some("boot-2"));
         expect(other).toStrictEqual(Option.none());
+      })
+  );
+
+  it.effect(
+    "a template's row and its builds round-trip through a reopen, a change writes what it decides or nothing, and a removal takes its builds",
+    () =>
+      Effect.gen(function* () {
+        const stateDir = yield* stateIn;
+
+        const web: TemplateRow = {
+          name: "web",
+          createdAt: DateTime.makeUnsafe("2026-10-04T12:00:00Z"),
+          base: "ubuntu",
+          cpu: 2,
+          ramMib: 4096,
+          diskGib: 20,
+          setupTimeoutSeconds: 600,
+          builds: [
+            {
+              number: 1,
+              createdAt: DateTime.makeUnsafe("2026-10-04T12:00:00Z"),
+              phase: "ready",
+              error: undefined,
+              host: "linux",
+              pin: "smolvm 0.0.0-test linux-x64",
+              image: "registry.example/ubuntu:24.04",
+            },
+            {
+              number: 2,
+              createdAt: DateTime.makeUnsafe("2026-10-04T12:05:00Z"),
+              phase: "failed",
+              error: new Internal({ message: "setup exited 3" }),
+              host: "linux",
+              pin: undefined,
+              image: "ubuntu",
+            },
+          ],
+        };
+
+        const api = {
+          ...web,
+          name: "api",
+          setupTimeoutSeconds: undefined,
+          builds: [],
+        };
+
+        const [refused, unchanged] = yield* withStore(stateDir, (store) =>
+          Effect.gen(function* () {
+            yield* store.changeTemplate("web", () => Result.succeed(web));
+            yield* store.changeTemplate("api", () => Result.succeed(api));
+
+            const failed = yield* Effect.flip(
+              store.changeTemplate("web", () =>
+                Result.fail(new Conflict({ message: "building", id: "web" }))
+              )
+            );
+
+            return [failed, yield* store.findTemplate("web")] as const;
+          })
+        );
+
+        const [reopened, removed] = yield* withStore(stateDir, (store) =>
+          Effect.gen(function* () {
+            const read = yield* store.templates;
+
+            yield* store.changeTemplate("web", () => Result.succeed("removed"));
+            yield* store.changeTemplate("web", () =>
+              Result.succeed({ ...web, builds: [] })
+            );
+
+            return [read, yield* store.templates] as const;
+          })
+        );
+
+        expect(refused).toStrictEqual(
+          new Conflict({ message: "building", id: "web" })
+        );
+        expect(unchanged).toStrictEqual(Option.some(web));
+        expect(reopened).toStrictEqual([api, web]);
+        expect(removed).toStrictEqual([api, { ...web, builds: [] }]);
       })
   );
 });

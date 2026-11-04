@@ -38,7 +38,6 @@ const checkpointColumns: ReadonlyArray<
   ["KIND", (checkpoint) => checkpoint.kind],
   ["MACHINE", (checkpoint) => checkpoint.machine],
   ["BASE", (checkpoint) => checkpoint.base],
-  ["PROFILE", (checkpoint) => checkpoint.profile ?? "-"],
   ["AGE", (checkpoint, now) => age(checkpoint.createdAt, now)],
 ];
 

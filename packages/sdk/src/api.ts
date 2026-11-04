@@ -7,6 +7,7 @@ import {
   Internal,
   Invalid,
   Missing,
+  NotBuilt,
   NotFound,
   NotMade,
   NotOffered,
@@ -17,6 +18,7 @@ import {
 import { Name } from "./ids.ts";
 import {
   Build,
+  BuildRequest,
   CapacityReport,
   CaptureRequest,
   Checkpoint,
@@ -25,13 +27,14 @@ import {
   ExecRequest,
   ForkRequest,
   Host,
+  keptBuilds,
   ListFilter,
   Machine,
   PauseRequest,
-  PrebuildRequest,
   ResizeRequest,
   RestoreRequest,
   Sizing,
+  Template,
 } from "./resources.ts";
 
 /** How long the control plane waits on a host. */
@@ -96,9 +99,9 @@ export const Http = ActionHttp.make(
     }),
     Action.make("createMachine", {
       ...write,
-      error: creating,
+      error: [...creating, NotBuilt] as const,
       description:
-        "Create a machine from a base, or on linux from an image reference, on a host with room. It runs its setup once, or restores the setup's prebuild when a host holds one at sizes the create can grow from, and prepares it. A create or setup that fails deletes the VM, again at each recheck while that delete fails, and keeps the row, failed, to say why; a preparation that fails keeps the machine.",
+        "Create a machine on a host with room, and prepare it: from a template's current build, or the build it pins, cloned with no setup run at the build's sizes or larger ones; or from a base, or on linux an image reference, running its setup once. NotBuilt answers a template with no ready build. A create or setup that fails deletes the VM, again at each recheck while that delete fails, and keeps the row, failed, to say why; a preparation that fails keeps the machine.",
       input: CreateRequest,
       success: Machine,
     }),
@@ -211,20 +214,32 @@ export const Http = ActionHttp.make(
         "Delete a checkpoint, once the restores that read it are done.",
       input: ById,
     }),
-    Action.make("prebuildCheckpoint", {
+    Action.make("buildTemplate", {
       ...write,
-      error: creating,
-      description:
-        "Make a checkpoint from a machine built from the spec, setup and all, and delete the machine after. A prebuild of that setup that exists, at any sizes, is replaced once the build's setup has run.",
-      input: PrebuildRequest,
+      error: [Invalid, Conflict, NotOffered, Unavailable, Internal] as const,
+      description: `Build a template and answer at once with the build, which a read of the template follows: a machine made from its base, its setup run, captured and deleted. A first build gives the base and the sizes, which a rebuild takes for each it leaves out. The template's current build moves to this one only once its setup has run, and it keeps its last ${keptBuilds} ready builds. Conflict refuses a build of a template whose build still runs.`,
+      input: BuildRequest,
       success: Build,
     }),
-    Action.make("getPrebuild", {
+    Action.make("listTemplates", {
+      ...read,
+      error: listing,
+      description: "List every template, with its builds.",
+      success: Schema.Array(Template),
+    }),
+    Action.make("getTemplate", {
       ...read,
       error: reading,
-      description: "Read a prebuild under way, or how it ended.",
+      description: "Read one template, with its builds.",
       input: ById,
-      success: Build,
+      success: Template,
+    }),
+    Action.make("deleteTemplate", {
+      ...write,
+      error: [Invalid, NotFound, Conflict, Internal] as const,
+      description:
+        "Delete a template and its builds, once the creates that clone them are done. Conflict refuses one whose build still runs. The machines cloned from it stay.",
+      input: ById,
     }),
     Action.make("listHosts", {
       ...read,

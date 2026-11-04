@@ -7,13 +7,18 @@ import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";
 import type { HttpClient } from "effect/http";
 
 import {
+  buildId,
+  builtFrom,
   Conflict,
   Http,
+  Invalid,
   labelledWith,
+  NotBuilt,
   NotFound,
   NotOffered,
   offered,
   offers,
+  templateRef,
   version,
   versionCheck,
   versionHeader,
@@ -21,6 +26,7 @@ import {
 } from "../src/index.ts";
 import type {
   Build,
+  BuildRequest,
   CapacityReport,
   Checkpoint,
   Client,
@@ -33,8 +39,8 @@ import type {
   Labels,
   Machine,
   Phase,
-  PrebuildRequest,
   Sizing,
+  Template,
 } from "../src/index.ts";
 
 /**
@@ -62,14 +68,12 @@ export interface StubServerOptions {
   readonly capacity?: CapacityReport;
   readonly machines?: readonly Machine[];
   readonly checkpoints?: readonly Checkpoint[];
+  readonly templates?: readonly Template[];
   readonly refuse?: Refusals;
   readonly takesHold?: boolean;
   readonly create?: (
     request: CreateRequest
   ) => Effect.Effect<Machine, Declared<"createMachine">>;
-  readonly prebuild?: (
-    request: PrebuildRequest
-  ) => Effect.Effect<Build, Declared<"prebuildCheckpoint">>;
   readonly exec?: (
     request: ExecRequest
   ) => Effect.Effect<Executed, Declared<"execMachine">>;
@@ -105,17 +109,47 @@ export const checkpoint = (
   ...fields,
 });
 
+export const build = (id: string, fields?: Partial<Build>): Build => ({
+  id,
+  createdAt: DateTime.makeUnsafe("2026-10-01T00:00:00Z"),
+  phase: "ready",
+  host: "stub",
+  image: "ubuntu",
+  ...fields,
+});
+
+/** A template whose builds are `builds`, oldest first, or one ready build, `<id>@1`. */
+export const template = (
+  id: string,
+  fields?: Partial<Omit<Template, "current" | "state">>
+): Template => {
+  const builds = fields?.builds ?? [build(buildId(id, 1))];
+
+  return {
+    id,
+    createdAt: DateTime.makeUnsafe("2026-10-01T00:00:00Z"),
+    base: "ubuntu",
+    cpu: 1,
+    ramMib: 1024,
+    diskGib: 10,
+    ...fields,
+    builds,
+    ...builtFrom(builds),
+  };
+};
+
 const labelled = <A extends Machine | Checkpoint>(
   made: A,
-  profile: string | undefined,
   labels?: Labels
 ): A => ({
   ...made,
-  ...(profile === undefined ? {} : { profile }),
   ...(labels === undefined ? {} : { labels }),
 });
 
-const sized = (found: Machine | Checkpoint, sizes: Sizing) => ({
+const sized = (
+  found: Pick<Machine, "cpu" | "ramMib" | "diskGib">,
+  sizes: Sizing
+) => ({
   cpu: sizes.cpu ?? found.cpu,
   ramMib: sizes.ramMib ?? found.ramMib,
   diskGib: sizes.diskGib ?? found.diskGib,
@@ -155,29 +189,27 @@ const isUndone = ({ phase, state, desired }: Machine) =>
 const noCheckpoint = (id: string) =>
   new NotFound({ message: `no checkpoint ${id}`, id });
 
-const noBuild = (id: string) =>
-  new NotFound({ message: `no prebuild ${id}`, id });
+const noTemplate = (id: string) =>
+  new NotFound({ message: `no template ${id}`, id });
 
 /**
  * The control plane, in memory. A mutation answers with the row it records, out of rest; the next
  * read rests it where the request asked, or removes it after a delete, unless `script`,
- * `scriptCheckpoint` or `scriptBuild` says what the next reads of an ID see, one step a read. Builds
- * are `prebuilt-0`, `prebuilt-1`. As on the control plane, a failed create's row whose VM is gone,
- * `failed` and `missing`, is replaced by a create of its name, cleared at once by a delete, and no
- * machine to any other request.
+ * `scriptCheckpoint` or `scriptBuild` says what the next reads of an ID see, one step a read. A
+ * build is read through its template, and `gone` deletes the template. As on the control plane, a
+ * failed create's row whose VM is gone, `failed` and `missing`, is replaced by a create of its
+ * name, cleared at once by a delete, and no machine to any other request.
  */
 export const stubServer = (options: StubServerOptions = {}) => {
   const kind = options.kind ?? "linux";
   const bases = options.bases ?? ["ubuntu"];
   const machines = new Map<string, Machine>();
   const checkpoints = new Map<string, Checkpoint>();
-  const builds = new Map<string, Build>();
-  const pendingBuilds = new Map<string, PrebuildRequest>();
+  const templates = new Map<string, Template>();
   const machineScripts = new Map<string, readonly MachineStep[]>();
   const checkpointScripts = new Map<string, readonly CheckpointStep[]>();
   const buildScripts = new Map<string, readonly BuildStep[]>();
   const creates: CreateRequest[] = [];
-  const prebuilds: PrebuildRequest[] = [];
   const execs: ExecRequest[] = [];
   const calls: string[] = [];
   const versions: Array<string | null> = [];
@@ -191,6 +223,10 @@ export const stubServer = (options: StubServerOptions = {}) => {
 
   for (const held of options.checkpoints ?? []) {
     checkpoints.set(held.id, held);
+  }
+
+  for (const held of options.templates ?? []) {
+    templates.set(held.id, held);
   }
 
   const recording = <N extends Client.ServerAction, A, E>(
@@ -341,62 +377,58 @@ export const stubServer = (options: StubServerOptions = {}) => {
     });
   };
 
-  const built = (build: Build) => {
-    const request = pendingBuilds.get(build.id);
+  const writeTemplate = (row: Template, written: readonly Build[]) => {
+    const { current: _current, ...rest } = row;
+    const next: Template = { ...rest, builds: written, ...builtFrom(written) };
 
-    if (request !== undefined) {
-      pendingBuilds.delete(build.id);
-      writeCheckpoint(
-        labelled<Checkpoint>(
-          checkpoint(build.id, {
-            base: request.base,
-            cpu: request.cpu,
-            ramMib: request.ramMib,
-            diskGib: request.diskGib,
-          }),
-          request.profile
-        )
-      );
-    }
+    templates.set(row.id, next);
 
-    builds.set(build.id, build);
-
-    return build;
+    return next;
   };
 
-  const readBuild = (id: string): Effect.Effect<Build, NotFound> => {
-    const step = nextStep(buildScripts, id);
-    const found = builds.get(id);
-
-    if (found === undefined) {
-      return Effect.fail(noBuild(id));
+  const readBuild = (found: Build): Build | "gone" => {
+    if (found.phase !== "building") {
+      return found;
     }
 
+    const step = nextStep(buildScripts, found.id);
+
     if (step === undefined) {
-      return Effect.succeed(
-        found.phase === "building" ? built({ ...found, phase: "built" }) : found
-      );
+      return { ...found, phase: "ready" };
     }
 
     if (step === "down") {
       replyDropped = true;
 
-      return Effect.succeed(found);
+      return found;
     }
 
     if (step === "gone") {
-      builds.delete(id);
-
-      return Effect.fail(noBuild(id));
+      return step;
     }
 
-    const now: Build = Predicate.isString(step)
+    return Predicate.isString(step)
       ? { ...found, phase: step }
       : { ...found, ...step };
+  };
 
-    builds.set(id, now);
+  const readTemplate = (id: string): Effect.Effect<Template, NotFound> => {
+    const found = templates.get(id);
 
-    return Effect.succeed(now.phase === "built" ? built(now) : now);
+    if (found === undefined) {
+      return Effect.fail(noTemplate(id));
+    }
+
+    const read = found.builds.map(readBuild);
+    const kept = read.filter((each): each is Build => each !== "gone");
+
+    if (kept.length < read.length) {
+      templates.delete(id);
+
+      return Effect.fail(noTemplate(id));
+    }
+
+    return Effect.succeed(writeTemplate(found, kept));
   };
 
   const add = (made: Machine) => {
@@ -425,29 +457,58 @@ export const stubServer = (options: StubServerOptions = {}) => {
         : Effect.asVoid(asked(id, "deleted"))
     );
 
+  const notOffered = (base: string) =>
+    new NotOffered({
+      message: `no host offers ${base}: the host offers ${offered({ kind, bases })}`,
+      base,
+    });
+
+  const cloned = (ref: string) => {
+    const { template: name, number } = templateRef(ref);
+    const found = templates.get(name);
+    const id = number === undefined ? found?.current : ref;
+
+    const ready = found?.builds.find(
+      (each) => each.id === id && each.phase === "ready"
+    );
+
+    return found === undefined || ready === undefined
+      ? Effect.fail(
+          new NotBuilt({
+            message: `template ${name} has no ready build${id === undefined ? "" : ` ${id}`}: run clankerbox template build ${name} to make one`,
+            template: name,
+          })
+        )
+      : Effect.succeed({ found, id: ready.id });
+  };
+
   const recordCreate = (request: CreateRequest) =>
     Effect.gen(function* () {
       if (options.create !== undefined) {
         return yield* options.create(request);
       }
 
-      if (!offers({ kind, bases }, request.base)) {
-        return yield* new NotOffered({
-          message: `no host offers ${request.base}: the host offers ${offered({ kind, bases })}`,
-          base: request.base,
-        });
+      if ("template" in request) {
+        const { found, id } = yield* cloned(request.template);
+
+        return yield* add(
+          labelled(
+            machine(request.id, {
+              kind,
+              base: found.base,
+              ...sized(found, request),
+              template: id,
+              state: "unknown",
+              phase: "observing",
+            }),
+            request.labels
+          )
+        );
       }
 
-      const prebuild =
-        request.fresh === true
-          ? undefined
-          : machineScripts
-              .get(request.id)
-              ?.flatMap((step) =>
-                !Predicate.isString(step) && step.prebuild !== undefined
-                  ? [step.prebuild]
-                  : []
-              )[0];
+      if (!offers({ kind, bases }, request.base)) {
+        return yield* notOffered(request.base);
+      }
 
       return yield* add(
         labelled(
@@ -459,9 +520,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
             diskGib: request.diskGib,
             state: "unknown",
             phase: "observing",
-            ...(prebuild === undefined ? {} : { prebuild }),
           }),
-          request.profile,
           request.labels
         )
       );
@@ -483,7 +542,6 @@ export const stubServer = (options: StubServerOptions = {}) => {
             state: "unknown",
             phase: "observing",
           }),
-          found.profile,
           labels
         )
       )
@@ -512,7 +570,6 @@ export const stubServer = (options: StubServerOptions = {}) => {
                     ? {}
                     : { expiresAt: fields.expiresAt }),
                 }),
-                found.profile,
                 fields.labels
               )
             )
@@ -560,31 +617,47 @@ export const stubServer = (options: StubServerOptions = {}) => {
         : yield* options.exec(request);
     });
 
-  const recordPrebuild = (
-    request: PrebuildRequest
-  ): Effect.Effect<Build, Declared<"prebuildCheckpoint">> => {
-    if (options.prebuild !== undefined) {
-      return options.prebuild(request);
-    }
+  const recordBuild = (
+    request: BuildRequest
+  ): Effect.Effect<Build, Declared<"buildTemplate">> =>
+    Effect.gen(function* () {
+      const found = templates.get(request.template);
+      const base = request.base ?? found?.base;
+      const cpu = request.cpu ?? found?.cpu;
+      const ramMib = request.ramMib ?? found?.ramMib;
+      const diskGib = request.diskGib ?? found?.diskGib;
 
-    if (!offers({ kind, bases }, request.base)) {
-      return Effect.fail(
-        new NotOffered({
-          message: `no host offers ${request.base}: the host offers ${offered({ kind, bases })}`,
-          base: request.base,
-        })
+      if (
+        base === undefined ||
+        cpu === undefined ||
+        ramMib === undefined ||
+        diskGib === undefined
+      ) {
+        return yield* new Invalid({
+          message: `a first build of template ${request.template} gives its base, vCPUs, RAM and disk`,
+        });
+      }
+
+      const earlier = found?.builds ?? [];
+
+      const made = build(buildId(request.template, earlier.length + 1), {
+        phase: "building",
+        image: base,
+      });
+
+      writeTemplate(
+        template(request.template, {
+          ...found,
+          base,
+          cpu,
+          ramMib,
+          diskGib,
+        }),
+        [...earlier, made]
       );
-    }
 
-    return Effect.sync(() => {
-      const build: Build = { id: `prebuilt-${builds.size}`, phase: "building" };
-
-      pendingBuilds.set(build.id, request);
-      builds.set(build.id, build);
-
-      return build;
+      return made;
     });
-  };
 
   const host: Host = {
     id: "stub",
@@ -658,7 +731,6 @@ export const stubServer = (options: StubServerOptions = {}) => {
                 state: "unknown",
                 phase: "observing",
               }),
-              found.profile,
               labels
             )
           )
@@ -698,17 +770,24 @@ export const stubServer = (options: StubServerOptions = {}) => {
           writeCheckpoint({ ...found, phase: "deleting" });
         })
       ),
-    prebuildCheckpoint: (request) =>
+    buildTemplate: (request) =>
+      recording("buildTemplate", "template.build", recordBuild(request)),
+    listTemplates: () =>
       recording(
-        "prebuildCheckpoint",
-        "checkpoint.prebuild",
-        Effect.andThen(
-          Effect.sync(() => prebuilds.push(request)),
-          recordPrebuild(request)
+        "listTemplates",
+        "template.list",
+        Effect.sync(() => [...templates.values()])
+      ),
+    getTemplate: ({ id }) =>
+      recording("getTemplate", "template.get", readTemplate(id)),
+    deleteTemplate: ({ id }) =>
+      recording(
+        "deleteTemplate",
+        "template.delete",
+        Effect.suspend(() =>
+          templates.delete(id) ? Effect.void : Effect.fail(noTemplate(id))
         )
       ),
-    getPrebuild: ({ id }) =>
-      recording("getPrebuild", "prebuild.get", readBuild(id)),
     listHosts: () =>
       recording(
         "listHosts",
@@ -739,7 +818,6 @@ export const stubServer = (options: StubServerOptions = {}) => {
 
   return {
     creates,
-    prebuilds,
     execs,
     calls,
     versions,

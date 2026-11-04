@@ -130,6 +130,31 @@ const unready = (
   fake.machines.set(name, { state: "unknown", root: fake.root(name) ?? "" });
 };
 
+const countsRuns = (dir: string) => ({
+  script: `#!/bin/sh\n${addsLoginUser}\necho ran >>"${path.join(dir, "setup-runs")}"\n`,
+  timeoutSeconds: 30,
+});
+
+const runs = (dir: string) =>
+  Effect.map(
+    read(path.join(dir, "setup-runs")),
+    (text) => text.trim().split("\n").length
+  );
+
+const built = (options?: Parameters<typeof served>[0]) =>
+  Effect.gen(function* () {
+    const plane = yield* served(options);
+
+    yield* plane.client.buildTemplate({
+      template: "web",
+      ...request("unused", { cpu: 2, ramMib: 2048, diskGib: 20 }),
+      setup: countsRuns(plane.dir),
+    });
+    plane.fake.calls.length = 0;
+
+    return plane;
+  });
+
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
     "create runs setup once, then preparation, and answers once the machine runs as asked",
@@ -1800,7 +1825,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(error).toMatchObject({ script: "setup" });
         expect(error.message).toContain("sudo: unknown user admin");
         expect(error.message).toContain(
-          "couldn't install the authorized keys for admin: the machine's image, from its setup or its prebuild, must have that user, and sudo"
+          "couldn't install the authorized keys for admin: the machine's image, from its setup or its template, must have that user, and sudo"
         );
         expect(fake.machines.size).toBe(0);
       })
@@ -3351,5 +3376,151 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       expect(sizesOf(forked)).toStrictEqual([2, 4096, 10]);
     })
+  );
+
+  it.effect("a create from a template never sends a setup", () =>
+    Effect.gen(function* () {
+      const { client, dir, fake, row } = yield* built();
+
+      const made = yield* client.create("box", { template: "web" });
+      const { source } = yield* row("box");
+
+      expect(made).toMatchObject({
+        template: "web@1",
+        base: "ubuntu",
+        phase: "settled",
+        state: "running",
+      });
+      expect(sizesOf(made)).toStrictEqual([2, 2048, 20]);
+      expect(source.kind).toBe("checkpoint");
+      expect(fake.calls).toContain("restore box");
+      expect(fake.calls).not.toContain("create box");
+      expect(yield* runs(dir)).toBe(1);
+    })
+  );
+
+  it.effect("a pinned build is cloned", () =>
+    Effect.gen(function* () {
+      const { client, dir, row, store } = yield* built();
+
+      yield* client.buildTemplate({
+        template: "web",
+        setup: countsRuns(dir),
+      });
+
+      const pinned = yield* client.create("old", { template: "web@1" });
+      const current = yield* client.create("new", { template: "web" });
+
+      const copyOf = (build: string) =>
+        Effect.map(
+          store.checkpoints,
+          (rows) => rows.find((each) => each.build === build)?.name
+        );
+
+      expect([pinned.template, current.template]).toStrictEqual([
+        "web@1",
+        "web@2",
+      ]);
+      expect((yield* row("old")).source).toStrictEqual({
+        kind: "checkpoint",
+        name: yield* copyOf("web@1"),
+      });
+      expect((yield* row("new")).source).toStrictEqual({
+        kind: "checkpoint",
+        name: yield* copyOf("web@2"),
+      });
+    })
+  );
+
+  it.effect("a template with no ready build fails NotBuilt", () =>
+    Effect.gen(function* () {
+      const { client, rows } = yield* built();
+
+      yield* Effect.flip(
+        client.buildTemplate({
+          template: "broken",
+          ...request("unused"),
+          setup: exits3,
+        })
+      );
+
+      const [unknown, failed, unkept] = yield* Effect.all([
+        Effect.flip(client.create("a", { template: "nope" })),
+        Effect.flip(client.create("b", { template: "broken" })),
+        Effect.flip(client.create("c", { template: "web@9" })),
+      ]);
+
+      expect(unknown).toMatchObject({ _tag: "NotBuilt", template: "nope" });
+      expect(unknown.message).toContain(
+        "template nope has no ready build: run clankerbox template build nope to make one"
+      );
+      expect(failed).toMatchObject({ _tag: "NotBuilt", template: "broken" });
+      expect(unkept.message).toBe(
+        "template web has no ready build web@9: its ready builds are web@1"
+      );
+      expect(yield* rows).toStrictEqual([]);
+    })
+  );
+
+  it.effect(
+    "a create from a template takes the build's sizes or larger ones, on linux and mac, and refuses smaller ones Unsizable",
+    () =>
+      Effect.gen(function* () {
+        for (const kind of ["linux", "mac"] as const) {
+          const { client } = yield* built({ hosts: [{ id: kind, kind }] });
+
+          const larger = yield* client.create("larger", {
+            template: "web",
+            cpu: 4,
+            ramMib: 4096,
+            diskGib: 40,
+          });
+
+          const smaller = yield* Effect.forEach(
+            [{ cpu: 1 }, { ramMib: 1024 }, { diskGib: 10 }],
+            (sizing) =>
+              Effect.flip(
+                client.create("smaller", { template: "web", ...sizing })
+              )
+          );
+
+          expect(sizesOf(larger)).toStrictEqual([4, 4096, 40]);
+          expect(smaller.map(({ _tag }) => _tag)).toStrictEqual([
+            "Unsizable",
+            "Unsizable",
+            "Unsizable",
+          ]);
+          expect(smaller[0]?.message).toContain(
+            "takes at least build web@1's 2 vCPUs"
+          );
+        }
+      })
+  );
+
+  it.effect(
+    "a build bakes no keys, and a create cloned from it installs the server's",
+    () =>
+      Effect.gen(function* () {
+        const { client, fake, host, store } = yield* built();
+        const [copy] = yield* store.checkpoints;
+
+        yield* client.create("box", { template: "web" });
+
+        expect(
+          yield* exists(
+            path.join(
+              host.dir,
+              "checkpoints",
+              copy?.instance ?? "",
+              "home/admin/.ssh/authorized_keys"
+            )
+          )
+        ).toBe(false);
+        expect(
+          yield* read(
+            path.join(fake.root("box") ?? "", "home/admin/.ssh/authorized_keys")
+          )
+        ).toBe(`\n${operatorKey}\n`);
+      })
   );
 });

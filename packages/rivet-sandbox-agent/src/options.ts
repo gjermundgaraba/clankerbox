@@ -2,14 +2,15 @@ import type { Machine, Sizing } from "@gjermundgaraba/clankerbox-sdk";
 import type { SandboxProvider } from "sandbox-agent";
 
 /**
- * A profile whose setup installs the Sandbox Agent, a checkpoint of a machine that has it, or a
- * machine to fork. A fork or `ram` restore carries its source's sessions: take it from an idle one,
- * and not a paused one, which can't be forked. `cpu`, `ramMib` and `diskGib`, where given, override
- * the profile's sizes, as `clankerbox create`'s flags do, or the copy's, as `restoreMachine` and
- * `forkMachine` take them.
+ * A template whose build runs the Sandbox Agent, as `web` for its current build or `web@3` for
+ * that one, a checkpoint of a machine that has it, or a machine to fork. A fork or `ram` restore
+ * carries its source's sessions: take it from an idle one, and not a paused one, which can't be
+ * forked. `cpu`, `ramMib` and `diskGib`, where given, replace the build's sizes with larger ones,
+ * as `clankerbox create --template` does, or the copy's, as `restoreMachine` and `forkMachine`
+ * take them.
  */
 export type Source =
-  | ({ readonly profile: string } & Sizing)
+  | ({ readonly template: string } & Sizing)
   | ({ readonly checkpoint: string } & Sizing)
   | ({ readonly machine: string } & Sizing);
 
@@ -17,8 +18,6 @@ export interface Options {
   /** The control plane's URL, as in the client config. */
   readonly server: string;
   readonly from: Source;
-  /** Runs a profile's setup even when a host has its prebuild, from `clankerbox prebuild`. */
-  readonly fresh?: boolean | undefined;
   /** `sandbox` by default. */
   readonly namePrefix?: string | undefined;
   /**

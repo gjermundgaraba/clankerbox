@@ -26,11 +26,7 @@ const Listed = Schema.Struct({
   checkpoints: Schema.Array(Schema.Struct({ id: Schema.String })),
 });
 
-const other = checkpoint("other", {
-  machine: "dev",
-  kind: "ram",
-  profile: "dev",
-});
+const other = checkpoint("other", { machine: "dev", kind: "ram" });
 
 layer(NodeServices.layer)((it) => {
   afterEach(async () => {
@@ -192,24 +188,21 @@ layer(NodeServices.layer)((it) => {
           "KIND",
           "MACHINE",
           "BASE",
-          "PROFILE",
           "AGE",
         ]);
-        expect(rows[1]?.slice(0, 6)).toStrictEqual([
+        expect(rows[1]?.slice(0, 5)).toStrictEqual([
           "snap",
           "ready",
           "disk",
           "dev",
           "ubuntu",
-          "-",
         ]);
-        expect(rows[2]?.slice(0, 6)).toStrictEqual([
+        expect(rows[2]?.slice(0, 5)).toStrictEqual([
           "other",
           "ready",
           "ram",
           "dev",
           "ubuntu",
-          "dev",
         ]);
       })
   );

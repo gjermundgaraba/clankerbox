@@ -19,13 +19,21 @@ import type { Decision } from "../chart.ts";
 import { leaves as checkpointLeaves } from "../checkpoint-chart.ts";
 import { leaves } from "../machine-chart.ts";
 import {
+  BuildRow,
   CannotStart,
   CheckpointFacts,
   Facts,
   Operation,
   Store,
+  TemplateFacts,
 } from "../store.ts";
-import type { Advanced, Interface, Lease, Rows } from "../store.ts";
+import type {
+  Advanced,
+  Interface,
+  Lease,
+  Rows,
+  TemplateRow,
+} from "../store.ts";
 
 export const databaseFile = "server.db";
 
@@ -99,6 +107,31 @@ export const migrations: readonly string[] = [
   ALTER TABLE machines ADD COLUMN after TEXT;
   ALTER TABLE checkpoints ADD COLUMN labels TEXT;
   ALTER TABLE checkpoints ADD COLUMN expires_at TEXT`,
+  `ALTER TABLE machines DROP COLUMN profile;
+  ALTER TABLE machines DROP COLUMN prebuild;
+  ALTER TABLE machines ADD COLUMN template TEXT;
+  ALTER TABLE checkpoints DROP COLUMN profile;
+  ALTER TABLE checkpoints ADD COLUMN build TEXT;
+  CREATE TABLE templates (
+    name TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    base TEXT NOT NULL,
+    cpu INTEGER NOT NULL,
+    ram_mib INTEGER NOT NULL,
+    disk_gib INTEGER NOT NULL,
+    setup_timeout_seconds INTEGER
+  ) STRICT;
+  CREATE TABLE builds (
+    template TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    error TEXT,
+    host TEXT NOT NULL,
+    pin TEXT,
+    image TEXT NOT NULL,
+    PRIMARY KEY (template, number)
+  ) STRICT`,
 ];
 
 const isSqliteError = (
@@ -236,6 +269,13 @@ const StoredCheckpoint = snakeColumns({
   state: Schema.Literals(checkpointLeaves),
 });
 
+const StoredTemplate = snakeColumns(TemplateFacts.fields);
+
+const StoredBuild = snakeColumns({
+  template: Schema.String,
+  ...BuildRow.fields,
+});
+
 const decodeBoot = Schema.decodeUnknownSync(
   Schema.Struct({ boot: Schema.String })
 );
@@ -275,6 +315,14 @@ const machineColumns = Schema.encodeSync(StoredMachine);
 const checkpointColumns = Schema.encodeSync(StoredCheckpoint);
 
 const operationColumns = Schema.encodeSync(Operation);
+
+const templateFactsOf = Schema.decodeUnknownSync(StoredTemplate);
+
+const buildOf = Schema.decodeUnknownSync(StoredBuild);
+
+const templateColumns = Schema.encodeSync(StoredTemplate);
+
+const buildColumns = Schema.encodeSync(StoredBuild);
 
 interface Table<R> {
   readonly select: StatementSync;
@@ -411,6 +459,32 @@ export const open = (
       "UPDATE sequence SET last = last + 1 RETURNING last"
     );
 
+    const selectTemplates = yield* prepare(
+      "SELECT * FROM templates ORDER BY created_at, name"
+    );
+
+    const selectTemplate = yield* prepare(
+      "SELECT * FROM templates WHERE name = ?"
+    );
+
+    const insertTemplate = yield* prepare(
+      insertInto("templates", StoredTemplate.from)
+    );
+
+    const deleteTemplate = yield* prepare(
+      "DELETE FROM templates WHERE name = ?"
+    );
+
+    const selectBuilds = yield* prepare(
+      "SELECT * FROM builds WHERE template = ? ORDER BY number"
+    );
+
+    const insertBuild = yield* prepare(insertInto("builds", StoredBuild.from));
+
+    const deleteBuilds = yield* prepare(
+      "DELETE FROM builds WHERE template = ?"
+    );
+
     const selectBoot = yield* prepare("SELECT boot FROM hosts WHERE id = ?");
 
     const upsertBoot = yield* prepare(
@@ -530,6 +604,25 @@ export const open = (
         Effect.uninterruptible
       );
 
+    const templateOf = (raw: unknown): TemplateRow => {
+      const facts = templateFactsOf(raw);
+
+      return {
+        ...facts,
+        builds: selectBuilds.all(facts.name).map((stored) => {
+          const { template: _template, ...build } = buildOf(stored);
+
+          return build;
+        }),
+      };
+    };
+
+    const foundTemplate = (name: string) => {
+      const raw = selectTemplate.get(name);
+
+      return raw === undefined ? Option.none() : Option.some(templateOf(raw));
+    };
+
     const findMachine = Effect.fn("Store.findMachine")((name: string) =>
       sql(`read ${name}`, () => {
         const row = selectMachine.get(name);
@@ -595,6 +688,38 @@ export const open = (
           insertCheckpoint.run(checkpointColumns(record));
         })
       ),
+      templates: sql("list templates", () =>
+        selectTemplates.all().map((raw) => templateOf(raw))
+      ).pipe(Effect.withSpan("Store.templates")),
+      findTemplate: Effect.fn("Store.findTemplate")((name) =>
+        sql(`read template ${name}`, () => foundTemplate(name))
+      ),
+      changeTemplate: (name, decide) =>
+        transaction(db, `change template ${name}`, () => {
+          const decided = decide(foundTemplate(name));
+
+          if (Result.isSuccess(decided)) {
+            deleteTemplate.run(name);
+            deleteBuilds.run(name);
+
+            const row: TemplateRow | "removed" = decided.success;
+
+            if (row !== "removed") {
+              const { builds, ...facts } = row;
+
+              insertTemplate.run(templateColumns(facts));
+
+              for (const build of builds) {
+                insertBuild.run(buildColumns({ template: name, ...build }));
+              }
+            }
+          }
+
+          return decided;
+        }).pipe(
+          Effect.flatMap(Effect.fromResult),
+          Effect.withSpan("Store.changeTemplate")
+        ),
       operationOn: Effect.fn("Store.operationOn")((resource, name) =>
         sql(`read the operation on ${name}`, () => {
           const row = selectOperation.get(resource, name);

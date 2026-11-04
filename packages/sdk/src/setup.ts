@@ -43,7 +43,7 @@ const selfExtracting = (steps: readonly string[]): string =>
 /**
  * Packs a recipe directory, a `setup.sh` and the files it needs, into one self-extracting script.
  * Symlinks are recreated as they are and never walked into. The same files always pack into the
- * same script, as a prebuild is named after it.
+ * same script.
  */
 export const packRecipe = (
   directory: string

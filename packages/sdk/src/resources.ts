@@ -124,23 +124,58 @@ export const TailnetStatus = Schema.Union([
 
 export type TailnetStatus = typeof TailnetStatus.Type;
 
+const buildNumber = /^[1-9][0-9]*$/u;
+
+const isName = Schema.is(Name);
+
+/** One build of a template: its name, `@` and its number, such as `web@4`, the template's fourth. */
+export const BuildId = Schema.String.check(
+  Schema.makeFilter((id: string) => {
+    const at = id.lastIndexOf("@");
+
+    return (
+      (at > 0 &&
+        isName(id.slice(0, at)) &&
+        buildNumber.test(id.slice(at + 1))) ||
+      "a build ID is its template's name, @ and the build's number, such as web@4"
+    );
+  })
+);
+
+/** A template, which names its current build, or one build of it, by ID. */
+export const TemplateRef = Schema.Union([Name, BuildId]);
+
+/** The build ID of build `number` of `template`. */
+export const buildId = (template: string, number: number): string =>
+  `${template}@${number}`;
+
+/** The template a `TemplateRef` names, and the number of the build it pins, if it pins one. */
+export const templateRef = (
+  ref: string
+): { readonly template: string; readonly number: number | undefined } => {
+  const at = ref.lastIndexOf("@");
+
+  return at === -1
+    ? { template: ref, number: undefined }
+    : { template: ref.slice(0, at), number: Number(ref.slice(at + 1)) };
+};
+
 /**
  * `state` is what the runtime reports: `paused` while it holds the machine's saved execution,
  * `missing` when it doesn't have the machine, and `unknown` when it couldn't be read. `desired` is
  * what the last request asked for, `phase` what the control plane is doing about it, and `error`
  * why the last step failed, until the next request. A request takes the row out of rest in the
- * write that records it, so a resting `phase` read after a request has seen it. `prebuild` names the checkpoint a create restored instead of running its setup. `ssh` is only on a running machine whose runtime gives
- * it an endpoint, and `hostKey`, `<type> <base64>`, once preparation has recorded it. `tailnet` is
- * on a running machine of a host that joins its machines to a tailnet, once the host has checked
- * it.
+ * write that records it, so a resting `phase` read after a request has seen it. `template` is the
+ * build a create cloned. `ssh` is only on a running machine whose runtime gives it an endpoint, and
+ * `hostKey`, `<type> <base64>`, once preparation has recorded it. `tailnet` is on a running machine
+ * of a host that joins its machines to a tailnet, once the host has checked it.
  */
 export const Machine = Schema.Struct({
   id: Name,
   kind: Kind,
   createdAt: Schema.DateTimeUtcFromString,
   base: Schema.String,
-  profile: Schema.optionalKey(Schema.String),
-  prebuild: Schema.optionalKey(Name),
+  template: Schema.optionalKey(BuildId),
   ...labelled,
   cpu: Size,
   ramMib: Size,
@@ -190,7 +225,6 @@ export const Checkpoint = Schema.Struct({
   phase: Schema.Literals(["capturing", "ready", "deleting", "failed"]),
   error: Schema.optionalKey(HostError),
   base: Schema.String,
-  profile: Schema.optionalKey(Schema.String),
   ...labelled,
   ...expiring,
   cpu: Size,
@@ -205,14 +239,67 @@ export const checkpointKinds = {
   mac: "disk",
 } as const satisfies Record<Kind, Checkpoint["kind"]>;
 
-/** A prebuild under way, until the control plane's process ends. */
+const BuildPhase = Schema.Literals(["building", "ready", "failed"]);
+
+/**
+ * One build of a template: a machine made from its base on `host`, its setup run, captured under
+ * the runtime `pin`, and deleted. `image` is what the base named on that host. A create clones a
+ * build only `ready`, and a ready build never changes. A failed one, also one a restart of the
+ * control plane ended, keeps its `error` until a later build ends.
+ */
 export const Build = Schema.Struct({
-  id: Name,
-  phase: Schema.Literals(["building", "built", "failed"]),
+  id: BuildId,
+  createdAt: Schema.DateTimeUtcFromString,
+  phase: BuildPhase,
   error: Schema.optionalKey(HostError),
+  host: Schema.String,
+  pin: Schema.optionalKey(Schema.String),
+  image: Schema.String,
 }).annotate({ identifier: "Build" });
 
 export type Build = typeof Build.Type;
+
+/** How many ready builds a template keeps: one more deletes the oldest. */
+export const keptBuilds = 2;
+
+/**
+ * A setup the control plane builds once, from `base` at the sizes given, and that a create clones
+ * with no setup run. Each build is sent its own setup, which is never kept. `current` is the newest
+ * ready build, which a create clones unless it pins another, at its sizes or larger ones. `state`
+ * is `building` while a build runs, else `ready` once one is, else `failed`. A rebuild takes the
+ * base, the sizes and the setup timeout of the build before for each it leaves out.
+ */
+export const Template = Schema.Struct({
+  id: Name,
+  createdAt: Schema.DateTimeUtcFromString,
+  base: Schema.String,
+  cpu: Size,
+  ramMib: Size,
+  diskGib: Size,
+  setupTimeoutSeconds: Schema.optionalKey(Size),
+  current: Schema.optionalKey(BuildId),
+  state: BuildPhase,
+  builds: Schema.Array(Build),
+}).annotate({ identifier: "Template" });
+
+export type Template = typeof Template.Type;
+
+/** A template's `current` build and its `state`, as its builds, oldest first, tell them. */
+export const builtFrom = (
+  builds: ReadonlyArray<Pick<Build, "id" | "phase">>
+): Pick<Template, "current" | "state"> => {
+  const current = builds.findLast(({ phase }) => phase === "ready")?.id;
+
+  if (builds.some(({ phase }) => phase === "building")) {
+    return current === undefined
+      ? { state: "building" }
+      : { current, state: "building" };
+  }
+
+  return current === undefined
+    ? { state: "failed" }
+    : { current, state: "ready" };
+};
 
 /**
  * An operator's view of a host: `up` with what it reported, `draining` when placement passes it
@@ -299,27 +386,43 @@ export const Setup = Schema.Struct({
 
 export type Setup = typeof Setup.Type;
 
-const specFields = {
+/** Sizes to give a machine, each optional: one left out stays as it is, or as its source's. */
+export const Sizing = Schema.Struct({
+  cpu: Schema.optional(Size),
+  ramMib: Schema.optional(Size),
+  diskGib: Schema.optional(Size),
+});
+
+export type Sizing = typeof Sizing.Type;
+
+const fromTemplate = { template: TemplateRef, ...Sizing.fields };
+
+const fromBase = {
   base: Schema.String,
   cpu: Size,
   ramMib: Size,
   diskGib: Size,
   setup: Schema.optionalKey(Setup),
-  profile: Schema.optionalKey(Schema.String),
 };
 
-/** A profile file fills these in; the server sees only the `profile` label. */
-export const MachineSpec = Schema.Struct(specFields);
+/** A template's build, at its sizes or the larger ones given, with no setup run. */
+export const TemplateSpec = Schema.Struct(fromTemplate);
+
+/** A base, at the sizes given, its setup run if it has one. */
+export const BaseSpec = Schema.Struct(fromBase);
+
+/**
+ * What a machine is made from. A spec that names a template is read as one, whatever else it
+ * holds.
+ */
+export const MachineSpec = Schema.Union([TemplateSpec, BaseSpec]);
 
 export type MachineSpec = typeof MachineSpec.Type;
 
-/** `fresh` runs the setup even when a host holds a prebuild of the spec. */
-export const CreateRequest = Schema.Struct({
-  id: Name,
-  ...specFields,
-  fresh: Schema.optionalKey(Schema.Boolean),
-  ...labelled,
-});
+export const CreateRequest = Schema.Union([
+  Schema.Struct({ id: Name, ...fromTemplate, ...labelled }),
+  Schema.Struct({ id: Name, ...fromBase, ...labelled }),
+]);
 
 export type CreateRequest = typeof CreateRequest.Type;
 
@@ -404,15 +507,6 @@ export const Executed = Schema.Struct({
 
 export type Executed = typeof Executed.Type;
 
-/** Sizes to give a machine, each optional: one left out stays as it is, or as its source's. */
-export const Sizing = Schema.Struct({
-  cpu: Schema.optional(Size),
-  ramMib: Schema.optional(Size),
-  diskGib: Schema.optional(Size),
-});
-
-export type Sizing = typeof Sizing.Type;
-
 /** The sizes to give machine `id`, at least one. */
 export const ResizeRequest = Schema.Struct({
   id: Name,
@@ -453,7 +547,15 @@ export const offered = ({
     ...(kind === "linux" ? ["and any image reference"] : []),
   ].join(", ");
 
-/** A prebuild is a checkpoint of a machine made from the spec, setup and all. */
-export const PrebuildRequest = Schema.Struct({ ...specFields, setup: Setup });
+/**
+ * A build of `template`, with `setup`. A first build gives the base and the sizes; a later one
+ * takes the template's for each it leaves out, its setup timeout included, and keeps what it gives.
+ */
+export const BuildRequest = Schema.Struct({
+  template: Name,
+  setup: Setup,
+  base: Schema.optional(Schema.String),
+  ...Sizing.fields,
+});
 
-export type PrebuildRequest = typeof PrebuildRequest.Type;
+export type BuildRequest = typeof BuildRequest.Type;

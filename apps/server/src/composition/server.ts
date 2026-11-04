@@ -16,6 +16,7 @@ import * as Machines from "../machines.ts";
 import * as Sqlite from "../platform/sqlite.ts";
 import type { ServerSettings } from "../settings.ts";
 import type { CannotStart, Store } from "../store.ts";
+import * as Templates from "../templates.ts";
 import { routes } from "./routes.ts";
 
 export type ServerLayer = Layer.Layer<
@@ -34,6 +35,7 @@ export const serverLayer = (
   | HttpServer.HttpServer
   | Machines.Machines
   | Checkpoints.Checkpoints
+  | Templates.Templates
   | Hosts.Hosts
   | Store,
   CannotStart | Internal,
@@ -51,6 +53,7 @@ export const serverLayer = (
         )
       )
     ),
+    Layer.provideMerge(Templates.layer),
     Layer.provideMerge(Checkpoints.layer(config)),
     Layer.provideMerge(Machines.layer(config)),
     Layer.provideMerge(Hosts.layer(config.hosts)),

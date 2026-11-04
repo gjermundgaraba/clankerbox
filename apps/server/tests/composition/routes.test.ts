@@ -11,7 +11,7 @@ import {
   versionHeader,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { MachineSpec } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Exit, Fiber, Layer, Option, Schema } from "effect";
+import { Effect, Exit, Fiber, Layer, Schema } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { expect } from "vite-plus/test";
 
@@ -398,51 +398,37 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "the SDK's client prebuilds a checkpoint, again on each ask, and the builder is gone after",
+    "the SDK's client builds, lists, reads and deletes a template over the routes",
     () =>
       Effect.gen(function* () {
-        const { url, hosts, store } = yield* running();
+        const { url } = yield* running();
         const client = yield* clientOf(url);
-        const prebuild = { ...spec, setup: { script: "true" } };
-        const first = yield* client.prebuild(prebuild);
 
-        const made = Option.getOrThrow(yield* store.findCheckpoint(first.id));
+        const built = yield* client.buildTemplate({
+          template: "web",
+          ...spec,
+          setup: { script: "true" },
+        });
 
-        const second = yield* client.prebuild(prebuild);
+        const listed = yield* client.templates;
+        const read = yield* client.getTemplate({ id: "web" });
+        const deleted = yield* client.deleteTemplate({ id: "web" });
 
-        const remade = Option.getOrThrow(
-          yield* store.findCheckpoint(second.id)
-        );
-
-        const machines = yield* client.machines;
-
-        yield* eventually(store.machines, (rows) => rows.length === 0);
-
-        expect(first.phase).toBe("built");
-        expect(first.id).toMatch(/^prebuilt-[0-9a-f]{12}$/u);
-        expect(second.id).toBe(first.id);
-        expect(remade.machine).not.toBe(made.machine);
-        expect(machines).toStrictEqual([]);
-        expect(
-          hosts[0]!.fake.calls.filter(
-            (call) =>
-              call.startsWith("capture") || call.startsWith("deleteCheckpoint")
-          )
-        ).toStrictEqual([
-          `capture ${first.id}`,
-          `deleteCheckpoint ${first.id}`,
-          `capture ${first.id}`,
+        expect([built.id, built.phase]).toStrictEqual(["web@1", "ready"]);
+        expect(listed.map(({ id, current }) => [id, current])).toStrictEqual([
+          ["web", "web@1"],
         ]);
+        expect(read).toMatchObject({ base: "ubuntu", state: "ready" });
+        expect(deleted).toBe("deleted");
+        expect(yield* client.templates).toStrictEqual([]);
       })
   );
 
-  it.effect("a read of a prebuild no build knows is NotFound", () =>
+  it.effect("a read of a template that doesn't exist is NotFound", () =>
     Effect.gen(function* () {
       const { url } = yield* running();
 
-      const answer = yield* post(url, "getPrebuild", {
-        id: "prebuilt-0123456789ab",
-      });
+      const answer = yield* post(url, "getTemplate", { id: "nope" });
 
       expect(answer.status).toBe(404);
       expect(answer.body).toContain('"_tag":"NotFound"');

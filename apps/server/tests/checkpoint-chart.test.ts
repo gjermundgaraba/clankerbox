@@ -401,7 +401,7 @@ describe("a delete", () => {
     expect(activityOf(held.state)).toBe("recheck");
   });
 
-  it("asked again while a held delete tries once more drops that delete's error, or a prebuild waiting on it would end there", () => {
+  it("asked again while a held delete tries once more drops that delete's error, or a wait on it would end there", () => {
     const stale = rowsFromACapture().filter(
       ({ state, error: left }) =>
         state.startsWith("deleting.") &&

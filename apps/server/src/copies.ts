@@ -18,7 +18,6 @@ import type { Interface as Store } from "./store.ts";
 
 export interface Spec {
   readonly base: string;
-  readonly profile?: string | undefined;
   readonly cpu: number;
   readonly ramMib: number;
   readonly diskGib: number;
@@ -26,7 +25,6 @@ export interface Spec {
 
 const sizedBy = (from: Spec, sizing: Sizing | undefined): Spec => ({
   base: from.base,
-  profile: from.profile,
   cpu: sizing?.cpu ?? from.cpu,
   ramMib: sizing?.ramMib ?? from.ramMib,
   diskGib: sizing?.diskGib ?? from.diskGib,
@@ -59,6 +57,26 @@ export const copied = (
 
     return spec;
   });
+
+/** The spec of a clone of `build`'s copy, `from`, which takes no size below the build's. */
+export const cloned = (
+  name: string,
+  build: string,
+  from: Spec,
+  sizing: Sizing
+): Effect.Effect<Spec, Unsizable> => {
+  const spec = sizedBy(from, sizing);
+
+  return spec.cpu < from.cpu ||
+    spec.ramMib < from.ramMib ||
+    spec.diskGib < from.diskGib
+    ? Effect.fail(
+        new Unsizable({
+          message: `machine ${name} takes at least build ${build}'s ${from.cpu} vCPUs, ${formatMib(from.ramMib)} of RAM and ${formatGib(from.diskGib)} of disk`,
+        })
+      )
+    : Effect.succeed(spec);
+};
 
 /**
  * Why a copy can't be made: its source went before it began, or it can't be at the sizes it was

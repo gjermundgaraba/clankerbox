@@ -16,10 +16,9 @@ import { HttpServer } from "effect/http";
 import { serverLayer } from "../src/composition/server.ts";
 import { defaultFailedRowsLast } from "../src/settings.ts";
 
-const usage =
-  "usage: serve.ts <run-dir> [linux|mac], with hosts in <run-dir>/hosts";
+const usage = "usage: serve.ts <run-dir>, with hosts in <run-dir>/hosts";
 
-const [runArg, kindArg] = process.argv.slice(2);
+const [runArg] = process.argv.slice(2);
 
 const parsed = () => {
   if (runArg === undefined) {
@@ -50,27 +49,18 @@ const clientFiles = (run: string, url: string) =>
     const home = path.join(run, "client-home");
     const client = path.join(home, ".config", "clankerbox");
 
-    yield* mkdir(path.join(client, "profiles"));
+    yield* mkdir(client);
     yield* write(
       path.join(client, "config.json"),
-      JSON.stringify({ server: url, profiles: "profiles" })
+      JSON.stringify({ server: url })
     );
 
     for (const [name, recipe] of [
       ["web", webRecipe(run)],
       ["slow", slowRecipe(run)],
     ] as const) {
-      yield* write(
-        path.join(client, "profiles", `${name}.json`),
-        JSON.stringify({
-          base: kindArg === "mac" ? "macos" : "ubuntu",
-          cpu: 1,
-          ramMib: 1024,
-          diskGib: 10,
-          setup: { path: `${name}-recipe.sh`, timeoutSeconds: 60 },
-        })
-      );
-      yield* write(path.join(client, "profiles", `${name}-recipe.sh`), recipe);
+      yield* mkdir(path.join(run, "recipes", name));
+      yield* write(path.join(run, "recipes", name, "setup.sh"), recipe);
     }
 
     yield* write(path.join(run, "home"), `${home}\n`);

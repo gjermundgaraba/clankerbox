@@ -4,11 +4,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, layer } from "@effect/vitest";
 import { Capacity, ScriptFailed } from "@gjermundgaraba/clankerbox-sdk";
 import { ticking } from "@gjermundgaraba/clankerbox-sdk/testing/clock";
-import {
-  mkdir,
-  write,
-  scratch,
-} from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import { write, scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { machine } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import type { StubServer } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import { Effect } from "effect";
@@ -380,10 +376,7 @@ describe("commands", () => {
       () =>
         Effect.gen(function* () {
           const dir = yield* scratch;
-          const config = yield* writeConfig(dir, "profiles");
-
-          yield* mkdir(path.join(dir, "profiles"));
-
+          const config = yield* writeConfig(dir);
           const stub = server();
 
           const machines = yield* cli(["machines", "--config", config], {
@@ -394,7 +387,12 @@ describe("commands", () => {
             server: stub,
           });
 
-          const profiles = yield* cli(["profiles", "--config", config]);
+          const templates = yield* cli(
+            ["template", "list", "--config", config],
+            {
+              server: stub,
+            }
+          );
 
           expect(machines).toMatchObject({
             code: 0,
@@ -402,10 +400,10 @@ describe("commands", () => {
             stderr: "clankerbox: no machines to list",
           });
           expect(JSON.parse(json.stdout)).toStrictEqual({ machines: [] });
-          expect(profiles).toMatchObject({
+          expect(templates).toMatchObject({
             code: 0,
             stdout: "",
-            stderr: `clankerbox: no profiles in ${path.join(dir, "profiles")}`,
+            stderr: "clankerbox: no templates to list",
           });
         })
     );

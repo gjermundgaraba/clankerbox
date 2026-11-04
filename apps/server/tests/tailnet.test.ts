@@ -337,13 +337,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
-  it.effect("a prebuild's builder joins no tailnet", () =>
+  it.effect("a template's builder joins no tailnet", () =>
     Effect.gen(function* () {
       const minted: string[] = [];
       const { client } = yield* served(joining(tailscaleApi(minted)));
 
-      yield* client.prebuild({
+      yield* client.buildTemplate({
         ...request("unused"),
+        template: "web",
         setup: { script: "#!/bin/sh\necho set up\n", timeoutSeconds: 30 },
       });
       yield* Effect.sleep(Duration.millis(200));

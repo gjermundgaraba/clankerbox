@@ -1160,7 +1160,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a copy from a prebuild installs the step's keys once, however often it runs",
+    "a copy from a template's build installs the step's keys once, however often it runs",
     () =>
       Effect.gen(function* () {
         const host = yield* runner();
@@ -1184,7 +1184,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* finished(host, {
           _tag: "capture",
           machine: ref("builder"),
-          checkpoint: checkpoint("prebuilt"),
+          checkpoint: checkpoint("built"),
           pin: "fake 1",
         });
 
@@ -1195,7 +1195,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           makes("dev", {
             source: {
               _tag: "checkpoint",
-              checkpoint: checkpoint("prebuilt"),
+              checkpoint: checkpoint("built"),
               pin: "fake 1",
             },
             authorizedKeys,

@@ -2,7 +2,11 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, layer } from "@effect/vitest";
-import { outputLimit, ScriptFailed } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  outputLimit,
+  readSetup,
+  ScriptFailed,
+} from "@gjermundgaraba/clankerbox-sdk";
 import type { Executed } from "@gjermundgaraba/clankerbox-sdk";
 import {
   mkdir,
@@ -10,8 +14,10 @@ import {
   scratch,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import {
+  build,
   checkpoint,
   machine,
+  template,
 } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import type { StubServer } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import { DateTime, Effect, Schema, Sink, Stdio, Stream } from "effect";
@@ -163,7 +169,7 @@ describe("machines", () => {
             "ID",
             "STATE",
             "BASE",
-            "PROFILE",
+            "TEMPLATE",
             "CPU",
             "RAM",
             "DISK",
@@ -311,44 +317,115 @@ describe("machines", () => {
     );
 
     it.effect(
-      "create --profile NAME reads NAME.json from the profiles directory, with its label and setup",
+      "create --setup packs a recipe directory into one script, and a setup with no timeout leaves it to the host",
       () =>
         Effect.gen(function* () {
           const dir = yield* scratch;
-          const profiles = path.join(dir, "profiles");
+          const recipe = path.join(dir, "dev-recipe");
 
-          yield* mkdir(path.join(profiles, "dev-recipe", "files"));
-          yield* write(
-            path.join(profiles, "dev-recipe", "setup.sh"),
-            "#!/bin/sh\ntrue\n"
+          yield* mkdir(path.join(recipe, "files"));
+          yield* write(path.join(recipe, "setup.sh"), "#!/bin/sh\ntrue\n");
+          yield* write(path.join(recipe, "files", "a"), "a\n");
+
+          const config = yield* writeConfig(dir);
+          const stub = server();
+
+          const { code, stdout } = yield* cli(
+            ["create", "box", ...sizes, "--setup", recipe, "--config", config],
+            { server: stub }
           );
-          yield* write(path.join(profiles, "dev-recipe", "files", "a"), "a\n");
-          yield* write(
-            path.join(profiles, "dev.json"),
-            JSON.stringify({
+
+          expect(code).toBe(0);
+          expect(stdout).toBe("box");
+          expect(stub.creates).toStrictEqual([
+            {
+              id: "box",
               base: "ubuntu",
               cpu: 2,
               ramMib: 4096,
               diskGib: 20,
-              setup: { path: "dev-recipe", timeoutSeconds: 900 },
-            })
-          );
+              setup: { script: yield* readSetup(recipe) },
+            },
+          ]);
+        })
+    );
 
-          const config = yield* writeConfig(dir, "profiles");
-          const stub = server();
+    it.effect(
+      "create --template sends the template, or the build named, and the sizes given, with no base or setup",
+      () =>
+        Effect.gen(function* () {
+          const dir = yield* scratch;
+          const config = yield* writeConfig(dir);
+
+          const stub = server({
+            templates: [
+              template("web", {
+                builds: [build("web@1"), build("web@2")],
+              }),
+            ],
+          });
+
+          const runs = [
+            yield* cli(
+              ["create", "box", "--template", "web", "--config", config],
+              {
+                server: stub,
+              }
+            ),
+            yield* cli(
+              [
+                "create",
+                "old",
+                "--template",
+                "web@1",
+                "--cpu",
+                "4",
+                "--ram",
+                "8G",
+                "--config",
+                config,
+              ],
+              { server: stub }
+            ),
+          ];
+
+          expect(runs.map(({ code, stdout }) => [code, stdout])).toStrictEqual([
+            [0, "box"],
+            [0, "old"],
+          ]);
+          expect(stub.creates).toStrictEqual([
+            { id: "box", template: "web" },
+            { id: "old", template: "web@1", cpu: 4, ramMib: 8192 },
+          ]);
+        })
+    );
+
+    it.effect(
+      "a create from a template with no ready build fails NotBuilt, which a retry doesn't help",
+      () =>
+        Effect.gen(function* () {
+          const dir = yield* scratch;
+          const config = yield* writeConfig(dir);
 
           const { code, stdout } = yield* cli(
-            ["create", "box", "--profile", "dev", "--config", config],
-            { server: stub }
+            [
+              "create",
+              "box",
+              "--template",
+              "web",
+              "--json",
+              "--config",
+              config,
+            ],
+            { server: server() }
           );
 
-          const [request] = stub.creates;
-
-          expect(code).toBe(0);
-          expect(stdout).toBe("box");
-          expect(request?.profile).toBe("dev");
-          expect(request?.setup?.timeoutSeconds).toBe(900);
-          expect(request?.setup?.script.startsWith("#!/bin/sh\n")).toBe(true);
+          expect(code).toBe(1);
+          expect(decodeJsonError(stdout).error).toMatchObject({
+            tag: "NotBuilt",
+            template: "web",
+            retryable: false,
+          });
         })
     );
 
@@ -374,156 +451,15 @@ describe("machines", () => {
         })
     );
 
-    it.effect("create --profile takes a path to a profile file", () =>
-      Effect.gen(function* () {
-        const dir = yield* scratch;
-        const file = path.join(dir, "small.json");
-
-        yield* write(
-          file,
-          JSON.stringify({ base: "ubuntu", cpu: 1, ramMib: 1024, diskGib: 10 })
-        );
-
-        const config = yield* writeConfig(dir);
-        const stub = server();
-
-        const { code } = yield* cli(
-          ["create", "box", "--profile", file, "--config", config],
-          { server: stub }
-        );
-
-        expect(code).toBe(0);
-        expect(stub.creates[0]?.profile).toBe("small");
-      })
-    );
-
     it.effect(
-      "create's flags override the profile's fields, its setup and timeout included",
-      () =>
-        Effect.gen(function* () {
-          const dir = yield* scratch;
-          const file = path.join(dir, "dev.json");
-          const script = path.join(dir, "other.sh");
-
-          yield* write(
-            file,
-            JSON.stringify({
-              base: "ubuntu",
-              cpu: 2,
-              ramMib: 4096,
-              diskGib: 20,
-              setup: { path: "missing.sh", timeoutSeconds: 900 },
-            })
-          );
-          yield* write(script, "#!/bin/sh\necho other\n");
-
-          const config = yield* writeConfig(dir);
-          const stub = server({ bases: ["ubuntu", "ubuntu-dev"] });
-
-          const { code } = yield* cli(
-            [
-              "create",
-              "box",
-              "--profile",
-              file,
-              "--base",
-              "ubuntu-dev",
-              "--cpu",
-              "8",
-              "--setup",
-              script,
-              "--setup-timeout",
-              "1m",
-              "--config",
-              config,
-            ],
-            { server: stub }
-          );
-
-          const [request] = stub.creates;
-
-          expect(code).toBe(0);
-          expect(request).toMatchObject({
-            id: "box",
-            base: "ubuntu-dev",
-            cpu: 8,
-            ramMib: 4096,
-            diskGib: 20,
-            profile: "dev",
-            setup: { timeoutSeconds: 60 },
-          });
-          expect(request?.setup?.script).toBe("#!/bin/sh\necho other\n");
-        })
-    );
-
-    it.effect(
-      "--setup and --setup-timeout each override the profile's, and a setup with no timeout leaves it to the host",
+      "create refuses a setup or a base with --template, --setup-timeout with no setup to time, and a spec missing its base or sizes",
       () =>
         Effect.gen(function* () {
           const dir = yield* scratch;
           const config = yield* writeConfig(dir);
           const script = path.join(dir, "setup.sh");
-          const other = path.join(dir, "other.sh");
-          const profile = path.join(dir, "small.json");
 
           yield* write(script, "#!/bin/sh\ntrue\n");
-          yield* write(other, "#!/bin/sh\necho other\n");
-          yield* write(
-            profile,
-            JSON.stringify({
-              base: "ubuntu",
-              cpu: 1,
-              ramMib: 1024,
-              diskGib: 10,
-              setup: { path: "setup.sh", timeoutSeconds: 900 },
-            })
-          );
-
-          const stub = server();
-
-          for (const [name, args] of [
-            ["bare", [...sizes, "--setup", script]],
-            ["timed", ["--profile", profile, "--setup-timeout", "60s"]],
-            ["scripted", ["--profile", profile, "--setup", other]],
-          ] as const) {
-            const { code } = yield* cli(
-              ["create", name, ...args, "--config", config],
-              { server: stub }
-            );
-
-            expect(code).toBe(0);
-          }
-
-          expect(
-            stub.creates.map(({ setup }) => [
-              setup?.script,
-              setup?.timeoutSeconds,
-            ])
-          ).toStrictEqual([
-            ["#!/bin/sh\ntrue\n", undefined],
-            ["#!/bin/sh\ntrue\n", 60],
-            ["#!/bin/sh\necho other\n", 900],
-          ]);
-        })
-    );
-
-    it.effect(
-      "create refuses --setup-timeout with no setup to time, and a spec missing its base or sizes",
-      () =>
-        Effect.gen(function* () {
-          const dir = yield* scratch;
-          const config = yield* writeConfig(dir);
-          const profile = path.join(dir, "small.json");
-
-          yield* write(
-            profile,
-            JSON.stringify({
-              base: "ubuntu",
-              cpu: 1,
-              ramMib: 1024,
-              diskGib: 10,
-            })
-          );
 
           const stub = server();
 
@@ -533,25 +469,47 @@ describe("machines", () => {
             });
 
           const runs = [
-            yield* run(["--profile", profile, "--setup-timeout", "60s"]),
+            yield* run([
+              "--template",
+              "web",
+              "--base",
+              "ubuntu",
+              "--setup",
+              script,
+            ]),
+            yield* run([...sizes, "--setup-timeout", "60s"]),
             yield* run(["--base", "ubuntu"]),
-            yield* run(["--profile", profile, "--cpu", "0"]),
+            yield* run(["--cpu", "2"]),
+            yield* run(["--template", "web", "--cpu", "0"]),
+            yield* run(["--template", "web@x"]),
           ];
 
-          for (const { code, stdout } of runs) {
-            expect(code).toBe(1);
-            expect(decodeJsonError(stdout).error.tag).toBe("Invalid");
-          }
-
           expect(
-            decodeJsonError(runs[0]?.stdout ?? "").error.message
-          ).toContain("--setup-timeout");
-          expect(decodeJsonError(runs[1]?.stdout ?? "").error.message).toBe(
-            "create: --cpu: missing; --ram: missing; --disk: missing"
-          );
-          expect(decodeJsonError(runs[2]?.stdout ?? "").error.message).toBe(
-            "create: --cpu: Expected a value greater than 0"
-          );
+            runs.map(({ code, stdout }) => {
+              const { tag, message } = decodeJsonError(stdout).error;
+
+              return [code, tag, message];
+            })
+          ).toStrictEqual([
+            [
+              1,
+              "Invalid",
+              "create: a template's build has its base and has run its setup, so --template takes no --base, --setup",
+            ],
+            [1, "Invalid", "create: --setup-timeout needs a setup to time"],
+            [
+              1,
+              "Invalid",
+              "create: --cpu: missing; --ram: missing; --disk: missing",
+            ],
+            [
+              1,
+              "Invalid",
+              "create: give --template, or --base with --cpu, --ram and --disk",
+            ],
+            [1, "Invalid", "create: --cpu: Expected a value greater than 0"],
+            [1, "Invalid", expect.stringContaining("create: --template: ")],
+          ]);
           expect(stub.calls).toStrictEqual([]);
         })
     );
@@ -582,8 +540,9 @@ describe("machines", () => {
         );
 
         expect(code).toBe(0);
-        expect(stub.creates[0]?.setup?.script).toBe("#!/bin/sh\necho set up\n");
-        expect(stub.creates[0]?.setup?.timeoutSeconds).toBe(60);
+        expect(stub.creates[0]).toMatchObject({
+          setup: { script: "#!/bin/sh\necho set up\n", timeoutSeconds: 60 },
+        });
       })
     );
 

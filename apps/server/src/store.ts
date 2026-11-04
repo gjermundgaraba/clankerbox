@@ -1,5 +1,6 @@
 import { Step } from "@clankerbox/host-contract";
 import {
+  Build,
   Desired,
   HostError,
   Kind,
@@ -14,7 +15,7 @@ import type {
   Phase,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, Schema, SchemaGetter } from "effect";
-import type { DateTime, Effect, Option, Scope } from "effect";
+import type { DateTime, Effect, Option, Result, Scope } from "effect";
 import { Hex } from "effect/encoding";
 
 import type { Decision } from "./chart.ts";
@@ -91,7 +92,6 @@ const made = {
   createdAt: Schema.DateTimeUtcFromString,
   kind: Kind,
   base: Schema.String,
-  profile: UndefinedFromNull(Schema.String),
   cpu: Schema.Int,
   ramMib: Schema.Int,
   diskGib: Schema.Int,
@@ -111,7 +111,8 @@ export const Facts = Schema.Struct({
   resize: UndefinedFromNull(Schema.fromJsonString(Sizing)),
   ephemeral: Schema.BooleanFromBit,
   source: Schema.fromJsonString(Source),
-  prebuild: UndefinedFromNull(Schema.String),
+  /** The template build a create cloned, from the checkpoint its source names. */
+  template: UndefinedFromNull(Schema.String),
   hostKey: UndefinedFromNull(Schema.String),
   undoneAt: UndefinedFromNull(Schema.DateTimeUtcFromString),
   /** The checkpoint whose capture a pause lets begin before it does. */
@@ -131,9 +132,40 @@ export const CheckpointFacts = Schema.Struct({
   failedAt: UndefinedFromNull(Schema.DateTimeUtcFromString),
   /** When the control plane deletes it, once ready. */
   expiresAt: UndefinedFromNull(Schema.DateTimeUtcFromString),
+  /** The template build this is a copy of, which no client reaches as a checkpoint. */
+  build: UndefinedFromNull(Schema.String),
 });
 
 export type CheckpointFacts = typeof CheckpointFacts.Type;
+
+/** A build of a template, by its number. Its copy is the checkpoint whose `build` names it. */
+export const BuildRow = Schema.Struct({
+  number: Schema.Int,
+  createdAt: Schema.DateTimeUtcFromString,
+  phase: Build.fields.phase,
+  error: UndefinedFromNull(Schema.fromJsonString(HostError)),
+  host: Schema.String,
+  pin: UndefinedFromNull(Schema.String),
+  image: Schema.String,
+});
+
+export type BuildRow = typeof BuildRow.Type;
+
+/** What a template's row holds but for its builds: what its next build is made from. */
+export const TemplateFacts = Schema.Struct({
+  name: Schema.String,
+  createdAt: Schema.DateTimeUtcFromString,
+  base: Schema.String,
+  cpu: Schema.Int,
+  ramMib: Schema.Int,
+  diskGib: Schema.Int,
+  setupTimeoutSeconds: UndefinedFromNull(Schema.Int),
+});
+
+/** A template's row, and its builds, oldest first. */
+export type TemplateRow = typeof TemplateFacts.Type & {
+  readonly builds: readonly BuildRow[];
+};
 
 /** A row of each resource, as `advance` reads and writes it. */
 export interface Rows {
@@ -193,6 +225,19 @@ export interface Interface {
   readonly insertCheckpoint: (
     row: CheckpointRow
   ) => Effect.Effect<void, Conflict | Internal>;
+  readonly templates: Effect.Effect<readonly TemplateRow[], Internal>;
+  readonly findTemplate: (
+    name: string
+  ) => Effect.Effect<Option.Option<TemplateRow>, Internal>;
+  /**
+   * One write of a template's row and its builds, decided inside it, as `advance` decides: `decide`
+   * reads them, or that there is none, and answers what they are to be, or `removed`, or why
+   * nothing is written.
+   */
+  readonly changeTemplate: <A extends TemplateRow | "removed", E>(
+    name: string,
+    decide: (found: Option.Option<TemplateRow>) => Result.Result<A, E>
+  ) => Effect.Effect<A, E | Internal>;
   /** The oldest operation in flight on a resource. Every lease is an operation in flight here. */
   readonly operationOn: (
     resource: Lease["resource"],

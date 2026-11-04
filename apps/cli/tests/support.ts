@@ -2,7 +2,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
-import { mkdir, write } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import { write } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import {
   stubServer,
   transport,
@@ -78,11 +78,11 @@ export const cleanup = async (stubs: StubServer[]) => {
   );
 };
 
-export const writeConfig = (dir: string, profiles?: string) =>
+export const writeConfig = (dir: string) =>
   Effect.gen(function* () {
     const file = path.join(dir, "config.json");
 
-    yield* write(file, JSON.stringify({ server: serverUrl, profiles }));
+    yield* write(file, JSON.stringify({ server: serverUrl }));
 
     return file;
   });
@@ -178,31 +178,3 @@ export const sizes = [
   "--disk",
   "20G",
 ];
-
-export const writeProfiles = (dir: string) =>
-  Effect.gen(function* () {
-    const profiles = path.join(dir, "profiles");
-
-    yield* mkdir(path.join(profiles, "dev-recipe"));
-    yield* write(
-      path.join(profiles, "dev-recipe", "setup.sh"),
-      "#!/bin/sh\ntrue\n"
-    );
-    yield* write(
-      path.join(profiles, "small.json"),
-      JSON.stringify({ base: "ubuntu", cpu: 1, ramMib: 1024, diskGib: 10 })
-    );
-    yield* write(
-      path.join(profiles, "dev.json"),
-      JSON.stringify({
-        base: "ubuntu-dev",
-        cpu: 2,
-        ramMib: 4096,
-        diskGib: 20,
-        setup: { path: "dev-recipe", timeoutSeconds: 900 },
-      })
-    );
-    yield* write(path.join(profiles, "notes.txt"), "not a profile\n");
-
-    return profiles;
-  });

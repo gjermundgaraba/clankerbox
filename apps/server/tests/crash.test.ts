@@ -616,25 +616,4 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(at(back)).toStrictEqual(["running", "running", "settled"]);
       })
   );
-
-  it.effect(
-    "a prebuild's builder left by a killed control plane is deleted",
-    () =>
-      Effect.gen(function* () {
-        const { asking, fake, restart } = yield* killedPlane();
-        const setup = fake.holdNext("exec");
-
-        yield* asking.prebuild({
-          ...request("unused"),
-          setup: { script: "#!/bin/sh\n", timeoutSeconds: 30 },
-        });
-        yield* setup.entered;
-
-        const second = yield* restart;
-
-        yield* eventually(second.store.machines, (rows) => rows.length === 0);
-
-        expect(fake.machines.size).toBe(0);
-      })
-  );
 });

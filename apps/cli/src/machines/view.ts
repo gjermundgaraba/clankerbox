@@ -19,7 +19,7 @@ const machineColumns: ReadonlyArray<
   ["ID", (machine) => machine.id],
   ["STATE", stateLabel],
   ["BASE", (machine) => machine.base],
-  ["PROFILE", (machine) => machine.profile ?? "-"],
+  ["TEMPLATE", (machine) => machine.template ?? "-"],
   ["CPU", (machine) => String(machine.cpu)],
   ["RAM", (machine) => formatMib(machine.ramMib)],
   ["DISK", (machine) => formatGib(machine.diskGib)],

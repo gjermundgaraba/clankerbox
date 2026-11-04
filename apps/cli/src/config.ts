@@ -5,16 +5,20 @@ import {
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Config, Effect, FileSystem, Option, Path, Schema } from "effect";
 
+const gone = (why: string) =>
+  Schema.optionalKey(
+    Schema.Unknown.check(
+      Schema.makeFilter(() => `${why} (README, Upgrading from 0.35)`)
+    )
+  );
+
 const ClientConfig = Schema.Struct({
   server: Schema.String,
-  profiles: Schema.optionalKey(Schema.String),
-  authorizedKeys: Schema.optionalKey(
-    Schema.Unknown.check(
-      Schema.makeFilter(
-        () =>
-          "moved to the server config: delete it here, and put its keys in the file the server config's authorizedKeys names (README, Upgrading from 0.35)"
-      )
-    )
+  profiles: gone(
+    "profiles are gone: delete it here, and build each profile's setup as a template on the server, with clankerbox template build"
+  ),
+  authorizedKeys: gone(
+    "moved to the server config: delete it here, and put its keys in the file the server config's authorizedKeys names"
   ),
 });
 
@@ -25,7 +29,6 @@ const decodeConfig = Schema.decodeUnknownEffect(
 export interface LoadedConfig {
   readonly file: string;
   readonly server: string;
-  readonly profiles: string | undefined;
 }
 
 const defaultPath = Effect.gen(function* () {
@@ -83,33 +86,5 @@ export const loadConfig = (
       )
     );
 
-    return {
-      file,
-      server: config.server,
-      profiles: config.profiles,
-    };
-  });
-
-export const configPath = (
-  config: LoadedConfig,
-  given: string
-): Effect.Effect<string, Invalid, Path.Path> =>
-  Effect.gen(function* () {
-    const path = yield* Path.Path;
-
-    if (!given.startsWith("~/")) {
-      return path.resolve(path.dirname(config.file), given);
-    }
-
-    const home = yield* Config.String("HOME").pipe(
-      Effect.mapError(
-        () =>
-          new Invalid({
-            message: `client config ${config.file}: ${given} starts with ~/, and HOME is unset`,
-            file: config.file,
-          })
-      )
-    );
-
-    return path.join(home, given.slice(2));
+    return { file, server: config.server };
   });

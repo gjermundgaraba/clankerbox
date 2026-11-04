@@ -65,7 +65,7 @@ start_server() {
   rm -f "$run/server.ready"
   (
     cd "$repo" &&
-      nohup vpx apps/server/tests/serve.ts "$run" "$(cat "$run/kind")" \
+      nohup vpx apps/server/tests/serve.ts "$run" \
         >>"$evidence/server.log" 2>&1 </dev/null &
     echo $! >"$run/server.starting"
   )

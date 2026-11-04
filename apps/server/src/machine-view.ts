@@ -89,9 +89,8 @@ export const machineOf = (
     state,
     desired: desiredOf(found),
     phase: phaseShown(found, seen),
-    ...(found.profile === undefined ? {} : { profile: found.profile }),
     ...(found.labels === undefined ? {} : { labels: found.labels }),
-    ...(found.prebuild === undefined ? {} : { prebuild: found.prebuild }),
+    ...(found.template === undefined ? {} : { template: found.template }),
     ...(found.error === undefined ? {} : { error: found.error }),
     ...(running && found.port !== undefined && reach.address !== undefined
       ? { ssh: { user: loginUser, host: reach.address, port: found.port } }

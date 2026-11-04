@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -106,16 +106,10 @@ export const setup = async (
       }),
   });
 
-  const profile = path.join(dir, "agent.json");
-
-  await writeFile(
-    profile,
-    JSON.stringify({ base: "ubuntu", cpu: 2, ramMib: 2048, diskGib: 20 })
-  );
   process.env["FAKE_SSH_DIR"] = dir;
 
   const sandbox = provider(
-    { server: url, from: { profile }, ...options },
+    { server: url, from: { template: "agent" }, ...options },
     Layer.mergeAll(
       Layer.effect(Client.Client, Effect.map(Client.make(url), wrap)).pipe(
         Layer.provide(transport(new Map([[new URL(url).origin, stub]])))

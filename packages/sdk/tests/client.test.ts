@@ -19,10 +19,12 @@ import {
 import type { MachineSpec } from "../src/index.ts";
 import { elapsing, ticking } from "./clock.ts";
 import {
+  build,
   checkpoint,
   machine,
   Silent,
   stubServer,
+  template,
   transport,
 } from "./stub-server.ts";
 import type { Endpoint, StubServer, StubServerOptions } from "./stub-server.ts";
@@ -85,7 +87,11 @@ const failing = () => {
   return stub;
 };
 
-const prebuildSpec = { ...spec, setup: { script: "#!/bin/sh\n" } };
+const webBuild = {
+  template: "web",
+  setup: { script: "#!/bin/sh\n" },
+  ...spec,
+};
 
 const scriptFailed = new ScriptFailed({
   message: "setup exited 1",
@@ -178,36 +184,36 @@ describe("client", () => {
             yield* client.captureCheckpoint({ machine: "dev", name: "snap" });
             yield* client.getCheckpoint({ id: "snap" });
             yield* client.restoreMachine({ checkpoint: "snap", name: "again" });
-            yield* client.prebuild({
-              ...spec,
-              setup: { script: "#!/bin/sh\n" },
-            });
+            yield* client.buildTemplate(webBuild);
+            yield* client.templates;
+            yield* client.getTemplate({ id: "web" });
+            yield* client.create("cloned", { template: "web" });
+            yield* client.deleteTemplate({ id: "web" });
             yield* client.deleteCheckpoint({ id: "snap" });
             yield* client.deleteMachine({ id: "dev" });
           })
         );
 
-        expect(stub.calls).toContain("prebuild.get");
+        expect(stub.calls).toContain("template.get");
         expect(stub.versions).toStrictEqual(stub.calls.map(() => version));
       })
     );
 
-    it.effect("a create asks the server to run the setup with `fresh`", () =>
-      Effect.gen(function* () {
-        const stub = server();
+    it.effect(
+      "a create from a template sends the template and the sizes given, and no base",
+      () =>
+        Effect.gen(function* () {
+          const stub = server({ templates: [template("web")] });
 
-        yield* withClient(stub, (client) =>
-          Effect.andThen(
-            client.create("plain", spec),
-            client.create("fresh", spec, { fresh: true })
-          )
-        );
+          const made = yield* withClient(stub, (client) =>
+            client.create("box", { template: "web", ramMib: 2048 })
+          );
 
-        expect(stub.creates.map(({ id, fresh }) => [id, fresh])).toStrictEqual([
-          ["plain", undefined],
-          ["fresh", true],
-        ]);
-      })
+          expect(stub.creates).toStrictEqual([
+            { id: "box", template: "web", ramMib: 2048 },
+          ]);
+          expect(made).toMatchObject({ template: "web@1", ramMib: 2048 });
+        })
     );
 
     it.effect(
@@ -1561,7 +1567,7 @@ describe("client", () => {
     );
   });
 
-  describe("the wait on a checkpoint and a prebuild", () => {
+  describe("the wait on a checkpoint and a template build", () => {
     it.effect("a capture waits for ready", () =>
       Effect.gen(function* () {
         const stub = server({ machines: [machine("dev")] });
@@ -1628,53 +1634,56 @@ describe("client", () => {
       })
     );
 
-    it.effect("a prebuild waits for its build to end", () =>
+    it.effect("a template build waits for the build to end", () =>
       Effect.gen(function* () {
         const stub = server();
 
-        stub.scriptBuild("prebuilt-0", ["building", "built"]);
+        stub.scriptBuild("web@1", ["building", "ready"]);
 
-        const build = yield* ticking(
+        const built = yield* ticking(
           withClient(
             stub,
-            (client) => client.prebuild(prebuildSpec),
+            (client) => client.buildTemplate(webBuild),
             everyMinute
           )
         );
 
-        expect(build).toStrictEqual({ id: "prebuilt-0", phase: "built" });
-        expect(stub.heldCheckpoints()).toStrictEqual(["prebuilt-0"]);
+        expect(built).toMatchObject({ id: "web@1", phase: "ready" });
+        expect(
+          stub.calls.filter((call) => call === "template.get")
+        ).toHaveLength(2);
       })
     );
 
-    it.effect("a prebuild that fails answers the build's error", () =>
+    it.effect("a template build that fails answers the build's error", () =>
       Effect.gen(function* () {
-        const stub = server();
+        const stub = server({ templates: [template("web")] });
 
-        stub.scriptBuild("prebuilt-0", [
-          { phase: "failed", error: scriptFailed },
-        ]);
+        stub.scriptBuild("web@2", [{ phase: "failed", error: scriptFailed }]);
 
         const error = yield* withClient(stub, (client) =>
-          Effect.flip(client.prebuild(prebuildSpec))
+          Effect.flip(
+            client.buildTemplate({ template: "web", setup: webBuild.setup })
+          )
         );
 
         expect(error._tag).toBe("ScriptFailed");
-        expect(error).toMatchObject({
-          action: "prebuildCheckpoint",
-          id: "prebuilt-0",
-        });
+        expect(error).toMatchObject({ action: "buildTemplate", id: "web@2" });
       })
     );
 
-    it.effect("a build the server forgot is NotFound", () =>
+    it.effect("a template deleted during its build's wait is NotFound", () =>
       Effect.gen(function* () {
-        const stub = server();
+        const stub = server({
+          templates: [
+            template("web", { builds: [build("web@1"), build("web@2")] }),
+          ],
+        });
 
-        stub.scriptBuild("prebuilt-0", ["gone"]);
+        stub.scriptBuild("web@3", ["gone"]);
 
         const error = yield* withClient(stub, (client) =>
-          Effect.flip(client.prebuild(prebuildSpec))
+          Effect.flip(client.buildTemplate({ ...webBuild }))
         );
 
         expect(error._tag).toBe("NotFound");
@@ -1846,7 +1855,7 @@ describe("client", () => {
                   machine: "dev",
                   name: "taken",
                 }),
-                built: client.prebuild(prebuildSpec),
+                built: client.buildTemplate(webBuild),
                 deleted: client.deleteMachine({ id: "dev" }),
                 discarded: client.deleteCheckpoint({ id: "snap" }),
               }),

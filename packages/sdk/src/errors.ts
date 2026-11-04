@@ -23,8 +23,8 @@ const at = (error: Where, where: Where) =>
   );
 
 /**
- * The request is malformed, or a config, profile or setup file couldn't be read or doesn't hold
- * what it should: then `file` names it.
+ * The request is malformed, or a config or setup file couldn't be read or doesn't hold what it
+ * should: then `file` names it.
  */
 export class Invalid extends Schema.TaggedError<
   Invalid,
@@ -127,6 +127,27 @@ export class NotOffered extends Schema.TaggedError<
     return new NotOffered({
       ...at(this, where),
       base: this.base,
+      message: this.message,
+    });
+  }
+}
+
+/**
+ * `template` has no ready build to clone: no build of it has succeeded, or none is kept of the one
+ * pinned, or no host that answers holds it. A build of the template makes one.
+ */
+export class NotBuilt extends Schema.TaggedError<
+  NotBuilt,
+  { readonly brand: unique symbol }
+>()(
+  "NotBuilt",
+  { message: Schema.String, ...located, template: Schema.String },
+  { httpApiStatus: 412 }
+) {
+  located(where: Where): NotBuilt {
+    return new NotBuilt({
+      ...at(this, where),
+      template: this.template,
       message: this.message,
     });
   }
@@ -311,6 +332,7 @@ export const hostErrors = [
   NotFound,
   Conflict,
   NotOffered,
+  NotBuilt,
   NotMade,
   Missing,
   PinMismatch,
@@ -353,6 +375,7 @@ export const retryable = (error: ClankerboxError): boolean =>
       Conflict: () => false,
       Superseded: () => false,
       NotOffered: () => false,
+      NotBuilt: () => false,
       NotMade: () => false,
       Missing: () => false,
       PinMismatch: () => false,

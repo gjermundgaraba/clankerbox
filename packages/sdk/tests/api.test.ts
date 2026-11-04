@@ -89,7 +89,7 @@ describe("api", () => {
     for (const [path, body] of [
       ["getMachine", { id: "dev", extra: 1 }],
       ["getCheckpoint", { id: "dev", extra: 1 }],
-      ["getPrebuild", { id: "dev", extra: 1 }],
+      ["getTemplate", { id: "dev", extra: 1 }],
       ["listHosts", { extra: 1 }],
       ["getCapacity", { extra: 1 }],
     ] as const) {

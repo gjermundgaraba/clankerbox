@@ -1274,8 +1274,7 @@ describe("the chart", () => {
       host: "other",
       kind: "mac",
       pin: "other pin",
-      source: { kind: "base", scripted: false },
-      prebuild: "built",
+      source: { kind: "checkpoint", name: "built" },
     } as const;
 
     expect(

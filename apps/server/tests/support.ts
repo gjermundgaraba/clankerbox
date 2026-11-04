@@ -39,6 +39,7 @@ import type {
   Facts,
   Interface as StoreInterface,
 } from "../src/store.ts";
+import * as Templates from "../src/templates.ts";
 
 export {
   eventually,
@@ -69,10 +70,12 @@ export const addsLoginUser = [
   'echo "admin:x:1000:1000::/home/admin:/bin/sh" >>"$CLANKERBOX_ROOT/etc/passwd"',
 ].join("\n");
 
+type BaseRequest = Extract<CreateRequest, { readonly base: string }>;
+
 export const request = (
   name: string,
-  fields?: Partial<CreateRequest>
-): CreateRequest => ({
+  fields?: Partial<BaseRequest>
+): BaseRequest => ({
   id: name,
   base: "ubuntu",
   cpu: 1,
@@ -118,6 +121,7 @@ export interface Started {
   readonly url: string;
   readonly machines: Machines.Interface;
   readonly checkpoints: Checkpoints.Interface;
+  readonly templates: Templates.Interface;
   readonly store: StoreInterface;
   /** Ends the process as a kill does: memory goes, and a host hears nothing. */
   readonly crash: Effect.Effect<void>;
@@ -159,6 +163,7 @@ const started = (
       ),
       machines: Context.get(context, Machines.Machines),
       checkpoints: Context.get(context, Checkpoints.Checkpoints),
+      templates: Context.get(context, Templates.Templates),
       store: Context.get(context, Store),
       crash: Scope.close(scope, Exit.void),
     };
@@ -254,3 +259,27 @@ export const clientOf = (url: string, options?: Client.Options) =>
   Client.make(url, { pollEvery: Duration.millis(20), ...options }).pipe(
     Effect.provide(NodeHttpClient.layerNodeHttp)
   );
+
+export const firstHost = (served: Pick<Plane, "hosts">): TestHost => {
+  const [host] = served.hosts;
+
+  if (host === undefined) {
+    throw new Error("a plane without a host");
+  }
+
+  return host;
+};
+
+export const withClient = (options?: Parameters<typeof running>[0]) =>
+  Effect.gen(function* () {
+    const served = yield* running(options);
+    const client = yield* clientOf(served.url);
+
+    return { ...served, client, host: firstHost(served) };
+  });
+
+export const machineNames = (served: Pick<Started, "store">) =>
+  Effect.map(served.store.machines, (rows) => rows.map(({ name }) => name));
+
+export const callsTo = (host: TestHost, operation: string) =>
+  host.fake.calls.filter((call) => call.startsWith(`${operation} `));

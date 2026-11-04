@@ -39,6 +39,7 @@ import { takesHold, version, versionHeader } from "./release.ts";
 import { isResting } from "./resources.ts";
 import type {
   Build,
+  BuildRequest,
   CapacityReport,
   Checkpoint,
   Executed,
@@ -47,8 +48,8 @@ import type {
   ListFilter,
   Machine,
   MachineSpec,
-  Setup,
   Sizing,
+  Template,
 } from "./resources.ts";
 
 const ServerUrl = Schema.String.check(
@@ -106,8 +107,6 @@ export interface Options {
 export type Deleted = "deleted" | "absent";
 
 export interface CreateOptions {
-  /** Run the setup even when a host holds a prebuild of the spec. */
-  readonly fresh?: boolean | undefined;
   readonly labels?: Labels | undefined;
   /** Runs once the server has recorded the create, before the wait, with what it recorded. */
   readonly recorded?: ((machine: Machine) => Effect.Effect<void>) | undefined;
@@ -123,7 +122,7 @@ export interface EnsureOptions extends CreateOptions {
   readonly sizing?: Sizing | undefined;
 }
 
-type Reads = "getMachine" | "getCheckpoint" | "getPrebuild";
+type Reads = "getMachine" | "getCheckpoint" | "getTemplate";
 
 type Lists = "listMachines" | "listCheckpoints";
 
@@ -170,6 +169,10 @@ export interface Interface extends Calls {
     ErrorOf<"listCheckpoints">
   >;
   readonly capacity: Effect.Effect<CapacityReport, ErrorOf<"getCapacity">>;
+  readonly templates: Effect.Effect<
+    readonly Template[],
+    ErrorOf<"listTemplates">
+  >;
   /** `createMachine`, then waits for the machine to rest. */
   readonly create: (
     name: string,
@@ -194,10 +197,13 @@ export interface Interface extends Calls {
   readonly execMachine: (
     input: Input<"execMachine">
   ) => Effect.Effect<Executed, ErrorOf<"execMachine">>;
-  /** Asks for the prebuild, then waits for it to end. */
-  readonly prebuild: (
-    spec: MachineSpec & { readonly setup: Setup }
-  ) => Effect.Effect<Build, WaitErrorOf<"prebuildCheckpoint">>;
+  /** `buildTemplate`, then waits for the build to end, reading its template. */
+  readonly buildTemplate: (
+    input: BuildRequest
+  ) => Effect.Effect<Build, WaitErrorOf<"buildTemplate">>;
+  readonly deleteTemplate: (
+    input: Input<"deleteTemplate">
+  ) => Effect.Effect<Deleted, WaitErrorOf<"deleteTemplate">>;
   readonly deleteMachine: (
     input: Input<"deleteMachine">
   ) => Effect.Effect<Deleted, WaitErrorOf<"deleteMachine">>;
@@ -468,6 +474,22 @@ const endedAt =
       : Option.none();
   };
 
+const builtAt =
+  (id: string) =>
+  (template: Template): Verdict<Build> => {
+    const build = template.builds.find((each) => each.id === id);
+
+    return build === undefined
+      ? Option.some(
+          Effect.fail(
+            new Internal({
+              message: `build ${id} is gone from template ${template.id}`,
+            })
+          )
+        )
+      : endedAt<Build>("ready", "build")(build);
+  };
+
 const undoneCreate = ({ phase, state, desired }: Machine) =>
   phase === "failed" && state === "missing" && desired !== "deleted";
 
@@ -656,7 +678,6 @@ export const make = (
         {
           ...spec,
           id: name,
-          ...(placement?.fresh === true ? { fresh: true } : {}),
           ...(placement?.labels === undefined
             ? {}
             : { labels: placement.labels }),
@@ -710,7 +731,7 @@ export const make = (
 
     const madeFrom = (
       name: string,
-      { checkpoint, spec, sizing, labels, fresh, recorded }: EnsureOptions
+      { checkpoint, spec, sizing, labels, recorded }: EnsureOptions
     ): Effect.Effect<Machine, EnsureError> =>
       Effect.gen(function* () {
         const ready =
@@ -728,7 +749,7 @@ export const make = (
               ...sizing,
               ...(labels === undefined ? {} : { labels }),
             })
-          : yield* create(name, spec, { fresh, labels, recorded });
+          : yield* create(name, spec, { labels, recorded });
       });
 
     const ensuring = (
@@ -801,9 +822,10 @@ export const make = (
       listMachines: (filter) => send("listMachines", filter ?? {}),
       listCheckpoints: (filter) => send("listCheckpoints", filter ?? {}),
       capacity: send("getCapacity", {}),
+      templates: send("listTemplates", {}),
       getMachine: (input) => send("getMachine", input, input.id),
       getCheckpoint: (input) => send("getCheckpoint", input, input.id),
-      getPrebuild: (input) => send("getPrebuild", input, input.id),
+      getTemplate: (input) => send("getTemplate", input, input.id),
       create,
       ensure: (name, from) => ensuring(name, from, true),
       execMachine,
@@ -834,18 +856,21 @@ export const make = (
               )
             )
         ).pipe(Effect.mapError(making(input.name))),
-      prebuild: (spec) =>
-        Effect.flatMap(send("prebuildCheckpoint", spec), (recorded) =>
-          unlessNoWait(
-            recorded,
-            polled(
-              call("getPrebuild", { id: recorded.id }, recorded.id),
-              endedAt<Build>("built", "prebuild"),
-              "prebuildCheckpoint",
-              recorded.id
+      buildTemplate: (input) =>
+        Effect.flatMap(
+          send("buildTemplate", input, input.template),
+          (recorded) =>
+            unlessNoWait(
+              recorded,
+              polled(
+                call("getTemplate", { id: input.template }, input.template),
+                builtAt(recorded.id),
+                "buildTemplate",
+                recorded.id
+              )
             )
-          )
         ),
+      deleteTemplate: ({ id }) => deleting(send("deleteTemplate", { id }, id)),
       deleteMachine,
       deleteCheckpoint: ({ id }) =>
         deleting(

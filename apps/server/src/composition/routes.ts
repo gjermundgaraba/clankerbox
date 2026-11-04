@@ -6,12 +6,14 @@ import { Effect, Layer } from "effect";
 import { Checkpoints } from "../checkpoints.ts";
 import { Hosts, listed } from "../hosts.ts";
 import { Machines } from "../machines.ts";
+import { Templates } from "../templates.ts";
 
 const app = Action.implement(
   Http.actions,
   Effect.gen(function* () {
     const machines = yield* Machines;
     const checkpoints = yield* Checkpoints;
+    const templates = yield* Templates;
     const hosts = yield* Hosts;
 
     return {
@@ -29,8 +31,10 @@ const app = Action.implement(
       getCheckpoint: ({ id }) => checkpoints.get(id),
       captureCheckpoint: checkpoints.capture,
       deleteCheckpoint: ({ id }) => checkpoints.delete(id),
-      prebuildCheckpoint: checkpoints.prebuild,
-      getPrebuild: ({ id }) => checkpoints.build(id),
+      buildTemplate: templates.build,
+      listTemplates: () => templates.list,
+      getTemplate: ({ id }) => templates.get(id),
+      deleteTemplate: ({ id }) => templates.delete(id),
       listHosts: () =>
         Effect.map(hosts.reachAll, (reached) => reached.map(listed)),
       getCapacity: () => machines.capacity,

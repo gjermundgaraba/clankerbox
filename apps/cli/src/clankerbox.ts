@@ -23,9 +23,14 @@ import {
   start,
   stop,
 } from "./machines/commands.ts";
-import { getPrebuild, prebuild } from "./prebuilds.ts";
-import { profiles } from "./profiles.ts";
 import { ssh, sshKnownHosts, sshProxy } from "./ssh.ts";
+import {
+  buildTemplate,
+  deleteTemplate,
+  getTemplate,
+  listTemplates,
+  template,
+} from "./templates.ts";
 
 export const actionCommands = {
   listMachines: machines,
@@ -42,8 +47,10 @@ export const actionCommands = {
   getCheckpoint,
   captureCheckpoint: capture,
   deleteCheckpoint,
-  prebuildCheckpoint: prebuild,
-  getPrebuild,
+  buildTemplate,
+  listTemplates,
+  getTemplate,
+  deleteTemplate,
   listHosts: hosts,
   getCapacity: capacity,
   execMachine: exec,
@@ -56,9 +63,8 @@ export const clankerbox = Command.make("clankerbox").pipe(
     capacity,
     machines,
     getMachine,
-    profiles,
+    template,
     create,
-    prebuild,
     start,
     stop,
     pause,

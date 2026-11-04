@@ -8,35 +8,30 @@ import {
   Capacity,
   Conflict,
   Internal,
-  Name,
   NotMade,
   PinMismatch,
 } from "@gjermundgaraba/clankerbox-sdk";
-import type {
-  Client,
-  Kind,
-  PrebuildRequest,
-} from "@gjermundgaraba/clankerbox-sdk";
-import { exists, read } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
-import { DateTime, Duration, Effect, Fiber, Option, Schema } from "effect";
+import type { Client, Kind } from "@gjermundgaraba/clankerbox-sdk";
+import { read } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import { DateTime, Duration, Effect, Fiber, Option } from "effect";
 import { expect } from "vite-plus/test";
 
 import * as Sqlite from "../src/platform/sqlite.ts";
-import { builderName } from "../src/prebuilds.ts";
 import {
   at,
   clientOf,
   eventually,
   addsLoginUser,
+  callsTo,
+  firstHost,
+  machineNames,
   patched,
   pause,
   plane,
   request,
-  restartedHost,
-  running,
+  withClient,
 } from "./support.ts";
-import type { Plane, Started } from "./support.ts";
+import type { Plane, Started, running } from "./support.ts";
 
 const keyed = {
   script: [
@@ -49,69 +44,27 @@ const keyed = {
   timeoutSeconds: 30,
 };
 
-const prebuild = (fields?: Partial<PrebuildRequest>): PrebuildRequest => ({
-  base: "ubuntu",
-  cpu: 1,
-  ramMib: 1024,
-  diskGib: 10,
-  setup: keyed,
-  ...fields,
-});
-
 const nearby = Duration.millis(300);
-
-const keysIn = (root: string) =>
-  path.join(root, "home", "admin", ".ssh", "authorized_keys");
-
-const firstHost = (served: Pick<Plane, "hosts">): TestHost => {
-  const [host] = served.hosts;
-
-  if (host === undefined) {
-    throw new Error("a plane without a host");
-  }
-
-  return host;
-};
 
 const onKind = (kind: Kind | undefined) => ({
   hosts: [kind === undefined ? { id: "linux" } : { id: kind, kind }],
 });
 
-const withClient = (options?: Parameters<typeof running>[0]) =>
-  Effect.gen(function* () {
-    const served = yield* running(options);
-    const client = yield* clientOf(served.url);
-
-    return { ...served, client, host: firstHost(served) };
-  });
-
 const withSource = (options?: Parameters<typeof running>[0]) =>
   Effect.gen(function* () {
     const served = yield* withClient(options);
 
-    yield* served.client.create(
-      "dev",
-      request("dev", { profile: "small", setup: keyed })
-    );
+    yield* served.client.create("dev", request("dev", { setup: keyed }));
     served.host.fake.calls.length = 0;
 
     return served;
   });
-
-const machineNames = (served: Pick<Started, "store">) =>
-  Effect.map(served.store.machines, (rows) => rows.map(({ name }) => name));
 
 const checkpointIds = (client: Client.Interface) =>
   Effect.map(client.checkpoints, (listed) => listed.map(({ id }) => id));
 
 const machineId = (host: TestHost, name: string) =>
   read(path.join(host.fake.root(name) ?? "", "var/lib/clankerbox/machine-id"));
-
-const opsOf = (host: TestHost) =>
-  host.fake.calls.map((call) => call.split(" ")[0]);
-
-const callsTo = (host: TestHost, operation: string) =>
-  host.fake.calls.filter((call) => call.startsWith(`${operation} `));
 
 const rested = (served: Pick<Started, "store">, name: string) =>
   Effect.map(
@@ -126,9 +79,6 @@ const rested = (served: Pick<Started, "store">, name: string) =>
 
 const gone = (served: Pick<Started, "store">, name: string) =>
   eventually(served.store.findCheckpoint(name), Option.isNone);
-
-const noMachines = (served: Pick<Started, "store">) =>
-  eventually(machineNames(served), (names) => names.length === 0);
 
 const restarted = (host: TestHost) =>
   Effect.gen(function* () {
@@ -166,7 +116,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(copy).toMatchObject({
           id: "copy",
           base: "ubuntu",
-          profile: "small",
           cpu: 1,
           ramMib: 1024,
           diskGib: 10,
@@ -490,7 +439,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           kind: "ram",
           phase: "ready",
           base: "ubuntu",
-          profile: "small",
           cpu: 1,
           ramMib: 1024,
           diskGib: 10,
@@ -1117,7 +1065,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(restored).toMatchObject({
           id: "dev",
-          profile: "small",
           state: "running",
           phase: "settled",
           ssh: { host: "127.0.0.1" },
@@ -1640,601 +1587,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(clearing._tag).toBe("Conflict");
         expect(again).toMatchObject({ id: "snap", phase: "ready" });
         expect(yield* checkpointIds(client)).toStrictEqual(["snap"]);
-      })
-  );
-
-  it.effect(
-    "a prebuild builds the checkpoint from a machine of its own, setup and all, and deletes the machine after",
-    () =>
-      Effect.gen(function* () {
-        const served = yield* withClient();
-        const { client, host } = served;
-        const built = yield* client.prebuild(prebuild({ profile: "small" }));
-
-        yield* noMachines(served);
-
-        const checkpoint = yield* client.getCheckpoint({ id: built.id });
-
-        expect(built).toMatchObject({ phase: "built" });
-        expect(checkpoint).toMatchObject({
-          kind: "ram",
-          base: "ubuntu",
-          profile: "small",
-        });
-        expect(checkpoint.machine).toMatch(/^prebuilding-[0-9a-f]{16}$/u);
-        expect(opsOf(host).slice(2)).toStrictEqual([
-          "admit",
-          "create",
-          "exec",
-          "start",
-          "exec",
-          "exec",
-          "capture",
-          "delete",
-        ]);
-      })
-  );
-
-  it.effect("a prebuild's builder has a name a machine may have", () =>
-    Effect.sync(() => {
-      expect(Schema.is(Name)(builderName())).toBe(true);
-    })
-  );
-
-  it.effect("a prebuild's builder is never listed, though it is a row", () =>
-    Effect.gen(function* () {
-      const served = yield* withClient();
-      const { client, host } = served;
-      const { release, entered } = host.fake.holdNext("capture");
-      const building = yield* Effect.forkChild(client.prebuild(prebuild()));
-
-      yield* entered;
-
-      const rows = yield* machineNames(served);
-      const listed = yield* client.machines;
-
-      yield* release;
-      yield* Fiber.join(building);
-
-      expect(rows).toHaveLength(1);
-      expect(listed).toStrictEqual([]);
-    })
-  );
-
-  it.effect(
-    "a prebuild asked for while one of its spec builds is Conflict, and reads building",
-    () =>
-      Effect.gen(function* () {
-        const { client, host, checkpoints } = yield* withClient();
-        const { release, entered } = host.fake.holdNext("capture");
-        const build = yield* checkpoints.prebuild(prebuild());
-
-        yield* entered;
-
-        const refused = yield* Effect.flip(checkpoints.prebuild(prebuild()));
-        const reading = yield* checkpoints.build(build.id);
-
-        yield* release;
-        yield* eventually(
-          checkpoints.build(build.id),
-          ({ phase }) => phase === "built"
-        );
-
-        expect(build.phase).toBe("building");
-        expect(refused).toStrictEqual(
-          new Conflict({
-            message: `prebuild ${build.id} is already building`,
-            id: build.id,
-          })
-        );
-        expect(reading.phase).toBe("building");
-        expect(yield* checkpointIds(client)).toStrictEqual([build.id]);
-      })
-  );
-
-  it.effect(
-    "a prebuild of a base no host offers is NotOffered, and of hosts that don't answer Unavailable",
-    () =>
-      Effect.gen(function* () {
-        const { host, checkpoints } = yield* withClient();
-
-        const refused = yield* Effect.flip(
-          checkpoints.prebuild(prebuild({ base: "debian" }))
-        );
-
-        yield* host.dispose;
-
-        const unread = yield* Effect.flip(checkpoints.prebuild(prebuild()));
-
-        expect(refused._tag).toBe("NotOffered");
-        expect(unread._tag).toBe("Unavailable");
-        expect(unread.message).toContain("no host answered");
-      })
-  );
-
-  it.effect("a prebuild skips a draining host", () =>
-    Effect.gen(function* () {
-      const served = yield* running({
-        hosts: [{ id: "one" }, { id: "two" }],
-        draining: ["one"],
-      });
-
-      const client = yield* clientOf(served.url);
-      const { id } = yield* client.prebuild(prebuild());
-
-      expect(
-        Option.getOrThrow(yield* served.store.findCheckpoint(id)).host
-      ).toBe("two");
-    })
-  );
-
-  it.effect(
-    "a create with a prebuild's setup restores it, on the host holding it",
-    () =>
-      Effect.gen(function* () {
-        const served = yield* running({
-          hosts: [{ id: "one" }, { id: "two" }],
-        });
-
-        const client = yield* clientOf(served.url);
-        const [, second] = served.hosts;
-        const { id } = yield* client.prebuild(prebuild());
-
-        const { host } = Option.getOrThrow(
-          yield* served.store.findCheckpoint(id)
-        );
-
-        expect(host).toBe("one");
-
-        second?.fake.calls.splice(0);
-
-        const made = yield* client.create(
-          "dev",
-          request("dev", { setup: keyed })
-        );
-
-        expect(made.prebuild).toBe(id);
-        expect(second?.fake.calls).toStrictEqual([]);
-      })
-  );
-
-  it.effect(
-    "a prebuild bakes no keys, and a create restored from it installs the server's",
-    () =>
-      Effect.gen(function* () {
-        const { client, host, store } = yield* withClient();
-        const { id } = yield* client.prebuild(prebuild());
-        const built = Option.getOrThrow(yield* store.findCheckpoint(id));
-
-        const made = yield* client.create(
-          "dev",
-          request("dev", { setup: keyed })
-        );
-
-        expect(made.prebuild).toBe(id);
-        expect(host.fake.calls).toContain("restore dev");
-        expect(
-          yield* exists(
-            keysIn(path.join(host.dir, "checkpoints", built.instance))
-          )
-        ).toBe(false);
-        expect(yield* read(keysIn(host.fake.root("dev") ?? ""))).toBe(
-          `\n${operatorKey}\n`
-        );
-      })
-  );
-
-  const sized = { cpu: 2, ramMib: 2048, diskGib: 20 };
-
-  const createdFrom = (
-    kind: Kind | undefined,
-    creates: ReadonlyArray<readonly [string, Partial<typeof sized>]>
-  ) =>
-    Effect.gen(function* () {
-      const { client, host } = yield* withClient(onKind(kind));
-      const { id } = yield* client.prebuild(prebuild(sized));
-      const made: Array<readonly [string, boolean, string | undefined]> = [];
-
-      for (const [name, sizing] of creates) {
-        const machine = yield* client.create(
-          name,
-          request(name, { setup: keyed, ...sized, ...sizing })
-        );
-
-        made.push([
-          name,
-          machine.prebuild === id,
-          host.fake.calls.find(
-            (call) => call === `restore ${name}` || call === `create ${name}`
-          ),
-        ]);
-        yield* client.deleteMachine({ id: name });
-      }
-
-      return made;
-    });
-
-  it.effect(
-    "a linux create at its prebuild's sizes or larger restores it, and one smaller in any size runs the setup",
-    () =>
-      Effect.gen(function* () {
-        const made = yield* createdFrom(undefined, [
-          ["same", {}],
-          ["larger", { cpu: 4, ramMib: 4096, diskGib: 40 }],
-          ["fewer-cpus", { cpu: 1 }],
-          ["less-ram", { ramMib: 1024 }],
-          ["less-disk", { diskGib: 10 }],
-        ]);
-
-        expect(made).toStrictEqual([
-          ["same", true, "restore same"],
-          ["larger", true, "restore larger"],
-          ["fewer-cpus", false, "create fewer-cpus"],
-          ["less-ram", false, "create less-ram"],
-          ["less-disk", false, "create less-disk"],
-        ]);
-      })
-  );
-
-  it.effect(
-    "a mac create restores its prebuild at any vCPUs and RAM, and runs the setup for a smaller disk",
-    () =>
-      Effect.gen(function* () {
-        const made = yield* createdFrom("mac", [
-          ["smaller", { cpu: 1, ramMib: 1024 }],
-          ["larger", { cpu: 4, ramMib: 4096, diskGib: 40 }],
-          ["less-disk", { diskGib: 10 }],
-        ]);
-
-        expect(made).toStrictEqual([
-          ["smaller", true, "restore smaller"],
-          ["larger", true, "restore larger"],
-          ["less-disk", false, "create less-disk"],
-        ]);
-      })
-  );
-
-  it.effect(
-    "a prebuild at other sizes replaces the one of its setup, and another setup is a prebuild of its own",
-    () =>
-      Effect.gen(function* () {
-        const served = yield* withClient();
-        const { client, store } = served;
-        const first = yield* client.prebuild(prebuild());
-        const resized = yield* client.prebuild(prebuild(sized));
-
-        const other = yield* client.prebuild(
-          prebuild({ setup: { ...keyed, script: `${keyed.script}\ntrue` } })
-        );
-
-        yield* noMachines(served);
-
-        const row = Option.getOrThrow(yield* store.findCheckpoint(first.id));
-
-        expect(resized.id).toBe(first.id);
-        expect(other.id).not.toBe(first.id);
-        expect([row.cpu, row.ramMib, row.diskGib]).toStrictEqual([2, 2048, 20]);
-        expect(yield* checkpointIds(client)).toHaveLength(2);
-      })
-  );
-
-  it.effect(
-    "a prebuild that exists is built again, and replaced once the setup has run",
-    () =>
-      Effect.gen(function* () {
-        const served = yield* withClient();
-        const { client, host, store } = served;
-        const first = yield* client.prebuild(prebuild());
-
-        yield* noMachines(served);
-
-        const before = Option.getOrThrow(yield* store.findCheckpoint(first.id));
-
-        host.fake.calls.length = 0;
-
-        const again = yield* client.prebuild(prebuild());
-
-        yield* noMachines(served);
-
-        const after = Option.getOrThrow(yield* store.findCheckpoint(first.id));
-
-        expect(again.id).toBe(first.id);
-        expect(after.instance).not.toBe(before.instance);
-        expect(after.machine).not.toBe(before.machine);
-        expect(opsOf(host)).toStrictEqual([
-          "admit",
-          "create",
-          "exec",
-          "start",
-          "exec",
-          "exec",
-          "deleteCheckpoint",
-          "capture",
-          "delete",
-        ]);
-        expect(yield* checkpointIds(client)).toStrictEqual([first.id]);
-      })
-  );
-
-  it.effect(
-    "a rebuild whose setup fails leaves the prebuild it would replace",
-    () =>
-      Effect.gen(function* () {
-        const served = yield* withClient();
-        const { client, host } = served;
-        const first = yield* client.prebuild(prebuild());
-        const kept = yield* client.getCheckpoint({ id: first.id });
-
-        host.fake.failNext("exec", new Internal({ message: "setup failed" }));
-
-        const error = yield* Effect.flip(client.prebuild(prebuild()));
-
-        yield* noMachines(served);
-
-        expect(error.message).toBe("setup failed");
-        expect(yield* client.getCheckpoint({ id: first.id })).toStrictEqual(
-          kept
-        );
-        expect(host.fake.calls).not.toContain(`deleteCheckpoint ${first.id}`);
-      })
-  );
-
-  it.effect(
-    "a rebuild whose capture fails leaves no prebuild, and the next one builds it",
-    () =>
-      Effect.gen(function* () {
-        const served = yield* withClient();
-        const { client, host } = served;
-        const first = yield* client.prebuild(prebuild());
-
-        host.fake.failNext("capture", new Internal({ message: "ENOSPC" }));
-
-        const error = yield* Effect.flip(client.prebuild(prebuild()));
-
-        yield* rested(served, first.id);
-        yield* noMachines(served);
-
-        const left = yield* checkpointIds(client);
-        const again = yield* client.prebuild(prebuild());
-
-        yield* noMachines(served);
-
-        expect(error.message).toBe("ENOSPC");
-        expect(left).toStrictEqual([]);
-        expect(again.id).toBe(first.id);
-        expect(yield* checkpointIds(client)).toStrictEqual([first.id]);
-      })
-  );
-
-  it.effect(
-    "a rebuild replaces its prebuild only once the restores reading it are done",
-    () =>
-      Effect.gen(function* () {
-        const { client, host, store } = yield* withClient();
-        const first = yield* client.prebuild(prebuild());
-        const before = Option.getOrThrow(yield* store.findCheckpoint(first.id));
-        const { release, entered } = host.fake.holdNext("restore");
-
-        const restoring = yield* Effect.forkChild(
-          client.restoreMachine({ checkpoint: first.id, name: "copy" })
-        );
-
-        yield* entered;
-        host.fake.calls.length = 0;
-
-        const rebuilding = yield* Effect.forkChild(client.prebuild(prebuild()));
-
-        yield* eventually(
-          client.getCheckpoint({ id: first.id }),
-          ({ phase }) => phase === "deleting"
-        );
-        yield* pause;
-
-        const beforeRelease = callsTo(host, "deleteCheckpoint");
-
-        yield* release;
-
-        const copy = yield* Fiber.join(restoring);
-
-        yield* Fiber.join(rebuilding);
-
-        const after = Option.getOrThrow(yield* store.findCheckpoint(first.id));
-
-        expect(beforeRelease).toStrictEqual([]);
-        expect(copy.id).toBe("copy");
-        expect(after.instance).not.toBe(before.instance);
-        expect(
-          host.fake.calls.indexOf(`deleteCheckpoint ${first.id}`)
-        ).toBeGreaterThan(-1);
-      })
-  );
-
-  it.effect("a mac prebuild stops its builder before the capture", () =>
-    Effect.gen(function* () {
-      const { client, host } = yield* withClient(onKind("mac"));
-
-      yield* client.prebuild(prebuild());
-
-      const ops = opsOf(host);
-
-      expect(ops.indexOf("stop")).toBeGreaterThan(-1);
-      expect(ops.indexOf("stop")).toBeLessThan(ops.indexOf("capture"));
-    })
-  );
-
-  it.effect(
-    "a prebuild whose setup fails deletes its builder and makes no checkpoint",
-    () =>
-      Effect.gen(function* () {
-        const served = yield* withClient();
-        const { client, host } = served;
-
-        const error = yield* Effect.flip(
-          client.prebuild(
-            prebuild({ setup: { script: "#!/bin/sh\nexit 4\n" } })
-          )
-        );
-
-        yield* noMachines(served);
-
-        expect(error._tag).toBe("ScriptFailed");
-        expect(yield* served.store.checkpoints).toStrictEqual([]);
-        expect(host.fake.calls.at(-1)).toMatch(/^delete prebuilding-/u);
-      })
-  );
-
-  it.effect("a prebuild on a dead host ends", () =>
-    Effect.gen(function* () {
-      const served = yield* withClient({ recheck: Duration.millis(200) });
-      const { client, host } = served;
-      const setup = host.fake.holdNext("exec");
-
-      const prebuilt = yield* Effect.forkChild(
-        Effect.flip(
-          client.prebuild(prebuild({ setup: { script: "#!/bin/sh\n" } }))
-        )
-      );
-
-      yield* setup.entered;
-
-      const loopRead = host.fake.holdNextObserve();
-      const restRead = host.fake.holdNextObserve();
-
-      yield* setup.release;
-      yield* loopRead.entered;
-      yield* restRead.entered;
-
-      const dying = yield* Effect.forkChild(host.dispose);
-
-      yield* eventually(
-        client.hosts,
-        ([only]) => only?.state === "unreachable"
-      );
-      yield* loopRead.release;
-      yield* restRead.release;
-      yield* Fiber.join(dying);
-
-      const error = yield* Fiber.join(prebuilt);
-      const checkpoints = yield* served.store.checkpoints;
-
-      yield* restartedHost(host);
-      yield* noMachines(served);
-
-      expect(error).toMatchObject({ _tag: "Unavailable", readOnly: true });
-      expect(checkpoints).toStrictEqual([]);
-    })
-  );
-
-  it.effect(
-    "a prebuild ends built past a read that fails between its steps",
-    () =>
-      Effect.gen(function* () {
-        const { client, host, store } = yield* withClient({
-          recheck: Duration.millis(200),
-        });
-
-        const setup = host.fake.holdNext("exec");
-
-        const prebuilt = yield* Effect.forkChild(
-          client.prebuild(prebuild({ setup: { script: "#!/bin/sh\n" } }))
-        );
-
-        yield* setup.entered;
-
-        const fault = new Internal({ message: "the runtime didn't answer" });
-
-        host.fake.failNextObserve(fault);
-        host.fake.failNextObserve(fault);
-        yield* setup.release;
-
-        const built = yield* Fiber.join(prebuilt);
-        const rows = yield* store.checkpoints;
-
-        expect(rows.map(({ name, state }) => [name, state])).toStrictEqual([
-          [built.id, "ready"],
-        ]);
-      })
-  );
-
-  it.effect("a prebuild ends when its host dies in the middle of a step", () =>
-    Effect.gen(function* () {
-      const served = yield* withClient({ recheck: Duration.millis(200) });
-      const { client, host } = served;
-      const setup = host.fake.holdNext("exec");
-
-      const prebuilt = yield* Effect.forkChild(
-        Effect.flip(
-          client.prebuild(prebuild({ setup: { script: "#!/bin/sh\n" } }))
-        )
-      );
-
-      yield* setup.entered;
-      yield* host.dispose;
-
-      const error = yield* Fiber.join(prebuilt);
-
-      yield* restartedHost(host);
-      yield* noMachines(served);
-
-      expect(error).toMatchObject({ _tag: "Unavailable", readOnly: true });
-    })
-  );
-
-  it.effect(
-    "a prebuild ends when its host dies in the middle of a capture",
-    () =>
-      Effect.gen(function* () {
-        const served = yield* withClient({ recheck: Duration.millis(200) });
-        const { client, host } = served;
-        const capture = host.fake.holdNext("capture");
-
-        const prebuilt = yield* Effect.forkChild(
-          Effect.flip(
-            client.prebuild(prebuild({ setup: { script: "#!/bin/sh\n" } }))
-          )
-        );
-
-        yield* capture.entered;
-        yield* host.dispose;
-
-        const error = yield* Fiber.join(prebuilt);
-
-        yield* restartedHost(host);
-        yield* noMachines(served);
-
-        expect(error).toMatchObject({ _tag: "Unavailable", readOnly: true });
-      })
-  );
-
-  it.effect(
-    "a builder a control plane's restart left behind is deleted by the next one, and its prebuild reads NotFound",
-    () =>
-      Effect.gen(function* () {
-        const planned = yield* plane();
-        const first = yield* planned.start();
-        const host = firstHost(planned);
-        const builder = builderName();
-
-        yield* first.machines.build(builder, prebuild(), "linux");
-        yield* first.machines.rest(builder);
-
-        const built = yield* first.checkpoints.prebuild(prebuild());
-
-        yield* first.crash;
-        host.fake.calls.length = 0;
-
-        const second = yield* planned.start();
-
-        yield* Effect.addFinalizer(() => second.crash);
-        yield* eventually(
-          machineNames(second),
-          (names) => !names.includes(builder)
-        );
-
-        const after = yield* Effect.flip(second.checkpoints.build(built.id));
-
-        expect(host.fake.calls).toContain(`delete ${builder}`);
-        expect(after._tag).toBe("NotFound");
       })
   );
 });

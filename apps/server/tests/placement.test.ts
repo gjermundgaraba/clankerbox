@@ -5,7 +5,7 @@ import { Capacity, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Option, Result } from "effect";
 
 import type { Reached } from "../src/hosts.ts";
-import { placing, preferring } from "../src/placement.ts";
+import { holding, placing } from "../src/placement.ts";
 import {
   clientOf,
   addsLoginUser,
@@ -127,31 +127,51 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     );
   });
 
-  describe("preferring", () => {
-    const hosts = ["a", "b", "c", "d"].map((id) => info(id, ["ubuntu"]));
+  describe("holding", () => {
+    const copies = new Map([
+      ["d", "copy-d"],
+      ["b", "copy-b"],
+    ]);
+
+    const holders = (reached: readonly Reached[]) =>
+      holding(reached, copies, "web", "web@1");
 
     it.effect(
-      "tries the hosts holding a prebuild first, keeping config order within each group",
+      "offers the hosts holding a copy of the build in config order, each with its copy",
       () =>
         Effect.sync(() => {
-          expect(ids(preferring(hosts, new Set(["d", "b"])))).toStrictEqual([
-            "b",
-            "d",
-            "a",
-            "c",
+          expect(
+            Result.getOrThrow(
+              holders(["a", "b", "c", "d"].map((id) => up(id)))
+            ).map(([{ id }, copy]) => [id, copy])
+          ).toStrictEqual([
+            ["b", "copy-b"],
+            ["d", "copy-d"],
           ]);
         })
     );
 
-    it.effect("keeps config order when no host holds one", () =>
-      Effect.sync(() => {
-        expect(ids(preferring(hosts, new Set()))).toStrictEqual([
-          "a",
-          "b",
-          "c",
-          "d",
-        ]);
-      })
+    it.effect(
+      "with no holder that can take it, a silent one is Unavailable and a draining one NotBuilt",
+      () =>
+        Effect.sync(() => {
+          const noReply = Result.getOrThrow(
+            Result.flip(holders([up("a"), silent("b"), draining("d")]))
+          );
+
+          const passed = Result.getOrThrow(
+            Result.flip(holders([up("a"), draining("b")]))
+          );
+
+          expect(noReply).toMatchObject({
+            _tag: "Unavailable",
+            readOnly: true,
+          });
+          expect(noReply.message).toContain("b failed: connection refused");
+          expect(passed).toMatchObject({ _tag: "NotBuilt", template: "web" });
+          expect(passed.message).toContain("b is draining");
+          expect(passed.message).toContain("clankerbox template build web");
+        })
     );
   });
 
@@ -363,64 +383,57 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
-  const prebuiltOnSecond = Effect.gen(function* () {
+  const builtOnSecond = Effect.gen(function* () {
     const served = yield* running({ hosts: [{ id: "a" }, { id: "b" }] });
     const client = yield* clientOf(served.url);
     const [first] = served.hosts;
-    const spec = { ...request("unused"), setup };
 
     yield* first?.dispose ?? Effect.void;
-    yield* client.prebuild(spec);
+    yield* client.buildTemplate({
+      ...request("unused"),
+      template: "web",
+      setup,
+    });
 
     if (first !== undefined) {
       yield* restartedHost(first);
     }
 
-    return { served, client, spec };
+    return { served, client };
   });
 
   it.effect(
-    "a host holding a create's prebuild is tried first, and restores it",
+    "a create from a template goes to the host holding its build, past one before it in config order",
     () =>
       Effect.gen(function* () {
-        const { served, client, spec } = yield* prebuiltOnSecond;
+        const { served, client } = yield* builtOnSecond;
         const [, second] = served.hosts;
 
-        const machine = yield* client.create("dev", spec);
+        const machine = yield* client.create("dev", { template: "web" });
 
-        expect(machine.prebuild).toBeDefined();
+        expect(machine.template).toBe("web@1");
         expect(yield* hostOf(served, "dev")).toStrictEqual(Option.some("b"));
         expect(second?.fake.calls).toContain("restore dev");
       })
   );
 
   it.effect(
-    "a fresh create ignores a prebuild, and lands in config order",
+    "a create from a template whose holder is full fails Capacity, and never moves to a host without the build",
     () =>
       Effect.gen(function* () {
-        const { served, client, spec } = yield* prebuiltOnSecond;
-
-        const machine = yield* client.create("dev", spec, { fresh: true });
-
-        expect(machine.prebuild).toBeUndefined();
-        expect(yield* hostOf(served, "dev")).toStrictEqual(Option.some("a"));
-      })
-  );
-
-  it.effect(
-    "a create past its prebuild's host runs its setup on the next, from the base",
-    () =>
-      Effect.gen(function* () {
-        const { served, client, spec } = yield* prebuiltOnSecond;
+        const { served, client } = yield* builtOnSecond;
         const [first, second] = served.hosts;
 
         second?.fake.failNext("admit", new Capacity({ message: "no room" }));
 
-        const machine = yield* client.create("dev", spec);
+        const error = yield* Effect.flip(
+          client.create("dev", { template: "web" })
+        );
 
-        expect(machine.prebuild).toBeUndefined();
-        expect(yield* hostOf(served, "dev")).toStrictEqual(Option.some("a"));
-        expect(first?.fake.calls).toContain("create dev");
+        expect(error._tag).toBe("Capacity");
+        expect(
+          first?.fake.calls.filter((call) => call.endsWith(" dev"))
+        ).toStrictEqual([]);
       })
   );
 });

@@ -1,5 +1,6 @@
 import type { HostInfo } from "@clankerbox/host-contract";
 import {
+  NotBuilt,
   NotOffered,
   offered,
   offers,
@@ -9,6 +10,34 @@ import { Array as Arr, Result } from "effect";
 
 import type { Reached } from "./hosts.ts";
 import type { Source } from "./store.ts";
+
+const sifted = <A>(
+  reached: readonly Reached[],
+  take: (info: HostInfo) => Result.Result<A, string>
+) => {
+  const taken: A[] = [];
+  const misses: string[] = [];
+  let noReply = false;
+
+  for (const { member, info, problem } of reached) {
+    if (info === undefined) {
+      noReply = true;
+      misses.push(`${member.id} failed: ${problem ?? "no answer"}`);
+    } else if (member.draining) {
+      misses.push(`${member.id} is draining`);
+    } else {
+      const took = take(info);
+
+      if (Result.isSuccess(took)) {
+        taken.push(took.success);
+      } else {
+        misses.push(`${member.id} ${took.failure}`);
+      }
+    }
+  }
+
+  return { taken, reasons: misses.join("; "), noReply };
+};
 
 /**
  * The hosts that can take a create of `base`, in config order, to try in turn: a later one only
@@ -22,28 +51,15 @@ export const placing = (
   Arr.NonEmptyReadonlyArray<HostInfo>,
   NotOffered | Unavailable
 > => {
-  const hosts: HostInfo[] = [];
-  const misses: string[] = [];
-  let noReply = false;
+  const { taken, reasons, noReply } = sifted(reached, (info) =>
+    offers(info, base)
+      ? Result.succeed(info)
+      : Result.fail(`offers ${offered(info)}`)
+  );
 
-  for (const { member, info, problem } of reached) {
-    if (info === undefined) {
-      noReply = true;
-      misses.push(`${member.id} failed: ${problem ?? "no answer"}`);
-    } else if (member.draining) {
-      misses.push(`${member.id} is draining`);
-    } else if (offers(info, base)) {
-      hosts.push(info);
-    } else {
-      misses.push(`${member.id} offers ${offered(info)}`);
-    }
+  if (Arr.isReadonlyArrayNonEmpty(taken)) {
+    return Result.succeed(taken);
   }
-
-  if (Arr.isReadonlyArrayNonEmpty(hosts)) {
-    return Result.succeed(hosts);
-  }
-
-  const reasons = misses.join("; ");
 
   return Result.fail(
     noReply
@@ -58,36 +74,50 @@ export const placing = (
   );
 };
 
-/** Prefers the hosts `holding` a prebuild, which keeps config order otherwise. */
-export const preferring = (
-  hosts: readonly HostInfo[],
-  holding: ReadonlySet<string>
-): readonly HostInfo[] => [
-  ...hosts.filter(({ id }) => holding.has(id)),
-  ...hosts.filter(({ id }) => !holding.has(id)),
-];
+/**
+ * The hosts that hold one of `copies`, of `build` of `template`, by host, and can take a clone of
+ * it, in config order, each with its copy, to try in turn as `placing`'s are. With none, a holder
+ * that gave no reply is `Unavailable`, and `NotBuilt` otherwise.
+ */
+export const holding = <A>(
+  reached: readonly Reached[],
+  copies: ReadonlyMap<string, A>,
+  template: string,
+  build: string
+): Result.Result<
+  Arr.NonEmptyReadonlyArray<readonly [HostInfo, A]>,
+  NotBuilt | Unavailable
+> => {
+  const { taken, reasons, noReply } = sifted(
+    reached.filter(({ member }) => copies.has(member.id)),
+    (info) => {
+      const copy = copies.get(info.id);
 
+      return copy === undefined
+        ? Result.fail(`holds no copy of ${build}`)
+        : Result.succeed([info, copy] as const);
+    }
+  );
+
+  if (Arr.isReadonlyArrayNonEmpty(taken)) {
+    return Result.succeed(taken);
+  }
+
+  return Result.fail(
+    noReply
+      ? new Unavailable({
+          message: `no host that holds build ${build} answered: ${reasons}`,
+          readOnly: true,
+        })
+      : new NotBuilt({
+          message: `no host that holds build ${build} can take a clone of it${reasons === "" ? "" : `: ${reasons}`}; run clankerbox template build ${template} to build it again`,
+          template,
+        })
+  );
+};
+
+/** Where a create may go, and what that host would make it from. */
 export interface Candidate {
   readonly host: string;
   readonly source: Source;
-  readonly prebuild: string | undefined;
 }
-
-/** Where a create may go, in order, and what each host would make it from. */
-export const candidatesFor = (
-  hosts: readonly HostInfo[],
-  prebuilds: ReadonlyMap<string, string>,
-  scripted: boolean
-): readonly Candidate[] =>
-  preferring(hosts, new Set(prebuilds.keys())).map(({ id }) => {
-    const prebuilt = prebuilds.get(id);
-
-    return {
-      host: id,
-      source:
-        prebuilt === undefined
-          ? { kind: "base", scripted }
-          : { kind: "checkpoint", name: prebuilt },
-      prebuild: prebuilt,
-    };
-  });

@@ -29,7 +29,7 @@ const setUp = (options?: Parameters<typeof running>[0]) =>
     const { dir, url } = served;
     const config = path.join(dir, "config.json");
 
-    yield* write(config, JSON.stringify({ server: url, profiles: "profiles" }));
+    yield* write(config, JSON.stringify({ server: url }));
 
     const run = (args: readonly string[]) =>
       cli([...args, "--config", config], { http });
@@ -61,28 +61,19 @@ const setupRuns = (dir: string) =>
     (text) => text.trim().split("\n").length
   );
 
-const countedProfile = (dir: string) =>
+const countedSetup = (dir: string) =>
   Effect.gen(function* () {
-    const profiles = path.join(dir, "profiles");
+    const script = path.join(dir, "web-setup.sh");
 
-    yield* mkdir(profiles);
     yield* write(
-      path.join(profiles, "web-setup.sh"),
+      script,
       `#!/bin/sh
 set -eu
 ${loginSetup}echo ran >>"${path.join(dir, "setup-runs")}"
 `
     );
-    yield* write(
-      path.join(profiles, "web.json"),
-      JSON.stringify({
-        base: "ubuntu",
-        cpu: 1,
-        ramMib: 1024,
-        diskGib: 10,
-        setup: { path: "web-setup.sh", timeoutSeconds: 60 },
-      })
-    );
+
+    return script;
   });
 
 const decodeJson = <S extends Schema.Top>(schema: S, text: string) =>
@@ -568,102 +559,85 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "profiles lists the profiles directory, and a prebuild of one is restored by the next create of it, also at larger sizes",
+    "a create from a template, also at larger sizes, runs no setup, and the build's copy lists as no checkpoint",
     () =>
       Effect.gen(function* () {
         const { dir, run } = yield* setUp();
-        const profiles = path.join(dir, "profiles");
+        const script = yield* countedSetup(dir);
 
-        yield* mkdir(profiles);
-        yield* write(path.join(profiles, "web-setup.sh"), setupScript);
-        yield* write(
-          path.join(profiles, "web.json"),
-          JSON.stringify({
-            base: "ubuntu",
-            cpu: 1,
-            ramMib: 1024,
-            diskGib: 10,
-            setup: { path: "web-setup.sh", timeoutSeconds: 60 },
-          })
-        );
-
-        const listed = yield* run(["profiles"]);
-        const prebuilt = yield* run(["prebuild", "--profile", "web"]);
-        const again = yield* run(["prebuild", "--profile", "web"]);
-        const checkpoints = yield* run(["checkpoint", "list"]);
-        const restored = yield* run(["create", "fast", "--profile", "web"]);
-
-        const fresh = yield* run([
-          "create",
-          "slow",
-          "--profile",
+        const built = yield* run([
+          "template",
+          "build",
           "web",
-          "--fresh",
+          script,
+          ...sizes,
         ]);
 
-        const other = yield* run([
+        const checkpoints = yield* run(["checkpoint", "list"]);
+        const fast = yield* run(["create", "fast", "--template", "web"]);
+
+        const large = yield* run([
           "create",
           "large",
-          "--profile",
+          "--template",
           "web",
           "--ram",
           "2G",
         ]);
 
-        expect(listed.stdout).toMatch(
-          /^web\s+ubuntu\s+1\s+1G\s+10G\s+web-setup\.sh/mu
+        const got = yield* decodeJson(
+          Schema.Struct({ template: Schema.String, ramMib: Schema.Int }),
+          (yield* run(["get", "large", "--json"])).stdout
         );
-        expect(prebuilt.code).toBe(0);
-        expect(prebuilt.stdout).toMatch(/^prebuilt-[0-9a-f]+$/u);
-        expect(again).toMatchObject({ code: 0, stdout: prebuilt.stdout });
-        expect(
-          checkpoints.stdout
-            .split("\n")
-            .filter((line) => line.startsWith(prebuilt.stdout))
-        ).toHaveLength(1);
-        expect(restored).toMatchObject({ code: 0, stdout: "fast" });
-        expect(restored.stderr).toContain(
-          `restored from the prebuild ${prebuilt.stdout}`
-        );
-        expect(fresh).toMatchObject({ code: 0, stdout: "slow" });
-        expect(fresh.stderr).not.toContain("restored from the prebuild");
-        expect(other).toMatchObject({ code: 0, stdout: "large" });
-        expect(other.stderr).toContain(
-          `restored from the prebuild ${prebuilt.stdout}`
-        );
+
+        expect(built).toMatchObject({ code: 0, stdout: "web@1" });
+        expect(checkpoints).toMatchObject({
+          code: 0,
+          stderr: "clankerbox: no checkpoints to list",
+        });
+        expect([fast.code, fast.stdout]).toStrictEqual([0, "fast"]);
+        expect([large.code, large.stdout]).toStrictEqual([0, "large"]);
+        expect(got).toStrictEqual({ template: "web@1", ramMib: 2048 });
+        expect(yield* setupRuns(dir)).toBe(1);
       })
   );
 
-  it.effect("a make from a prebuild sends no setup", () =>
-    Effect.gen(function* () {
-      const { dir, run } = yield* setUp();
-
-      yield* countedProfile(dir);
-      yield* run(["prebuild", "--profile", "web"]);
-
-      const restored = yield* run(["create", "fast", "--profile", "web"]);
-
-      expect(restored).toMatchObject({ code: 0, stdout: "fast" });
-      expect(yield* setupRuns(dir)).toBe(1);
-    })
-  );
-
   it.effect(
-    "a create that moves off a full prebuild's host runs its setup on the base it lands on",
+    "a create from a template whose only holder is full fails Capacity, and never moves to a host without the build",
     () =>
       Effect.gen(function* () {
         const { dir, hosts, run } = yield* setUp(twoHosts);
+        const script = yield* countedSetup(dir);
 
-        yield* countedProfile(dir);
-        yield* run(["prebuild", "--profile", "web"]);
-        hosts[0]?.fake.failNext("admit", new Capacity({ message: "full" }));
+        yield* run(["template", "build", "web", script, ...sizes]);
 
-        const moved = yield* run(["create", "fast", "--profile", "web"]);
-        const got = yield* run(["get", "fast", "--json"]);
+        const holds = ({ fake }: (typeof hosts)[number]) =>
+          fake.calls.some((call) => call.startsWith("capture "));
 
-        expect(moved).toMatchObject({ code: 0, stdout: "fast" });
-        expect(JSON.parse(got.stdout)).not.toHaveProperty("prebuild");
-        expect(yield* setupRuns(dir)).toBe(2);
+        const holder = hosts.filter(holds);
+        const others = hosts.filter((host) => !holds(host));
+
+        for (const { fake } of holder) {
+          fake.failNext("admit", new Capacity({ message: "full" }));
+        }
+
+        const refused = yield* run([
+          "create",
+          "fast",
+          "--template",
+          "web",
+          "--json",
+        ]);
+
+        expect([holder.length, others.length]).toStrictEqual([1, 1]);
+        expect(refused.code).toBe(1);
+        expect(decodeFailure(refused.stdout).error.tag).toBe("Capacity");
+        expect(
+          others.flatMap(({ fake }) =>
+            fake.calls.filter((call) => call.endsWith(" fast"))
+          )
+        ).toStrictEqual([]);
+        expect(yield* setupRuns(dir)).toBe(1);
       })
   );
 

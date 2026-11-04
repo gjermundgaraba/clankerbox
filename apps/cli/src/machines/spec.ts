@@ -1,11 +1,15 @@
-import { loadProfile, specRequest } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Option, Path } from "effect";
+import {
+  BaseSpec,
+  describeIssues,
+  Invalid,
+  readSetup,
+  TemplateSpec,
+} from "@gjermundgaraba/clankerbox-sdk";
+import { Effect, Option, Path, Predicate, Record, Schema } from "effect";
 import type { Command } from "effect/cli";
 import { Flag } from "effect/cli";
 
 import { parsed } from "../command.ts";
-import type { LoadedConfig } from "../config.ts";
-import { profileFile } from "../profiles.ts";
 import { parseGib, parseMib, parseSeconds } from "../units.ts";
 
 export const sizeArguments = {
@@ -37,27 +41,28 @@ export const flagSizes = (flags: SizeFlags) =>
   });
 
 export const specArguments = {
-  profile: Flag.String("profile").pipe(
+  template: Flag.String("template").pipe(
+    Flag.withMetavar("NAME[@BUILD]"),
     Flag.withDescription(
-      "A profile file's path, or a name in the config's profiles directory. The other flags override its fields."
+      "The template to create from: its current build, or the build named, such as web@3. The machine takes the build's sizes, or the larger ones given."
     ),
     Flag.optional
   ),
   base: Flag.String("base").pipe(
-    Flag.withDescription("The base to create from."),
+    Flag.withDescription("The base to create from, when there is no template."),
     Flag.optional
   ),
   ...sizeArguments,
   setup: Flag.String("setup").pipe(
     Flag.withDescription(
-      "A setup script, or a recipe directory holding setup.sh. After it, the host installs the server config's authorizedKeys for the login user; a base alone authorizes no SSH key."
+      "A setup script, or a recipe directory holding setup.sh, run on a create from a base. After it, the host installs the server config's authorizedKeys for the login user; a base alone authorizes no SSH key."
     ),
     Flag.optional
   ),
   setupTimeout: Flag.String("setup-timeout").pipe(
     Flag.withMetavar("DURATION"),
     Flag.withDescription(
-      "How long setup may run, such as 90s or 15m. Default: the profile's, or else the host's."
+      "How long setup may run, such as 90s or 15m. Default: the host's."
     ),
     Flag.optional
   ),
@@ -66,25 +71,29 @@ export const specArguments = {
 export type SpecFlags = Command.Command.Config.Infer<typeof specArguments>;
 
 const specNames = new Map<PropertyKey, string>([
+  ["template", "--template"],
   ["base", "--base"],
   ["cpu", "--cpu"],
   ["ramMib", "--ram"],
   ["diskGib", "--disk"],
-  ["setupTimeoutSeconds", "--setup-timeout"],
 ]);
 
-export const flagsRequest = (
-  command: string,
-  flags: SpecFlags,
-  config: LoadedConfig
-) =>
+const defined = (fields: Readonly<Record<string, unknown>>) =>
+  Record.filter(fields, Predicate.isNotUndefined);
+
+const decodeTemplateSpec = Schema.decodeUnknownEffect(TemplateSpec);
+
+const decodeBaseSpec = Schema.decodeUnknownEffect(BaseSpec);
+
+const strictly = { onExcessProperty: "error", errors: "all" } as const;
+
+const refused = (command: string) => (error: Schema.SchemaError) =>
+  new Invalid({ message: `${command}: ${describeIssues(error, specNames)}` });
+
+/** The spec the flags ask for: a template's build, or a base with its setup read. */
+export const flagsSpec = (command: string, flags: SpecFlags) =>
   Effect.gen(function* () {
     const path = yield* Path.Path;
-
-    const profile = Option.isSome(flags.profile)
-      ? yield* loadProfile(yield* profileFile(config, flags.profile.value))
-      : undefined;
-
     const sizes = yield* flagSizes(flags);
 
     const timeout = yield* parsed(
@@ -93,17 +102,46 @@ export const flagsRequest = (
       parseSeconds
     );
 
-    return yield* specRequest(
-      command,
-      profile,
-      {
-        base: Option.getOrUndefined(flags.base),
-        ...sizes,
-        setup: Option.getOrUndefined(
-          Option.map(flags.setup, (given) => path.resolve(given))
-        ),
-        setupTimeoutSeconds: Option.getOrUndefined(timeout),
-      },
-      specNames
-    );
+    if (Option.isSome(flags.template)) {
+      const given = [
+        ...(Option.isSome(flags.base) ? ["--base"] : []),
+        ...(Option.isSome(flags.setup) ? ["--setup"] : []),
+        ...(Option.isSome(timeout) ? ["--setup-timeout"] : []),
+      ];
+
+      if (given.length > 0) {
+        return yield* new Invalid({
+          message: `${command}: a template's build has its base and has run its setup, so --template takes no ${given.join(", ")}`,
+        });
+      }
+
+      return yield* decodeTemplateSpec(
+        defined({ template: flags.template.value, ...sizes }),
+        strictly
+      ).pipe(Effect.mapError(refused(command)));
+    }
+
+    if (Option.isNone(flags.base)) {
+      return yield* new Invalid({
+        message: `${command}: give --template, or --base with --cpu, --ram and --disk`,
+      });
+    }
+
+    if (Option.isNone(flags.setup) && Option.isSome(timeout)) {
+      return yield* new Invalid({
+        message: `${command}: --setup-timeout needs a setup to time`,
+      });
+    }
+
+    const setup = Option.isSome(flags.setup)
+      ? defined({
+          script: yield* readSetup(path.resolve(flags.setup.value)),
+          timeoutSeconds: Option.getOrUndefined(timeout),
+        })
+      : undefined;
+
+    return yield* decodeBaseSpec(
+      defined({ base: flags.base.value, ...sizes, setup }),
+      strictly
+    ).pipe(Effect.mapError(refused(command)));
   });

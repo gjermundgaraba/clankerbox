@@ -24,7 +24,6 @@ import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 
 import { loadConfig } from "./config.ts";
-import type { LoadedConfig } from "./config.ts";
 import { syncSshConfig } from "./ssh-config.ts";
 import { parseSeconds } from "./units.ts";
 
@@ -130,7 +129,7 @@ export const mutationFlags = {
   timeout: Flag.String("timeout").pipe(
     Flag.withMetavar("DURATION"),
     Flag.withDescription(
-      "Stop waiting for the machine or checkpoint to rest after this long, such as 90s or 10m; unbounded by default. The request stays saved and still acts."
+      "Stop waiting for the machine, checkpoint or build to rest after this long, such as 90s or 10m; unbounded by default. The request stays saved and still acts."
     ),
     Flag.optional
   ),
@@ -260,8 +259,7 @@ type Services =
 export const withClient = <A, R>(
   flags: ClientFlags,
   body: (
-    client: Client.Interface,
-    config: LoadedConfig
+    client: Client.Interface
   ) => Effect.Effect<A, ClankerboxError | Invalid, R>
 ): Effect.Effect<A, Exited, R | Services> =>
   Effect.gen(function* () {
@@ -286,7 +284,7 @@ export const withClient = <A, R>(
       yield* syncSshConfig;
     }
 
-    return yield* body(client, config);
+    return yield* body(client);
   }).pipe(Effect.catch(fail(flags.json)));
 
 export const print = (
@@ -379,16 +377,15 @@ export const printResource = <A, R>(
   flags: ClientFlags,
   resource: {
     readonly call: (
-      client: Client.Interface,
-      config: LoadedConfig
+      client: Client.Interface
     ) => Effect.Effect<A, ClankerboxError | Invalid, R>;
     readonly encode: (resource: A) => object;
     readonly text: (resource: A, now: DateTime.Utc) => string;
   }
 ) =>
-  withClient(flags, (client, config) =>
+  withClient(flags, (client) =>
     Effect.gen(function* () {
-      const replied = yield* resource.call(client, config);
+      const replied = yield* resource.call(client);
       const now = yield* DateTime.now;
 
       yield* print(

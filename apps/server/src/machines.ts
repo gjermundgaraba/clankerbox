@@ -1,10 +1,13 @@
 import type { HostInfo, MachineState, Report } from "@clankerbox/host-contract";
 import {
+  buildId,
   Internal,
   isResting,
   labelledWith,
+  NotBuilt,
   NotMade,
   readTimeout,
+  templateRef,
   Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
@@ -17,7 +20,6 @@ import type {
   ListFilter,
   Machine,
   NotFound,
-  PrebuildRequest,
   ResizeRequest,
   RestoreRequest,
   Setup,
@@ -30,12 +32,13 @@ import {
   Effect,
   Layer,
   Option,
+  Result,
   Schedule,
 } from "effect";
 import type { Scope } from "effect";
 
 import { applied } from "./chart.ts";
-import { copied, refusedBySource } from "./copies.ts";
+import { cloned, copied, refusedBySource } from "./copies.ts";
 import type { Spec } from "./copies.ts";
 import { driver, untilRest } from "./driver.ts";
 import type { Heard } from "./driver.ts";
@@ -59,12 +62,11 @@ import {
   stateOf,
 } from "./machine-view.ts";
 import { collect, cutShort, poll } from "./operations.ts";
-import { candidatesFor, placing } from "./placement.ts";
+import { holding, placing } from "./placement.ts";
 import type { Candidate } from "./placement.ts";
-import { nameOf } from "./prebuilds.ts";
 import { machineStep, refOf } from "./steps.ts";
 import { newId, notFound, Store } from "./store.ts";
-import type { Operation, Source } from "./store.ts";
+import type { Operation, TemplateRow } from "./store.ts";
 import { checked, due, firstCheck, ticked, unchecked } from "./tailnet.ts";
 import type { TailnetCheck } from "./tailnet.ts";
 
@@ -87,10 +89,10 @@ export interface Interface {
   readonly create: (
     request: CreateRequest
   ) => Effect.Effect<Machine, Declared<"createMachine">>;
-  /** A machine for a prebuild to capture, on `host`, deleted if the control plane restarts. */
+  /** A machine for a template's build to capture, on `host`, deleted if the control plane restarts. */
   readonly build: (
     name: string,
-    request: PrebuildRequest,
+    spec: Spec & { readonly setup: Setup },
     host: string
   ) => Effect.Effect<void, Declared<"createMachine">>;
   readonly start: (
@@ -125,7 +127,7 @@ export interface Interface {
   ) => Effect.Effect<Executed, Declared<"execMachine">>;
   readonly capacity: Effect.Effect<CapacityRead, Internal>;
   /**
-   * Waits until a machine rests or is gone, for a prebuild's own steps. A machine that can't be read
+   * Waits until a machine rests or is gone, for a template build's own steps. A machine that can't be read
    * for a whole recheck ends the wait as `Unavailable`, whatever step it is in.
    */
   readonly rest: (
@@ -140,6 +142,49 @@ export class Machines extends Context.Service<Machines, Interface>()(
 interface CreateHeldInMemory {
   readonly setup: Setup | undefined;
   readonly untried: readonly Candidate[];
+}
+
+type TemplateCreate = Extract<CreateRequest, { readonly template: string }>;
+
+type BaseCreate = Exclude<CreateRequest, TemplateCreate>;
+
+const readyBuild = (
+  found: Option.Option<TemplateRow>,
+  { template, number }: ReturnType<typeof templateRef>
+): Result.Result<string, NotBuilt> => {
+  const ready = Option.match(found, {
+    onNone: () => [],
+    onSome: ({ builds }) => builds.filter(({ phase }) => phase === "ready"),
+  });
+
+  const build =
+    number === undefined
+      ? ready.at(-1)
+      : ready.find((each) => each.number === number);
+
+  if (build !== undefined) {
+    return Result.succeed(buildId(template, build.number));
+  }
+
+  const kept = ready.map((each) => buildId(template, each.number));
+
+  return Result.fail(
+    new NotBuilt({
+      message: `template ${template} has no ready build${number === undefined ? "" : ` ${buildId(template, number)}`}: ${
+        kept.length === 0
+          ? `run clankerbox template build ${template} to make one`
+          : `its ready builds are ${kept.join(", ")}`
+      }`,
+      template,
+    })
+  );
+};
+
+interface Made {
+  readonly spec: Spec;
+  readonly labels: Labels | undefined;
+  readonly template?: string | undefined;
+  readonly ephemeral?: boolean | undefined;
 }
 
 /** Why a machine can't be copied or resized: it may yet be made, or it won't be. */
@@ -191,7 +236,6 @@ export const make = (
             kind: info.kind,
             pin: info.pin,
             source: candidate.source,
-            prebuild: candidate.prebuild,
           };
     };
 
@@ -419,11 +463,9 @@ export const make = (
 
     const born = (
       name: string,
-      spec: Spec,
-      labels: Labels | undefined,
+      { spec, labels, template, ephemeral }: Made,
       placed: Candidate,
       info: HostInfo,
-      ephemeral: boolean,
       held: CreateHeldInMemory
     ) =>
       Effect.gen(function* () {
@@ -433,7 +475,6 @@ export const make = (
           createdAt: yield* DateTime.now,
           kind: info.kind,
           base: spec.base,
-          profile: spec.profile,
           cpu: spec.cpu,
           ramMib: spec.ramMib,
           diskGib: spec.diskGib,
@@ -445,9 +486,9 @@ export const make = (
           prepared: false,
           error: undefined,
           resize: undefined,
-          ephemeral,
+          ephemeral: ephemeral === true,
           source: placed.source,
-          prebuild: placed.prebuild,
+          template,
           hostKey: undefined,
           pin: info.pin,
           undoneAt: undefined,
@@ -476,85 +517,91 @@ export const make = (
 
     const copy = (
       name: string,
-      spec: Spec,
-      labels: Labels | undefined,
+      made: Made,
       info: HostInfo,
-      host: string,
-      source: Source
-    ) =>
-      born(
-        name,
-        spec,
-        labels,
-        { host, source, prebuild: undefined },
-        info,
-        false,
-        { setup: undefined, untried: [] }
-      );
+      placed: Candidate
+    ) => born(name, made, placed, info, { setup: undefined, untried: [] });
 
-    const create = (request: CreateRequest) =>
+    const fromBase = (request: BaseCreate) =>
       Effect.gen(function* () {
-        const { id: name, setup, fresh } = request;
+        const { id: name, setup, labels } = request;
 
-        const placed = yield* Effect.fromResult(
+        const [first, ...rest] = yield* Effect.fromResult(
           placing(yield* hosts.reachAll, request.base)
         );
 
-        const prebuilds = new Map<string, string>();
-
-        if (setup !== undefined && fresh !== true) {
-          for (const host of placed) {
-            const prebuilt = yield* nameOf(request, host);
-            const found = yield* store.findCheckpoint(prebuilt);
-
-            if (
-              Option.isSome(found) &&
-              found.value.state === "ready" &&
-              (yield* Effect.isSuccess(
-                copied(name, found.value, request, host.kind)
-              ))
-            ) {
-              prebuilds.set(host.id, prebuilt);
-            }
-          }
-        }
-
-        const [first, ...untried] = candidatesFor(
-          placed,
-          prebuilds,
-          setup !== undefined
-        );
-
-        const info = hosts.known(first?.host ?? "");
-
-        if (first === undefined || info === undefined) {
-          return yield* new Internal({
-            message: `no host left to place machine ${name} on`,
-          });
-        }
-
-        return yield* born(name, request, request.labels, first, info, false, {
-          setup,
-          untried,
+        const onBase = ({ id }: HostInfo): Candidate => ({
+          host: id,
+          source: { kind: "base", scripted: setup !== undefined },
         });
+
+        return yield* born(
+          name,
+          { spec: request, labels },
+          onBase(first),
+          first,
+          {
+            setup,
+            untried: rest.map(onBase),
+          }
+        );
       });
 
-    const build: Interface["build"] = (name, request, host) =>
+    const fromTemplate = (request: TemplateCreate) =>
+      Effect.gen(function* () {
+        const { id: name, template: ref, labels, ...sizing } = request;
+        const pinned = templateRef(ref);
+        const { template } = pinned;
+
+        const build = yield* Effect.fromResult(
+          readyBuild(yield* store.findTemplate(template), pinned)
+        );
+
+        const copies = new Map(
+          (yield* store.checkpoints).flatMap((record) =>
+            record.build === build && record.state === "ready"
+              ? [[record.host, record] as const]
+              : []
+          )
+        );
+
+        const [first, ...rest] = yield* Effect.fromResult(
+          holding(yield* hosts.reachAll, copies, template, build)
+        );
+
+        const onCopy = ([{ id }, held]: (typeof rest)[number]): Candidate => ({
+          host: id,
+          source: { kind: "checkpoint", name: held.name },
+        });
+
+        const [info, held] = first;
+
+        return yield* born(
+          name,
+          {
+            spec: yield* cloned(name, build, held, sizing),
+            labels,
+            template: build,
+          },
+          onCopy(first),
+          info,
+          { setup: undefined, untried: rest.map(onCopy) }
+        );
+      });
+
+    const create: Interface["create"] = (request) =>
+      "template" in request ? fromTemplate(request) : fromBase(request);
+
+    const build: Interface["build"] = (name, spec, host) =>
       Effect.gen(function* () {
         const info = yield* answering(hosts, host);
 
         yield* born(
           name,
-          request,
-          undefined,
-          {
-            host,
-            source: { kind: "base", scripted: true },
-            prebuild: undefined,
-          },
+          { spec, labels: undefined, ephemeral: true },
+          { host, source: { kind: "base", scripted: true } },
           info,
-          true,
-          { setup: request.setup, untried: [] }
+          { setup: spec.setup, untried: [] }
         );
       });
 
@@ -575,11 +622,9 @@ export const make = (
 
         return yield* copy(
           name,
-          yield* copied(name, from, sizing, from.kind),
-          labels,
+          { spec: yield* copied(name, from, sizing, from.kind), labels },
           info,
-          from.host,
-          { kind: "machine", name: id }
+          { host: from.host, source: { kind: "machine", name: id } }
         );
       });
 
@@ -592,7 +637,11 @@ export const make = (
       Effect.gen(function* () {
         const present = yield* store.findCheckpoint(checkpoint);
 
-        if (Option.isNone(present) || present.value.state !== "ready") {
+        if (
+          Option.isNone(present) ||
+          present.value.state !== "ready" ||
+          present.value.build !== undefined
+        ) {
           return yield* notFound("checkpoint", checkpoint);
         }
 
@@ -602,11 +651,12 @@ export const make = (
 
         return yield* copy(
           name,
-          yield* copied(name, record, sizing, info.kind),
-          labels,
+          { spec: yield* copied(name, record, sizing, info.kind), labels },
           info,
-          record.host,
-          { kind: "checkpoint", name: checkpoint }
+          {
+            host: record.host,
+            source: { kind: "checkpoint", name: checkpoint },
+          }
         );
       });
 
