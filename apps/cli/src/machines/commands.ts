@@ -138,7 +138,7 @@ const missedPrebuild = (client: Client.Interface, spec: MachineSpec) =>
       onSome: ({ id }) =>
         larger.length > 0
           ? `: ${id} of ${profile} has ${larger.join(" and ")}, more than this create`
-          : `: ${id} of ${profile} is of another setup, authorized keys or host release`,
+          : `: ${id} of ${profile} is of another setup or host release`,
     });
 
     yield* Console.error(

@@ -9,7 +9,6 @@ import {
   write,
   scratch,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import {
   checkpoint,
   machine,
@@ -23,7 +22,6 @@ import {
   cli,
   decodeJsonError,
   serverIn,
-  serverUrl,
   sizes,
   writeConfig,
 } from "./support.ts";
@@ -587,60 +585,6 @@ describe("machines", () => {
         expect(stub.creates[0]?.setup?.script).toBe("#!/bin/sh\necho set up\n");
         expect(stub.creates[0]?.setup?.timeoutSeconds).toBe(60);
       })
-    );
-
-    it.effect(
-      "create sends the config's authorizedKeys, relative to the config or under ~/, with a setup alone, which needs them",
-      () =>
-        Effect.gen(function* () {
-          const dir = yield* scratch;
-          const key = `${operatorKey}\n`;
-          const script = path.join(dir, "setup.sh");
-          const relative = path.join(dir, "relative.json");
-          const home = path.join(dir, "home.json");
-          const keyless = path.join(dir, "keyless.json");
-
-          yield* mkdir(path.join(dir, "keys"));
-          yield* write(path.join(dir, "keys", "id.pub"), key);
-          yield* write(script, "#!/bin/sh\n");
-          yield* write(
-            relative,
-            JSON.stringify({ server: serverUrl, authorizedKeys: "keys/id.pub" })
-          );
-          yield* write(
-            home,
-            JSON.stringify({
-              server: serverUrl,
-              authorizedKeys: "~/keys/id.pub",
-            })
-          );
-          yield* write(keyless, JSON.stringify({ server: serverUrl }));
-
-          const stub = server();
-
-          const create = (
-            name: string,
-            config: string,
-            ...args: readonly string[]
-          ) =>
-            cli(["create", name, ...sizes, ...args, "--config", config], {
-              server: stub,
-              env: { HOME: dir },
-            });
-
-          yield* create("a", relative, "--setup", script);
-          yield* create("b", home, "--setup", script);
-          yield* create("c", relative);
-
-          const refused = yield* create("d", keyless, "--setup", script);
-
-          expect(
-            stub.creates.map((sent) => sent.setup?.authorizedKeys)
-          ).toStrictEqual([key, key, undefined]);
-          expect(refused.stderr).toBe(
-            "clankerbox: Invalid: create: a setup needs the client config's authorizedKeys, the public keys the host installs for the login user after it"
-          );
-        })
     );
 
     it.effect("deleting a machine that is already gone counts as done", () =>

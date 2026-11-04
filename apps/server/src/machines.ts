@@ -70,6 +70,7 @@ import type { TailnetCheck } from "./tailnet.ts";
 export interface Settings {
   readonly recheck: Duration.Duration;
   readonly failedRowsLast: Duration.Duration;
+  readonly authorizedKeys: string;
 }
 
 const stepPoll = Duration.millis(100);
@@ -388,7 +389,13 @@ export const make = (
       polling: (found, op) =>
         poll(hosts, op, {
           cut: !wants(op.kind, desiredOf(found)),
-          step: machineStep(store, found, op, creates.get(found.name)?.setup),
+          step: machineStep(
+            store,
+            found,
+            op,
+            creates.get(found.name)?.setup,
+            settings.authorizedKeys
+          ),
         }),
       following,
     });

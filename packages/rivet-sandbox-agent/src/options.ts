@@ -22,12 +22,6 @@ export interface Options {
   /** `sandbox` by default. */
   readonly namePrefix?: string | undefined;
   /**
-   * The path of a public-key file, such as your `id_ed25519.pub`, whose keys are installed for
-   * the login user after a profile's setup, as the client config's `authorizedKeys` does: the key
-   * the tunnel's ssh logs in with. A profile with a setup needs it.
-   */
-  readonly authorizedKeys?: string | undefined;
-  /**
    * Such as `["-i", "/path/to/key"]`. Neither these nor ssh config may fork the forward (`-f`,
    * `-N`, `ForkAfterAuthentication`, `SessionType none`) or give it to a connection master (`-M`,
    * `-S`): the tunnel ends with its ssh, and those would outlive it.

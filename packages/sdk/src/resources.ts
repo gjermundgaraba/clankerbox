@@ -291,14 +291,10 @@ export const PublicKeys = Schema.String.check(
   })
 );
 
-/**
- * Nothing logs the script: it can carry secrets. `authorizedKeys` is appended to the login user's
- * `~/.ssh/authorized_keys` once the script exits 0, through the guest's `sudo`.
- */
+/** Nothing logs the script: it can carry secrets. */
 export const Setup = Schema.Struct({
   script: Schema.String,
   timeoutSeconds: Schema.optionalKey(Size),
-  authorizedKeys: Schema.optionalKey(PublicKeys),
 });
 
 export type Setup = typeof Setup.Type;

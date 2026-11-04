@@ -117,7 +117,6 @@ layer(NodeServices.layer)((it) => {
           JSON.stringify({
             server: serverUrl,
             profiles: "~/profiles",
-            authorizedKeys: "~/.ssh/id_ed25519.pub",
           })
         );
 
@@ -135,9 +134,29 @@ layer(NodeServices.layer)((it) => {
           script,
         ]);
 
-        expect(hosts.code).toBe(0);
+        expect([hosts.code, create.code]).toStrictEqual([0, 0]);
         expect(profiles.stderr).toBe(unset("~/profiles"));
-        expect(create.stderr).toBe(unset("~/.ssh/id_ed25519.pub"));
+      })
+  );
+
+  it.effect(
+    "a config from 0.35 that still names authorizedKeys is refused, saying they moved to the server config",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        const old = path.join(dir, "config.json");
+
+        yield* write(
+          old,
+          JSON.stringify({
+            server: serverUrl,
+            authorizedKeys: "~/.ssh/id_ed25519.pub",
+          })
+        );
+
+        expect(yield* hostsStderr(old)).toBe(
+          `clankerbox: Invalid: client config ${old}: authorizedKeys: moved to the server config: delete it here, and put its keys in the file the server config's authorizedKeys names (README, Upgrading from 0.35)`
+        );
       })
   );
 

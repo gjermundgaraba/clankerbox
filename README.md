@@ -118,6 +118,7 @@ One process runs from one JSON config file:
 {
   "listen": { "address": "100.64.0.1", "port": 8484 },
   "stateDir": "state",
+  "authorizedKeys": "authorized_keys.pub",
   "hosts": [
     { "id": "linux", "url": "http://100.64.0.10:8484" },
     { "id": "mac", "url": "http://100.64.0.20:8484" }
@@ -129,6 +130,7 @@ One process runs from one JSON config file:
 - `hosts` is in placement order: a create goes to the first that offers its base and has room, or to one holding the setup's prebuild first.
 - `draining: true` on a host passes it over for new machines, and leaves what it runs alone.
 - `stateDir`, relative to the config, holds `server.db`. One process holds it at a time.
+- `authorizedKeys`, relative to the config, is a public-key file, such as an `id_ed25519.pub`, or several concatenated: each line that isn't blank is `<type> <base64> [comment]`, so a private key or any other file is refused. The control plane reads the file as it starts and sends the keys with every create that runs a setup or restores a prebuild, and the host installs those it lacks for the login user once the setup exits 0 or the prebuild is restored. A prebuild holds none, so creates from every client share it. A create without a setup gets none, and a fork or restore of a checkpoint only those its source had. The keys are never stored or logged. To change them, edit the file and restart the control plane: machines made after it take the new set, and those made before keep theirs.
 - To add a host, add its line and restart the control plane. Machines keep running through the restart, and clients need nothing.
 
 ```sh
@@ -141,6 +143,10 @@ The control plane exits 130 on SIGINT or SIGTERM and 1 when it fails.
 
 Hosts and the control plane start fresh: 0.30's machines aren't carried over. Before you upgrade, delete each machine and checkpoint with the old release, then stop its host, and remove its `stateDir`. IDs no longer carry a host: `linux_dev` is `dev`, and `ssh dev.cbx` replaces `ssh linux_dev`. Client configs name `server` instead of `hosts`, and profiles lose `host`. `clankerbox host` is now `clankerbox-host`.
 
+### Upgrading from 0.35
+
+State carries over, and nothing on a host changes. The authorized keys moved from each client config to the server config: gather the public keys of every client config's `authorizedKeys` into one file, name it in the server config's `authorizedKeys`, and delete `authorizedKeys` from each client config, which a client now refuses, and from the Sandbox Agent provider's options. Every machine made with a setup, or from a prebuild, then takes every key in that file, and a create sends none. A prebuild's name no longer covers the keys, so 0.35's prebuilds serve no create: run `prebuild` once from any client, and delete the old ones with `checkpoint delete`, since each holds the keys of the client that made it. Machines already made keep the keys they have. Upgrade hosts and the control plane together, as always.
+
 ### Upgrading from 0.34
 
 State carries over: the control plane migrates its database on its first start, adding the columns that labels, expiry and a pause's capture take, and nothing on a host changes. Upgrade hosts and the control plane together, as always.
@@ -152,12 +158,11 @@ The client config is `$XDG_CONFIG_HOME/clankerbox/config.json` (`~/.config` when
 ```json
 {
   "server": "http://100.64.0.1:8484",
-  "profiles": "profiles",
-  "authorizedKeys": "~/.ssh/id_ed25519.pub"
+  "profiles": "profiles"
 }
 ```
 
-Machines of either kind are logged in to as `admin`. `authorizedKeys` is a public-key file, such as an `id_ed25519.pub`, or several concatenated: each line that isn't blank is `<type> <base64> [comment]`, so a private key or any other file is refused. Every create or prebuild with a setup needs it: its keys are installed for the login user once the setup exits 0, and a create without a setup sends none. Paths in the config, `profiles` and `authorizedKeys`, are under `~/` or else relative to the config. `profiles` is read only by `profiles` and by commands given `--profile NAME`, and `authorizedKeys` only by `create` and `prebuild`. `--profile NAME` reads `NAME.json` from the profiles directory; a value with a `/` or ending in `.json` is a path:
+Machines of either kind are logged in to as `admin`, with the keys of the server config's `authorizedKeys`. A path in the config, as `profiles`, is under `~/` or else relative to the config. `profiles` is read only by `profiles` and by commands given `--profile NAME`. `--profile NAME` reads `NAME.json` from the profiles directory; a value with a `/` or ending in `.json` is a path:
 
 ```json
 {
@@ -216,7 +221,7 @@ clankerbox capacity                        # for an operator: each host's resour
 - `--label KEY=VALUE`, repeated for more, tags a machine or checkpoint when it is made: on `create`, `fork`, `restore`, `checkpoint capture` and `pause --capture`. Labels never change after that, and a copy takes only the labels its own request gives. `machines --label KEY=VALUE` and `checkpoint list --label KEY=VALUE` list what carries every pair given. A resource takes at most 16 labels; a key is a name like a resource's, and a value up to 63 characters.
 - `--expires 7d` on `checkpoint capture` or `pause --capture` has the control plane delete the checkpoint once it is ready and that long has passed, at its next check; `checkpoint get` shows `EXPIRES`. A prebuild never expires.
 - `pause --capture NAME` records the capture first, and the pause begins once the capture has, so the checkpoint holds the machine as it ran; `--label` and `--expires` go on the checkpoint. The machine must be running: a stopped or paused one answers `WrongState`, so capture it with `checkpoint capture` instead. A capture that fails fails the command with its error once the machine has paused; `checkpoint get NAME` says why.
-- A prebuild matches the profile, its setup, the config's authorized keys, and the host it was built on and its runtime release; any change runs the setup again until a new `prebuild`. It serves a create at sizes a `restore` of it takes: on linux vCPUs, RAM and disk each at least its own, and on a Mac any vCPUs and RAM and a disk at least its own. A smaller create runs the setup, so prebuild at the smallest sizes you create. A linux create grows the restored VM while it runs, so smolvm's limits on a live grow hold: RAM grows in 128M steps, and a create past that fails `Unsizable`, which `--fresh` avoids by running the setup. Each host keeps its own: a create uses a prebuild held by any host that can take it. Each `prebuild` runs the setup again and replaces the one that matches, at any sizes, once it has run, so a setup that installs latest releases picks up today's; creates restore the old one until then. A capture that fails leaves none. Prebuilds that match nothing any more stay until deleted: `checkpoint list` shows them. A create with a setup that no prebuild serves says so on stderr as it begins, naming the profile's newest prebuild and why it was passed over: sizes it can't grow from, or else another setup, keys or host release.
+- A prebuild matches the profile, its setup, and the host it was built on and its runtime release; any change runs the setup again until a new `prebuild`. It serves a create at sizes a `restore` of it takes: on linux vCPUs, RAM and disk each at least its own, and on a Mac any vCPUs and RAM and a disk at least its own. A smaller create runs the setup, so prebuild at the smallest sizes you create. A linux create grows the restored VM while it runs, so smolvm's limits on a live grow hold: RAM grows in 128M steps, and a create past that fails `Unsizable`, which `--fresh` avoids by running the setup. Each host keeps its own: a create uses a prebuild held by any host that can take it. Each `prebuild` runs the setup again and replaces the one that matches, at any sizes, once it has run, so a setup that installs latest releases picks up today's; creates restore the old one until then. A capture that fails leaves none. Prebuilds that match nothing any more stay until deleted: `checkpoint list` shows them. A create with a setup that no prebuild serves says so on stderr as it begins, naming the profile's newest prebuild and why it was passed over: sizes it can't grow from, or else another setup or host release.
 - `ssh` pins the machine's host key and logs in as `admin`.
 - Plain OpenSSH reaches machines as `<name>.cbx`, so `ssh dev.cbx`, scp, rsync and tools that run ssh work. A command on the default client config keeps `~/.ssh/clankerbox` with one `Host *.cbx` block, as `admin`, and ends `~/.ssh/config` with `Match all` and `Include clankerbox`, so your own entries come first and win. Each connection runs `clankerbox ssh-proxy` and `clankerbox ssh-known-hosts` for the machine's current endpoint and host key, so nothing goes stale when a port changes or a machine is recreated, and the connection goes straight to the machine's host. Both run through your login shell, `$SHELL` as of the command that wrote the file (`/bin/sh` without one), so `clankerbox` must be on the `PATH` that shell sets up, even for an app started outside a terminal. `CLANKERBOX_SSH_CONFIG=false` removes both.
 - `--json` prints the resource or `{"error": {...}}`.
@@ -247,7 +252,7 @@ Setup runs once, as root, after the machine's first boot; forks and restores car
 
 A service of the login user that serves TLS on the tailnet can take the node's certificate from clankerbox's `tailscaled` (see above). On a successful join, the tailnet is up before `/etc/clankerbox/start` runs.
 
-Once a setup exits 0, the host appends the client config's `authorizedKeys` to the login user's `~/.ssh/authorized_keys`, as that user through `sudo`, beside any keys already there. A setup that leaves no login user, or no `sudo`, fails then, and its machine is deleted. Put no key in root's: nothing logs in as root.
+Once a setup exits 0, and once a create restores a prebuild of it, the host adds each key of the server config's `authorizedKeys` that the login user's `~/.ssh/authorized_keys` lacks, as that user through `sudo`, beside the keys already there. A prebuild's own setup installs none. A setup that leaves no login user, or no `sudo`, fails then, as does each create from its prebuild, and the machine is deleted. Put no key in root's: nothing logs in as root.
 
 Linux guests need `perl`. On mac, Softnet blocks gateway DNS, so set public resolvers. A checkpoint, prebuilds included, holds everything the machine had, credentials too.
 
@@ -351,7 +356,6 @@ import { SandboxAgent } from "sandbox-agent";
 const sandbox = clankerbox({
   server: "http://100.64.0.1:8484",
   from: { profile: "profiles/agent.json" },
-  authorizedKeys: "/path/to/key.pub",
   sshArguments: ["-i", "/path/to/key"],
 });
 
@@ -362,7 +366,7 @@ await session.prompt([{ type: "text", text: "Summarize README.md" }]);
 await sdk.destroySandbox();
 ```
 
-- A sandbox comes from a profile (`{ profile }`), a checkpoint (`{ checkpoint }`) or a fork (`{ machine }`), and a profile's prebuild is used when there is one. Any source may add `cpu`, `ramMib` and `diskGib`: over a profile's, as `create`'s flags do, or for the copy, as `restore` and `fork` take them. `authorizedKeys` does what the client config's does, for the key the tunnel logs in with, and a profile with a setup needs it.
+- A sandbox comes from a profile (`{ profile }`), a checkpoint (`{ checkpoint }`) or a fork (`{ machine }`), and a profile's prebuild is used when there is one. Any source may add `cpu`, `ramMib` and `diskGib`: over a profile's, as `create`'s flags do, or for the copy, as `restore` and `fork` take them. The key the tunnel logs in with must be in the server config's `authorizedKeys`.
 - `sandbox.resize(id, sizes)` resizes a sandbox's machine as `resize` does, and answers its sizes; `id` is the machine's name, `sdk.sandboxId` without its `clankerbox/`. For what a running machine can't take, `pauseSandbox`, resize, then `sandbox.ensureServer(id)`.
 - A sandbox's ID is `clankerbox/<machine name>`; `pauseSandbox` stops the machine and `destroySandbox` deletes it. Stop a sandbox's machine rather than `clankerbox pause` it: a reconnect resumes a paused one with its old agents, which then run beside the sessions the SDK replays into new ones, and a paused one can't be forked. A create that fails deletes the row it may have left, unless the answer is `Conflict`, as the name is another machine's, `Superseded`, as a later request owns it, or `Unavailable`, as the server may still act on it: the error's `made` names the machine to read or delete.
 - `recipes/ubuntu/` (linux) and `recipes/macos/` (mac) install the server, Node and Claude Code, and run the server as the login user, whose home, `/home/admin` on Linux, is the default `cwd`; on macOS, give `cwd: "/Users/admin"`. Each takes an optional `agent.env` beside its `setup.sh`, of `NAME=value` lines, such as `ANTHROPIC_API_KEY=…`, so keep a recipe with one private.

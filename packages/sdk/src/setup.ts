@@ -153,8 +153,8 @@ export const readSetup = (
 const decodePublicKeys = Schema.decodeUnknownEffect(PublicKeys);
 
 /**
- * A public-key file's text, such as `~/.ssh/id_ed25519.pub`'s, for a setup's `authorizedKeys`, with
- * its line endings as `\n`.
+ * A public-key file's text, such as `~/.ssh/id_ed25519.pub`'s, for the server config's
+ * `authorizedKeys`, with its line endings as `\n`.
  */
 export const readAuthorizedKeys = (
   path: string

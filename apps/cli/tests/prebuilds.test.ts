@@ -4,7 +4,6 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { NotOffered, ScriptFailed } from "@gjermundgaraba/clankerbox-sdk";
 import { write, scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import { checkpoint } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import type {
   MachineStep,
@@ -187,7 +186,7 @@ layer(NodeServices.layer)((it) => {
           code: 0,
           stdout: "box",
           stderr:
-            "clankerbox: no prebuild matches this create, so its setup runs: prebuilt-new of dev is of another setup, authorized keys or host release; clankerbox prebuild with the same flags makes one",
+            "clankerbox: no prebuild matches this create, so its setup runs: prebuilt-new of dev is of another setup or host release; clankerbox prebuild with the same flags makes one",
         });
         expect(smaller.stderr).toBe(
           "clankerbox: no prebuild matches this create, so its setup runs: prebuilt-new of dev has 4G of RAM and a 20G disk, more than this create; clankerbox prebuild with the same flags makes one"
@@ -294,10 +293,7 @@ layer(NodeServices.layer)((it) => {
           cpu: 2,
           ramMib: 4096,
           diskGib: 20,
-          setup: {
-            script: "#!/bin/sh\ntrue\n",
-            authorizedKeys: `${operatorKey}\n`,
-          },
+          setup: { script: "#!/bin/sh\ntrue\n" },
         });
         expect(refused.code).toBe(1);
         expect(refused.stderr).toContain("NotOffered: no host offers it");

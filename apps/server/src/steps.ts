@@ -89,6 +89,14 @@ const sourceStep = (store: Store, found: MachineRow, held: Setup | undefined) =>
       : undefined;
   });
 
+const isPrebuildBuilder = ({ ephemeral }: MachineRow) => ephemeral;
+
+const takesKeys = (found: MachineRow) =>
+  !isPrebuildBuilder(found) &&
+  (found.source.kind === "base"
+    ? found.source.scripted
+    : found.prebuild !== undefined);
+
 /**
  * What a host is sent for a machine's operation, built afresh from the rows at each delivery, or
  * undefined when it can't be sent: its source went, or the setup `held` in memory did.
@@ -97,7 +105,8 @@ export const machineStep = (
   store: Store,
   found: MachineRow,
   op: Operation,
-  held: Setup | undefined
+  held: Setup | undefined,
+  authorizedKeys: string
 ): Effect.Effect<Step | undefined, Internal> =>
   Effect.gen(function* () {
     const ref = refOf(found);
@@ -123,6 +132,7 @@ export const machineStep = (
               diskGib: found.diskGib,
             },
             source,
+            ...(takesKeys(found) ? { authorizedKeys } : {}),
             ports,
             machines,
           };

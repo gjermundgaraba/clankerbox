@@ -240,7 +240,6 @@ export const make = (options: Options, ssh = "ssh") => {
         "create",
         yield* loadProfile(from.profile),
         {
-          authorizedKeys: options.authorizedKeys,
           cpu: from.cpu,
           ramMib: from.ramMib,
           diskGib: from.diskGib,

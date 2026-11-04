@@ -4,7 +4,6 @@ import type { Command } from "effect/cli";
 import { Flag } from "effect/cli";
 
 import { parsed } from "../command.ts";
-import { configPath } from "../config.ts";
 import type { LoadedConfig } from "../config.ts";
 import { profileFile } from "../profiles.ts";
 import { parseGib, parseMib, parseSeconds } from "../units.ts";
@@ -51,7 +50,7 @@ export const specArguments = {
   ...sizeArguments,
   setup: Flag.String("setup").pipe(
     Flag.withDescription(
-      "A setup script, or a recipe directory holding setup.sh. After it, the host installs the config's authorizedKeys for the login user; a base alone authorizes no SSH key."
+      "A setup script, or a recipe directory holding setup.sh. After it, the host installs the server config's authorizedKeys for the login user; a base alone authorizes no SSH key."
     ),
     Flag.optional
   ),
@@ -72,7 +71,6 @@ const specNames = new Map<PropertyKey, string>([
   ["ramMib", "--ram"],
   ["diskGib", "--disk"],
   ["setupTimeoutSeconds", "--setup-timeout"],
-  ["authorizedKeys", "the client config's authorizedKeys"],
 ]);
 
 export const flagsRequest = (
@@ -105,10 +103,6 @@ export const flagsRequest = (
           Option.map(flags.setup, (given) => path.resolve(given))
         ),
         setupTimeoutSeconds: Option.getOrUndefined(timeout),
-        authorizedKeys:
-          config.authorizedKeys === undefined
-            ? undefined
-            : yield* configPath(config, config.authorizedKeys),
       },
       specNames
     );

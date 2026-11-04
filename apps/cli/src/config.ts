@@ -8,7 +8,14 @@ import { Config, Effect, FileSystem, Option, Path, Schema } from "effect";
 const ClientConfig = Schema.Struct({
   server: Schema.String,
   profiles: Schema.optionalKey(Schema.String),
-  authorizedKeys: Schema.optionalKey(Schema.String),
+  authorizedKeys: Schema.optionalKey(
+    Schema.Unknown.check(
+      Schema.makeFilter(
+        () =>
+          "moved to the server config: delete it here, and put its keys in the file the server config's authorizedKeys names (README, Upgrading from 0.35)"
+      )
+    )
+  ),
 });
 
 const decodeConfig = Schema.decodeUnknownEffect(
@@ -19,7 +26,6 @@ export interface LoadedConfig {
   readonly file: string;
   readonly server: string;
   readonly profiles: string | undefined;
-  readonly authorizedKeys: string | undefined;
 }
 
 const defaultPath = Effect.gen(function* () {
@@ -81,7 +87,6 @@ export const loadConfig = (
       file,
       server: config.server,
       profiles: config.profiles,
-      authorizedKeys: config.authorizedKeys,
     };
   });
 

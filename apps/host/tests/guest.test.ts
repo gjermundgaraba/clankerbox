@@ -266,7 +266,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         ].join("\n");
 
         const error = yield* Effect.flip(
-          runSetup(runtime, machine, { script, timeoutSeconds: 30 })
+          runSetup(runtime, machine, { script, timeoutSeconds: 30 }, undefined)
         );
 
         const copy =
@@ -281,7 +281,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(yield* isMissing(copy)).toBe(true);
 
         const ok = yield* Effect.exit(
-          runSetup(runtime, machine, { script: "#!/bin/sh\ntrue\n" })
+          runSetup(runtime, machine, { script: "#!/bin/sh\ntrue\n" }, undefined)
         );
 
         expect(Exit.isSuccess(ok)).toBe(true);
@@ -372,10 +372,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const runtime = yield* running;
 
         const error = yield* Effect.flip(
-          runSetup(runtime, machine, {
-            script: "#!/bin/sh\necho started\nsleep 30\n",
-            timeoutSeconds: 1,
-          })
+          runSetup(
+            runtime,
+            machine,
+            {
+              script: "#!/bin/sh\necho started\nsleep 30\n",
+              timeoutSeconds: 1,
+            },
+            undefined
+          )
         );
 
         expect(error).toMatchObject({ _tag: "ScriptFailed", script: "setup" });

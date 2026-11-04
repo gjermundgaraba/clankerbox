@@ -3,7 +3,7 @@ import { Effect, FileSystem, Path, Predicate, Record, Schema } from "effect";
 import { describeFileError, describeIssues } from "./describe.ts";
 import { Invalid } from "./errors.ts";
 import { MachineSpec, Setup } from "./resources.ts";
-import { readAuthorizedKeys, readSetup } from "./setup.ts";
+import { readSetup } from "./setup.ts";
 
 /**
  * A client-side file that fills in a create's spec; hosts never see it. `setup.path` is a script
@@ -90,8 +90,6 @@ export type Overrides = {
   /** A setup script or recipe directory, already resolved. */
   readonly setup?: string | undefined;
   readonly setupTimeoutSeconds?: number | undefined;
-  /** A public-key file, already resolved, which a setup needs and which is read only for one. */
-  readonly authorizedKeys?: string | undefined;
 };
 
 export interface SpecRequest {
@@ -122,27 +120,13 @@ export const specRequest = (
       });
     }
 
-    const keys = overrides.authorizedKeys;
-
     const setup =
       file === undefined
         ? undefined
-        : yield* Effect.gen(function* () {
-            if (keys === undefined) {
-              return yield* new Invalid({
-                message: `${what}: a setup needs ${names?.get("authorizedKeys") ?? "authorizedKeys"}, the public keys the host installs for the login user after it`,
-              });
-            }
-
-            return Record.filter(
-              {
-                script: yield* readSetup(file),
-                timeoutSeconds,
-                authorizedKeys: yield* readAuthorizedKeys(keys),
-              },
-              Predicate.isNotUndefined
-            );
-          });
+        : Record.filter(
+            { script: yield* readSetup(file), timeoutSeconds },
+            Predicate.isNotUndefined
+          );
 
     const fields = {
       base: overrides.base ?? profile?.base,

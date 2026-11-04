@@ -54,6 +54,11 @@ control plane's URL), `server.pid`, `hosts/<id>.url` and `hosts/<id>.pid`, `home
 | `runtime-calls.txt` | one line per runtime call as it happens, such as `capture snap`       |
 | `transcript.txt`    | each `cb.sh` command as a JSON argv, its output and `[exit N]`, and each fault |
 
+The control plane's authorized keys are `server-keys.pub`, read at each start.
+It holds the test operator key and is kept across restarts: append a key, then
+`fault.sh <run> kill-server` and `start-server`, to rotate them. The HOME's
+config names no keys.
+
 IDs are bare names. The base is `ubuntu` on linux and `macos` on mac. The recheck
 runs every 2 seconds. The optional budget is the RAM, in MiB, that a host refuses
 to pass. The HOME's config has two profiles, each with the kind's base, 1 vCPU,

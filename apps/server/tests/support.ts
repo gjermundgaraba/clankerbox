@@ -17,6 +17,7 @@ import type {
   Machine,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import { Context, Duration, Effect, Exit, Layer, Logger, Scope } from "effect";
 import { HttpServer } from "effect/http";
 
@@ -62,6 +63,11 @@ export const restartedHost = (
   });
 
 export const quiet = Duration.hours(1);
+
+export const addsLoginUser = [
+  'mkdir -p "$CLANKERBOX_ROOT/etc"',
+  'echo "admin:x:1000:1000::/home/admin:/bin/sh" >>"$CLANKERBOX_ROOT/etc/passwd"',
+].join("\n");
 
 export const request = (
   name: string,
@@ -219,6 +225,7 @@ export const plane = (options?: {
       })),
       recheck: options?.recheck ?? quiet,
       failedRowsLast: options?.failedRowsLast ?? defaultFailedRowsLast,
+      authorizedKeys: `${operatorKey}\n`,
     };
 
     const plan: Plane = {

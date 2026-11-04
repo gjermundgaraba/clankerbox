@@ -11,7 +11,6 @@ import {
   Superseded,
   Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import { checkpoint } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import { Effect, Schema } from "effect";
 import { SandboxAgent, SandboxDestroyedError } from "sandbox-agent";
@@ -30,8 +29,6 @@ import {
   setup,
   until,
 } from "./support.ts";
-
-const keys = `${operatorKey}\n`;
 
 const decodeManifest = Schema.decodeSync(
   Schema.fromJsonString(Schema.Struct({ version: Schema.String }))
@@ -145,7 +142,7 @@ describe("provider", () => {
     expect(missing.stub.held()).toStrictEqual([]);
   });
 
-  it("a create from a profile with a setup and authorizedKeys sends both, and asks for a fresh setup only when told to", async () => {
+  it("a create from a profile with a setup sends it with no keys, and asks for a fresh setup only when told to", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "clankerbox-profile-"));
 
     cleanups.push(async () => {
@@ -155,7 +152,6 @@ describe("provider", () => {
     const profile = path.join(dir, "agent.json");
 
     await writeFile(path.join(dir, "setup.sh"), "echo set up\n");
-    await writeFile(path.join(dir, "id.pub"), keys);
     await writeFile(
       profile,
       JSON.stringify({
@@ -168,57 +164,18 @@ describe("provider", () => {
     );
 
     const from = { profile };
-    const authorizedKeys = path.join(dir, "id.pub");
+    const setUp = { script: "echo set up\n", timeoutSeconds: 300 };
 
-    const setUp = {
-      script: "echo set up\n",
-      timeoutSeconds: 300,
-      authorizedKeys: keys,
-    };
-
-    const plain = await setup({}, { from, authorizedKeys });
+    const plain = await setup({}, { from });
 
     await plain.sandbox.create();
-    expect(plain.stub.creates).toMatchObject([{ setup: setUp }]);
+    expect(plain.stub.creates.map((sent) => sent.setup)).toStrictEqual([setUp]);
     expect(plain.stub.creates[0]).not.toHaveProperty("fresh");
 
-    const fresh = await setup({}, { from, authorizedKeys, fresh: true });
+    const fresh = await setup({}, { from, fresh: true });
 
     await fresh.sandbox.create();
     expect(fresh.stub.creates).toMatchObject([{ setup: setUp, fresh: true }]);
-  });
-
-  it("a create from a profile with a setup and no authorizedKeys is Invalid, and asks the control plane nothing", async () => {
-    const dir = await mkdtemp(path.join(tmpdir(), "clankerbox-profile-"));
-
-    cleanups.push(async () => {
-      await rm(dir, { recursive: true, force: true });
-    });
-
-    const profile = path.join(dir, "agent.json");
-
-    await writeFile(path.join(dir, "setup.sh"), "echo set up\n");
-    await writeFile(
-      profile,
-      JSON.stringify({
-        base: "ubuntu",
-        cpu: 2,
-        ramMib: 2048,
-        diskGib: 20,
-        setup: { path: "setup.sh" },
-      })
-    );
-
-    const { stub, sandbox } = await setup({}, { from: { profile } });
-
-    const creating = sandbox.create();
-
-    await expect(creating).rejects.toBeInstanceOf(Invalid);
-    await expect(creating).rejects.toMatchObject({
-      message:
-        "create: a setup needs authorizedKeys, the public keys the host installs for the login user after it",
-    });
-    expect(stub.calls).toStrictEqual([]);
   });
 
   it("a create that fails after it was recorded, as a failed preparation, deletes its machine", async () => {

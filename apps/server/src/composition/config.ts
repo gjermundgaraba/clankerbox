@@ -4,6 +4,7 @@ import {
   HostId,
   Invalid,
   Port,
+  readAuthorizedKeys,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Address } from "@gjermundgaraba/clankerbox-sdk/node";
 import { Effect, FileSystem, Path, Schema } from "effect";
@@ -14,6 +15,7 @@ import type { ServerSettings } from "../settings.ts";
 const ServerConfigFile = Schema.Struct({
   listen: Schema.Struct({ address: Address, port: Port }),
   stateDir: Schema.String,
+  authorizedKeys: Schema.String,
   hosts: Schema.Array(
     Schema.Struct({
       id: HostId,
@@ -65,9 +67,12 @@ export const loadConfig = (
       )
     );
 
+    const relative = (given: string) =>
+      path.resolve(path.dirname(resolved), given);
+
     return {
       listen: decoded.listen,
-      stateDir: path.resolve(path.dirname(resolved), decoded.stateDir),
+      stateDir: relative(decoded.stateDir),
       hosts: decoded.hosts.map(({ id, url, draining }) => ({
         id,
         url,
@@ -75,5 +80,8 @@ export const loadConfig = (
       })),
       recheck: defaultRecheck,
       failedRowsLast: defaultFailedRowsLast,
+      authorizedKeys: yield* readAuthorizedKeys(
+        relative(decoded.authorizedKeys)
+      ),
     };
   });

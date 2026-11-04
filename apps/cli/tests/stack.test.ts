@@ -9,7 +9,6 @@ import {
   read,
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import { stubServer } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import { loginSetup, running } from "@gjermundgaraba/clankerbox-server/testing";
 import { Effect, Schema, Stdio, Stream } from "effect";
@@ -30,15 +29,7 @@ const setUp = (options?: Parameters<typeof running>[0]) =>
     const { dir, url } = served;
     const config = path.join(dir, "config.json");
 
-    yield* write(path.join(dir, "id.pub"), operatorKey);
-    yield* write(
-      config,
-      JSON.stringify({
-        server: url,
-        authorizedKeys: "id.pub",
-        profiles: "profiles",
-      })
-    );
+    yield* write(config, JSON.stringify({ server: url, profiles: "profiles" }));
 
     const run = (args: readonly string[]) =>
       cli([...args, "--config", config], { http });

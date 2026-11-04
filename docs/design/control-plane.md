@@ -324,7 +324,7 @@ The tailnet node name is `dev` under bare names, which can clash with other node
 Where secrets live, each as its own choice:
 
 - **`tailnet.oauthClient`.** Stay on each host, as now (`README.md:68`), or move to the control plane, which mints keys. Moving gives one secret to rotate, and joins stop working while it is down.
-- **`authorizedKeys`.** Stay in client config and travel in the request (`setup.ts:159`), or move to the control plane. Moving gives one key set for everyone and drops per-client keys. They are part of the prebuild digest (`prebuild.ts:41`), so either way a change rebuilds.
+- **`authorizedKeys`.** Moved to the control plane's config after 0.35: one key set for everyone and no per-client keys. The host installs them after a setup or a prebuild's copy, and they left the prebuild digest, so a key change rebuilds nothing.
 - **Setup scripts.** Pass through in memory only, or get stored. Storing them breaks the rule that only the request holds them, and they may carry secrets.
 
 ### D8. Deployment

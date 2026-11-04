@@ -11,6 +11,7 @@ import {
   at,
   clientOf,
   eventually,
+  addsLoginUser,
   pause,
   phaseOf,
   plane,
@@ -196,7 +197,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* asking.create(
           "dev",
           request("dev", {
-            setup: { script: "#!/bin/sh\necho set up\n", timeoutSeconds: 30 },
+            setup: {
+              script: `#!/bin/sh\n${addsLoginUser}\necho set up\n`,
+              timeoutSeconds: 30,
+            },
           })
         );
         yield* setup.entered;

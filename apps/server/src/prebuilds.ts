@@ -23,7 +23,6 @@ export const nameOf = (
             spec.profile ?? null,
             spec.base,
             spec.setup?.script ?? null,
-            spec.setup?.authorizedKeys ?? null,
             host.id,
             host.runtimeVersion,
           ])

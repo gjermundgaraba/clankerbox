@@ -3,7 +3,6 @@ import path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import { mkdir, write } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import {
   stubServer,
   transport,
@@ -83,15 +82,7 @@ export const writeConfig = (dir: string, profiles?: string) =>
   Effect.gen(function* () {
     const file = path.join(dir, "config.json");
 
-    yield* write(path.join(dir, "id.pub"), `${operatorKey}\n`);
-    yield* write(
-      file,
-      JSON.stringify({
-        server: serverUrl,
-        profiles,
-        authorizedKeys: "id.pub",
-      })
-    );
+    yield* write(file, JSON.stringify({ server: serverUrl, profiles }));
 
     return file;
   });

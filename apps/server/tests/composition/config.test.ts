@@ -3,6 +3,7 @@ import path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import { Effect } from "effect";
 import type { Schema } from "effect";
 import { expect } from "vite-plus/test";
@@ -13,16 +14,19 @@ import { defaultFailedRowsLast, defaultRecheck } from "../../src/settings.ts";
 const config = {
   listen: { address: "100.95.240.37", port: 8585 },
   stateDir: "state",
+  authorizedKeys: "id.pub",
   hosts: [
     { id: "linux", url: "http://100.95.240.37:8484" },
     { id: "mac", url: "http://100.122.69.11:8484", draining: true },
   ],
 };
 
-const load = (contents: Schema.Json) =>
+const load = (contents: Schema.Json, keys = `${operatorKey}\n`) =>
   Effect.gen(function* () {
-    const file = path.join(yield* scratch, "server.json");
+    const dir = yield* scratch;
+    const file = path.join(dir, "server.json");
 
+    yield* write(path.join(dir, "id.pub"), keys);
     yield* write(file, JSON.stringify(contents));
 
     return { file, loaded: loadConfig(file) };
@@ -30,7 +34,7 @@ const load = (contents: Schema.Json) =>
 
 layer(NodeServices.layer)((it) => {
   it.effect(
-    "a server config resolves its state dir against its own directory, and a host drains only when it says so",
+    "a server config resolves its state dir and authorized keys against its own directory, and a host drains only when it says so",
     () =>
       Effect.gen(function* () {
         const { file, loaded } = yield* load(config);
@@ -48,7 +52,30 @@ layer(NodeServices.layer)((it) => {
           ],
           recheck: defaultRecheck,
           failedRowsLast: defaultFailedRowsLast,
+          authorizedKeys: `${operatorKey}\n`,
         });
+      })
+  );
+
+  it.effect(
+    "a server config whose authorizedKeys holds a private key is refused",
+    () =>
+      Effect.gen(function* () {
+        const secret = "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQ";
+
+        const { file, loaded } = yield* load(
+          config,
+          `-----BEGIN OPENSSH PRIVATE KEY-----\n${secret}\n-----END OPENSSH PRIVATE KEY-----\n`
+        );
+
+        const error = yield* Effect.flip(loaded);
+        const keys = path.join(file, "..", "id.pub");
+
+        expect([error._tag, error.file]).toStrictEqual(["Invalid", keys]);
+        expect(error.message).toContain(
+          `authorized keys ${keys}: each line that isn't blank is a public key`
+        );
+        expect(error.message).not.toContain(secret);
       })
   );
 
@@ -96,6 +123,12 @@ layer(NodeServices.layer)((it) => {
           { ...config, hosts: [{ id: "not a host id", url: "http://a:8484" }] },
           { ...config, hosts: [{ id: "linux" }] },
           { listen: config.listen, hosts: config.hosts },
+          {
+            listen: config.listen,
+            stateDir: config.stateDir,
+            hosts: config.hosts,
+          },
+          { ...config, authorizedKeys: "missing.pub" },
           { ...config, recheck: 30 },
           { ...config, hosts: [{ ...config.hosts[0], kind: "linux" }] },
         ];

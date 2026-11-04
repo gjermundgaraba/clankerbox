@@ -9,6 +9,7 @@ export interface ServerSettings {
   /** How often what no request wakes is looked at again. */
   readonly recheck: Duration.Duration;
   readonly failedRowsLast: Duration.Duration;
+  readonly authorizedKeys: string;
 }
 
 export const defaultRecheck = Duration.seconds(30);

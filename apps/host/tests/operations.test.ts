@@ -22,11 +22,13 @@ import {
 import type { Kind, Setup, Sizing } from "@gjermundgaraba/clankerbox-sdk";
 import {
   chmod,
+  exists,
   mkdir,
   read,
   scratch,
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import {
   Context,
   Deferred,
@@ -134,6 +136,7 @@ const makes = (
     readonly machine?: Partial<NewMachine>;
     readonly source?: Source;
     readonly setup?: Setup;
+    readonly authorizedKeys?: string;
     readonly ports?: readonly number[];
     readonly machines?: readonly MachineRef[];
   }
@@ -145,6 +148,9 @@ const makes = (
     base: "ubuntu",
     ...(fields?.setup === undefined ? {} : { setup: fields.setup }),
   },
+  ...(fields?.authorizedKeys === undefined
+    ? {}
+    : { authorizedKeys: fields.authorizedKeys }),
   ports: fields?.ports ?? [],
   machines: fields?.machines ?? [],
 });
@@ -1150,6 +1156,69 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(
           [taken, restored, forked].map(({ status }) => status)
         ).toStrictEqual(["done", "done", "done"]);
+      })
+  );
+
+  it.effect(
+    "a copy from a prebuild installs the step's keys once, however often it runs",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner();
+
+        const secondKey =
+          "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISecondKey second";
+
+        const keysOf = (name: string) =>
+          path.join(
+            host.fake.root(name) ?? "",
+            "home",
+            "admin",
+            ".ssh",
+            "authorized_keys"
+          );
+
+        yield* finished(
+          host,
+          makes("builder", { setup: { script: loginSetup } })
+        );
+        yield* finished(host, {
+          _tag: "capture",
+          machine: ref("builder"),
+          checkpoint: checkpoint("prebuilt"),
+          pin: "fake 1",
+        });
+
+        const authorizedKeys = `${operatorKey}\n\n${secondKey}\n`;
+
+        const restored = yield* finished(
+          host,
+          makes("dev", {
+            source: {
+              _tag: "checkpoint",
+              checkpoint: checkpoint("prebuilt"),
+              pin: "fake 1",
+            },
+            authorizedKeys,
+          })
+        );
+
+        const forked = yield* finished(
+          host,
+          makes("copy", {
+            source: { _tag: "machine", machine: ref("dev"), pin: "fake 1" },
+            authorizedKeys,
+          })
+        );
+
+        const installed = `\n${operatorKey}\n\n${secondKey}\n`;
+
+        expect([restored.status, forked.status]).toStrictEqual([
+          "done",
+          "done",
+        ]);
+        expect(yield* exists(keysOf("builder"))).toBe(false);
+        expect(yield* read(keysOf("dev"))).toBe(installed);
+        expect(yield* read(keysOf("copy"))).toBe(installed);
       })
   );
 

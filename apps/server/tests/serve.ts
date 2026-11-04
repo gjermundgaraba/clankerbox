@@ -7,6 +7,7 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { loginSetup } from "@gjermundgaraba/clankerbox-host/testing";
+import { readAuthorizedKeys } from "@gjermundgaraba/clankerbox-sdk";
 import { mkdir, write } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import { Console, Duration, Effect, FileSystem, Layer, Logger } from "effect";
@@ -50,14 +51,9 @@ const clientFiles = (run: string, url: string) =>
     const client = path.join(home, ".config", "clankerbox");
 
     yield* mkdir(path.join(client, "profiles"));
-    yield* write(path.join(client, "id.pub"), `${operatorKey}\n`);
     yield* write(
       path.join(client, "config.json"),
-      JSON.stringify({
-        server: url,
-        authorizedKeys: "id.pub",
-        profiles: "profiles",
-      })
+      JSON.stringify({ server: url, profiles: "profiles" })
     );
 
     for (const [name, recipe] of [
@@ -93,12 +89,19 @@ const serve = Effect.gen(function* () {
     .filter((file) => file.endsWith(".url"))
     .map(memberOf(run));
 
+  const keys = path.join(run, "server-keys.pub");
+
+  if (!(yield* fs.exists(keys))) {
+    yield* write(keys, `${operatorKey}\n`);
+  }
+
   const settings = {
     listen: { address: "127.0.0.1", port: Number(previous?.port ?? 0) },
     stateDir: path.join(run, "server-state"),
     hosts,
     recheck: Duration.seconds(2),
     failedRowsLast: defaultFailedRowsLast,
+    authorizedKeys: yield* readAuthorizedKeys(keys),
   };
 
   return yield* Layer.launch(

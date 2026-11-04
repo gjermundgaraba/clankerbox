@@ -10,6 +10,7 @@ import {
   Missing,
   Name,
   Port,
+  PublicKeys,
   Reading,
   Setup,
   Sizing,
@@ -76,12 +77,15 @@ const others = { machines: Schema.Array(MachineRef) };
 /**
  * What a host runs. `pin` is the runtime pin a VM booted under, compared with the host's own, and
  * `machines` the host's other machines, which admission counts beside the one a step boots. A step
- * that acts by what its VM is doing reads it from the runtime as it begins.
+ * that acts by what its VM is doing reads it from the runtime as it begins. A make's
+ * `authorizedKeys` go to the login user once the machine is made, after its setup if it has one,
+ * beside the keys already there.
  */
 export const Step = Schema.Union([
   Schema.TaggedStruct("make", {
     machine: NewMachine,
     source: Source,
+    authorizedKeys: Schema.optionalKey(PublicKeys),
     ports: Schema.Array(Port),
     ...others,
   }),

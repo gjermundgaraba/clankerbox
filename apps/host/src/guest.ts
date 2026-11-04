@@ -143,38 +143,55 @@ export const runCommand = (
     return { exitCode, output: output.text(), truncated: output.truncated() };
   });
 
+const preparationTimeout = Duration.seconds(60);
+
+const addingMissingKeys = [
+  `if [ "$#" -gt 0 ]; then`,
+  "  (",
+  "    PATH=$root/usr/local/sbin:$root/usr/local/bin:$root/usr/sbin:$root/usr/bin:$root/sbin:$root/bin",
+  `    sudo -n -u "$login" -H sh -c 'umask 077 && mkdir -p "$HOME/.ssh" && for key do grep -qxF -e "$key" "$HOME/.ssh/authorized_keys" 2>/dev/null || printf "\\n%s\\n" "$key" >>"$HOME/.ssh/authorized_keys" || exit 1; done' clankerbox-keys "$@"`,
+  "  ) || {",
+  `    echo "couldn't install the authorized keys for $login: setup must leave that user, and sudo"`,
+  "    exit 1",
+  "  }",
+  "fi",
+];
+
 const setupRunner = [
   "set -eu",
   "login=$1",
+  "shift",
   "root=${CLANKERBOX_ROOT-}",
   "script=$(mktemp /var/tmp/clankerbox-setup.XXXXXX)",
   `trap 'rm -f "$script"' EXIT`,
   `cat >"$script"`,
   `chmod 700 "$script"`,
   `"$script" </dev/null`,
-  `if [ "$#" -gt 1 ]; then`,
-  "  (",
-  "    PATH=$root/usr/local/sbin:$root/usr/local/bin:$root/usr/sbin:$root/usr/bin:$root/sbin:$root/bin",
-  `    sudo -n -u "$login" -H sh -c 'umask 077 && mkdir -p "$HOME/.ssh" && printf "\\n%s\\n" "$1" >>"$HOME/.ssh/authorized_keys"' clankerbox-keys "$2"`,
-  "  ) || {",
-  `    echo "couldn't install the authorized keys for $login: setup must leave that user, and sudo"`,
-  "    exit 1",
-  "  }",
-  "fi",
+  ...addingMissingKeys,
 ].join("\n");
+
+const keysRunner = [
+  "set -eu",
+  "login=$1",
+  "shift",
+  "root=${CLANKERBOX_ROOT-}",
+  ...addingMissingKeys,
+].join("\n");
+
+const keyLines = (keys: string | undefined) =>
+  keys?.split("\n").filter((line) => line.trim() !== "") ?? [];
 
 const defaultSetupTimeoutSeconds = 600;
 
 export const runSetup = (
   runtime: Runtime,
   machine: MachineRef,
-  setup: Setup
+  setup: Setup,
+  authorizedKeys: string | undefined
 ): Effect.Effect<void, RuntimeError | ScriptFailed> => {
   const timeout = Duration.seconds(
     setup.timeoutSeconds ?? defaultSetupTimeoutSeconds
   );
-
-  const keys = setup.authorizedKeys === undefined ? [] : [setup.authorizedKeys];
 
   return Effect.asVoid(
     runInGuest(
@@ -188,7 +205,7 @@ export const runSetup = (
           setupRunner,
           "clankerbox-setup",
           loginUser,
-          ...keys,
+          ...keyLines(authorizedKeys),
         ],
         stdin: new TextEncoder().encode(setup.script),
       },
@@ -196,6 +213,30 @@ export const runSetup = (
     )
   );
 };
+
+export const addMissingKeys = (
+  runtime: Runtime,
+  machine: MachineRef,
+  authorizedKeys: string
+): Effect.Effect<void, RuntimeError | ScriptFailed> =>
+  Effect.asVoid(
+    runInGuest(
+      runtime,
+      "preparation",
+      machine,
+      {
+        argv: [
+          "/bin/sh",
+          "-c",
+          keysRunner,
+          "clankerbox-keys",
+          loginUser,
+          ...keyLines(authorizedKeys),
+        ],
+      },
+      preparationTimeout
+    )
+  );
 
 const hostKeyMarker = "clankerbox-host-key: ";
 
@@ -367,8 +408,6 @@ export const startScript = [
   "done",
   "",
 ].join("\n");
-
-const preparationTimeout = Duration.seconds(60);
 
 const seedBytes = 64;
 

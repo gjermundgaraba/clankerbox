@@ -42,6 +42,7 @@ import { Hex } from "effect/encoding";
 import {
   checkTailnet,
   identify,
+  addMissingKeys,
   prepare,
   runCommand,
   runSetup,
@@ -430,7 +431,7 @@ export const make = (
       );
 
     const made = (
-      { machine, source, machines }: Make,
+      { machine, source, authorizedKeys, machines }: Make,
       port: number
     ): Effect.Effect<void, HostError> =>
       Effect.gen(function* () {
@@ -453,7 +454,9 @@ export const make = (
         );
 
         if (source._tag === "base" && source.setup !== undefined) {
-          yield* runSetup(runtime, ref, source.setup);
+          yield* runSetup(runtime, ref, source.setup, authorizedKeys);
+        } else if (authorizedKeys !== undefined) {
+          yield* addMissingKeys(runtime, ref, authorizedKeys);
         }
       });
 

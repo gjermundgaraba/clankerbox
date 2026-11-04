@@ -32,6 +32,7 @@ import {
   at,
   clientOf,
   eventually,
+  addsLoginUser,
   loginSetup,
   patched,
   pause,
@@ -47,6 +48,7 @@ const theirs =
 const installsStart = {
   script: [
     "#!/bin/sh",
+    addsLoginUser,
     'mkdir -p "$CLANKERBOX_ROOT/etc/clankerbox" "$CLANKERBOX_ROOT/etc/ssh"',
     'printf "#!/bin/sh\\necho start >>\\"\\$CLANKERBOX_ROOT/starts\\"\\n" >"$CLANKERBOX_ROOT/etc/clankerbox/start"',
     'chmod 755 "$CLANKERBOX_ROOT/etc/clankerbox/start"',
@@ -59,7 +61,10 @@ const installsStart = {
 
 const exits3 = { script: "#!/bin/sh\nexit 3\n", timeoutSeconds: 30 };
 
-const quickSetup = { script: "#!/bin/sh\n", timeoutSeconds: 30 };
+const quickSetup = {
+  script: `#!/bin/sh\n${addsLoginUser}\n`,
+  timeoutSeconds: 30,
+};
 
 const portsOfHere = { first: 21_900, last: 21_909 };
 
@@ -1668,7 +1673,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a setup's authorized keys go to the login user once it exits 0, in the same exec, beside the keys already there",
+    "the server's authorized keys go to a setup's login user once it exits 0, in the same exec, beside the keys already there",
     () =>
       Effect.gen(function* () {
         const { client, fake } = yield* served();
@@ -1684,24 +1689,20 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
                 'mkdir -p "$CLANKERBOX_ROOT/home/admin/.ssh"',
                 `printf "${theirs}" >"$CLANKERBOX_ROOT/${keys}"`,
               ].join("\n"),
-              authorizedKeys: `${operatorKey}\n`,
             },
           })
         );
         yield* client.create(
           "fresh",
           request("fresh", {
-            setup: {
-              script: `#!/bin/sh\n${loginSetup}`,
-              authorizedKeys: operatorKey,
-            },
+            setup: { script: `#!/bin/sh\n${loginSetup}` },
           })
         );
 
         const fresh = path.join(fake.root("fresh") ?? "", keys);
 
         expect(yield* read(path.join(fake.root("dev") ?? "", keys))).toBe(
-          `${theirs}\n${operatorKey}\n\n`
+          `${theirs}\n${operatorKey}\n`
         );
         expect(fake.calls.filter((call) => call === "exec dev")).toHaveLength(
           3
@@ -1712,7 +1713,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a setup with authorized keys that leaves no login user fails, and deletes the machine",
+    "a setup that leaves no login user fails, and deletes the machine",
     () =>
       Effect.gen(function* () {
         const { client, fake } = yield* served();
@@ -1721,10 +1722,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           client.create(
             "dev",
             request("dev", {
-              setup: {
-                script: "#!/bin/sh\ntrue\n",
-                authorizedKeys: operatorKey,
-              },
+              setup: { script: "#!/bin/sh\ntrue\n" },
             })
           )
         );
@@ -1736,20 +1734,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "couldn't install the authorized keys for admin: setup must leave that user, and sudo"
         );
         expect(fake.machines.size).toBe(0);
-      })
-  );
-
-  it.effect(
-    "a setup with no authorized keys installs none, so it needs no login user",
-    () =>
-      Effect.gen(function* () {
-        const { client, fake } = yield* served();
-
-        yield* client.create("dev", request("dev", { setup: installsStart }));
-
-        expect(yield* exists(path.join(fake.root("dev") ?? "", "home"))).toBe(
-          false
-        );
       })
   );
 
@@ -1775,11 +1759,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a setup's text reaches neither the control plane's log, nor a host's, nor the control plane's files",
+    "a setup's text and the server's keys reach neither the control plane's log, nor a host's, nor the control plane's files",
     () =>
       Effect.gen(function* () {
         const secret = "setup-secret-6f1c";
-        const script = `#!/bin/sh\n# ${secret}\nTOKEN=${secret}\necho set up\n`;
+        const script = `#!/bin/sh\n# ${secret}\nTOKEN=${secret}\n${addsLoginUser}\necho set up\n`;
+        const [, key = ""] = operatorKey.split(" ");
         const logged: string[] = [];
 
         const heard = Logger.map(Logger.formatJson, (line) => {
@@ -1833,6 +1818,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(holding(kept)).not.toStrictEqual([]);
         expect(holding(broken)).not.toStrictEqual([]);
         expect(holding(secret)).toStrictEqual([]);
+        expect(logged.filter((line) => line.includes(key))).toStrictEqual([]);
+        expect(holding(key)).toStrictEqual([]);
       })
   );
 

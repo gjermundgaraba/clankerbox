@@ -156,19 +156,6 @@ describe("api", () => {
     expect(answer.body).not.toContain(marker);
   });
 
-  it("a refused create's message doesn't carry authorized keys that aren't public keys", async () => {
-    const secret =
-      "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEsecret\n";
-
-    const answer = await post("createMachine", {
-      ...create,
-      setup: { script: "#!/bin/sh\n", authorizedKeys: secret },
-    });
-
-    expect(answer.status).toBe(400);
-    expect(answer.body).not.toContain("b3BlbnNzaC1rZXktdjEsecret");
-  });
-
   const decodeKeys = Schema.decodeUnknownExit(PublicKeys);
 
   it.each([

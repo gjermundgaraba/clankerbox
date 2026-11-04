@@ -17,7 +17,8 @@ import type {
   Kind,
   PrebuildRequest,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { read } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import { exists, read } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import { DateTime, Duration, Effect, Fiber, Option, Schema } from "effect";
 import { expect } from "vite-plus/test";
 
@@ -27,6 +28,7 @@ import {
   at,
   clientOf,
   eventually,
+  addsLoginUser,
   patched,
   pause,
   plane,
@@ -39,6 +41,7 @@ import type { Plane, Started } from "./support.ts";
 const keyed = {
   script: [
     "#!/bin/sh",
+    addsLoginUser,
     'mkdir -p "$CLANKERBOX_ROOT/etc/ssh"',
     ': >"$CLANKERBOX_ROOT/etc/ssh/ssh_host_ed25519_key"',
     'echo "ssh-ed25519 AAAAimage root@image" >"$CLANKERBOX_ROOT/etc/ssh/ssh_host_ed25519_key.pub"',
@@ -56,6 +59,9 @@ const prebuild = (fields?: Partial<PrebuildRequest>): PrebuildRequest => ({
 });
 
 const nearby = Duration.millis(300);
+
+const keysIn = (root: string) =>
+  path.join(root, "home", "admin", ".ssh", "authorized_keys");
 
 const firstHost = (served: Pick<Plane, "hosts">): TestHost => {
   const [host] = served.hosts;
@@ -1789,6 +1795,32 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(made.prebuild).toBe(id);
         expect(second?.fake.calls).toStrictEqual([]);
+      })
+  );
+
+  it.effect(
+    "a prebuild bakes no keys, and a create restored from it installs the server's",
+    () =>
+      Effect.gen(function* () {
+        const { client, host, store } = yield* withClient();
+        const { id } = yield* client.prebuild(prebuild());
+        const built = Option.getOrThrow(yield* store.findCheckpoint(id));
+
+        const made = yield* client.create(
+          "dev",
+          request("dev", { setup: keyed })
+        );
+
+        expect(made.prebuild).toBe(id);
+        expect(host.fake.calls).toContain("restore dev");
+        expect(
+          yield* exists(
+            keysIn(path.join(host.dir, "checkpoints", built.instance))
+          )
+        ).toBe(false);
+        expect(yield* read(keysIn(host.fake.root("dev") ?? ""))).toBe(
+          `\n${operatorKey}\n`
+        );
       })
   );
 
