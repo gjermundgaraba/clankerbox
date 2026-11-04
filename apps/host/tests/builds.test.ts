@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
@@ -18,8 +20,15 @@ import { expect } from "vite-plus/test";
 
 import { fetch, pieceBytes, publish } from "../src/builds.ts";
 import type { Interface } from "../src/builds.ts";
+import {
+  make,
+  minimumVersion,
+  nativeName,
+  templates,
+} from "../src/platform/smolvm.ts";
 import { Runtime } from "../src/runtime.ts";
 import { fakeRuntime } from "./fake-runtime.ts";
+import { scripted } from "./scripted.ts";
 
 const Written = Schema.fromJsonString(
   Schema.Struct({
@@ -76,6 +85,33 @@ const runtimeIn = (dir: string, kind: Kind) =>
     Layer.build(fakeRuntime({ dir, kind }).layer),
     Context.get(Runtime)
   );
+
+const smolvmIn = (stateDir: string) => {
+  const prefix = path.join(stateDir, "smolvm");
+
+  mkdirSync(prefix, { recursive: true });
+
+  for (const template of templates) {
+    writeFileSync(path.join(prefix, template), "");
+  }
+
+  const spawner = scripted((call) =>
+    call.args[0] === "--version"
+      ? { stdout: `smolvm ${minimumVersion}\n` }
+      : undefined
+  );
+
+  return make(
+    {
+      prefix,
+      publishAddress: "127.0.0.1",
+      ramBudgetMib: 4096,
+      stateDir,
+      arch: "x64",
+    },
+    0
+  ).pipe(Effect.provide(Layer.merge(NodeServices.layer, spawner.layer)));
+};
 
 const checkpointRef = (instance: string) => ({
   name: instance,
@@ -166,6 +202,8 @@ const outside = "a relative path with no empty, . or .. part";
 
 const overlap = "each path once, and none within another file";
 
+const storeObject = `objects/${"0".repeat(64)}`;
+
 const refusedManifests: ReadonlyArray<
   readonly [string, Kind, (file: ManifestFile) => ManifestFile, string]
 > = [
@@ -211,6 +249,18 @@ const refusedManifests: ReadonlyArray<
     "linux",
     (file) => ({ ...file, key: "fake/../../escaped" }),
     "a runtime's name, / and a SHA-256 in hex",
+  ],
+  [
+    "key isn't the object its objects/ path names",
+    "linux",
+    (file) => ({ ...file, path: storeObject }),
+    "a key of the SHA-256 its objects/ path names",
+  ],
+  [
+    "file in pieces lies under objects/",
+    "mac",
+    (file) => ({ ...file, path: storeObject }),
+    "a path outside objects/, which holds keyed files",
   ],
   [
     "file has both a key and pieces",
@@ -345,6 +395,58 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           readFileSync(path.join(installed, "disk.raw")).equals(disk)
         ).toBe(true);
         expect(readFileSync(path.join(installed, "empty"))).toHaveLength(0);
+      })
+  );
+
+  it.effect(
+    "a fetch on smolvm installs what a smolvm publish wrote, each object into the host's store",
+    () =>
+      Effect.gen(function* () {
+        const root = yield* scratch;
+        const hash = createHash("sha256").update("a chunk").digest("hex");
+        const object = path.join("objects", hash);
+        const built = checkpointRef("built");
+        const fetchedRef = checkpointRef("fetched");
+        const memory = memoryStore();
+
+        const checkpointIn = (dir: string, ref: typeof built) =>
+          path.join(dir, "checkpoints", `${nativeName(ref)}.checkpoint`);
+
+        const from = path.join(root, "from");
+
+        for (const [file, content] of [
+          [object, "a chunk"],
+          ["checkpoint.json", "{}"],
+        ] as const) {
+          const target = path.join(checkpointIn(from, built), file);
+
+          mkdirSync(path.dirname(target), { recursive: true });
+          writeFileSync(target, content);
+        }
+
+        yield* publish(memory.store, yield* smolvmIn(from), built, "built");
+
+        const to = path.join(root, "to");
+
+        yield* fetch(
+          memory.store,
+          yield* smolvmIn(to),
+          fetchedRef,
+          "built",
+          "web@1"
+        );
+
+        const installed = checkpointIn(to, fetchedRef);
+
+        expect(readFileSync(path.join(installed, object), "utf8")).toBe(
+          "a chunk"
+        );
+        expect(
+          readFileSync(path.join(installed, "checkpoint.json"), "utf8")
+        ).toBe("{}");
+        expect(statSync(path.join(to, "checkpoints", object)).ino).toBe(
+          statSync(path.join(installed, object)).ino
+        );
       })
   );
 });

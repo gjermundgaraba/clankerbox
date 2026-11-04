@@ -56,7 +56,21 @@ const Key = Schema.String.check(
   })
 );
 
-const Keyed = Schema.Struct({ path: Within, size: Size, key: Key });
+const storeObject = /^objects\/(?<hash>[0-9a-f]{64})$/u;
+
+const Keyed = Schema.Struct({ path: Within, size: Size, key: Key }).check(
+  Schema.makeFilter(
+    ({ path, key }: { readonly path: string; readonly key: string }) => {
+      const object = storeObject.exec(path)?.groups?.["hash"];
+
+      return (
+        object === undefined ||
+        key.endsWith(`/${object}`) ||
+        "a key of the SHA-256 its objects/ path names"
+      );
+    }
+  )
+);
 
 const Pieced = Schema.Struct({
   path: Within,
@@ -73,6 +87,11 @@ const Pieced = Schema.Struct({
     }) =>
       pieces.length === Math.ceil(size / pieceBytes) ||
       `one piece for each ${pieceBytes} bytes of its size`
+  ),
+  Schema.makeFilter(
+    ({ path }: { readonly path: string }) =>
+      !path.startsWith("objects/") ||
+      "a path outside objects/, which holds keyed files"
   )
 );
 
