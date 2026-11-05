@@ -20,6 +20,7 @@ import {
   Conflict,
   Http,
   isResting,
+  isUndone,
   labelledWith,
   NotBuilt,
   NotFound,
@@ -191,9 +192,6 @@ const nextStep = <S>(
 
 const noMachine = (id: string) =>
   new NotFound({ message: `no machine ${id}`, id });
-
-const isUndone = ({ phase, state, desired }: Machine) =>
-  phase === "failed" && state === "missing" && desired !== "deleted";
 
 const noCheckpoint = (id: string) =>
   new NotFound({ message: `no checkpoint ${id}`, id });

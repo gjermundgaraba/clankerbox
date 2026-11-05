@@ -30,7 +30,7 @@ import {
 } from "./errors.ts";
 import type { ClankerboxError, HostError } from "./errors.ts";
 import { version, versionHeader } from "./release.ts";
-import { isResting } from "./resources.ts";
+import { isResting, isUndone } from "./resources.ts";
 import type {
   Build,
   BuildRequest,
@@ -471,9 +471,6 @@ const builtAt =
       : endedAt<Build>("ready", "build")(build);
   };
 
-const undoneCreate = ({ phase, state, desired }: Machine) =>
-  phase === "failed" && state === "missing" && desired !== "deleted";
-
 /** A client of the control plane at `url`. It sends nothing until called. */
 export const make = (
   url: string,
@@ -728,7 +725,7 @@ export const make = (
           Effect.catchTag("NotFound", () => Effect.succeedNone)
         );
 
-        if (Option.isSome(found) && !undoneCreate(found.value)) {
+        if (Option.isSome(found) && !isUndone(found.value)) {
           return yield* startMachine({ id: name });
         }
 

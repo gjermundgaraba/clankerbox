@@ -197,6 +197,14 @@ export const Machine = Schema.Struct({
 
 export type Machine = typeof Machine.Type;
 
+/** A create that failed and was undone: its row stays until a delete, or a create of its name replaces it. */
+export const isUndone = ({
+  phase,
+  state,
+  desired,
+}: Pick<Machine, "phase" | "state" | "desired">): boolean =>
+  phase === "failed" && state === "missing" && desired !== "deleted";
+
 /**
  * The state as people read it: `running` at rest, `running (failed)` where it is but not at rest,
  * and `stopped, wants running (starting)` on the way.
