@@ -89,13 +89,10 @@ const sourceStep = (store: Store, found: MachineRow, held: Setup | undefined) =>
       : undefined;
   });
 
-const isTemplateBuilder = ({ ephemeral }: MachineRow) => ephemeral;
-
 const takesKeys = (found: MachineRow) =>
-  !isTemplateBuilder(found) &&
-  (found.source.kind === "base"
+  found.source.kind === "base"
     ? found.source.scripted
-    : found.template !== undefined);
+    : found.template !== undefined;
 
 /**
  * What a host is sent for a machine's operation, built afresh from the rows at each delivery, or

@@ -15,7 +15,7 @@ import { Effect, Exit, Fiber, Layer, Schema } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { expect } from "vite-plus/test";
 
-import { clientOf, eventually, running } from "../support.ts";
+import { addsLoginUser, clientOf, eventually, running } from "../support.ts";
 
 const spec: MachineSpec = { base: "ubuntu", cpu: 1, ramMib: 1024, diskGib: 10 };
 
@@ -435,7 +435,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const built = yield* client.buildTemplate({
           template: "web",
           ...spec,
-          setup: { script: "true" },
+          setup: { script: addsLoginUser },
         });
 
         const listed = yield* client.templates;

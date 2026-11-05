@@ -131,7 +131,7 @@ One process runs from one JSON config file:
 - `hosts` is in placement order: a create goes to the first that offers its base and has room, and a create from a template to the first that holds a copy of its build and has room.
 - `draining: true` on a host passes it over for new machines, and leaves what it runs alone.
 - `stateDir`, relative to the config, holds `server.db`. One process holds it at a time.
-- `authorizedKeys`, relative to the config, is a public-key file, such as an `id_ed25519.pub`, or several concatenated: each line that isn't blank is `<type> <base64> [comment]`, so a private key or any other file is refused. The control plane reads the file as it starts and sends the keys with every create that runs a setup or clones a template's build, and the host installs those it lacks for the login user once the setup exits 0 or the clone is made. A template's build holds none. A create without a setup gets none, and a fork or restore of a checkpoint only those its source had. The keys are never stored or logged. To change them, edit the file and restart the control plane: machines made after it take the new set, and those made before keep theirs.
+- `authorizedKeys`, relative to the config, is a public-key file, such as an `id_ed25519.pub`, or several concatenated: each line that isn't blank is `<type> <base64> [comment]`, so a private key or any other file is refused. The control plane reads the file as it starts and sends the keys with every create that runs a setup or clones a template's build, and the host installs those it lacks for the login user once the setup exits 0 or the clone is made. A template's build holds the keys its setup was sent, and a clone of it adds any key it lacks, so a key added since the build reaches it, and one removed since stays. A create without a setup gets none, and a fork or restore of a checkpoint only those its source had. The keys are never stored or logged. To change them, edit the file and restart the control plane: machines made after it take the new set, and those made before keep theirs.
 - To add a host, add its line and restart the control plane. Machines keep running through the restart, and clients need nothing.
 
 ```sh
@@ -143,6 +143,10 @@ The control plane exits 130 on SIGINT or SIGTERM and 1 when it fails.
 ### Upgrading from 0.30
 
 Hosts and the control plane start fresh: 0.30's machines aren't carried over. Before you upgrade, delete each machine and checkpoint with the old release, then stop its host, and remove its `stateDir`. IDs no longer carry a host: `linux_dev` is `dev`, and `ssh dev.cbx` replaces `ssh linux_dev`. Client configs name `server` instead of `hosts`, and profiles lose `host`. `clankerbox host` is now `clankerbox-host`.
+
+### Upgrading from 0.36
+
+State carries over, and nothing on a host changes. A template's build now holds the server config's `authorizedKeys`, installed once its setup exits 0. A build made before keeps none, and a create from it still installs them, so nothing needs a rebuild. A build whose setup leaves no login user, or no `sudo`, now fails as it ends, where before each create from it failed.
 
 ### Upgrading from 0.35
 
@@ -268,7 +272,7 @@ Setup runs once, as root, after the machine's first boot; forks and restores car
 
 A service of the login user that serves TLS on the tailnet can take the node's certificate from clankerbox's `tailscaled` (see above). The join comes after `/etc/clankerbox/start` has run, so the hook can't wait for the tailnet.
 
-Once a setup exits 0, and once a create clones a template's build, the host adds each key of the server config's `authorizedKeys` that the login user's `~/.ssh/authorized_keys` lacks, as that user through `sudo`, beside the keys already there. A template build's own setup installs none. A setup that leaves no login user, or no `sudo`, fails then, as does each create from a build of it, and the machine is deleted. Put no key in root's: nothing logs in as root.
+Once a setup exits 0, and once a create clones a template's build, the host adds each key of the server config's `authorizedKeys` that the login user's `~/.ssh/authorized_keys` lacks, as that user through `sudo`, beside the keys already there, so a template's build holds them. A setup that leaves no login user, or no `sudo`, fails then, so a template's build of it fails, and the machine is deleted. Put no key in root's: nothing logs in as root.
 
 Linux guests need `perl`. On mac, Softnet blocks gateway DNS, so set public resolvers. A checkpoint, like a template's build, holds everything the machine had, credentials too.
 

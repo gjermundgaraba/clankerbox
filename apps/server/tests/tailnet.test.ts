@@ -13,6 +13,7 @@ import {
   unchecked,
 } from "../src/tailnet.ts";
 import {
+  addsLoginUser,
   clientOf,
   eventually,
   loginSetup,
@@ -352,7 +353,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       yield* client.buildTemplate({
         ...request("unused"),
         template: "web",
-        setup: { script: "#!/bin/sh\necho set up\n", timeoutSeconds: 30 },
+        setup: {
+          script: `#!/bin/sh\n${addsLoginUser}\necho set up\n`,
+          timeoutSeconds: 30,
+        },
       });
       yield* Effect.sleep(Duration.millis(200));
 

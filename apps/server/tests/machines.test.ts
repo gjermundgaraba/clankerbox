@@ -3528,7 +3528,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a build bakes no keys, and a create cloned from it installs the server's",
+    "a build holds the server's keys, and a create cloned from it holds each once",
     () =>
       Effect.gen(function* () {
         const { client, fake, host, store } = yield* built();
@@ -3537,7 +3537,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* client.create("box", { template: "web" });
 
         expect(
-          yield* exists(
+          yield* read(
             path.join(
               host.dir,
               "checkpoints",
@@ -3545,7 +3545,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
               "home/admin/.ssh/authorized_keys"
             )
           )
-        ).toBe(false);
+        ).toBe(`\n${operatorKey}\n`);
         expect(
           yield* read(
             path.join(fake.root("box") ?? "", "home/admin/.ssh/authorized_keys")
