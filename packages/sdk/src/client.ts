@@ -154,12 +154,6 @@ export type EnsureError =
 
 export interface Interface extends Calls {
   readonly hosts: Effect.Effect<readonly Host[], ErrorOf<"listHosts">>;
-  readonly machines: Effect.Effect<readonly Machine[], ErrorOf<"listMachines">>;
-  /** Every ready checkpoint; `listCheckpoints` takes a filter. */
-  readonly checkpoints: Effect.Effect<
-    readonly Checkpoint[],
-    ErrorOf<"listCheckpoints">
-  >;
   readonly capacity: Effect.Effect<CapacityReport, ErrorOf<"getCapacity">>;
   readonly templates: Effect.Effect<
     readonly Template[],
@@ -779,8 +773,6 @@ export const make = (
 
     return {
       hosts: send("listHosts", {}),
-      machines: send("listMachines", {}),
-      checkpoints: send("listCheckpoints", {}),
       listMachines: (filter) => send("listMachines", filter ?? {}),
       listCheckpoints: (filter) => send("listCheckpoints", filter ?? {}),
       capacity: send("getCapacity", {}),

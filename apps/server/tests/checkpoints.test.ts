@@ -69,7 +69,7 @@ const captured = (store: Started["store"]) =>
   );
 
 const checkpointIds = (client: Client.Interface) =>
-  Effect.map(client.checkpoints, (listed) => listed.map(({ id }) => id));
+  Effect.map(client.listCheckpoints(), (listed) => listed.map(({ id }) => id));
 
 const machineId = (host: TestHost, name: string) =>
   read(path.join(host.fake.root(name) ?? "", "var/lib/clankerbox/machine-id"));
@@ -393,7 +393,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(error).toStrictEqual(
           new Conflict({ message: "checkpoint snap exists", id: "snap" })
         );
-        expect(yield* client.checkpoints).toStrictEqual([first]);
+        expect(yield* client.listCheckpoints()).toStrictEqual([first]);
       })
   );
 
@@ -451,7 +451,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(rows.map(({ name, pin }) => [name, pin])).toStrictEqual([
           ["hot", "fake 1"],
         ]);
-        expect(yield* client.checkpoints).toStrictEqual([ram]);
+        expect(yield* client.listCheckpoints()).toStrictEqual([ram]);
       })
   );
 

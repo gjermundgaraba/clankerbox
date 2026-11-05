@@ -89,7 +89,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         });
 
         expect(yield* client.deleteMachine({ id: "dev" })).toBe("deleted");
-        expect(yield* client.machines).toStrictEqual([]);
+        expect(yield* client.listMachines()).toStrictEqual([]);
       })
   );
 
@@ -209,7 +209,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(fake.calls).toStrictEqual([]);
         expect(
-          (yield* second.client.machines).map(({ id, state }) => [id, state])
+          (yield* second.client.listMachines()).map(({ id, state }) => [
+            id,
+            state,
+          ])
         ).toStrictEqual([
           ["dev", "running"],
           ["other", "stopped"],

@@ -150,8 +150,8 @@ describe("client", () => {
 
         const seen = yield* withClient(stub, (client) =>
           Effect.all({
-            machines: client.machines,
-            checkpoints: client.checkpoints,
+            machines: client.listMachines(),
+            checkpoints: client.listCheckpoints(),
             hosts: client.hosts,
             capacity: client.capacity,
           })
@@ -171,8 +171,8 @@ describe("client", () => {
         yield* withClient(stub, (client) =>
           Effect.gen(function* () {
             yield* client.hosts;
-            yield* client.machines;
-            yield* client.checkpoints;
+            yield* client.listMachines();
+            yield* client.listCheckpoints();
             yield* client.capacity;
             yield* client.create("dev", spec);
             yield* client.getMachine({ id: "dev" });
@@ -782,7 +782,7 @@ describe("client", () => {
       () =>
         Effect.gen(function* () {
           const error = yield* withClient("down", (client) =>
-            Effect.flip(client.machines)
+            Effect.flip(client.listMachines())
           );
 
           expect(error._tag).toBe("Unavailable");
@@ -796,7 +796,7 @@ describe("client", () => {
         Effect.gen(function* () {
           const error = yield* Effect.flatMap(
             Client.make("http://elsewhere.test"),
-            (client) => Effect.flip(client.machines)
+            (client) => Effect.flip(client.listMachines())
           ).pipe(Effect.provide(transport(new Map())));
 
           expect(error._tag).toBe("Unavailable");

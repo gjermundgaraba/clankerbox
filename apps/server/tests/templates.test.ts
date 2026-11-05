@@ -415,7 +415,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const [copy] = yield* store.checkpoints;
         const name = copy?.name ?? "";
 
-        expect(yield* client.checkpoints).toStrictEqual([]);
+        expect(yield* client.listCheckpoints()).toStrictEqual([]);
         expect(
           yield* Effect.flip(client.getCheckpoint({ id: name }))
         ).toMatchObject({ _tag: "NotFound" });
@@ -439,7 +439,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       yield* entered;
 
       const rows = yield* machineNames(served);
-      const listed = yield* client.machines;
+      const listed = yield* client.listMachines();
 
       yield* release;
       yield* Fiber.join(building);

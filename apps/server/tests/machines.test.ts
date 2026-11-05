@@ -275,7 +275,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       fake.machines.clear();
 
       const got = yield* machine("dev");
-      const listed = yield* client.machines;
+      const listed = yield* client.listMachines();
 
       expect(got.state).toBe("missing");
       expect(listed.map(({ id, state }) => [id, state])).toStrictEqual([
@@ -361,7 +361,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       yield* client.create("b", request("b"));
       fake.observed.length = 0;
 
-      const listed = yield* client.machines;
+      const listed = yield* client.listMachines();
 
       expect(listed.map(({ id, state }) => [id, state])).toStrictEqual([
         ["a", "running"],
@@ -381,7 +381,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* client.create("b", request("b"));
         fake.failNextObserve(new Internal({ message: "tart list exited 1" }));
 
-        const listed = yield* client.machines;
+        const listed = yield* client.listMachines();
 
         expect(listed.map(({ id, state }) => [id, state])).toStrictEqual([
           ["a", "unknown"],
@@ -517,7 +517,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* client.create("b", request("b"));
         unready(fake, "a");
 
-        const listed = yield* client.machines;
+        const listed = yield* client.listMachines();
 
         expect(listed.map(({ id, state }) => [id, state])).toStrictEqual([
           ["a", "unknown"],
@@ -735,10 +735,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(refused.map(({ _tag }) => _tag)).toStrictEqual(
           Array.from({ length: 5 }, () => "NotFound")
         );
-        expect((yield* client.machines).map(({ id }) => id)).toStrictEqual([
-          "source",
-          "dev",
-        ]);
+        expect(
+          (yield* client.listMachines()).map(({ id }) => id)
+        ).toStrictEqual(["source", "dev"]);
       })
   );
 
@@ -1559,7 +1558,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(
           idsOf(yield* client.listMachines({ labels: { app: "none" } }))
         ).toStrictEqual([]);
-        expect(idsOf(yield* client.machines)).toStrictEqual([
+        expect(idsOf(yield* client.listMachines())).toStrictEqual([
           "dev",
           "plain",
           "copy",
@@ -2142,7 +2141,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* host.dispose;
 
         const down = yield* machine("dev");
-        const listed = yield* client.machines;
+        const listed = yield* client.listMachines();
 
         yield* restartedHost(host);
 
