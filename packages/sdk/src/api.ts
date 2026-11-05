@@ -101,7 +101,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: [...creating, NotBuilt] as const,
       description:
-        "Create a machine on a host with room, and prepare it: from a template's current build, or the build it pins, cloned with no setup run at the build's sizes or larger ones; or from a base, or on linux an image reference, running its setup once. NotBuilt answers a template with no ready build. A create or setup that fails deletes the VM, again at each recheck while that delete fails, and keeps the row, failed, to say why. A template's clone is prepared as part of its create, so one whose preparation fails goes the same way; a base's preparation that fails keeps the machine.",
+        "Create a machine on a host with room, and prepare it: from a template's current build, or the build it pins, cloned at the build's sizes or larger ones; or from a base, or on linux an image reference. A create runs no setup: a template's build runs one. NotBuilt answers a template with no ready build. A create that fails deletes the VM, again at each recheck while that delete fails, and keeps the row, failed, to say why. A template's clone is prepared as part of its create, so one whose preparation fails goes the same way; a base's preparation that fails keeps the machine.",
       input: CreateRequest,
       success: Machine,
     }),

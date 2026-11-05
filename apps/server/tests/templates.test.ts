@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { image } from "@gjermundgaraba/clankerbox-host/testing";
@@ -8,7 +10,13 @@ import {
   isBuildCopy,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { BuildRequest, Kind } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, Fiber, Option } from "effect";
+import {
+  exists,
+  readBytes,
+  readDirectory,
+} from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
+import { Duration, Effect, Fiber, Logger, Option, References } from "effect";
 import { expect } from "vite-plus/test";
 
 import {
@@ -742,5 +750,92 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       expect(error).toMatchObject({ _tag: "Unavailable", readOnly: true });
     })
+  );
+
+  it.effect(
+    "a build's setup and the server's keys reach neither the control plane's log, nor a host's, nor the control plane's files",
+    () =>
+      Effect.gen(function* () {
+        const secret = "setup-secret-6f1c";
+        const script = `#!/bin/sh\n# ${secret}\nTOKEN=${secret}\n${addsLoginUser}\necho set up\n`;
+        const [, key = ""] = operatorKey.split(" ");
+        const logged: string[] = [];
+
+        const heard = Logger.map(Logger.formatJson, (line) => {
+          logged.push(line);
+        });
+
+        const { client, stateDir } = yield* withClient({
+          logger: heard,
+          runtime: { logger: heard },
+        }).pipe(Effect.provideService(References.MinimumLogLevel, "All"));
+
+        yield* client.buildTemplate(web({ setup: { script } }));
+        yield* client.create("kept-6f1c", { template: "web" });
+
+        const failed = yield* Effect.flip(
+          client.buildTemplate(web({ setup: { script: `${script}exit 3\n` } }))
+        );
+
+        const files = yield* readDirectory(stateDir);
+
+        const texts = yield* Effect.forEach(files, (file) =>
+          Effect.map(readBytes(path.join(stateDir, file)), (bytes) =>
+            new TextDecoder("latin1").decode(bytes)
+          )
+        );
+
+        expect(failed._tag).toBe("ScriptFailed");
+        expect(files).toContain("server.db");
+        expect(logged.some((line) => line.includes("setup exited 3"))).toBe(
+          true
+        );
+        expect(logged.filter((line) => line.includes(secret))).toStrictEqual(
+          []
+        );
+        expect(texts.some((text) => text.includes("kept-6f1c"))).toBe(true);
+        expect(texts.filter((text) => text.includes(secret))).toStrictEqual([]);
+        expect(logged.filter((line) => line.includes(key))).toStrictEqual([]);
+        expect(texts.filter((text) => text.includes(key))).toStrictEqual([]);
+      })
+  );
+
+  it.effect(
+    "a build whose setup fails ends with its last lines of output, never its text, and leaves no file of it",
+    () =>
+      Effect.gen(function* () {
+        const { client } = yield* withClient();
+        const marker = "setup-text-marker";
+
+        const script = [
+          "#!/bin/sh",
+          `# ${marker}`,
+          "i=0",
+          "while [ $i -lt 30 ]; do echo line $i; i=$((i+1)); done",
+          'echo "running as $0"',
+          "echo broke >&2",
+          "exit 3",
+        ].join("\n");
+
+        const error = yield* Effect.flip(
+          client.buildTemplate(web({ setup: { script } }))
+        );
+
+        const read = yield* client.getTemplate({ id: "web" });
+
+        const file =
+          /running as (?<file>\S+)/u.exec(error.message)?.groups?.["file"] ??
+          "";
+
+        expect(error).toMatchObject({ _tag: "ScriptFailed", script: "setup" });
+        expect(error.message).toContain("setup exited 3");
+        expect(error.message).toContain("line 29\nrunning as ");
+        expect(error.message).toContain("broke");
+        expect(error.message).not.toContain("line 10\n");
+        expect(error.message).not.toContain(marker);
+        expect(read.builds.at(-1)?.error?.message).toBe(error.message);
+        expect(file).toMatch(/^\/var\/tmp\/clankerbox-setup\./u);
+        expect(yield* exists(file)).toBe(false);
+      })
   );
 });

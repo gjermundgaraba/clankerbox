@@ -2,17 +2,9 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, layer } from "@effect/vitest";
-import {
-  outputLimit,
-  readSetup,
-  ScriptFailed,
-} from "@gjermundgaraba/clankerbox-sdk";
+import { outputLimit, ScriptFailed } from "@gjermundgaraba/clankerbox-sdk";
 import type { Executed } from "@gjermundgaraba/clankerbox-sdk";
-import {
-  mkdir,
-  write,
-  scratch,
-} from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import { write, scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import {
   build,
   checkpoint,
@@ -317,40 +309,6 @@ describe("machines", () => {
     );
 
     it.effect(
-      "create --setup packs a recipe directory into one script, and a setup with no timeout leaves it to the host",
-      () =>
-        Effect.gen(function* () {
-          const dir = yield* scratch;
-          const recipe = path.join(dir, "dev-recipe");
-
-          yield* mkdir(path.join(recipe, "files"));
-          yield* write(path.join(recipe, "setup.sh"), "#!/bin/sh\ntrue\n");
-          yield* write(path.join(recipe, "files", "a"), "a\n");
-
-          const config = yield* writeConfig(dir);
-          const stub = server();
-
-          const { code, stdout } = yield* cli(
-            ["create", "box", ...sizes, "--setup", recipe, "--config", config],
-            { server: stub }
-          );
-
-          expect(code).toBe(0);
-          expect(stdout).toBe("box");
-          expect(stub.creates).toStrictEqual([
-            {
-              id: "box",
-              base: "ubuntu",
-              cpu: 2,
-              ramMib: 4096,
-              diskGib: 20,
-              setup: { script: yield* readSetup(recipe) },
-            },
-          ]);
-        })
-    );
-
-    it.effect(
       "create --template sends the template, or the build named, and the sizes given, with no base or setup",
       () =>
         Effect.gen(function* () {
@@ -452,15 +410,11 @@ describe("machines", () => {
     );
 
     it.effect(
-      "create refuses a setup or a base with --template, --setup-timeout with no setup to time, and a spec missing its base or sizes",
+      "create refuses a base with --template, and a spec missing its base or sizes",
       () =>
         Effect.gen(function* () {
           const dir = yield* scratch;
           const config = yield* writeConfig(dir);
-          const script = path.join(dir, "setup.sh");
-
-          yield* write(script, "#!/bin/sh\ntrue\n");
-
           const stub = server();
 
           const run = (args: readonly string[]) =>
@@ -469,15 +423,7 @@ describe("machines", () => {
             });
 
           const runs = [
-            yield* run([
-              "--template",
-              "web",
-              "--base",
-              "ubuntu",
-              "--setup",
-              script,
-            ]),
-            yield* run([...sizes, "--setup-timeout", "60s"]),
+            yield* run(["--template", "web", "--base", "ubuntu"]),
             yield* run(["--base", "ubuntu"]),
             yield* run(["--cpu", "2"]),
             yield* run(["--template", "web", "--cpu", "0"]),
@@ -494,9 +440,8 @@ describe("machines", () => {
             [
               1,
               "Invalid",
-              "create: a template's build has its base and has run its setup, so --template takes no --base, --setup",
+              "create: a template's build has its base, so --template takes no --base",
             ],
-            [1, "Invalid", "create: --setup-timeout needs a setup to time"],
             [
               1,
               "Invalid",
@@ -514,36 +459,62 @@ describe("machines", () => {
         })
     );
 
-    it.effect("create --setup sends a script file as its text", () =>
-      Effect.gen(function* () {
-        const dir = yield* scratch;
-        const config = yield* writeConfig(dir);
-        const script = path.join(dir, "setup.sh");
+    it.effect(
+      "create takes no --setup or --setup-timeout, as a setup runs only in a template's build, and its help lists neither",
+      () =>
+        Effect.gen(function* () {
+          const dir = yield* scratch;
+          const config = yield* writeConfig(dir);
+          const script = path.join(dir, "setup.sh");
 
-        yield* write(script, "#!/bin/sh\necho set up\n");
+          yield* write(script, "#!/bin/sh\ntrue\n");
 
-        const stub = server();
+          const stub = server();
 
-        const { code } = yield* cli(
-          [
-            "create",
-            "box",
-            ...sizes,
-            "--setup",
-            script,
-            "--setup-timeout",
-            "60s",
-            "--config",
-            config,
-          ],
-          { server: stub }
-        );
+          const runs = [
+            yield* cli(
+              [
+                "create",
+                "box",
+                ...sizes,
+                "--setup",
+                script,
+                "--config",
+                config,
+              ],
+              { server: stub }
+            ),
+            yield* cli(
+              [
+                "create",
+                "box",
+                ...sizes,
+                "--setup-timeout",
+                "60s",
+                "--config",
+                config,
+              ],
+              { server: stub }
+            ),
+          ];
 
-        expect(code).toBe(0);
-        expect(stub.creates[0]).toMatchObject({
-          setup: { script: "#!/bin/sh\necho set up\n", timeoutSeconds: 60 },
-        });
-      })
+          const help = yield* cli(["create", "--help"]);
+
+          expect(runs.map(({ code, stderr }) => [code, stderr])).toStrictEqual([
+            [
+              1,
+              expect.stringContaining("Unrecognized flag: --setup in command"),
+            ],
+            [
+              1,
+              expect.stringContaining("Unrecognized flag: --setup-timeout in"),
+            ],
+          ]);
+          expect(stub.calls).toStrictEqual([]);
+          expect(help.code).toBe(0);
+          expect(help.stdout).toContain("--template");
+          expect(help.stdout).not.toContain("--setup");
+        })
     );
 
     it.effect("deleting a machine that is already gone counts as done", () =>

@@ -6,25 +6,10 @@ import path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { Capacity, Internal, Unsizable } from "@gjermundgaraba/clankerbox-sdk";
-import type { Machine } from "@gjermundgaraba/clankerbox-sdk";
-import {
-  exists,
-  read,
-  readBytes,
-  readDirectory,
-  remove,
-  stat,
-} from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import type { Machine, Setup } from "@gjermundgaraba/clankerbox-sdk";
+import { read, stat } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
-import {
-  Duration,
-  Effect,
-  Fiber,
-  Logger,
-  Option,
-  References,
-  Result,
-} from "effect";
+import { Duration, Effect, Fiber, Option, Result } from "effect";
 import { expect } from "vite-plus/test";
 
 import {
@@ -60,11 +45,6 @@ const installsStart = {
 };
 
 const exits3 = { script: "#!/bin/sh\nexit 3\n", timeoutSeconds: 30 };
-
-const quickSetup = {
-  script: `#!/bin/sh\n${addsLoginUser}\n`,
-  timeoutSeconds: 30,
-};
 
 const portsOfHere = { first: 21_900, last: 21_909 };
 
@@ -155,17 +135,37 @@ const built = (options?: Parameters<typeof served>[0]) =>
     return plane;
   });
 
+const fromWeb = { template: "web" } as const;
+
+const servedWithBuildOf = (
+  setup: Setup,
+  options?: Parameters<typeof served>[0]
+) =>
+  Effect.gen(function* () {
+    const plane = yield* served(options);
+
+    yield* plane.client.buildTemplate({
+      template: "web",
+      ...request("unused"),
+      setup,
+    });
+    yield* eventually(plane.store.machines, (rows) =>
+      rows.every(({ ephemeral }) => !ephemeral)
+    );
+    plane.fake.calls.length = 0;
+    plane.fake.observed.length = 0;
+
+    return plane;
+  });
+
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
-    "create runs setup once, then preparation, and answers once the machine runs as asked",
+    "a create from a template's build runs no setup, then preparation, and answers once the machine runs as asked",
     () =>
       Effect.gen(function* () {
-        const { client, fake } = yield* served();
+        const { client, fake } = yield* servedWithBuildOf(installsStart);
 
-        const made = yield* client.create(
-          "dev",
-          request("dev", { setup: installsStart })
-        );
+        const made = yield* client.create("dev", fromWeb);
 
         const root = fake.root("dev") ?? "";
 
@@ -183,13 +183,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(
           yield* read(path.join(root, "var/lib/clankerbox/machine-id"))
         ).toBe("dev\n");
-        expect(yield* read(path.join(root, "starts"))).toBe("start\n");
+        expect(yield* read(path.join(root, "starts"))).toBe("start\nstart\n");
         expect(fake.calls).toStrictEqual([
           "admit dev",
-          "create dev",
+          "restore dev",
           "exec dev",
-          "exec dev",
-          "start dev",
           "exec dev",
           "exec dev",
         ]);
@@ -212,9 +210,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a start of a machine that already runs prepares it again, admitting nothing",
     () =>
       Effect.gen(function* () {
-        const { client, fake } = yield* served();
+        const { client, fake } = yield* servedWithBuildOf(installsStart);
 
-        yield* client.create("dev", request("dev", { setup: installsStart }));
+        yield* client.create("dev", fromWeb);
         fake.calls.length = 0;
 
         const started = yield* client.startMachine({ id: "dev" });
@@ -222,7 +220,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(at(started)).toStrictEqual(["running", "running", "settled"]);
         expect(fake.calls).toStrictEqual(["start dev", "exec dev", "exec dev"]);
         expect(yield* read(path.join(fake.root("dev") ?? "", "starts"))).toBe(
-          "start\nstart\n"
+          "start\nstart\nstart\n"
         );
       })
   );
@@ -293,10 +291,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { asking, client, fake } = yield* served();
-        const setup = fake.holdNext("exec");
+        const making = fake.holdNext("create");
 
-        yield* asking.create("dev", request("dev", { setup: quickSetup }));
-        yield* setup.entered;
+        yield* asking.create("dev", request("dev"));
+        yield* making.entered;
 
         const readsBefore = fake.observed.length;
 
@@ -311,7 +309,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
 
         yield* pause;
-        yield* setup.release;
+        yield* making.release;
 
         const [woken, rested] = yield* Fiber.join(resting);
 
@@ -327,10 +325,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { asking, client, fake } = yield* served();
-        const setup = fake.holdNext("exec");
+        const making = fake.holdNext("create");
 
-        yield* asking.create("dev", request("dev", { setup: quickSetup }));
-        yield* setup.entered;
+        yield* asking.create("dev", request("dev"));
+        yield* making.entered;
 
         const holding = (holdSeconds: number) =>
           Effect.forkChild(
@@ -341,7 +339,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const long = yield* Effect.all([holding(5), holding(5), holding(5)]);
         const [bounded, unrested] = yield* Fiber.join(short);
 
-        yield* setup.release;
+        yield* making.release;
 
         const answered = yield* Effect.forEach(long, Fiber.join);
         const waits = answered.map(([waited]) => Duration.toMillis(waited));
@@ -437,19 +435,20 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a create whose machine can't be read after its make reads waiting, unprepared, and a recheck prepares it",
+    "a create whose machine can't be read after its make reads waiting, and the recheck that reads it settles it",
     () =>
       Effect.gen(function* () {
-        const { asking, fake, machine, rests } = yield* served({
-          recheck: Duration.millis(200),
-        });
+        const { asking, fake, machine, rests } = yield* servedWithBuildOf(
+          installsStart,
+          { recheck: Duration.millis(200) }
+        );
 
-        const setup = fake.holdNext("exec");
+        const keys = fake.holdNext("exec");
 
-        yield* asking.create("dev", request("dev", { setup: installsStart }));
-        yield* setup.entered;
+        yield* asking.create("dev", fromWeb);
+        yield* keys.entered;
         unready(fake, "dev");
-        yield* setup.release;
+        yield* keys.release;
 
         yield* eventually(
           machine("dev"),
@@ -467,11 +466,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const settled = yield* rests("dev");
 
         expect(at(unread)).toStrictEqual(["unknown", "running", "waiting"]);
-        expect(unread.hostKey).toBeUndefined();
-        expect([at(settled), settled.hostKey === undefined]).toStrictEqual([
-          ["running", "running", "settled"],
-          false,
-        ]);
+        expect(at(settled)).toStrictEqual(["running", "running", "settled"]);
       })
   );
 
@@ -1633,28 +1628,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a delete sent while a create's setup runs cuts the setup short and deletes it",
-    () =>
-      Effect.gen(function* () {
-        const { client, fake, rows } = yield* served();
-        const { entered } = fake.holdNext("exec");
-
-        const creating = yield* Effect.forkChild(
-          Effect.flip(
-            client.create("dev", request("dev", { setup: installsStart }))
-          )
-        );
-
-        yield* entered;
-        yield* client.deleteMachine({ id: "dev" });
-
-        expect((yield* Fiber.join(creating))._tag).toBe("Superseded");
-        expect(fake.calls.slice(-2)).toStrictEqual(["exec dev", "delete dev"]);
-        expect(yield* rows).toStrictEqual([]);
-      })
-  );
-
-  it.effect(
     "a stop sent while a start boots reads the machine only once the start's native work ends",
     () =>
       Effect.gen(function* () {
@@ -1768,31 +1741,27 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "the server's authorized keys go to a setup's login user once it exits 0, in the same exec, beside the keys already there",
+    "the server's authorized keys go to a clone's login user, beside the keys its build left there",
     () =>
       Effect.gen(function* () {
-        const { client, fake } = yield* served();
         const keys = path.join("home", "admin", ".ssh", "authorized_keys");
 
-        yield* client.create(
-          "dev",
-          request("dev", {
-            setup: {
-              script: [
-                installsStart.script,
-                loginSetup,
-                'mkdir -p "$CLANKERBOX_ROOT/home/admin/.ssh"',
-                `printf "${theirs}" >"$CLANKERBOX_ROOT/${keys}"`,
-              ].join("\n"),
-            },
-          })
-        );
-        yield* client.create(
-          "fresh",
-          request("fresh", {
-            setup: { script: `#!/bin/sh\n${loginSetup}` },
-          })
-        );
+        const { client, fake } = yield* servedWithBuildOf({
+          script: [
+            installsStart.script,
+            loginSetup,
+            'mkdir -p "$CLANKERBOX_ROOT/home/admin/.ssh"',
+            `printf "${theirs}" >"$CLANKERBOX_ROOT/${keys}"`,
+          ].join("\n"),
+        });
+
+        yield* client.buildTemplate({
+          template: "fresh",
+          ...request("unused"),
+          setup: { script: `#!/bin/sh\n${loginSetup}` },
+        });
+        yield* client.create("dev", fromWeb);
+        yield* client.create("fresh", { template: "fresh" });
 
         const fresh = path.join(fake.root("fresh") ?? "", keys);
 
@@ -1800,126 +1769,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           `${theirs}\n${operatorKey}\n`
         );
         expect(fake.calls.filter((call) => call === "exec dev")).toHaveLength(
-          4
+          3
         );
         expect(yield* read(fresh)).toBe(`\n${operatorKey}\n`);
         expect((yield* stat(fresh)).mode & 0o777).toBe(0o600);
-      })
-  );
-
-  it.effect("a setup that fails deletes the machine, VM and all", () =>
-    Effect.gen(function* () {
-      const { client, fake, machine, row } = yield* served();
-
-      const error = yield* Effect.flip(
-        client.create("dev", request("dev", { setup: exits3 }))
-      );
-
-      const got = yield* machine("dev");
-
-      expect([error._tag, got.error?._tag]).toStrictEqual([
-        "ScriptFailed",
-        "ScriptFailed",
-      ]);
-      expect([got.state, got.phase]).toStrictEqual(["missing", "failed"]);
-      expect(stageOf(yield* row("dev"))).toBe("undone");
-      expect(fake.calls.slice(-2)).toStrictEqual(["exec dev", "delete dev"]);
-      expect(fake.machines.size).toBe(0);
-    })
-  );
-
-  it.effect(
-    "a setup's text and the server's keys reach neither the control plane's log, nor a host's, nor the control plane's files",
-    () =>
-      Effect.gen(function* () {
-        const secret = "setup-secret-6f1c";
-        const script = `#!/bin/sh\n# ${secret}\nTOKEN=${secret}\n${addsLoginUser}\necho set up\n`;
-        const [, key = ""] = operatorKey.split(" ");
-        const logged: string[] = [];
-
-        const heard = Logger.map(Logger.formatJson, (line) => {
-          logged.push(line);
-        });
-
-        const { client, stateDir } = yield* served({
-          logger: heard,
-          runtime: { logger: heard },
-        }).pipe(Effect.provideService(References.MinimumLogLevel, "All"));
-
-        const kept = "kept-6f1c";
-        const broken = "broken-6f1c";
-
-        yield* client.create(
-          kept,
-          request(kept, { setup: { script, timeoutSeconds: 30 } })
-        );
-
-        const failed = yield* Effect.flip(
-          client.create(
-            broken,
-            request(broken, {
-              setup: { script: `${script}exit 3\n`, timeoutSeconds: 30 },
-            })
-          )
-        );
-
-        const files = yield* readDirectory(stateDir);
-
-        const texts = yield* Effect.forEach(files, (file) =>
-          Effect.map(readBytes(path.join(stateDir, file)), (bytes) => ({
-            file,
-            text: new TextDecoder("latin1").decode(bytes),
-          }))
-        );
-
-        const holding = (wanted: string) =>
-          texts
-            .filter(({ text }) => text.includes(wanted))
-            .map(({ file }) => file);
-
-        expect(failed._tag).toBe("ScriptFailed");
-        expect(files).toContain("server.db");
-        expect(logged.some((line) => line.includes("setup exited 3"))).toBe(
-          true
-        );
-        expect(logged.filter((line) => line.includes(secret))).toStrictEqual(
-          []
-        );
-        expect(holding(kept)).not.toStrictEqual([]);
-        expect(holding(broken)).not.toStrictEqual([]);
-        expect(holding(secret)).toStrictEqual([]);
-        expect(logged.filter((line) => line.includes(key))).toStrictEqual([]);
-        expect(holding(key)).toStrictEqual([]);
-      })
-  );
-
-  it.effect(
-    "a setup that fails answers its failure though the delete after it fails, and the next recheck deletes the machine",
-    () =>
-      Effect.gen(function* () {
-        const { client, fake, machine, row } = yield* served({
-          recheck: Duration.millis(200),
-        });
-
-        fake.failNext("delete", new Internal({ message: "krun busy" }));
-
-        const error = yield* Effect.flip(
-          client.create("dev", request("dev", { setup: exits3 }))
-        );
-
-        const left = yield* machine("dev");
-
-        expect(error._tag).toBe("ScriptFailed");
-        expect(refusal(left)).toStrictEqual(["failed", "ScriptFailed"]);
-        expect(fake.machines.size).toBe(1);
-
-        yield* eventually(row("dev"), ({ state }) => state === "undone");
-
-        expect(fake.machines.size).toBe(0);
-        expect(refusal(yield* machine("dev"))).toStrictEqual([
-          "failed",
-          "ScriptFailed",
-        ]);
       })
   );
 
@@ -1930,8 +1783,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { client, fake, machine } = yield* served();
         const undoing = fake.holdNext("delete");
 
+        fake.failNext("create", new Internal({ message: "krun EINVAL" }));
+
         const creating = yield* Effect.forkChild(
-          Effect.flip(client.create("dev", request("dev", { setup: exits3 })))
+          Effect.flip(client.create("dev", request("dev")))
         );
 
         yield* undoing.entered;
@@ -1941,54 +1796,23 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* undoing.release;
 
         expect(refused._tag).toBe("NotFound");
-        expect((yield* Fiber.join(creating))._tag).toBe("ScriptFailed");
+        expect((yield* Fiber.join(creating))._tag).toBe("Internal");
         expect(refusal(yield* machine("dev"))).toStrictEqual([
           "failed",
-          "ScriptFailed",
+          "Internal",
         ]);
       })
   );
 
   it.effect(
-    "a setup that fails deletes the machine though a stop was asked meanwhile, and the stop answers the failure",
-    () =>
-      Effect.gen(function* () {
-        const { client, fake, machine } = yield* served();
-        const setup = fake.holdNext("exec");
-
-        const creating = yield* Effect.forkChild(
-          Effect.flip(client.create("dev", request("dev", { setup: exits3 })))
-        );
-
-        yield* setup.entered;
-
-        const stopping = yield* Effect.forkChild(
-          Effect.flip(client.stopMachine({ id: "dev" }))
-        );
-
-        yield* eventually(
-          machine("dev"),
-          ({ desired }) => desired === "stopped"
-        );
-        yield* setup.release;
-
-        expect((yield* Fiber.join(creating))._tag).toBe("Superseded");
-        expect((yield* Fiber.join(stopping))._tag).toBe("ScriptFailed");
-        expect(fake.machines.size).toBe(0);
-      })
-  );
-
-  it.effect(
-    "a fork of a machine whose setup still runs is NotMade, and a stop waits for the setup, then stops it",
+    "a fork of a machine whose make still runs is NotMade, and a stop waits for the make, then stops it",
     () =>
       Effect.gen(function* () {
         const { client, fake, machine, row } = yield* served();
-        const { release, entered } = fake.holdNext("exec");
+        const { release, entered } = fake.holdNext("create");
 
         const creating = yield* Effect.forkChild(
-          Effect.flip(
-            client.create("dev", request("dev", { setup: quickSetup }))
-          )
+          Effect.flip(client.create("dev", request("dev")))
         );
 
         yield* entered;
@@ -2024,25 +1848,23 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
-  it.effect(
-    "a create, fork or restore that succeeds makes its machine, setup and all",
-    () =>
-      Effect.gen(function* () {
-        const { client, rows } = yield* served();
+  it.effect("a create, fork or restore that succeeds makes its machine", () =>
+    Effect.gen(function* () {
+      const { client, rows } = yield* served();
 
-        yield* client.create("dev", request("dev", { setup: installsStart }));
-        yield* client.captureCheckpoint({ machine: "dev", name: "snap" });
-        yield* client.forkMachine({ machine: "dev", name: "forked" });
-        yield* client.restoreMachine({ checkpoint: "snap", name: "restored" });
+      yield* client.create("dev", request("dev"));
+      yield* client.captureCheckpoint({ machine: "dev", name: "snap" });
+      yield* client.forkMachine({ machine: "dev", name: "forked" });
+      yield* client.restoreMachine({ checkpoint: "snap", name: "restored" });
 
-        expect(
-          (yield* rows).map((found) => [found.name, stageOf(found)])
-        ).toStrictEqual([
-          ["dev", "made"],
-          ["forked", "made"],
-          ["restored", "made"],
-        ]);
-      })
+      expect(
+        (yield* rows).map((found) => [found.name, stageOf(found)])
+      ).toStrictEqual([
+        ["dev", "made"],
+        ["forked", "made"],
+        ["restored", "made"],
+      ]);
+    })
   );
 
   it.effect(
@@ -2069,104 +1891,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(refusal(failed)).toStrictEqual(["failed", "Internal"]);
         expect(at(started)).toStrictEqual(["running", "running", "settled"]);
         expect(fake.calls).toStrictEqual(["start dev", "exec dev", "exec dev"]);
-      })
-  );
-
-  const marker = "setup-text-marker";
-
-  it.effect(
-    "a failing setup fails the create with its last lines of output, never its text",
-    () =>
-      Effect.gen(function* () {
-        const { client, machine } = yield* served();
-
-        const script = [
-          "#!/bin/sh",
-          `# ${marker}`,
-          "i=0",
-          "while [ $i -lt 30 ]; do echo line $i; i=$((i+1)); done",
-          "echo broke >&2",
-          "exit 3",
-        ].join("\n");
-
-        const error = yield* Effect.flip(
-          client.create(
-            "dev",
-            request("dev", { setup: { script, timeoutSeconds: 30 } })
-          )
-        );
-
-        const got = yield* machine("dev");
-
-        expect(error._tag).toBe("ScriptFailed");
-        expect(error).toMatchObject({ script: "setup" });
-        expect(error.message).toContain("setup exited 3");
-        expect(error.message).toContain("line 29\nbroke");
-        expect(error.message).not.toContain("line 10\n");
-        expect(error.message).not.toContain(marker);
-        expect(got.error?.message).toBe(error.message);
-      })
-  );
-
-  it.effect("a setup that exits removes its file", () =>
-    Effect.gen(function* () {
-      const { client } = yield* served();
-      const script = `#!/bin/sh\necho "running as $0"\nexit 3\n`;
-
-      const error = yield* Effect.flip(
-        client.create(
-          "dev",
-          request("dev", { setup: { script, timeoutSeconds: 30 } })
-        )
-      );
-
-      const file =
-        /running as (?<file>\S+)/u.exec(error.message)?.groups?.["file"] ?? "";
-
-      expect(file).toMatch(/^\/var\/tmp\/clankerbox-setup\./u);
-      expect(yield* exists(file)).toBe(false);
-    })
-  );
-
-  it.effect("create accepts a setup that names no timeout", () =>
-    Effect.gen(function* () {
-      const { client } = yield* served();
-
-      const made = yield* client.create(
-        "dev",
-        request("dev", { setup: { script: installsStart.script } })
-      );
-
-      expect(made.phase).toBe("settled");
-    })
-  );
-
-  it.effect(
-    "a setup that runs past its timeout fails the create with the output so far",
-    () =>
-      Effect.gen(function* () {
-        const { client } = yield* served();
-        const script = `#!/bin/sh\n# ${marker}\necho "running as $0"\nsleep 30\n`;
-
-        const error = yield* Effect.flip(
-          client.create(
-            "dev",
-            request("dev", { setup: { script, timeoutSeconds: 1 } })
-          )
-        );
-
-        const file =
-          /running as (?<file>\S+)/u.exec(error.message)?.groups?.["file"] ??
-          "";
-
-        expect(file).toMatch(/^\/var\/tmp\/clankerbox-setup\./u);
-
-        yield* remove(file);
-
-        expect(error._tag).toBe("ScriptFailed");
-        expect(error).toMatchObject({ script: "setup" });
-        expect(error.message).toContain("setup ran past its 1s timeout");
-        expect(error.message).not.toContain(marker);
       })
   );
 

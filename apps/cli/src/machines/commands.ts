@@ -90,7 +90,7 @@ export const create = Command.make(
     })
 ).pipe(
   Command.withDescription(
-    "Create a machine from a template's build, which runs no setup, or from a base with sizes and an optional setup. A create waits until its machine runs, unless --no-wait. One whose copy or setup fails deletes its machine, keeps its row to say why, and fails. Prints the new ID."
+    "Create a machine from a template's build, or from a base with sizes. A create runs no setup: a template's build runs one, with clankerbox template build. A create waits until its machine runs, unless --no-wait. One whose make or copy fails deletes its machine, keeps its row to say why, and fails. Prints the new ID."
   )
 );
 

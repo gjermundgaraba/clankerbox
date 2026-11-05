@@ -61,7 +61,7 @@ const sourceStep = (store: Store, found: MachineRow, held: Setup | undefined) =>
     const { source } = found;
 
     if (source.kind === "base") {
-      if (!source.scripted) {
+      if (!found.ephemeral) {
         return { _tag: "base", base: found.base } as const;
       }
 
@@ -89,14 +89,11 @@ const sourceStep = (store: Store, found: MachineRow, held: Setup | undefined) =>
       : undefined;
   });
 
-const takesKeys = (found: MachineRow) =>
-  found.source.kind === "base"
-    ? found.source.scripted
-    : found.template !== undefined;
-
 /**
  * What a host is sent for a machine's operation, built afresh from the rows at each delivery, or
- * undefined when it can't be sent: its source went, or the setup `held` in memory did.
+ * undefined when it can't be sent: its source went, or the setup `held` in memory for a template's
+ * builder did. The keys go to a builder, so its build holds them, and to a clone of a build, which adds
+ * any it lacks.
  */
 export const machineStep = (
   store: Store,
@@ -129,7 +126,9 @@ export const machineStep = (
               diskGib: found.diskGib,
             },
             source,
-            ...(takesKeys(found) ? { authorizedKeys } : {}),
+            ...(found.ephemeral || found.template !== undefined
+              ? { authorizedKeys }
+              : {}),
             ports,
             machines,
           };

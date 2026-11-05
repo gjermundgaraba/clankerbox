@@ -126,30 +126,30 @@ describe("api", () => {
     }
   });
 
-  it("setup needs its script, and its timeout goes inside it", async () => {
-    const halves: readonly Schema.Json[] = [
-      { ...create, setup: { timeoutSeconds: 60 } },
+  it("a create takes no setup, which only a template's build runs, nor a setup's timeout", async () => {
+    const setups: readonly Schema.Json[] = [
+      { ...create, setup: { script: "#!/bin/sh\n", timeoutSeconds: 60 } },
       { ...create, setupTimeoutSeconds: 60 },
     ];
 
-    for (const body of halves) {
+    for (const body of setups) {
       const answer = await post("createMachine", body);
 
       expect(answer.status).toBe(400);
       expect(decodeInvalidInput(answer.body)).toBeInstanceOf(
         Action.InvalidInput
       );
+      expect(answer.body).toContain("setup");
       await server?.dispose();
     }
   });
 
-  it("a refused create's message doesn't carry its setup script", async () => {
+  it("a create refused for its setup doesn't carry the script in its message", async () => {
     const marker = "setup-text-marker";
 
     const answer = await post("createMachine", {
       ...create,
-      setup: { script: `#!/bin/sh\necho ${marker}\n`, timeoutSeconds: "soon" },
-      extra: true,
+      setup: { script: `#!/bin/sh\necho ${marker}\n` },
     });
 
     expect(answer.status).toBe(400);

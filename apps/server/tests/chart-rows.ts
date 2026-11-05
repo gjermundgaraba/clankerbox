@@ -27,7 +27,7 @@ export const facts = (fields?: Partial<Facts>): Facts => ({
   error: undefined,
   resize: undefined,
   ephemeral: false,
-  source: { kind: "base", scripted: true },
+  source: { kind: "base" },
   template: undefined,
   hostKey: undefined,
   pin: "pin",

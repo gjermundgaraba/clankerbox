@@ -62,14 +62,13 @@ config names no keys.
 
 IDs are bare names. The base is `ubuntu` on linux and `macos` on mac. The recheck
 runs every 2 seconds. The optional budget is the RAM, in MiB, that a host refuses
-to pass. The run has two recipes, each a directory with a `setup.sh`, to pass
-as `--setup`, and beside each a template file naming it with the kind's base
-and 1 vCPU, 1G of RAM and a 10G disk: `$S/cb.sh "$RUN" template build
-"$RUN/recipes/web.yaml"` builds the template `web`, and a copy beside it under
-another name builds another.
-`$RUN/recipes/web` writes `$RUN/recipe-ran`. `$RUN/recipes/slow` touches
-`$RUN/setup-began` and waits for `fault.sh <run> setup-go`, so a create or a
-template build can be caught mid-make.
+to pass. The run has two recipes, each a directory with a `setup.sh`, and
+beside each a template file naming it with the kind's base and 1 vCPU, 1G of
+RAM and a 10G disk: `$S/cb.sh "$RUN" template build "$RUN/recipes/web.yaml"`
+builds the template `web`, and a copy beside it under another name builds
+another. A create runs no setup. `$RUN/recipes/web` writes `$RUN/recipe-ran`.
+`$RUN/recipes/slow` touches `$RUN/setup-began` and waits for
+`fault.sh <run> setup-go`, so a template build can be caught mid-setup.
 
 ## Doctor
 
@@ -113,16 +112,17 @@ dies, as the fake's captures are too quick for a kill to catch one.
 `fault.sh <run> setup-go` lets the `slow` recipe's setup finish. Each is written
 to the transcript.
 
-The make a kill catches decides the outcome:
+What a kill catches decides the outcome:
 
 | When the control plane dies                 | Where it must end                                       |
 | ------------------------------------------- | ------------------------------------------------------- |
-| After the make reached the host             | The restart finds it by ID and the machine is `settled` |
-| Before the make reached the host            | The setup died with the process: `failed`, state `missing`, its error says so, and no VM on the host |
+| A create's make, before or after it reached the host | The restart sends it, or finds it by ID, and the machine is `settled` |
+| A template build, during its setup          | The setup died with the process: the build is `failed`, the template's current build is as it was, and the builder is gone from the host |
 
-Run the first with `slow` and `--no-wait`, waiting for `$RUN/setup-began` before
-the kill. `apps/server/tests/crash.test.ts` covers the second, which a
-user can't time from the CLI.
+Run the second with `template build "$RUN/recipes/slow.yaml" --no-wait`,
+waiting for `$RUN/setup-began` before the kill.
+`apps/server/tests/crash.test.ts` covers the first, which a user can't time
+from the CLI.
 
 So does what a restarted host held:
 

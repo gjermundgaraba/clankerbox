@@ -193,6 +193,11 @@ interface Made {
   readonly ephemeral?: boolean | undefined;
 }
 
+const onBase = ({ id }: HostInfo): Candidate => ({
+  host: id,
+  source: { kind: "base" },
+});
+
 /** Why a machine can't be copied or resized: it may yet be made, or it won't be. */
 export const unmade = (found: MachineRow): NotMade | NotFound =>
   stageOf(found.state) === "making"
@@ -529,26 +534,18 @@ export const make = (
 
     const fromBase = (request: BaseCreate) =>
       Effect.gen(function* () {
-        const { id: name, setup, labels } = request;
+        const { id: name, labels } = request;
 
         const [first, ...rest] = yield* Effect.fromResult(
           placing(yield* hosts.reachAll, request.base)
         );
-
-        const onBase = ({ id }: HostInfo): Candidate => ({
-          host: id,
-          source: { kind: "base", scripted: setup !== undefined },
-        });
 
         return yield* born(
           name,
           { spec: request, labels },
           onBase(first),
           first,
-          {
-            setup,
-            untried: rest.map(onBase),
-          }
+          { setup: undefined, untried: rest.map(onBase) }
         );
       });
 
@@ -606,7 +603,7 @@ export const make = (
         yield* born(
           name,
           { spec, labels: undefined, ephemeral: true },
-          { host, source: { kind: "base", scripted: true } },
+          { host, source: { kind: "base" } },
           info,
           { setup: spec.setup, untried: [] }
         );

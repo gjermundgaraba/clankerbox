@@ -88,7 +88,7 @@ export type WaitErrorOf<N extends ServerAction> =
 export interface Options {
   /**
    * How long a mutation may wait for its machine or checkpoint to rest, unbounded by default, as a
-   * create's setup can take hours. A wait that outlasts it fails like a lost reply, and the
+   * template's build can take hours. A wait that outlasts it fails like a lost reply, and the
    * request still acts on the server.
    */
   readonly timeout?: Duration.Duration | undefined;

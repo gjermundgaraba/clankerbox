@@ -63,10 +63,10 @@ export const labelledWith = (
  * `settled`, at rest with what was asked; `failed`, after a step failed, until the next request;
  * and `lost`, one the runtime no longer has, which can only be deleted. `waiting` is no rest: the
  * control plane can't read the machine's host, so it tells nothing of a request, which stays saved
- * and acts when it can, and a wait reads on through it as through an outage. `creating` copies the
- * machine and runs its setup, and a machine whose create or setup fails is deleted, its row kept
- * `failed` to say why. `starting` starts the machine, also when it runs already, resumes a paused
- * one, and prepares it.
+ * and acts when it can, and a wait reads on through it as through an outage. `creating` makes or
+ * copies the machine, and a machine whose create fails is deleted, its row kept `failed` to say
+ * why. `starting` starts the machine, also when it runs already, resumes a paused one, and
+ * prepares it.
  */
 export const Phase = Schema.Literals([
   "observing",
@@ -421,13 +421,12 @@ const fromBase = {
   cpu: Size,
   ramMib: Size,
   diskGib: Size,
-  setup: Schema.optionalKey(Setup),
 };
 
 /** A template's build, at its sizes or the larger ones given, with no setup run. */
 export const TemplateSpec = Schema.Struct(fromTemplate);
 
-/** A base, at the sizes given, its setup run if it has one. */
+/** A base, at the sizes given, with no setup run: only a template's build runs one. */
 export const BaseSpec = Schema.Struct(fromBase);
 
 /**

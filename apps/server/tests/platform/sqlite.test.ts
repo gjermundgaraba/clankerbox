@@ -159,7 +159,7 @@ const row = (name: string, fields?: Partial<MachineRow>): MachineRow => ({
   error: undefined,
   resize: undefined,
   ephemeral: false,
-  source: { kind: "base", scripted: false },
+  source: { kind: "base" },
   template: undefined,
   hostKey: undefined,
   pin: undefined,
@@ -263,6 +263,11 @@ const begun = (store: Interface, wanted: Omit<Operation, "sequence">) =>
 
 const found = (store: Interface, name: string) =>
   Effect.map(store.findMachine(name), Option.getOrThrow);
+
+const lostWithUpgrade = (name: string) =>
+  new Internal({
+    message: `the make of machine ${name} ended before its host reported it: its setup left with the control plane this one upgraded from, and a create runs none now`,
+  });
 
 const Generated = Schema.Union([
   Schema.Struct({
@@ -671,7 +676,7 @@ layer(NodeServices.layer)((it) => {
           createdAt: DateTime.makeUnsafe("2026-10-04T12:01:00Z"),
           state: "undone",
           error: new Internal({ message: "setup failed" }),
-          source: { kind: "base", scripted: true },
+          source: { kind: "base" },
           undoneAt: DateTime.makeUnsafe("2026-10-04T12:02:00Z"),
         });
 
@@ -731,6 +736,127 @@ layer(NodeServices.layer)((it) => {
         });
         expect(after).toStrictEqual(Option.none());
         expect(later.sequence).toBe(8);
+      })
+  );
+
+  it.effect(
+    "a state dir from 0.36 keeps each row but scripted, and a create whose setup is still to run goes to be undone, its make with it, as its setup left with that control plane",
+    () =>
+      Effect.gen(function* () {
+        const shipped = 4;
+
+        const stateDir = yield* stateDirAt(shipped, (db) => {
+          for (const migration of migrations.slice(0, shipped)) {
+            db.exec(migration);
+          }
+
+          const insertMachine = db.prepare(
+            `INSERT INTO machines (name, instance, created_at, kind, base, cpu, ram_mib, disk_gib, host, port, desired, state, prepared, ephemeral, source)
+              VALUES ($name, '0123456789abcdef0123456789abcdef', '2026-10-04T12:00:00.000Z', 'linux', 'ubuntu', 1, 1024, 10, 'linux', $port, 'running', $state, 0, $ephemeral, $source)`
+          );
+
+          const scripted = `{"kind":"base","scripted":true}`;
+
+          for (const [name, state, ephemeral, source, port] of [
+            ["sent", "making.sent", 0, scripted, 10_000],
+            ["due", "making.due", 0, scripted, null],
+            ["builder", "making.sent", 1, scripted, 10_001],
+            ["made", "made.settled", 0, scripted, 10_002],
+            [
+              "plain",
+              "making.sent",
+              0,
+              `{"kind":"base","scripted":false}`,
+              10_003,
+            ],
+            [
+              "copy",
+              "making.sent",
+              0,
+              `{"kind":"machine","name":"made"}`,
+              10_004,
+            ],
+          ] as const) {
+            insertMachine.run({ name, state, ephemeral, source, port });
+          }
+
+          const insertOperation = db.prepare(
+            `INSERT INTO operations (id, kind, resource, name, host, boot, sequence, leases)
+              VALUES ($name, 'make', 'machine', $name, 'linux', 'boot-1', $sequence, $leases)`
+          );
+
+          for (const [sequence, name] of [
+            "sent",
+            "builder",
+            "plain",
+            "copy",
+          ].entries()) {
+            insertOperation.run({
+              name,
+              sequence: sequence + 1,
+              leases: JSON.stringify([
+                { resource: "machine", name, mode: "own" },
+                ...(name === "copy"
+                  ? [{ resource: "machine", name: "made", mode: "share" }]
+                  : []),
+              ]),
+            });
+          }
+
+          db.exec("UPDATE sequence SET last = 4");
+        });
+
+        const [machines, operations] = yield* withStore(stateDir, (store) =>
+          Effect.all([
+            store.machines,
+            Effect.forEach(["sent", "builder", "plain", "copy"], (name) =>
+              Effect.map(store.operationOn("machine", name), (op) =>
+                Option.map(op, ({ id }) => id)
+              )
+            ),
+          ])
+        );
+
+        const db = new DatabaseSync(path.join(stateDir, databaseFile));
+
+        const sources = db
+          .prepare("SELECT name, source FROM machines ORDER BY name")
+          .all()
+          .map(({ name, source }) => [name, source]);
+
+        db.close();
+
+        expect(
+          machines
+            .toSorted((a, b) => a.name.localeCompare(b.name))
+            .map(({ name, state, error, source }) => [
+              name,
+              state,
+              error,
+              source,
+            ])
+        ).toStrictEqual([
+          ["builder", "making.sent", undefined, { kind: "base" }],
+          ["copy", "making.sent", undefined, { kind: "machine", name: "made" }],
+          ["due", "undoing.due", lostWithUpgrade("due"), { kind: "base" }],
+          ["made", "made.settled", undefined, { kind: "base" }],
+          ["plain", "making.sent", undefined, { kind: "base" }],
+          ["sent", "undoing.due", lostWithUpgrade("sent"), { kind: "base" }],
+        ]);
+        expect(operations).toStrictEqual([
+          Option.none(),
+          Option.some("builder"),
+          Option.some("plain"),
+          Option.some("copy"),
+        ]);
+        expect(sources).toStrictEqual([
+          ["builder", `{"kind":"base"}`],
+          ["copy", `{"kind":"machine","name":"made"}`],
+          ["due", `{"kind":"base"}`],
+          ["made", `{"kind":"base"}`],
+          ["plain", `{"kind":"base"}`],
+          ["sent", `{"kind":"base"}`],
+        ]);
       })
   );
 

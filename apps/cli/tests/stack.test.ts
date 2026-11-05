@@ -3,7 +3,7 @@ import path from "node:path";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { Capacity } from "@gjermundgaraba/clankerbox-sdk";
+import { Capacity, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import {
   mkdir,
   read,
@@ -322,28 +322,21 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a setup that fails replies with its output, its row says so until it is deleted, a create of the name replaces it, and the SDK's stub holding the row answers alike",
+    "a create that fails replies with its error, its row says so until it is deleted, a create of the name replaces it, and the SDK's stub holding the row answers alike",
     () =>
       Effect.gen(function* () {
-        const { dir, machines, run } = yield* setUp();
-        const script = path.join(dir, "setup.sh");
+        const { dir, hosts, machines, run } = yield* setUp();
 
-        yield* write(
-          script,
-          "#!/bin/sh\necho installing\necho no network >&2\nexit 7\n"
-        );
+        for (const _ of ["dev", "other"]) {
+          hosts[0]?.fake.failNext(
+            "create",
+            new Internal({ message: "krun EINVAL" })
+          );
+        }
 
-        const scripted = [
-          ...sizes,
-          "--setup",
-          script,
-          "--setup-timeout",
-          "30s",
-        ];
+        const created = yield* run(["create", "dev", ...sizes, "--json"]);
 
-        const created = yield* run(["create", "dev", ...scripted, "--json"]);
-
-        yield* run(["create", "other", ...scripted]);
+        yield* run(["create", "other", ...sizes]);
 
         const held = yield* run(["get", "dev", "--json"]);
         const listed = yield* run(["machines"]);
@@ -351,16 +344,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { error } = decodeFailure(created.stdout);
 
         expect(created.code).toBe(1);
-        expect(error.tag).toBe("ScriptFailed");
-        expect(error.message).toContain("setup exited 7");
-        expect(error.message).toContain("installing\nno network");
+        expect(error.tag).toBe("Internal");
+        expect(error.message).toContain("krun EINVAL");
         expect(yield* decodeJson(MachineJson, held.stdout)).toMatchObject({
           id: "dev",
           state: "missing",
           phase: "failed",
-          error: { _tag: "ScriptFailed" },
+          error: { _tag: "Internal" },
         });
-        expect(listed.stdout).toContain("ScriptFailed");
+        expect(listed.stdout).toContain("Internal");
 
         const stub = yield* Effect.acquireRelease(
           Effect.map(machines.list({}), (rows) =>
@@ -498,21 +490,22 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a setup that succeeds runs in the machine, records the host key, and ssh-known-hosts prints it for a .cbx name",
+    "a clone of a build whose setup succeeded holds what the setup did, records the host key, and ssh-known-hosts prints it for a .cbx name",
     () =>
       Effect.gen(function* () {
         const { dir, hosts, run } = yield* setUp();
         const script = path.join(dir, "setup.sh");
 
-        yield* write(script, setupScript);
+        const file = path.join(dir, "web.yaml");
 
-        const created = yield* run([
-          "create",
-          "dev",
-          ...sizes,
-          "--setup",
-          script,
-        ]);
+        yield* write(script, setupScript);
+        yield* write(
+          file,
+          "base: ubuntu\ncpu: 1\nram: 1G\ndisk: 10G\nsetup: setup.sh\n"
+        );
+        yield* run(["template", "build", file]);
+
+        const created = yield* run(["create", "dev", "--template", "web"]);
 
         const machine = yield* decodeJson(
           MachineJson,

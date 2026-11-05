@@ -700,31 +700,18 @@ describe("client", () => {
         })
     );
 
-    it.effect(
-      "a spec that doesn't encode is Invalid, sends nothing, and never carries its script",
-      () =>
-        Effect.gen(function* () {
-          const stub = server();
-          const marker = "setup-text-marker";
+    it.effect("a spec that doesn't encode is Invalid, and sends nothing", () =>
+      Effect.gen(function* () {
+        const stub = server();
 
-          const error = yield* withClient(stub, (client) =>
-            Effect.flip(
-              client.create("dev", {
-                ...spec,
-                cpu: 0,
-                setup: {
-                  script: `#!/bin/sh\necho ${marker}\n`,
-                  timeoutSeconds: 60,
-                },
-              })
-            )
-          );
+        const error = yield* withClient(stub, (client) =>
+          Effect.flip(client.create("dev", { ...spec, cpu: 0 }))
+        );
 
-          expect(error._tag).toBe("Invalid");
-          expect(error.message).toContain("createMachine dev");
-          expect(error.message).not.toContain(marker);
-          expect(stub.calls).toStrictEqual([]);
-        })
+        expect(error._tag).toBe("Invalid");
+        expect(error.message).toContain("createMachine dev");
+        expect(stub.calls).toStrictEqual([]);
+      })
     );
 
     it.effect(

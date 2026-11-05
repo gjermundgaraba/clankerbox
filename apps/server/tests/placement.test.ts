@@ -298,7 +298,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a create moved to the next host takes that host's kind, and runs its setup there",
+    "a create moved to the next host takes that host's kind, and is made there",
     () =>
       Effect.gen(function* () {
         const served = yield* running({
@@ -310,15 +310,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         first?.fake.failNext("admit", new Capacity({ message: "no room" }));
 
-        const machine = yield* client.create("dev", request("dev", { setup }));
+        const machine = yield* client.create("dev", request("dev"));
 
         const found = Option.getOrThrow(yield* served.store.findMachine("dev"));
 
         expect(machine.kind).toBe("mac");
         expect(found.pin).toBeUndefined();
-        expect(
-          second?.fake.calls.filter((call) => call === "exec dev")
-        ).toHaveLength(4);
+        expect(second?.fake.calls).toContain("create dev");
       })
   );
 

@@ -54,11 +54,21 @@ const withSource = (options?: Parameters<typeof running>[0]) =>
   Effect.gen(function* () {
     const served = yield* withClient(options);
 
-    yield* served.client.create("dev", request("dev", { setup: keyed }));
+    yield* served.client.buildTemplate({
+      template: "keyed",
+      ...request("unused"),
+      setup: keyed,
+    });
+    yield* served.client.create("dev", { template: "keyed" });
     served.host.fake.calls.length = 0;
 
     return served;
   });
+
+const captured = (store: Started["store"]) =>
+  Effect.map(store.checkpoints, (rows) =>
+    rows.filter(({ build }) => build === undefined)
+  );
 
 const checkpointIds = (client: Client.Interface) =>
   Effect.map(client.checkpoints, (listed) => listed.map(({ id }) => id));
@@ -427,7 +437,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           name: "hot",
         });
 
-        const rows = yield* store.checkpoints;
+        const rows = yield* captured(store);
 
         expect(ram).toStrictEqual({
           id: "hot",
@@ -485,7 +495,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         name: "cold",
       });
 
-      const rows = yield* store.checkpoints;
+      const rows = yield* captured(store);
 
       expect(disk).toMatchObject({ id: "cold", kind: "disk", phase: "ready" });
       expect(rows.map(({ name, pin }) => [name, pin])).toStrictEqual([
@@ -1174,7 +1184,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "NotFound",
           "NotFound",
         ]);
-        expect(yield* store.checkpoints).toStrictEqual([]);
+        expect(yield* captured(store)).toStrictEqual([]);
         expect(yield* machineNames(served)).toStrictEqual([]);
       })
   );

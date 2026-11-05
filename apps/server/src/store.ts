@@ -41,10 +41,10 @@ const UndefinedFromNull = <S extends Schema.Top>(schema: S) =>
 
 /**
  * Where a machine's disk comes from. Copies stay on their source's host, and hold what a setup did,
- * so only a base can have one to run: `scripted` outlives the setup, which stays in memory.
+ * so only a base has one to run, and only on a template's builder, which holds it in memory.
  */
 export const Source = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal("base"), scripted: Schema.Boolean }),
+  Schema.Struct({ kind: Schema.Literal("base") }),
   Schema.Struct({ kind: Schema.Literal("checkpoint"), name: Schema.String }),
   Schema.Struct({ kind: Schema.Literal("machine"), name: Schema.String }),
 ]);

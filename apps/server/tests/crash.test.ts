@@ -1,3 +1,6 @@
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { Duration, Effect, Option } from "effect";
@@ -5,13 +8,13 @@ import { expect } from "vite-plus/test";
 
 import { applied } from "../src/chart.ts";
 import { checkpointChart } from "../src/checkpoint-chart.ts";
+import { databaseFile, migrations } from "../src/platform/sqlite.ts";
 import { freshBoot } from "./chart-rows.ts";
 import {
   applying,
   at,
   clientOf,
   eventually,
-  addsLoginUser,
   pause,
   phaseOf,
   plane,
@@ -188,35 +191,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a control plane killed mid-setup finds the host still running it, and it runs once",
-    () =>
-      Effect.gen(function* () {
-        const { asking, fake, restart } = yield* killedPlane();
-        const setup = fake.holdNext("exec");
-
-        yield* asking.create(
-          "dev",
-          request("dev", {
-            setup: {
-              script: `#!/bin/sh\n${addsLoginUser}\necho set up\n`,
-              timeoutSeconds: 30,
-            },
-          })
-        );
-        yield* setup.entered;
-
-        const second = yield* restart;
-
-        yield* setup.release;
-        yield* second.rests("dev");
-
-        expect(fake.calls.filter((call) => call === "create dev")).toHaveLength(
-          1
-        );
-      })
-  );
-
-  it.effect(
     "a control plane that restarts leaves its running machines alone",
     () =>
       Effect.gen(function* () {
@@ -331,10 +305,48 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a scripted make never sent is undone, as its setup left with the process that held it",
+    "a builder's make never sent is never sent, as its setup left with the process that held it, and its row goes",
     () =>
       Effect.gen(function* () {
         const { client, first, fake, planned, restart } = yield* killedPlane();
+        const [host] = planned.hosts;
+
+        yield* client.create("template", request("template"));
+        fake.calls.length = 0;
+
+        const template = Option.getOrThrow(
+          yield* first.store.findMachine("template")
+        );
+
+        yield* first.store.insertMachine({
+          ...template,
+          name: "building",
+          instance: "unsent",
+          port: undefined,
+          state: "making.due",
+          prepared: false,
+          ephemeral: true,
+        });
+        yield* unsent(
+          first.store,
+          host!.operations.boot,
+          "building",
+          "unknown"
+        );
+
+        const second = yield* restart;
+
+        yield* second.gone("building");
+
+        expect(fake.calls).not.toContain("create building");
+      })
+  );
+
+  it.effect(
+    "a create with a setup that a 0.36 control plane recorded and never sent is undone after the upgrade, as its setup left with that process",
+    () =>
+      Effect.gen(function* () {
+        const { client, first, fake, planned } = yield* killedPlane();
         const [host] = planned.hosts;
 
         yield* client.create("template", request("template"));
@@ -351,27 +363,37 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           port: undefined,
           state: "making.due",
           prepared: false,
-          source: { kind: "base", scripted: true },
         });
         yield* unsent(first.store, host!.operations.boot, "dev", "unknown");
+        yield* first.crash;
 
-        const second = yield* restart;
+        const db = new DatabaseSync(path.join(planned.stateDir, databaseFile));
+
+        db.exec(
+          `UPDATE machines SET source = '{"kind":"base","scripted":true}' WHERE name = 'dev';
+          PRAGMA user_version = ${migrations.length - 1}`
+        );
+        db.close();
+
+        const second = yield* planned.start();
+
+        yield* Effect.addFinalizer(() => second.crash);
 
         const failed = yield* eventually(
-          second.client.getMachine({ id: "dev" }),
+          (yield* clientOf(second.url)).getMachine({ id: "dev" }),
           ({ phase }) => phase === "failed"
         );
 
-        expect([failed.state, failed.error?._tag]).toStrictEqual([
+        expect([failed.state, failed.error?.message]).toStrictEqual([
           "missing",
-          "Internal",
+          "the make of machine dev ended before its host reported it: its setup left with the control plane this one upgraded from, and a create runs none now",
         ]);
         expect(fake.calls).toStrictEqual(["delete dev"]);
       })
   );
 
   it.effect(
-    "a machine whose make is unscripted is made though it was never sent",
+    "a create from a base never sent is made after a restart, as it holds no setup to lose",
     () =>
       Effect.gen(function* () {
         const { client, first, fake, planned, restart } = yield* killedPlane();

@@ -35,7 +35,7 @@ What happens when something fails:
 | What fails | What you see |
 | --- | --- |
 | The control plane is down | Running machines keep running. Open SSH sessions stay up. A new `ssh` fails, since it asks the control plane where the machine is. Every other command fails `Unavailable`. A step a host already has runs to its end. |
-| The control plane comes back | It finds each step in flight on its host, and carries on. A create whose setup hadn't reached its host is undone and fails, since a setup is never stored. |
+| The control plane comes back | It finds each step in flight on its host, and carries on. A template build that was running ends failed and its builder is deleted, since a setup is never stored. |
 | A host is unreachable | Its machines read `unknown`, phase `waiting`. A request on one stays saved, and its wait reads on as through an outage of the control plane, ending `Unavailable` once the host has been unreachable for two minutes; it acts when the host is back. A create goes to another host, and only fails if no host could take it. |
 | A host restarts | Its VMs stay up. A step it held ends, and the control plane decides afresh from the VM's state. A create it held is undone, and a capture it held fails and leaves no checkpoint. |
 | A template build's host stops answering | The build rides out a fault shorter than a recheck, 30 s, and fails `Unavailable` past that, and the template's current build stays as it was. Its builder goes once the host is back. |
@@ -131,7 +131,7 @@ One process runs from one JSON config file:
 - `hosts` is in placement order: a create goes to the first that offers its base and has room, and a create from a template to the first that holds a copy of its build and has room.
 - `draining: true` on a host passes it over for new machines, and leaves what it runs alone.
 - `stateDir`, relative to the config, holds `server.db`. One process holds it at a time.
-- `authorizedKeys`, relative to the config, is a public-key file, such as an `id_ed25519.pub`, or several concatenated: each line that isn't blank is `<type> <base64> [comment]`, so a private key or any other file is refused. The control plane reads the file as it starts and sends the keys with every create that runs a setup or clones a template's build, and the host installs those it lacks for the login user once the setup exits 0 or the clone is made. A template's build holds the keys its setup was sent, and a clone of it adds any key it lacks, so a key added since the build reaches it, and one removed since stays. A create without a setup gets none, and a fork or restore of a checkpoint only those its source had. The keys are never stored or logged. To change them, edit the file and restart the control plane: machines made after it take the new set, and those made before keep theirs.
+- `authorizedKeys`, relative to the config, is a public-key file, such as an `id_ed25519.pub`, or several concatenated: each line that isn't blank is `<type> <base64> [comment]`, so a private key or any other file is refused. The control plane reads the file as it starts and sends the keys with every template build's setup and every create that clones a template's build, and the host installs those it lacks for the login user once the setup exits 0 or the clone is made. A template's build holds the keys its setup was sent, and a clone of it adds any key it lacks, so a key added since the build reaches it, and one removed since stays. A create from a base gets none, and a fork or restore of a checkpoint only those its source had. The keys are never stored or logged. To change them, edit the file and restart the control plane: machines made after it take the new set, and those made before keep theirs.
 - To add a host, add its line and restart the control plane. Machines keep running through the restart, and clients need nothing.
 
 ```sh
@@ -151,6 +151,8 @@ State carries over. A template's build now holds the server config's `authorized
 A host now prepares a base before its setup runs, and runs the setup as `admin` rather than root: see Writing a setup. A setup that creates `admin` itself fails where it does so unguarded, as `useradd` refuses a user that exists, and one that writes outside `admin`'s home needs `sudo`. Upgrade hosts and the control plane together.
 
 `template build` now takes one template file, `NAME.yaml`, which holds the base, the sizes, the setup and its timeout (see Templates), and `--base`, `--cpu`, `--ram`, `--disk` and `--setup-timeout` are gone from it. A build no longer takes anything from the build before it, so write each template's file in full: a file without `setupTimeout` gets the host's default. `client.buildTemplate` needs `base`, `cpu`, `ramMib` and `diskGib` on every build.
+
+A create runs no setup: `create --setup` and `create --setup-timeout` are gone, and the API's `createMachine` refuses a `setup`. Build a template from the setup instead, with `clankerbox template build NAME PATH --base BASE --cpu N --ram SIZE --disk SIZE`, and create with `--template NAME`; in the SDK, call `client.buildTemplate` with the setup and create with `{ template }`. A create from a base still works, with no setup and no keys. The control plane migrates its database on its first start, and keeps every machine. A create that 0.36 took with a setup and hadn't made yet is undone, failed, since its setup left with the old control plane: create it again from a template.
 
 ### Upgrading from 0.35
 
@@ -179,7 +181,6 @@ Machines of either kind are logged in to as `admin`, with the keys of the server
 ```sh
 clankerbox create dev --template web       # waits until it runs, prints dev
 clankerbox create review --base macos --cpu 4 --ram 8G --disk 150G
-clankerbox create box --base ubuntu --cpu 2 --ram 4G --disk 20G --setup ./recipes/web
 clankerbox machines
 clankerbox get dev
 clankerbox ssh dev -- uptime
@@ -203,7 +204,7 @@ clankerbox capacity                        # for an operator: each host's resour
 ```
 
 - A name is unique across every host, per resource type. A checkpoint's name doesn't begin `built-` or `fetched-`, which the control plane gives template builds' copies.
-- `create` makes a machine from a template's build (see Templates), or from `--base` with `--cpu`, `--ram` and `--disk`, running `--setup`, a script or a recipe directory with a `setup.sh`, if given.
+- `create` makes a machine from a template's build (see Templates), or from `--base` with `--cpu`, `--ram` and `--disk`. A create runs no setup: a template's build runs one.
 - A command waits until the machine rests. `--no-wait` answers once the request is recorded, and `--timeout 10m` bounds the wait; either way the request stays saved and acts. A wait goes on through a short restart of the control plane.
 - Sizes and durations carry their unit: `--ram 8G`, `--disk 60G`, `--setup-timeout 15m`.
 - `fork` copies a running linux machine with its RAM, or a stopped mac machine's disk. `fork` and `restore` take `--cpu`, `--ram` and `--disk` for the copy, its source's by default: a linux copy, holding its source's RAM, only grows, live once it runs; a mac copy takes any vCPUs and RAM; a disk only grows. `checkpoint capture` does the same, so a linux checkpoint is `ram` and a mac one `disk`.
@@ -213,7 +214,7 @@ clankerbox capacity                        # for an operator: each host's resour
 - A `stop` of a paused machine resumes it on linux to end its processes, needing room as a start does, and fails `PinMismatch` after an upgrade too; on a Mac it discards the saved state without booting. Either keeps the disk.
 - On a Mac, macOS restores a VM's state only in the operator's unlocked login session: a `start` of a paused machine while it is locked fails and keeps the saved state (see Deploy).
 - `resize` gives a stopped machine any vCPUs and RAM, and grows a running linux machine's live, needing room for its RAM as a start does; a running mac machine or a paused one is refused, so stop it first. A disk only grows: smolvm grows the guest's filesystem, at once when it runs, and on a Mac the base's Tart guest agent grows APFS at the next boot. A resize waits for a step under way, and keeps what the runtime gave when it fails part way, or when the host stops during it, which the machine's sizes then show; asking for the same sizes again finishes a live grow that failed part way. A `resize` answers at the machine's next rest under any later wish but a delete, as each runs after it.
-- A create, fork or restore whose copy or setup fails deletes its VM, keeps its row for a day to say why, and answers the error; so does a fork, a restore or a create from a template whose preparation fails, as each prepares its copy in the step that makes it. A delete that fails runs again at the next check. A create that a host had no room for moves to the next host first, unless the control plane restarted since it took the create. Only a `delete` stops a machine being made: a `stop` waits for it to be made, then stops it. A `start` on a running machine runs its preparation again.
+- A create, fork or restore whose make or copy fails deletes its VM, keeps its row for a day to say why, and answers the error; so does a fork, a restore or a create from a template whose preparation fails, as each prepares its copy in the step that makes it. A delete that fails runs again at the next check. A create that a host had no room for moves to the next host first, unless the control plane restarted since it took the create. Only a `delete` stops a machine being made: a `stop` waits for it to be made, then stops it. A `start` on a running machine runs its preparation again.
 - A request on a machine whose host can't be reached stays saved, and its wait reads on, failing `Unavailable` once the host has been unreachable for two minutes; it acts once the host answers. A capture on such a machine reads `capturing` until the host answers, so `checkpoint capture` waits that long, or until its `--timeout`.
 - A machine being deleted can't be captured or forked: either answers `NotFound`.
 - A checkpoint is `ready` until its delete begins, and a delete that fails runs again.
@@ -256,9 +257,9 @@ clankerbox template delete gg-linux-dev
 - A build's ID is the template's name, `@` and its number, such as `web@2`. `template build` waits until the build ends and prints its ID; `--no-wait` prints it at once, and `template get` follows the build.
 - The current build is the newest that is ready: it moves to a build only once its setup has run and its copy is made, so a build that fails leaves the one before it current. The control plane keeps the last 2 ready builds, and deletes an older one's copy once the creates cloning it are done.
 - One build of a template runs at a time: a build or a delete asked meanwhile fails `Conflict`. A control plane that restarts during a build ends it failed and deletes its builder.
-- `create --template NAME` clones the current build, and `--template NAME@N` that build while it is kept; one with no ready build to clone fails `NotBuilt`. A create from a template takes no `--base`, `--setup` or `--setup-timeout`. It takes the build's sizes, or larger ones from `--cpu`, `--ram` and `--disk`; smaller ones fail `Unsizable`. A linux create grows the clone while it runs, so smolvm's limits on a live grow hold: RAM grows in 128M steps.
+- `create --template NAME` clones the current build, and `--template NAME@N` that build while it is kept; one with no ready build to clone fails `NotBuilt`. A create from a template takes no `--base`. It takes the build's sizes, or larger ones from `--cpu`, `--ram` and `--disk`; smaller ones fail `Unsizable`. A linux create grows the clone while it runs, so smolvm's limits on a live grow hold: RAM grows in 128M steps.
 - A build goes to the first host that offers the base. On a Mac the build stops its machine before the copy, so a clone boots from the disk. A host with `builds` then uploads the copy to the bucket, only what the bucket lacks, and the build is ready once that is done, so a build whose upload fails fails. Every other host of the kind with `builds` that offers the base then downloads a copy of each ready build, only what it doesn't hold already, and the control plane retries a download that fails at each recheck. Without `builds`, a build's copy stays on the host that built it.
-- Creates from a build go only to a host whose copy is ready, in the config's order: when none has room the create fails `Capacity`, and runs no setup elsewhere. A copy on a host that now runs another runtime pin, or names another image for the base, than the build was made under is `outdated`: no create goes there, and the host downloads none. `template get` lists each build's copies, `ready`, `fetching`, `failed` or `outdated`, with why. Deleting a build's copy on the host that built it also deletes its objects from the bucket, those no other build holds.
+- Creates from a build go only to a host whose copy is ready, in the config's order: when none has room the create fails `Capacity`. A copy on a host that now runs another runtime pin, or names another image for the base, than the build was made under is `outdated`: no create goes there, and the host downloads none. `template get` lists each build's copies, `ready`, `fetching`, `failed` or `outdated`, with why. Deleting a build's copy on the host that built it also deletes its objects from the bucket, those no other build holds.
 - A linux host keeps a parked base of each build's copy it holds, built there or fetched: a VM restored from the copy and frozen, which a create from the build branches instead of restoring the copy. Branches of one base run one at a time, each in a few hundred milliseconds. A build parks its base before it ends, a fetch before it ends, and a host that starts parks one again for each copy it keeps, in the background; a create restores the copy while its base isn't parked or can't be branched. A copy captured under another smolvm than the host's parks no base, so its creates restore. A base holds the RAM its guest touched, which the host's RAM budget counts and `capacity` leaves out, so `capacity` can show more free RAM than the host admits. A base goes once no machine branched from it remains and its build's copy is deleted, the kernel boot it was parked under has ended, or the host runs another smolvm, so a machine cloned from a build keeps its base after `template delete`. `smolvm machine ls` names each `base_<boot>_<copy>`, where `<boot>` is the first 8 hex digits of the kernel's boot ID.
 - A build's copy is no checkpoint: `checkpoint list` leaves it out, and `restore` can't reach it. `get` shows the build a machine was cloned from as `TEMPLATE`. `template delete` deletes a template and its builds' copies, once the creates cloning them are done, and leaves the machines cloned from it.
 
@@ -278,7 +279,7 @@ A host with `tailnet` joins each machine whose guest has `tailscale` and `tailsc
 
 ### Writing a setup
 
-A setup runs once, as the login user `admin` in its home, on a base clankerbox has prepared; forks, restores and every create from a template's build carry its results. Before the setup starts, clankerbox makes the base ready as root:
+A setup runs once, in a template build's machine, as the login user `admin` in its home, on a base clankerbox has prepared; the build's copy, and each clone, fork and restore of it, carry its results. Before the setup starts, clankerbox makes the base ready as root:
 
 - on linux, it installs `openssh-server`, `sudo`, `perl`, `ca-certificates`, `curl` and `libnss-myhostname` with `apt-get`, creates `admin` where the image lacks it, and sets `PermitRootLogin no`. An image without `apt-get` is refused: build on a Debian or Ubuntu image;
 - on mac, whose Tart bases ship `admin`, it names public DNS resolvers, as Softnet blocks the gateway's, and waits for the clock, which the base boots behind;
@@ -353,14 +354,18 @@ import { Console, Effect } from "effect";
 const program = Effect.gen(function* () {
   const client = yield* Client.Client;
 
-  // Waits until it runs; the control plane chooses the host.
-  const machine = yield* client.create("dev", {
+  // Runs the setup once, on a machine it copies and then deletes.
+  yield* client.buildTemplate({
+    template: "dev",
     base: "ubuntu",
     cpu: 2,
     ramMib: 4096,
     diskGib: 20,
     setup: { script: yield* readSetup("recipes/dev"), timeoutSeconds: 900 },
   });
+
+  // Waits until it runs; the control plane chooses the host.
+  const machine = yield* client.create("dev", { template: "dev" });
 
   yield* Console.log(machine.id, machine.ssh, machine.hostKey);
 }).pipe(
@@ -432,7 +437,7 @@ amp orb provider "$(command -v clankerbox-amp-orbs-dispatch)"   # a one-line scr
 ```
 
 - `sizes` has an entry per orb type Amp's settings define, and `default` for a thread that picks none; a type the settings don't know gets `default` too. `user` is the image's login user, `user` as in Amp's image. `snapshotExpiry` is how long a saved project snapshot is kept, 14 days unless given.
-- A spawn makes the orb's machine run, `client.ensure` with the machine named after `ORB_ID`: started or resumed when it exists, else restored from the project snapshot `ORB_SNAPSHOT_ID` names when that checkpoint is ready, at the snapshot's sizes, else created from `ORB_IMAGE` at the orb type's sizes, with no setup. Amp's image carries what bootstrap needs, so nothing is installed, and a create without a setup needs no `admin`, `sudo` or key. Then `execMachine` starts `amp orb bootstrap` as the login user, detached, with `ORB_TOKEN` and `AMP_URL` in its environment, after ending one still running: a resumed or restored machine keeps the processes it paused with, and that bootstrap holds the previous job's token. Bootstrap logs to `~/.amp-orb-bootstrap.log` in the orb.
+- A spawn makes the orb's machine run, `client.ensure` with the machine named after `ORB_ID`: started or resumed when it exists, else restored from the project snapshot `ORB_SNAPSHOT_ID` names when that checkpoint is ready, at the snapshot's sizes, else created from `ORB_IMAGE` at the orb type's sizes, with no setup. Amp's image carries what bootstrap needs, so nothing is installed, and a create from a base needs no `admin`, `sudo` or key. Then `execMachine` starts `amp orb bootstrap` as the login user, detached, with `ORB_TOKEN` and `AMP_URL` in its environment, after ending one still running: a resumed or restored machine keeps the processes it paused with, and that bootstrap holds the previous job's token. Bootstrap logs to `~/.amp-orb-bootstrap.log` in the orb.
 - A pause with a snapshot of a running machine deletes the checkpoint of that snapshot's name, then `pauseMachine` with `capture` makes the new one, labelled `amp-orb` and `amp-snapshot` and expiring after `snapshotExpiry`, and the pause begins once the capture has. A machine that isn't running is paused without a snapshot, and a pause of an orb with no machine does nothing. A linux checkpoint holds RAM, so a restore resumes where the pause left off.
 - A delete deletes the machine; one already gone is done. Snapshots are a project's, not an orb's, so they stay until they expire or a pause replaces them.
 - An Amp ID that is a clankerbox name, as `amp-<thread id>` is, names the machine; another gets its letters and digits with a digest of it, and the machine carries the ID as its `amp-orb` label either way, `amp-orb-type` the orb type.

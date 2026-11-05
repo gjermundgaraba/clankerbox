@@ -137,6 +137,16 @@ export const migrations: readonly string[] = [
     last INTEGER NOT NULL
   ) STRICT`,
   "ALTER TABLE checkpoints ADD COLUMN published TEXT",
+  `DELETE FROM operations WHERE kind = 'make' AND resource = 'machine' AND name IN (
+    SELECT name FROM machines
+      WHERE ephemeral = 0 AND json_extract(source, '$.scripted') = 1 AND state LIKE 'making.%'
+  );
+  UPDATE machines
+    SET state = 'undoing.due',
+      error = json_object('_tag', 'Internal', 'message', 'the make of machine ' || name || ' ended before its host reported it: its setup left with the control plane this one upgraded from, and a create runs none now')
+    WHERE ephemeral = 0 AND json_extract(source, '$.scripted') = 1 AND state LIKE 'making.%';
+  UPDATE machines SET source = json_remove(source, '$.scripted')
+    WHERE json_extract(source, '$.kind') = 'base'`,
 ];
 
 const isSqliteError = (
