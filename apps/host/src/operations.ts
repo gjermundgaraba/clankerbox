@@ -223,7 +223,7 @@ export const make = (
     const { bases } = runtime;
 
     const parked = (build: CheckpointRef) =>
-      bases === undefined || !isBuildCopy(build.name)
+      bases === undefined
         ? Effect.void
         : bases
             .park(build)

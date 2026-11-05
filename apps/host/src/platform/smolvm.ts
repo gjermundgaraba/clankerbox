@@ -700,15 +700,15 @@ export const make = (
         : Effect.void;
     };
 
-    const restoreRam = (
+    const booted = (
+      native: string,
       from: string,
-      source: Pick<MachineRef, "port"> & Sizes,
-      machine: MachineRef
+      ports: {
+        readonly remove: readonly string[];
+        readonly add: readonly string[];
+      }
     ) =>
       Effect.gen(function* () {
-        const native = nativeName(machine);
-        const { port } = machine;
-
         yield* call(
           [
             "machine",
@@ -723,23 +723,36 @@ export const make = (
           `machine create ${native}`
         );
 
-        if (source.port !== port) {
+        if (ports.remove.length > 0 || ports.add.length > 0) {
           yield* call(
             [
               "machine",
               "update",
               "--name",
               native,
-              "--remove-port",
-              `${source.port}:22`,
-              "-p",
-              `${port}:22`,
+              ...ports.remove.flatMap((forward) => ["--remove-port", forward]),
+              ...ports.add.flatMap((forward) => ["-p", forward]),
             ],
             `machine update ${native}`
           );
         }
 
         yield* boot(native);
+      });
+
+    const restoreRam = (
+      from: string,
+      source: Pick<MachineRef, "port"> & Sizes,
+      machine: MachineRef
+    ) =>
+      Effect.gen(function* () {
+        const native = nativeName(machine);
+        const moved = source.port !== machine.port;
+
+        yield* booted(native, from, {
+          remove: moved ? [`${source.port}:22`] : [],
+          add: moved ? [`${machine.port}:22`] : [],
+        });
         yield* grown(native, source, changes(source, machine));
       });
 
@@ -834,37 +847,10 @@ export const make = (
           Effect.gen(function* () {
             const { forwards } = yield* indexOf(build);
 
-            yield* call(
-              [
-                "machine",
-                "create",
-                "--name",
-                base,
-                "--from",
-                storedAt(build),
-                "--restore-cache-entries",
-                "0",
-              ],
-              `machine create ${base}`
-            );
-
-            if (forwards.length > 0) {
-              yield* call(
-                [
-                  "machine",
-                  "update",
-                  "--name",
-                  base,
-                  ...forwards.flatMap(({ host, guest }) => [
-                    "--remove-port",
-                    `${host}:${guest}`,
-                  ]),
-                ],
-                `machine update ${base}`
-              );
-            }
-
-            yield* boot(base);
+            yield* booted(base, storedAt(build), {
+              remove: forwards.map(({ host, guest }) => `${host}:${guest}`),
+              add: [],
+            });
             yield* freeze(base);
           })
         );
@@ -998,7 +984,7 @@ export const make = (
 
     const bases = {
       park: Effect.fn("Smolvm.park")((build: CheckpointRef) =>
-        parking(nativeName(build))
+        isBuildCopy(build.name) ? parking(nativeName(build)) : Effect.void
       ),
       settle: Effect.gen(function* () {
         yield* retireAllStale;

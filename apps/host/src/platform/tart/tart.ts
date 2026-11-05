@@ -117,11 +117,14 @@ export const checkpointName = (
 ): string =>
   `cbx-${host}-c-${checkpoint.name}-${checkpoint.instance.slice(0, 8)}`;
 
+const tartHome = (settings: Pick<Settings, "tartHome">): string =>
+  settings.tartHome ?? path.join(homedir(), ".tart");
+
 export const vmsDir = (settings: Pick<Settings, "tartHome">): string =>
-  path.join(settings.tartHome ?? path.join(homedir(), ".tart"), "vms");
+  path.join(tartHome(settings), "vms");
 
 const fetchingDir = (settings: Pick<Settings, "tartHome">): string =>
-  path.join(path.dirname(vmsDir(settings)), "cbx-fetching");
+  path.join(tartHome(settings), "cbx-fetching");
 
 export const jobsDir = (stateDir: string): string =>
   path.join(stateDir, "launchd");
@@ -271,8 +274,23 @@ export const make = (
         expect(ran, `tart ${what}`, ok)
       );
 
-    const launchctl = (args: readonly string[], what: string) =>
+    const launchd = (args: readonly string[], what: string) =>
       run("/bin/launchctl", args, `launchctl ${what}`);
+
+    const launchctl = (
+      args: readonly string[],
+      what: string,
+      ok?: readonly number[]
+    ) =>
+      Effect.flatMap(launchd(args, what), (ran) =>
+        expect(ran, `launchctl ${what}`, ok)
+      );
+
+    const printJob = (target: string) =>
+      Effect.map(
+        launchctl(["print", target], `print ${target}`),
+        ({ stdout }) => stdout
+      );
 
     const reported = (yield* call(["--version"], "--version")).stdout.trim();
     const disks = yield* DiskGate.make;
@@ -393,12 +411,9 @@ export const make = (
           return true;
         }
 
-        const printedJob = yield* Effect.flatMap(
-          launchctl(["print", target], `print ${target}`),
-          (ran) => expect(ran, `launchctl print ${target}`)
-        );
+        const printedJob = yield* printJob(target);
 
-        if (printed(printedJob.stdout, "state") !== "not running") {
+        if (printed(printedJob, "state") !== "not running") {
           return false;
         }
 
@@ -411,7 +426,7 @@ export const make = (
         }
 
         return yield* new Internal({
-          message: `tart run for ${machine.name} exited ${printed(printedJob.stdout, "last exit code") ?? "early"}: ${lastLines(output)}`,
+          message: `tart run for ${machine.name} exited ${printed(printedJob, "last exit code") ?? "early"}: ${lastLines(output)}`,
         });
       });
 
@@ -466,12 +481,7 @@ export const make = (
           return true;
         }
 
-        const printedJob = yield* launchctl(
-          ["print", target],
-          `print ${target}`
-        );
-
-        return printed(printedJob.stdout, "state") === "not running";
+        return printed(yield* printJob(target), "state") === "not running";
       }).pipe(Effect.orElseSucceed(() => false));
 
       return look.pipe(
@@ -496,7 +506,7 @@ export const make = (
         );
         yield* writeJob(vm);
 
-        const loaded = yield* launchctl(["print", target], `print ${target}`);
+        const loaded = yield* launchd(["print", target], `print ${target}`);
 
         const stale =
           loaded.exitCode === 0 &&
@@ -505,25 +515,16 @@ export const make = (
             program(settings.binary, vm).join("\n");
 
         if (stale) {
-          yield* Effect.flatMap(
-            launchctl(["bootout", target], `bootout ${vm}`),
-            (ran) => expect(ran, `launchctl bootout ${vm}`)
-          );
+          yield* launchctl(["bootout", target], `bootout ${vm}`);
         }
 
         yield* stale || loaded.exitCode === 113
-          ? Effect.flatMap(
-              launchctl(["bootstrap", domain, file], `bootstrap ${vm}`),
-              (ran) => expect(ran, `launchctl bootstrap ${vm}`)
-            )
+          ? launchctl(["bootstrap", domain, file], `bootstrap ${vm}`)
           : expect(loaded, `launchctl print ${target}`);
 
         const since = (yield* Clock.currentTimeMillis) - 1000;
 
-        yield* Effect.flatMap(
-          launchctl(["kickstart", target], `kickstart ${vm}`),
-          (ran) => expect(ran, `launchctl kickstart ${vm}`)
-        );
+        yield* launchctl(["kickstart", target], `kickstart ${vm}`);
         yield* started(vm, since);
       });
 
@@ -674,12 +675,7 @@ export const make = (
           });
         }
 
-        const loaded = yield* Effect.flatMap(
-          launchctl(["print", target], `print ${target}`),
-          (ran) => expect(ran, `launchctl print ${target}`)
-        );
-
-        const loadedArguments = printedArguments(loaded.stdout);
+        const loadedArguments = printedArguments(yield* printJob(target));
 
         if (loadedArguments === undefined) {
           return yield* new Internal({
@@ -816,10 +812,7 @@ export const make = (
 
           yield* deleteVm(vm);
 
-          yield* Effect.flatMap(
-            launchctl(["bootout", target], `bootout ${vm}`),
-            (ran) => expect(ran, `launchctl bootout ${vm}`, [0, 3])
-          );
+          yield* launchctl(["bootout", target], `bootout ${vm}`, [0, 3]);
 
           for (const leftover of [file, log]) {
             yield* files(
