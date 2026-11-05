@@ -12,14 +12,12 @@ import { gzipSync } from "node:zlib";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import type { Kind } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { Context, Effect, Layer, Schema } from "effect";
 import { expect } from "vite-plus/test";
 
 import { fetch, pieceBytes, publish } from "../src/builds.ts";
-import type { Interface } from "../src/builds.ts";
 import {
   make,
   minimumVersion,
@@ -29,6 +27,7 @@ import {
 import { Runtime } from "../src/runtime.ts";
 import { fakeRuntime } from "./fake-runtime.ts";
 import { scripted } from "./scripted.ts";
+import { memoryBuildStore } from "./support.ts";
 
 const Written = Schema.fromJsonString(
   Schema.Struct({
@@ -48,37 +47,6 @@ type ManifestFile = (typeof Written.Type)["files"][number];
 const encoder = new TextEncoder();
 
 const decoder = new TextDecoder();
-
-const memoryStore = () => {
-  const objects = new Map<string, Uint8Array>();
-
-  const store: Interface = {
-    list: (prefix) =>
-      Effect.sync(() =>
-        [...objects.keys()].filter((key) => key.startsWith(prefix)).toSorted()
-      ),
-    get: (key) =>
-      Effect.suspend(() => {
-        const body = objects.get(key);
-
-        return body === undefined
-          ? Effect.fail(new Internal({ message: `no object ${key}` }))
-          : Effect.succeed(body);
-      }),
-    put: (key, body) =>
-      Effect.sync(() => {
-        objects.set(key, body);
-      }),
-    remove: (keys) =>
-      Effect.sync(() => {
-        for (const key of keys) {
-          objects.delete(key);
-        }
-      }),
-  };
-
-  return { objects, store };
-};
 
 const runtimeIn = (dir: string, kind: Kind) =>
   Effect.map(
@@ -140,7 +108,7 @@ const published = (
     const root = yield* scratch;
     const from = path.join(root, "from");
     const built = path.join(from, "checkpoints", "built");
-    const memory = memoryStore();
+    const memory = memoryBuildStore();
 
     for (const [name, content] of contents) {
       mkdirSync(path.dirname(path.join(built, name)), { recursive: true });
@@ -408,7 +376,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const object = path.join("objects", hash);
         const built = checkpointRef("built");
         const fetchedRef = checkpointRef("fetched");
-        const memory = memoryStore();
+        const memory = memoryBuildStore();
 
         const checkpointIn = (dir: string, ref: typeof built) =>
           path.join(dir, "checkpoints", `${nativeName(ref)}.checkpoint`);

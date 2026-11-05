@@ -144,39 +144,41 @@ export const memoryBuildStore = () => {
   const objects = new Map<string, Uint8Array>();
   const downloaded: string[] = [];
 
-  const layer = Layer.succeed(
-    BuildStore,
-    BuildStore.of({
-      list: (prefix) =>
-        Effect.sync(() =>
-          [...objects.keys()].filter((key) => key.startsWith(prefix))
-        ),
-      get: (key) =>
-        Effect.suspend(() => {
-          const found = objects.get(key);
+  const store = BuildStore.of({
+    list: (prefix) =>
+      Effect.sync(() =>
+        [...objects.keys()].filter((key) => key.startsWith(prefix)).toSorted()
+      ),
+    get: (key) =>
+      Effect.suspend(() => {
+        const found = objects.get(key);
 
-          downloaded.push(key);
+        downloaded.push(key);
 
-          return found === undefined
-            ? Effect.fail(
-                new Internal({ message: `the build store has no ${key}` })
-              )
-            : Effect.succeed(found);
-        }),
-      put: (key, body) =>
-        Effect.sync(() => {
-          objects.set(key, body);
-        }),
-      remove: (keys) =>
-        Effect.sync(() => {
-          for (const key of keys) {
-            objects.delete(key);
-          }
-        }),
-    })
-  );
+        return found === undefined
+          ? Effect.fail(
+              new Internal({ message: `the build store has no ${key}` })
+            )
+          : Effect.succeed(found);
+      }),
+    put: (key, body) =>
+      Effect.sync(() => {
+        objects.set(key, body);
+      }),
+    remove: (keys) =>
+      Effect.sync(() => {
+        for (const key of keys) {
+          objects.delete(key);
+        }
+      }),
+  });
 
-  return { layer, objects, downloaded };
+  return {
+    layer: Layer.succeed(BuildStore, store),
+    store,
+    objects,
+    downloaded,
+  };
 };
 
 export const pause = Effect.sleep(Duration.millis(50));
