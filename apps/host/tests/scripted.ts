@@ -11,6 +11,7 @@ export interface Call {
 export interface Reply {
   readonly exitCode?: number;
   readonly hangs?: boolean;
+  readonly until?: Effect.Effect<void>;
   readonly stdout?: string;
   readonly stderr?: string;
 }
@@ -52,7 +53,8 @@ export const scripted = (reply: (call: Call) => Reply | undefined) => {
         exitCode:
           answer.hangs === true
             ? Effect.never
-            : Effect.succeed(
+            : Effect.as(
+                answer.until ?? Effect.void,
                 ChildProcessSpawner.ExitCode(answer.exitCode ?? 0)
               ),
         isRunning: Effect.succeed(false),

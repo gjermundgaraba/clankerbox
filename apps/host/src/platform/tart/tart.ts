@@ -11,6 +11,7 @@ import {
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { HostError, Sizing } from "@gjermundgaraba/clankerbox-sdk";
 import {
+  Clock,
   Duration,
   Effect,
   FileSystem,
@@ -45,6 +46,7 @@ import type {
 import type { HostSettings } from "../../settings.ts";
 import { allotted, inUse } from "../../usage.ts";
 import { cliIn, expect, files, regularFiles } from "../process.ts";
+import * as DiskGate from "./disk-gate.ts";
 import * as Forwarder from "./forwarder.ts";
 
 export const TartSettings = Schema.Struct({
@@ -81,6 +83,10 @@ const minimumRefusal = "at minimum (requested";
 const bootWait = Duration.minutes(3);
 
 const probePause = Duration.seconds(1);
+
+const startWait = Duration.minutes(1);
+
+const startPause = Duration.millis(100);
 
 const shutdownWait = Duration.minutes(1);
 
@@ -269,6 +275,7 @@ export const make = (
       run("/bin/launchctl", args, `launchctl ${what}`);
 
     const reported = (yield* call(["--version"], "--version")).stdout.trim();
+    const disks = yield* DiskGate.make;
 
     if (!supported(reported)) {
       return yield* new CannotStart({
@@ -277,7 +284,9 @@ export const make = (
     }
 
     const list = Effect.flatMap(
-      call(["list", "--source", "local", "--format", "json"], "list"),
+      disks.reading(
+        call(["list", "--source", "local", "--format", "json"], "list")
+      ),
       (ran) =>
         decodeList(ran.stdout).pipe(
           Effect.map(
@@ -443,7 +452,40 @@ export const make = (
         }
       });
 
-    const boot = (machine: MachineRef) =>
+    const started = (vm: string, since: number) => {
+      const socket = path.join(vmsDir(settings), vm, "control.sock");
+      const { target } = job(vm);
+
+      const look = Effect.gen(function* () {
+        const info = yield* Effect.option(fs.stat(socket));
+
+        if (
+          Option.isSome(info) &&
+          Option.exists(info.value.mtime, (at) => at.getTime() >= since)
+        ) {
+          return true;
+        }
+
+        const printedJob = yield* launchctl(
+          ["print", target],
+          `print ${target}`
+        );
+
+        return printed(printedJob.stdout, "state") === "not running";
+      }).pipe(Effect.orElseSucceed(() => false));
+
+      return look.pipe(
+        Effect.repeat({
+          until: (done) => done,
+          schedule: Schedule.spaced(startPause),
+        }),
+        Effect.timeoutOption(startWait),
+        Effect.asVoid
+      );
+    };
+
+    // https://github.com/openai/tart/blob/2.41.1/Sources/tart/Commands/Run.swift#L589
+    const launch = (machine: MachineRef) =>
       Effect.gen(function* () {
         const vm = vmOf(machine);
         const { target, plist: file, log } = job(vm);
@@ -476,12 +518,17 @@ export const make = (
             )
           : expect(loaded, `launchctl print ${target}`);
 
+        const since = (yield* Clock.currentTimeMillis) - 1000;
+
         yield* Effect.flatMap(
           launchctl(["kickstart", target], `kickstart ${vm}`),
           (ran) => expect(ran, `launchctl kickstart ${vm}`)
         );
-        yield* ready(machine);
+        yield* started(vm, since);
       });
+
+    const boot = (machine: MachineRef) =>
+      Effect.andThen(disks.opening(launch(machine)), ready(machine));
 
     const stop = (machine: MachineRef) =>
       Effect.gen(function* () {
@@ -567,8 +614,13 @@ export const make = (
       return Effect.gen(function* () {
         yield* listen(machine);
         yield* call(["clone", from, vm], `clone ${from} ${vm}`);
-        yield* set(machine, machine, ["--random-serial", ...sizes]);
-        yield* boot(machine);
+        yield* disks.opening(
+          Effect.andThen(
+            set(machine, machine, ["--random-serial", ...sizes]),
+            launch(machine)
+          )
+        );
+        yield* ready(machine);
       });
     };
 
@@ -817,7 +869,7 @@ export const make = (
           const flags = sizeFlags(to);
 
           if (flags.length > 0) {
-            yield* set(machine, sizedBy(machine, to), flags);
+            yield* disks.opening(set(machine, sizedBy(machine, to), flags));
           }
         })
       ),
@@ -825,7 +877,7 @@ export const make = (
         const vm = vmOf(machine);
 
         return Effect.flatMap(
-          call(["get", vm, "--format", "json"], `get ${vm}`),
+          disks.reading(call(["get", vm, "--format", "json"], `get ${vm}`)),
           (ran) =>
             decodeInfo(ran.stdout).pipe(
               Effect.map(({ CPU, Memory, Disk }) => ({

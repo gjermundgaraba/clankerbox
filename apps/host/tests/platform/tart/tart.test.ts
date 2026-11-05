@@ -1,6 +1,7 @@
 import {
   appendFileSync,
   existsSync,
+  mkdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -19,7 +20,16 @@ import {
   scratch,
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { Duration, Effect, Fiber, Layer, Logger, Stream } from "effect";
+import {
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Logger,
+  Stream,
+} from "effect";
 import { TestClock } from "effect/testing";
 import { expect } from "vite-plus/test";
 
@@ -125,8 +135,17 @@ const scriptedMac = (stateDir: string) => {
   const exited = new Map<string, number>();
 
   const hooks: Hooks = {};
+  const tartHome = path.join(path.dirname(stateDir), "tart");
 
   const logOf = (vm: string) => path.join(jobsDir(stateDir), `${vm}.log`);
+
+  const startVm = (vm: string) => {
+    const dir = path.join(tartHome, "vms", vm);
+
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, "control.sock"), "");
+    vms.set(vm, "running");
+  };
 
   const tart = (args: readonly string[]): Reply | undefined => {
     const [command = "", ...rest] = args;
@@ -321,7 +340,7 @@ const scriptedMac = (stateDir: string) => {
 
       case "kickstart": {
         if (hooks.kickstart === undefined) {
-          vms.set(label, "running");
+          startVm(label);
         } else {
           hooks.kickstart(label);
         }
@@ -365,10 +384,20 @@ const scriptedMac = (stateDir: string) => {
     hostId: "mac",
     stateDir,
     uid: 501,
-    tartHome: "/Users/operator/.tart-test",
+    tartHome,
   };
 
-  return { vms, jobs, programs, exited, hooks, spawner, settings, logOf };
+  return {
+    vms,
+    jobs,
+    programs,
+    exited,
+    hooks,
+    spawner,
+    settings,
+    logOf,
+    startVm,
+  };
 };
 
 type ScriptedMac = ReturnType<typeof scriptedMac>;
@@ -463,7 +492,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           expect(call.env).toStrictEqual({
             PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
             HOME: homedir(),
-            TART_HOME: "/Users/operator/.tart-test",
+            TART_HOME: mac.settings.tartHome,
           });
         }
 
@@ -1127,6 +1156,133 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           )
         ).toBe(false);
         expect(yield* accepts(copy.port)).toBe(false);
+      })
+  );
+
+  it.effect(
+    "a create's tart set waits for a tart list under way, and so does a resize's, as the list opens every VM's disk",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const machine = machineOn("dev");
+        const vm = vmOf(machine);
+
+        const listHeld = () =>
+          Effect.gen(function* () {
+            const release = yield* Deferred.make<undefined>();
+            const listed = yield* Deferred.make<undefined>();
+
+            mac.hooks.list = () => {
+              delete mac.hooks.list;
+              Deferred.doneUnsafe(listed, Exit.succeed(undefined));
+
+              return { stdout: "[]", until: Deferred.await(release) };
+            };
+
+            const reading = yield* Effect.forkChild(runtime.observe([machine]));
+
+            yield* Deferred.await(listed);
+
+            return {
+              reading,
+              release: Deferred.succeed(release, undefined),
+            };
+          });
+
+        const settingWhileListed = (work: Effect.Effect<unknown, HostError>) =>
+          Effect.gen(function* () {
+            const { reading, release } = yield* listHeld();
+            const before = calls(mac).length;
+            const working = yield* Effect.forkChild(work);
+
+            yield* Effect.sleep(Duration.millis(300));
+
+            const during = calls(mac)
+              .slice(before)
+              .filter((line) => line.startsWith("tart set"));
+
+            yield* release;
+            yield* Fiber.join(reading);
+            yield* Fiber.join(working);
+
+            return during;
+          });
+
+        const created = yield* settingWhileListed(
+          runtime.create(machine, "base")
+        );
+
+        yield* runtime.stop(machine);
+
+        const resized = yield* settingWhileListed(
+          runtime.resize(machine, { diskGib: 100 }, false)
+        );
+
+        expect(created).toStrictEqual([]);
+        expect(resized).toStrictEqual([]);
+        expect(
+          calls(mac).filter((line) => line.startsWith("tart set"))
+        ).toStrictEqual([
+          `tart set ${vm} --random-serial --cpu 4 --memory 8192 --disk-size ${diskGb(60)}`,
+          `tart set ${vm} --disk-size ${diskGb(100)}`,
+        ]);
+      })
+  );
+
+  it.effect(
+    "a tart list and a tart get wait while a VM boots, until its run has started it or exited",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const machine = machineOn("dev");
+        const vm = vmOf(machine);
+        const kicked = yield* Deferred.make<undefined>();
+
+        mac.hooks.kickstart = (label) => {
+          mac.vms.set(label, "running");
+          Deferred.doneUnsafe(kicked, Exit.succeed(undefined));
+        };
+
+        const creating = yield* Effect.forkChild(
+          runtime.create(machine, "base")
+        );
+
+        yield* Deferred.await(kicked);
+
+        const listsBefore = mac.spawner.calls.length;
+
+        const reading = yield* Effect.forkChild(
+          Effect.all([runtime.observe([machine]), runtime.sizes(machine)], {
+            concurrency: "unbounded",
+          })
+        );
+
+        yield* Effect.sleep(Duration.millis(300));
+
+        const during = mac.spawner.calls
+          .slice(listsBefore)
+          .map(({ args }) => args[0])
+          .filter((command) => command === "list" || command === "get");
+
+        mac.startVm(vm);
+
+        const [observed] = yield* Fiber.join(reading);
+
+        yield* Fiber.join(creating);
+
+        mac.hooks.kickstart = (label) => {
+          mac.exited.set(label, 1);
+        };
+
+        mac.vms.set(vm, "stopped");
+
+        const failed = yield* Effect.flip(runtime.start(machine));
+        const afterExit = yield* runtime.observe([machine]);
+
+        expect(during).toStrictEqual([]);
+        expect(observed).toStrictEqual(new Map([["dev", "running"]]));
+        expect(failed._tag).toBe("Internal");
+        expect(afterExit).toStrictEqual(new Map([["dev", "stopped"]]));
       })
   );
 
