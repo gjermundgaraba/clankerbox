@@ -1,6 +1,6 @@
 {
   "name": "@gjermundgaraba/clankerbox-host",
-  "version": "0.36.3",
+  "version": "0.37.0",
   "description": "A clankerbox host: runs the control plane's operations on a runtime",
   "license": "MIT",
   "repository": {
