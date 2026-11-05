@@ -450,7 +450,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a build reads no VM from its host while its builder is made, as Tart's read opens the disk the boot locks",
+    "a build reads no VM from its host while a step runs on its builder, only whether the host answers",
     () =>
       Effect.gen(function* () {
         const { client, host } = yield* withClient();

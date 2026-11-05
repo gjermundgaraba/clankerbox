@@ -736,7 +736,6 @@ export const make = (
           activityOf(found.value.state) !== "follow" &&
           isResting(phaseOf(found.value.state));
 
-        // https://github.com/openai/tart/blob/2.41.1/Sources/tart/Commands/List.swift#L47
         if (!resting) {
           return yield* hosts.read(found.value.host).pipe(
             Effect.as(false),
