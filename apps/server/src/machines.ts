@@ -62,7 +62,7 @@ import {
   stateOf,
 } from "./machine-view.ts";
 import { collect, cutShort, poll } from "./operations.ts";
-import { holding, placing } from "./placement.ts";
+import { builtUnder, holding, placing } from "./placement.ts";
 import type { BuiltUnder, Candidate } from "./placement.ts";
 import { machineStep, refOf } from "./steps.ts";
 import { newId, notFound, Store } from "./store.ts";
@@ -163,13 +163,8 @@ const readyBuild = (
       ? ready.at(-1)
       : ready.find((each) => each.number === number);
 
-  if (build !== undefined && Option.isSome(found)) {
-    return Result.succeed({
-      id: buildId(template, build.number),
-      base: found.value.base,
-      pin: build.pin,
-      image: build.image,
-    });
+  if (build !== undefined) {
+    return Result.succeed(builtUnder(template, build));
   }
 
   const kept = ready.map((each) => buildId(template, each.number));

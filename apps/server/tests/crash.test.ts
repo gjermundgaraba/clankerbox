@@ -8,7 +8,7 @@ import { expect } from "vite-plus/test";
 
 import { applied } from "../src/chart.ts";
 import { checkpointChart } from "../src/checkpoint-chart.ts";
-import { databaseFile, migrations } from "../src/platform/sqlite.ts";
+import { databaseFile } from "../src/platform/sqlite.ts";
 import { freshBoot } from "./chart-rows.ts";
 import {
   applying,
@@ -368,10 +368,16 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* first.crash;
 
         const db = new DatabaseSync(path.join(planned.stateDir, databaseFile));
+        const shipped = 4;
 
         db.exec(
           `UPDATE machines SET source = '{"kind":"base","scripted":true}' WHERE name = 'dev';
-          PRAGMA user_version = ${migrations.length - 1}`
+          ALTER TABLE templates ADD COLUMN base TEXT;
+          ALTER TABLE templates ADD COLUMN cpu INTEGER;
+          ALTER TABLE templates ADD COLUMN ram_mib INTEGER;
+          ALTER TABLE templates ADD COLUMN disk_gib INTEGER;
+          ALTER TABLE templates ADD COLUMN setup_timeout_seconds INTEGER;
+          PRAGMA user_version = ${shipped}`
         );
         db.close();
 

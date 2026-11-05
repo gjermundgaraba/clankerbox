@@ -179,6 +179,37 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a rebuild onto another base keeps the older build its own base, so a create pinned to it clones it",
+    () =>
+      Effect.gen(function* () {
+        const { client } = yield* withClient();
+
+        yield* client.buildTemplate(web({ cpu: 2 }));
+        yield* client.buildTemplate(
+          web({ base: "docker.io/library/debian:12", cpu: 1 })
+        );
+
+        const read = yield* client.getTemplate({ id: "web" });
+        const made = yield* client.create("dev", { template: "web@1" });
+
+        expect(read).toMatchObject({
+          current: "web@2",
+          base: "docker.io/library/debian:12",
+          cpu: 1,
+        });
+        expect(read.builds.map(({ copies }) => copies)).toStrictEqual([
+          [{ host: "linux", phase: "ready" }],
+          [{ host: "linux", phase: "ready" }],
+        ]);
+        expect(made).toMatchObject({
+          template: "web@1",
+          base: "ubuntu",
+          cpu: 2,
+        });
+      })
+  );
+
+  it.effect(
     "a template whose first builds failed shows the newest's sizes, and a ready build's once one is",
     () =>
       Effect.gen(function* () {

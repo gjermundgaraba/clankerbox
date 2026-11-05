@@ -34,7 +34,7 @@ import { Checkpoints } from "./checkpoints.ts";
 import { Hosts } from "./hosts.ts";
 import type { Reached } from "./hosts.ts";
 import { Machines } from "./machines.ts";
-import { outdated, placing } from "./placement.ts";
+import { builtUnder, outdated, placing } from "./placement.ts";
 import type { BuiltUnder } from "./placement.ts";
 import { newId, Store } from "./store.ts";
 import type { BuildRow, TemplateRow } from "./store.ts";
@@ -63,13 +63,6 @@ export interface Seen {
   readonly records: readonly CheckpointRow[];
   readonly reached: readonly Reached[];
 }
-
-const builtUnder = (template: TemplateRow, build: BuildRow): BuiltUnder => ({
-  id: buildId(template.name, build.number),
-  base: template.base,
-  pin: build.pin,
-  image: build.image,
-});
 
 const copyOf = (
   made: BuiltUnder,
@@ -118,7 +111,7 @@ const shownBuild = (
   row: BuildRow,
   seen: Seen
 ): Build => {
-  const made = builtUnder(template, row);
+  const made = builtUnder(template.name, row);
   const records = seen.records.filter(({ build }) => build === made.id);
 
   return {
@@ -144,25 +137,32 @@ const shownBuild = (
   };
 };
 
+type Facts = Pick<
+  BuildRow,
+  "base" | "cpu" | "ramMib" | "diskGib" | "setupTimeoutSeconds"
+>;
+
+const currentOrNewest = ({ builds }: TemplateRow): Facts =>
+  builds.findLast(({ phase }) => phase === "ready") ?? Arr.lastNonEmpty(builds);
+
 const shown = (row: TemplateRow, seen: Seen): Template => {
   const builds = row.builds.map((each) => shownBuild(row, each, seen));
+
+  const { base, cpu, ramMib, diskGib, setupTimeoutSeconds } =
+    currentOrNewest(row);
 
   return {
     id: row.name,
     createdAt: row.createdAt,
-    base: row.base,
-    cpu: row.cpu,
-    ramMib: row.ramMib,
-    diskGib: row.diskGib,
-    ...(row.setupTimeoutSeconds === undefined
-      ? {}
-      : { setupTimeoutSeconds: row.setupTimeoutSeconds }),
+    base,
+    cpu,
+    ramMib,
+    diskGib,
+    ...(setupTimeoutSeconds === undefined ? {} : { setupTimeoutSeconds }),
     builds,
     ...builtFrom(builds),
   };
 };
-
-type Facts = Omit<TemplateRow, "name" | "createdAt" | "builds">;
 
 const building = ({ builds }: TemplateRow) =>
   builds.find(({ phase }) => phase === "building");
@@ -171,7 +171,7 @@ const ended = (
   row: TemplateRow,
   number: number,
   end: Pick<BuildRow, "phase" | "error">
-): TemplateRow => {
+): TemplateRow | "removed" => {
   const builds = row.builds.map((each) =>
     each.number === number ? { ...each, ...end } : each
   );
@@ -180,14 +180,13 @@ const ended = (
     builds.filter(({ phase }) => phase === "ready").slice(-keptBuilds)
   );
 
-  return {
-    ...row,
-    builds: builds.filter((each) => each.number === number || ready.has(each)),
-  };
-};
+  const kept = builds.filter(
+    (each) => each.number === number || ready.has(each)
+  );
 
-type Begun = TemplateRow & {
-  readonly builds: Arr.NonEmptyReadonlyArray<BuildRow>;
+  return Arr.isReadonlyArrayNonEmpty(kept)
+    ? { ...row, builds: kept }
+    : "removed";
 };
 
 const begun =
@@ -195,7 +194,7 @@ const begun =
   (
     found: Option.Option<TemplateRow>,
     lastBuild: number
-  ): Result.Result<Begun, Conflict> => {
+  ): Result.Result<TemplateRow, Conflict> => {
     const before = Option.getOrUndefined(found);
     const running = before === undefined ? undefined : building(before);
 
@@ -208,18 +207,11 @@ const begun =
       );
     }
 
-    const earlier = before?.builds ?? [];
-
-    const facts =
-      before !== undefined && earlier.some(({ phase }) => phase === "ready")
-        ? before
-        : asked;
-
     return Result.succeed({
-      ...facts,
       name,
       createdAt: before?.createdAt ?? now,
-      builds: Arr.append(earlier, {
+      builds: Arr.append(before?.builds ?? [], {
+        ...asked,
         number: lastBuild + 1,
         createdAt: now,
         phase: "building",
@@ -245,7 +237,7 @@ export const fetchesDue = (
 ) =>
   templates.flatMap((template) =>
     template.builds.flatMap((build) => {
-      const made = builtUnder(template, build);
+      const made = builtUnder(template.name, build);
       const copies = records.filter((record) => record.build === made.id);
 
       const source = copies.find(
@@ -260,7 +252,7 @@ export const fetchesDue = (
             return info !== undefined &&
               info.builds &&
               info.kind === source.kind &&
-              offers(info, template.base) &&
+              offers(info, made.base) &&
               outdated(info, made) === undefined &&
               !here.some(holds)
               ? [{ source, host: info.id, failed: here }]
@@ -313,14 +305,13 @@ export const make = (settings: {
     const ending = (
       name: string,
       number: number,
-      end: Pick<BuildRow, "phase" | "error">,
-      facts?: Facts
+      end: Pick<BuildRow, "phase" | "error">
     ) =>
       store.advanceTemplate(name, (found) =>
         Result.succeed(
           Option.match(found, {
             onNone: () => "removed" as const,
-            onSome: (row) => ({ ...ended(row, number, end), ...facts }),
+            onSome: (row) => ended(row, number, end),
           })
         )
       );
@@ -409,7 +400,7 @@ export const make = (settings: {
       }).pipe(
         Effect.matchCauseEffect({
           onSuccess: () =>
-            ending(name, number, { phase: "ready", error: undefined }, asked),
+            ending(name, number, { phase: "ready", error: undefined }),
           onFailure: (cause) => {
             const error = Cause.findError(cause);
 
