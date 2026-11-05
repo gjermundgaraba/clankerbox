@@ -93,7 +93,7 @@ export const Http = ActionHttp.make(
       ...read,
       error: reading,
       description:
-        "Read one machine. With `holdSeconds`, the read is held until the machine rests, is deleted or is made again, or that many seconds pass, and answers then. Only a control plane that names its version on its replies takes it.",
+        "Read one machine. With `holdSeconds`, the read is held until the machine rests, is deleted or is made again, or that many seconds pass, and answers then.",
       input: MachineRead,
       success: Machine,
     }),

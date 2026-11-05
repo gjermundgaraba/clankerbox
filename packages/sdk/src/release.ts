@@ -22,10 +22,6 @@ export const release = (of: string): string =>
  */
 export const versionHeader = "clankerbox-version";
 
-/** A control plane from before the hold names no version on its replies, and refuses `holdSeconds`. */
-export const takesHold = (served: Option.Option<string>): boolean =>
-  Option.isSome(served);
-
 const refusal = (
   server: string,
   sent: Option.Option<string>
