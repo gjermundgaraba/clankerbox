@@ -40,12 +40,6 @@ const web = (fields?: Partial<BuildRequest>): BuildRequest => ({
   ...fields,
 });
 
-const rebuild = (fields?: Partial<BuildRequest>): BuildRequest => ({
-  template: "web",
-  setup,
-  ...fields,
-});
-
 const exits3 = { script: "#!/bin/sh\nexit 3\n" };
 
 const onKind = (kind: Kind) => ({ hosts: [{ id: kind, kind }] });
@@ -79,7 +73,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* client.buildTemplate(web());
 
         const held = host.fake.holdNext("exec");
-        const second = yield* Effect.forkChild(client.buildTemplate(rebuild()));
+        const second = yield* Effect.forkChild(client.buildTemplate(web()));
 
         yield* held.entered;
 
@@ -110,7 +104,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       yield* client.buildTemplate(web());
 
       const error = yield* Effect.flip(
-        client.buildTemplate(rebuild({ setup: exits3 }))
+        client.buildTemplate(web({ setup: exits3 }))
       );
 
       yield* noMachines(served);
@@ -144,7 +138,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* client.buildTemplate(web({ cpu: 2, ramMib: 2048 }));
         yield* Effect.flip(
           client.buildTemplate(
-            rebuild({
+            web({
               base: "docker.io/library/debian:12",
               cpu: 1,
               ramMib: 1024,
@@ -178,7 +172,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a template's first builds that fail show the newest's sizes, and a rebuild takes them",
+    "a template whose first builds failed shows the newest's sizes, and a ready build's once one is",
     () =>
       Effect.gen(function* () {
         const served = yield* withClient();
@@ -186,17 +180,17 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* Effect.flip(client.buildTemplate(web({ setup: exits3 })));
         yield* Effect.flip(
-          client.buildTemplate(rebuild({ cpu: 2, setup: exits3 }))
+          client.buildTemplate(web({ cpu: 2, setup: exits3 }))
         );
 
         const failed = yield* client.getTemplate({ id: "web" });
 
-        yield* client.buildTemplate(rebuild());
+        yield* client.buildTemplate(web());
 
         expect(failed).toMatchObject({ state: "failed", cpu: 2 });
         expect(yield* client.getTemplate({ id: "web" })).toMatchObject({
           current: "web@3",
-          cpu: 2,
+          cpu: 1,
         });
       })
   );
@@ -257,7 +251,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const held = host.fake.holdNext("exec");
 
-        yield* first.templates.build(rebuild());
+        yield* first.templates.build(web());
         yield* held.entered;
 
         const [builder] = yield* machineNames(first);
@@ -293,9 +287,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const { client, host } = served;
 
       yield* client.buildTemplate(web());
-      yield* Effect.flip(client.buildTemplate(rebuild({ setup: exits3 })));
-      yield* client.buildTemplate(rebuild());
-      yield* client.buildTemplate(rebuild());
+      yield* Effect.flip(client.buildTemplate(web({ setup: exits3 })));
+      yield* client.buildTemplate(web());
+      yield* client.buildTemplate(web());
 
       yield* eventually(copiesOf(served), (copies) => copies.length === 2);
 
@@ -319,7 +313,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { client } = served;
 
         yield* client.buildTemplate(web());
-        yield* client.buildTemplate(rebuild());
+        yield* client.buildTemplate(web());
         yield* client.deleteTemplate({ id: "web" });
 
         const built = yield* client.buildTemplate(web());
@@ -447,7 +441,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* entered;
 
-        const refused = yield* Effect.flip(templates.build(rebuild()));
+        const refused = yield* Effect.flip(templates.build(web()));
         const kept = yield* Effect.flip(templates.delete("web"));
 
         yield* release;
@@ -472,39 +466,29 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a first build without a base or sizes is Invalid, and a rebuild takes the template's, and keeps what it gives",
+    "a build keeps the base and sizes it gives, and a setup without a timeout takes the host's, not the build's before",
     () =>
       Effect.gen(function* () {
-        const { client, store, templates } = yield* withClient();
-
-        const noBase = yield* Effect.flip(templates.build(rebuild()));
-
-        const noSizes = yield* Effect.flip(
-          templates.build(rebuild({ base: "ubuntu" }))
-        );
+        const { client, store } = yield* withClient();
 
         yield* client.buildTemplate(web({ cpu: 2 }));
         yield* client.buildTemplate(
-          rebuild({ ramMib: 2048, setup: { script: setup.script } })
+          web({ ramMib: 2048, setup: { script: setup.script } })
         );
 
         const read = yield* client.getTemplate({ id: "web" });
         const copies = yield* store.checkpoints;
 
-        expect(noBase._tag).toBe("Invalid");
-        expect(noBase.message).toContain("gives its base");
-        expect(noSizes._tag).toBe("Invalid");
-        expect(noSizes.message).toContain("gives its vCPUs, RAM and disk");
         expect(read).toMatchObject({
           base: "ubuntu",
-          cpu: 2,
+          cpu: 1,
           ramMib: 2048,
           diskGib: 10,
-          setupTimeoutSeconds: 30,
         });
+        expect(read.setupTimeoutSeconds).toBeUndefined();
         expect(copies.map(({ cpu, ramMib }) => [cpu, ramMib])).toStrictEqual([
           [2, 1024],
-          [2, 2048],
+          [1, 2048],
         ]);
       })
   );
@@ -567,13 +551,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         host.fake.failNext("capture", new Internal({ message: "ENOSPC" }));
 
-        const error = yield* Effect.flip(client.buildTemplate(rebuild()));
+        const error = yield* Effect.flip(client.buildTemplate(web()));
 
         yield* noMachines(served);
         yield* eventually(copiesOf(served), (copies) => copies.length === 1);
 
         const failed = yield* phases(served);
-        const again = yield* client.buildTemplate(rebuild());
+        const again = yield* client.buildTemplate(web());
 
         yield* noMachines(served);
 
@@ -598,7 +582,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { client, host } = served;
 
         yield* client.buildTemplate(web());
-        yield* client.buildTemplate(rebuild());
+        yield* client.buildTemplate(web());
 
         const { release, entered } = host.fake.holdNext("restore");
 
@@ -609,7 +593,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* entered;
         host.fake.calls.length = 0;
 
-        yield* client.buildTemplate(rebuild());
+        yield* client.buildTemplate(web());
         yield* eventually(copiesOf(served), (copies) =>
           copies.some(
             ([build, state]) =>

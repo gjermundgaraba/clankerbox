@@ -15,8 +15,6 @@ vi.setConfig({ testTimeout: 30_000 });
 
 const http = NodeHttpClient.layerNodeHttp;
 
-const sizes = ["--cpu", "1", "--ram", "1G", "--disk", "10G"];
-
 const decodeFailure = Schema.decodeSync(
   Schema.fromJsonString(Schema.Struct({ error: ErrorDocument }))
 );
@@ -49,57 +47,46 @@ const home = (dir: string, name: string, url: string) =>
       cli(args, { http, env: { HOME: root } });
   });
 
+const webFile = (cpu: number) =>
+  `base: ubuntu\ncpu: ${cpu}\nram: 1G\ndisk: 10G\nsetupTimeout: 90s\nsetup: ../recipes/web\n`;
+
+const writeTemplate = (dir: string, contents: string) =>
+  Effect.gen(function* () {
+    const recipe = path.join(dir, "recipes", "web");
+    const file = path.join(dir, "templates", "web.yaml");
+
+    yield* mkdir(recipe);
+    yield* mkdir(path.dirname(file));
+    yield* write(
+      path.join(recipe, "setup.sh"),
+      `#!/bin/sh\nset -eu\n${loginSetup}`
+    );
+    yield* write(file, contents);
+
+    return file;
+  });
+
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
-    "a first build needs a base and sizes, and a rebuild reuses them",
+    "a build reads its template, base, sizes and setup from a file, and a rebuild reads the file again",
     () =>
       Effect.gen(function* () {
         const { dir, url } = yield* Effect.orDie(running());
         const run = yield* home(dir, "client", url);
-        const script = path.join(dir, "setup.sh");
+        const file = yield* writeTemplate(dir, webFile(1));
 
-        yield* write(script, `#!/bin/sh\nset -eu\n${loginSetup}`);
+        const first = yield* run(["template", "build", file]);
 
-        const build = (args: readonly string[]) =>
-          run(["template", "build", "web", script, ...args]);
+        yield* write(file, webFile(2));
 
-        const refusals = [
-          yield* build([...sizes, "--json"]),
-          yield* build(["--base", "ubuntu", "--json"]),
-        ];
-
-        const first = yield* build([
-          "--base",
-          "ubuntu",
-          ...sizes,
-          "--setup-timeout",
-          "90s",
-        ]);
-
-        const rebuilt = yield* build([]);
-        const grown = yield* build(["--cpu", "2"]);
+        const rebuilt = yield* run(["template", "build", file]);
         const got = yield* run(["template", "get", "web", "--json"]);
 
         expect(
-          refusals.map(({ code, stdout }) => {
-            const { tag, message } = decodeFailure(stdout).error;
-
-            return [code, tag, message];
-          })
-        ).toStrictEqual([
-          [1, "Invalid", "a first build of template web gives its base"],
-          [
-            1,
-            "Invalid",
-            "a first build of template web gives its vCPUs, RAM and disk",
-          ],
-        ]);
-        expect(
-          [first, rebuilt, grown].map(({ code, stdout }) => [code, stdout])
+          [first, rebuilt].map(({ code, stdout }) => [code, stdout])
         ).toStrictEqual([
           [0, "web@1"],
           [0, "web@2"],
-          [0, "web@3"],
         ]);
         expect(decodeTemplate(got.stdout)).toStrictEqual({
           base: "ubuntu",
@@ -107,9 +94,45 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ramMib: 1024,
           diskGib: 10,
           setupTimeoutSeconds: 90,
-          current: "web@3",
-          builds: [{ id: "web@2" }, { id: "web@3" }],
+          current: "web@2",
+          builds: [{ id: "web@1" }, { id: "web@2" }],
         });
+      })
+  );
+
+  it.effect(
+    "a file missing a field is Invalid with its file, and the build's old flags are refused, each before a request",
+    () =>
+      Effect.gen(function* () {
+        const { dir, url } = yield* Effect.orDie(running());
+        const run = yield* home(dir, "client", url);
+
+        const file = yield* writeTemplate(
+          dir,
+          "base: ubuntu\ncpu: 1\nram: 1G\nsetup: ../recipes/web\n"
+        );
+
+        const missing = yield* run(["template", "build", file, "--json"]);
+
+        const flagged = yield* run([
+          "template",
+          "build",
+          "--base",
+          "ubuntu",
+          file,
+        ]);
+
+        const listed = yield* run(["template", "list"]);
+
+        expect(missing.code).toBe(1);
+        expect(decodeFailure(missing.stdout).error).toMatchObject({
+          tag: "Invalid",
+          file,
+          message: `template file ${file}: disk: missing`,
+        });
+        expect(flagged.code).not.toBe(0);
+        expect(flagged.stderr).toContain("--base");
+        expect(listed.stderr).toBe("clankerbox: no templates to list");
       })
   );
 
@@ -118,21 +141,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const { dir, url } = yield* Effect.orDie(running());
       const builder = yield* home(dir, "builder", url);
       const other = yield* home(dir, "other", url);
-      const script = path.join(dir, "setup.sh");
-
-      yield* write(script, `#!/bin/sh\nset -eu\n${loginSetup}`);
+      const file = yield* writeTemplate(dir, webFile(1));
 
       const empty = yield* other(["template", "list"]);
-
-      const built = yield* builder([
-        "template",
-        "build",
-        "web",
-        script,
-        "--base",
-        "ubuntu",
-        ...sizes,
-      ]);
+      const built = yield* builder(["template", "build", file]);
 
       const listed = yield* other(["template", "list"]);
       const deleted = yield* other(["template", "delete", "web"]);

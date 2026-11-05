@@ -62,12 +62,21 @@ const clientFiles = (run: string, url: string) =>
       JSON.stringify({ server: url })
     );
 
+    const base =
+      readFileSync(path.join(run, "kind"), "utf8").trim() === "mac"
+        ? "macos"
+        : "ubuntu";
+
     for (const [name, recipe] of [
       ["web", webRecipe(run)],
       ["slow", slowRecipe(run)],
     ] as const) {
       yield* mkdir(path.join(run, "recipes", name));
       yield* write(path.join(run, "recipes", name, "setup.sh"), recipe);
+      yield* write(
+        path.join(run, "recipes", `${name}.yaml`),
+        `base: ${base}\ncpu: 1\nram: 1G\ndisk: 10G\nsetup: ${name}\n`
+      );
     }
 
     yield* write(path.join(run, "home"), `${home}\n`);

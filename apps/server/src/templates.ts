@@ -5,7 +5,6 @@ import {
   checkpointKinds,
   Conflict,
   Internal,
-  Invalid,
   keptBuilds,
   NotFound,
   offers,
@@ -433,33 +432,15 @@ export const make = (settings: {
 
     const build = (request: BuildRequest) =>
       Effect.gen(function* () {
-        const { template: name } = request;
-        const before = Option.getOrUndefined(yield* store.findTemplate(name));
-        const base = request.base ?? before?.base;
-        const cpu = request.cpu ?? before?.cpu;
-        const ramMib = request.ramMib ?? before?.ramMib;
-        const diskGib = request.diskGib ?? before?.diskGib;
+        const { template: name, base, cpu, ramMib, diskGib } = request;
 
-        const setupTimeoutSeconds =
-          request.setup.timeoutSeconds ?? before?.setupTimeoutSeconds;
-
-        if (base === undefined) {
-          return yield* new Invalid({
-            message: `a first build of template ${name} gives its base`,
-          });
-        }
-
-        if (
-          cpu === undefined ||
-          ramMib === undefined ||
-          diskGib === undefined
-        ) {
-          return yield* new Invalid({
-            message: `a first build of template ${name} gives its vCPUs, RAM and disk`,
-          });
-        }
-
-        const asked = { base, cpu, ramMib, diskGib, setupTimeoutSeconds };
+        const asked = {
+          base,
+          cpu,
+          ramMib,
+          diskGib,
+          setupTimeoutSeconds: request.setup.timeoutSeconds,
+        };
 
         const [host] = yield* Effect.fromResult(
           placing(yield* hosts.reachAll, base)

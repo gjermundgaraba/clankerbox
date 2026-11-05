@@ -390,7 +390,7 @@ times, and the disk's capacity and format)
   restart the host.
   Machines and checkpoints made from the old base keep their disks. A template
   keeps cloning its current build, made from the old base, until
-  `clankerbox template build NAME PATH` runs again; `template get` shows each
+  `clankerbox template build NAME.yaml` runs again; `template get` shows each
   build's `image`. A create from the base, with no template, takes the new
   base at once. The old image stays in the Tart home's OCI cache until
   `tart delete` or `tart prune` removes it.

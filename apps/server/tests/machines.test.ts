@@ -3435,6 +3435,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       yield* client.buildTemplate({
         template: "web",
+        ...request("unused", { cpu: 2, ramMib: 2048, diskGib: 20 }),
         setup: countsRuns(dir),
       });
 

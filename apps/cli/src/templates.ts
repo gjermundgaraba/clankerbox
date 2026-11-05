@@ -3,12 +3,11 @@ import {
   Build,
   formatGib,
   formatMib,
-  readSetup,
   Template,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { DateTime } from "effect";
-import { Effect, Option, Path, Schema } from "effect";
-import { Argument, Command, Flag } from "effect/cli";
+import { Effect, Path, Schema } from "effect";
+import { Argument, Command } from "effect/cli";
 
 import {
   clientFlags,
@@ -16,13 +15,12 @@ import {
   listCommand,
   mutationFlags,
   newId,
-  parsed,
   printResource,
   table,
   withClient,
 } from "./command.ts";
-import { flagSizes, sizeArguments } from "./machines/spec.ts";
-import { age, formatSeconds, parseSeconds } from "./units.ts";
+import { readTemplateFile } from "./template-file.ts";
+import { age, formatSeconds } from "./units.ts";
 
 const templateArgument = Argument.String("template").pipe(
   Argument.withDescription("The template's name.")
@@ -92,25 +90,10 @@ export const buildTemplate = Command.make(
   "build",
   {
     ...mutationFlags,
-    template: templateArgument,
-    setup: Argument.String("path").pipe(
+    file: Argument.String("file").pipe(
       Argument.withDescription(
-        "A setup script, or a recipe directory holding setup.sh. The server runs it once, on a machine it copies and then deletes, and never keeps it."
+        "A template file, such as web.yaml, which builds the template web: its base, cpu, ram and disk, its setup, a script or a recipe directory holding setup.sh, against the file's directory, and an optional setupTimeout. The server runs the setup once, on a machine it copies and then deletes, and never keeps it."
       )
-    ),
-    base: Flag.String("base").pipe(
-      Flag.withDescription(
-        "The base to build on. Default: the template's, which a first build names."
-      ),
-      Flag.optional
-    ),
-    ...sizeArguments,
-    setupTimeout: Flag.String("setup-timeout").pipe(
-      Flag.withMetavar("DURATION"),
-      Flag.withDescription(
-        "How long setup may run, such as 90s or 15m. Default: the template's, or else the host's."
-      ),
-      Flag.optional
     ),
   },
   (flags) =>
@@ -118,32 +101,17 @@ export const buildTemplate = Command.make(
       call: (client) =>
         Effect.gen(function* () {
           const path = yield* Path.Path;
-          const sizes = yield* flagSizes(flags);
 
-          const timeout = yield* parsed(
-            flags.setupTimeout,
-            "--setup-timeout",
-            parseSeconds
+          return yield* client.buildTemplate(
+            yield* readTemplateFile(path.resolve(flags.file))
           );
-
-          const script = yield* readSetup(path.resolve(flags.setup));
-
-          return yield* client.buildTemplate({
-            template: flags.template,
-            base: Option.getOrUndefined(flags.base),
-            ...sizes,
-            setup: Option.match(timeout, {
-              onNone: () => ({ script }),
-              onSome: (timeoutSeconds) => ({ script, timeoutSeconds }),
-            }),
-          });
         }),
       encode: encodeBuild,
       text: newId,
     })
 ).pipe(
   Command.withDescription(
-    `${actionsByName.buildTemplate.description} A first build needs --base, --cpu, --ram and --disk, and a rebuild takes each one it leaves out from what template get shows. Waits until the build ends, unless --no-wait, and prints its ID, such as web@1.`
+    `${actionsByName.buildTemplate.description} Waits until the build ends, unless --no-wait, and prints its ID, such as web@1.`
   )
 );
 

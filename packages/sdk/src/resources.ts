@@ -567,14 +567,16 @@ export const offered = ({
   ].join(", ");
 
 /**
- * A build of `template`, with `setup`. A first build gives the base and the sizes; a later one
- * takes the template's for each it leaves out, its setup timeout included, and keeps what it gives.
+ * A build of `template` from `base` at its sizes, with `setup`. Each build gives them all, and a
+ * setup without a timeout takes the host's.
  */
 export const BuildRequest = Schema.Struct({
   template: Name,
   setup: Setup,
-  base: Schema.optional(Schema.String),
-  ...Sizing.fields,
+  base: Schema.String,
+  cpu: Size,
+  ramMib: Size,
+  diskGib: Size,
 });
 
 export type BuildRequest = typeof BuildRequest.Type;

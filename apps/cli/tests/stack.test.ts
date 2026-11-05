@@ -61,19 +61,23 @@ const setupRuns = (dir: string) =>
     (text) => text.trim().split("\n").length
   );
 
-const countedSetup = (dir: string) =>
+const countedTemplate = (dir: string) =>
   Effect.gen(function* () {
-    const script = path.join(dir, "web-setup.sh");
+    const file = path.join(dir, "web.yaml");
 
     yield* write(
-      script,
+      path.join(dir, "web-setup.sh"),
       `#!/bin/sh
 set -eu
 ${loginSetup}echo ran >>"${path.join(dir, "setup-runs")}"
 `
     );
+    yield* write(
+      file,
+      "base: ubuntu\ncpu: 1\nram: 1G\ndisk: 10G\nsetup: web-setup.sh\n"
+    );
 
-    return script;
+    return file;
   });
 
 const decodeJson = <S extends Schema.Top>(schema: S, text: string) =>
@@ -563,15 +567,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { dir, run } = yield* setUp();
-        const script = yield* countedSetup(dir);
-
-        const built = yield* run([
-          "template",
-          "build",
-          "web",
-          script,
-          ...sizes,
-        ]);
+        const file = yield* countedTemplate(dir);
+        const built = yield* run(["template", "build", file]);
 
         const checkpoints = yield* run(["checkpoint", "list"]);
         const fast = yield* run(["create", "fast", "--template", "web"]);
@@ -605,9 +602,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect("a create from a template sends no setup and no start", () =>
     Effect.gen(function* () {
       const { dir, hosts, run } = yield* setUp();
-      const script = yield* countedSetup(dir);
-
-      yield* run(["template", "build", "web", script, ...sizes]);
+      yield* run(["template", "build", yield* countedTemplate(dir)]);
 
       const created = yield* run(["create", "box", "--template", "web"]);
 
@@ -637,9 +632,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { dir, hosts, run } = yield* setUp(twoHosts);
-        const script = yield* countedSetup(dir);
-
-        yield* run(["template", "build", "web", script, ...sizes]);
+        yield* run(["template", "build", yield* countedTemplate(dir)]);
 
         const holds = ({ fake }: (typeof hosts)[number]) =>
           fake.calls.some((call) => call.startsWith("capture "));

@@ -148,11 +148,13 @@ Hosts and the control plane start fresh: 0.30's machines aren't carried over. Be
 
 State carries over, and nothing on a host changes. A template's build now holds the server config's `authorizedKeys`, installed once its setup exits 0. A build made before keeps none, and a create from it still installs them, so nothing needs a rebuild. A build whose setup leaves no login user, or no `sudo`, now fails as it ends, where before each create from it failed.
 
+`template build` now takes one template file, `NAME.yaml`, which holds the base, the sizes, the setup and its timeout (see Templates), and `--base`, `--cpu`, `--ram`, `--disk` and `--setup-timeout` are gone from it. A build no longer takes anything from the build before it, so write each template's file in full: a file without `setupTimeout` gets the host's default. `client.buildTemplate` needs `base`, `cpu`, `ramMib` and `diskGib` on every build.
+
 ### Upgrading from 0.35
 
 State carries over, but the host contract changed: a host's make now carries the authorized keys, so upgrade hosts and the control plane together, since a create placed on a host of the other release fails. The authorized keys moved from each client config to the server config: gather the public keys of every client config's `authorizedKeys` into one file, name it in the server config's `authorizedKeys`, and delete `authorizedKeys` from each client config, which a client now refuses, and from the Sandbox Agent provider's options. Every machine made with a setup, or from a template, then takes every key in that file, and a create sends none. Machines already made keep the keys they have. A client config that still names `authorizedKeys` fails every command, `ssh-proxy` and `ssh-known-hosts` included, so `ssh <name>.cbx` stops working until the key is deleted from that config.
 
-Templates replace profiles and prebuilds. The control plane migrates its database on its first start: it drops the profile from each machine and checkpoint and the prebuild from each machine, and adds the tables templates and their builds take. For each profile you create from, run `clankerbox template build NAME PATH --base BASE --cpu N --ram SIZE --disk SIZE`, with the profile's setup as `PATH`, once from any client, then create with `--template NAME` instead of `--profile NAME`. Delete `profiles` from each client config, which a client now refuses, and in the Sandbox Agent provider's options give `from: { template }` for `from: { profile }`, and drop `fresh`. `profiles`, `prebuild`, `prebuild get`, `--profile` and `--fresh` are gone. 0.35's prebuilds stay as plain checkpoints, named `prebuilt-<digest>`, which no create restores: delete them with `checkpoint delete`.
+Templates replace profiles and prebuilds. The control plane migrates its database on its first start: it drops the profile from each machine and checkpoint and the prebuild from each machine, and adds the tables templates and their builds take. For each profile you create from, write a template file `NAME.yaml` with the profile's base, sizes and setup (see Templates) and run `clankerbox template build NAME.yaml` once from any client, then create with `--template NAME` instead of `--profile NAME`. Delete `profiles` from each client config, which a client now refuses, and in the Sandbox Agent provider's options give `from: { template }` for `from: { profile }`, and drop `fresh`. `profiles`, `prebuild`, `prebuild get`, `--profile` and `--fresh` are gone. 0.35's prebuilds stay as plain checkpoints, named `prebuilt-<digest>`, which no create restores: delete them with `checkpoint delete`.
 
 A linux host parks a base for each build's copy it keeps (see Templates) as it starts. The bases' RAM counts in its budget, so it admits that much less of machines' RAM.
 
@@ -223,20 +225,32 @@ clankerbox capacity                        # for an operator: each host's resour
 
 ### Templates
 
-A template is a base, sizes and builds, kept by the control plane, so every client sees the same ones. `template build` creates a machine from the base, runs the setup in it, captures a copy of it on its host, and deletes the machine. A create from the template clones that copy, so no setup runs.
+A template is a base, sizes and builds, kept by the control plane, so every client sees the same ones. A template file says how to build one, and its name is the file's: `gg-linux-dev.yaml` builds the template `gg-linux-dev`.
 
-```sh
-clankerbox template build web ./recipes/web --base ubuntu --cpu 2 --ram 4G --disk 20G  # prints web@1
-clankerbox template build web ./recipes/web     # prints web@2, with web's base and sizes
-clankerbox template list                        # each template's base, current build and state
-clankerbox template get web                     # its sizes, and each build kept
-clankerbox create box --template web            # clones web's current build
-clankerbox create old --template web@1 --ram 8G # clones that build, with more RAM
-clankerbox template delete web
+```yaml
+base: ubuntu
+cpu: 8
+ram: 16G
+disk: 100G
+setupTimeout: 15m
+setup: gg-linux-dev
 ```
 
-- `PATH` is a setup script or a recipe directory with a `setup.sh`, read by the client and sent with the build. The control plane holds it in memory for that build only, and never stores or logs it, so each build sends it again.
-- A first build gives `--base`, `--cpu`, `--ram` and `--disk`, and `--setup-timeout` when the host's default won't do. A rebuild takes the template's for each it leaves out, and keeps each it gives.
+`template build` creates a machine from the base at the file's sizes, runs the setup in it, captures a copy of it on its host, and deletes the machine. A create from the template clones that copy, so no setup runs.
+
+```sh
+clankerbox template build gg-linux-dev.yaml     # prints gg-linux-dev@1
+clankerbox template build gg-linux-dev.yaml     # prints gg-linux-dev@2, from the file as it is now
+clankerbox template list                        # each template's base, current build and state
+clankerbox template get gg-linux-dev            # its sizes, and each build kept
+clankerbox create box --template gg-linux-dev   # clones its current build
+clankerbox create old --template gg-linux-dev@1 --ram 32G # clones that build, with more RAM
+clankerbox template delete gg-linux-dev
+```
+
+- The file holds `base`, `cpu`, `ram`, `disk` and `setup`, and optionally `setupTimeout`, the host's 10 minutes by default; any other key fails the file. `ram` and `disk` are sizes, such as `16G`, and `setupTimeout` a duration, such as `15m`.
+- `setup` is a setup script, or a recipe directory with a `setup.sh`, found from the file's directory. The client reads it and sends it with the build. The control plane holds it in memory for that build only, and never stores or logs it, so each build sends it again.
+- Each build takes everything from its file and nothing from the build before it, so a file without `setupTimeout` gets the host's default even when the last build had one.
 - A build's ID is the template's name, `@` and its number, such as `web@2`. `template build` waits until the build ends and prints its ID; `--no-wait` prints it at once, and `template get` follows the build.
 - The current build is the newest that is ready: it moves to a build only once its setup has run and its copy is made, so a build that fails leaves the one before it current. The control plane keeps the last 2 ready builds, and deletes an older one's copy once the creates cloning it are done.
 - One build of a template runs at a time: a build or a delete asked meanwhile fails `Conflict`. A control plane that restarts during a build ends it failed and deletes its builder.
@@ -386,10 +400,10 @@ await session.prompt([{ type: "text", text: "Summarize README.md" }]);
 await sdk.destroySandbox();
 ```
 
-- A sandbox comes from a template (`{ template }`, `agent` or `agent@3`), a checkpoint (`{ checkpoint }`) or a fork (`{ machine }`). Build the template from a recipe below once, with `clankerbox template build agent recipes/ubuntu --base ubuntu --cpu 2 --ram 4G --disk 20G`. Any source may add `cpu`, `ramMib` and `diskGib`: larger than the build's, as `create --template` takes them, or for the copy, as `restore` and `fork` take them. The key the tunnel logs in with must be in the server config's `authorizedKeys`.
+- A sandbox comes from a template (`{ template }`, `agent` or `agent@3`), a checkpoint (`{ checkpoint }`) or a fork (`{ machine }`). Build the template from a recipe below once, with `clankerbox template build recipes/agent.yaml`, which builds `agent` with 2 vCPUs, 4G of RAM and a 20G disk, or on mac `recipes/agent-mac.yaml`, which builds `agent-mac`. Any source may add `cpu`, `ramMib` and `diskGib`: larger than the build's, as `create --template` takes them, or for the copy, as `restore` and `fork` take them. The key the tunnel logs in with must be in the server config's `authorizedKeys`.
 - `sandbox.resize(id, sizes)` resizes a sandbox's machine as `resize` does, and answers its sizes; `id` is the machine's name, `sdk.sandboxId` without its `clankerbox/`. For what a running machine can't take, `pauseSandbox`, resize, then `sandbox.ensureServer(id)`.
 - A sandbox's ID is `clankerbox/<machine name>`; `pauseSandbox` stops the machine and `destroySandbox` deletes it. Stop a sandbox's machine rather than `clankerbox pause` it: a reconnect resumes a paused one with its old agents, which then run beside the sessions the SDK replays into new ones, and a paused one can't be forked. A create that fails deletes the row it may have left, unless the answer is `Conflict`, as the name is another machine's, `Superseded`, as a later request owns it, or `Unavailable`, as the server may still act on it: the error's `made` names the machine to read or delete.
-- `recipes/ubuntu/` (linux) and `recipes/macos/` (mac) install the server, Node and Claude Code, and run the server as the login user, whose home, `/home/admin` on Linux, is the default `cwd`; on macOS, give `cwd: "/Users/admin"`. Each takes an optional `agent.env` beside its `setup.sh`, of `NAME=value` lines, such as `ANTHROPIC_API_KEY=…`, so keep a recipe with one private.
+- `recipes/ubuntu/` (linux) and `recipes/macos/` (mac), built from the template files `agent.yaml` and `agent-mac.yaml` beside them, install the server, Node and Claude Code, and run the server as the login user, whose home, `/home/admin` on Linux, is the default `cwd`; on macOS, give `cwd: "/Users/admin"`. Each takes an optional `agent.env` beside its `setup.sh`, of `NAME=value` lines, such as `ANTHROPIC_API_KEY=…`, so keep a recipe with one private.
 - A tunnel that ends, say because its machine stopped, stays down until `sandbox.ensureServer(id)` or a new `SandboxAgent.start`.
 - `effect`, `@effect/platform-node` and `sandbox-agent` are peer dependencies.
 

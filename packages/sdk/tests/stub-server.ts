@@ -11,7 +11,6 @@ import {
   builtFrom,
   Conflict,
   Http,
-  Invalid,
   labelledWith,
   NotBuilt,
   NotFound,
@@ -623,41 +622,21 @@ export const stubServer = (options: StubServerOptions = {}) => {
   const recordBuild = (
     request: BuildRequest
   ): Effect.Effect<Build, Declared<"buildTemplate">> =>
-    Effect.gen(function* () {
-      const found = templates.get(request.template);
-      const base = request.base ?? found?.base;
-      const cpu = request.cpu ?? found?.cpu;
-      const ramMib = request.ramMib ?? found?.ramMib;
-      const diskGib = request.diskGib ?? found?.diskGib;
-
-      if (
-        base === undefined ||
-        cpu === undefined ||
-        ramMib === undefined ||
-        diskGib === undefined
-      ) {
-        return yield* new Invalid({
-          message: `a first build of template ${request.template} gives its base, vCPUs, RAM and disk`,
-        });
-      }
+    Effect.sync(() => {
+      const { template: name, base, cpu, ramMib, diskGib } = request;
+      const found = templates.get(name);
 
       const earlier = found?.builds ?? [];
 
-      const made = build(buildId(request.template, earlier.length + 1), {
+      const made = build(buildId(name, earlier.length + 1), {
         phase: "building",
         image: base,
       });
 
-      writeTemplate(
-        template(request.template, {
-          ...found,
-          base,
-          cpu,
-          ramMib,
-          diskGib,
-        }),
-        [...earlier, made]
-      );
+      writeTemplate(template(name, { ...found, base, cpu, ramMib, diskGib }), [
+        ...earlier,
+        made,
+      ]);
 
       return made;
     });

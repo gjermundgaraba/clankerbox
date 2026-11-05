@@ -63,7 +63,10 @@ config names no keys.
 IDs are bare names. The base is `ubuntu` on linux and `macos` on mac. The recheck
 runs every 2 seconds. The optional budget is the RAM, in MiB, that a host refuses
 to pass. The run has two recipes, each a directory with a `setup.sh`, to pass
-as `--setup` or as a template build's `PATH` with the kind's base and sizes.
+as `--setup`, and beside each a template file naming it with the kind's base
+and 1 vCPU, 1G of RAM and a 10G disk: `$S/cb.sh "$RUN" template build
+"$RUN/recipes/web.yaml"` builds the template `web`, and a copy beside it under
+another name builds another.
 `$RUN/recipes/web` writes `$RUN/recipe-ran`. `$RUN/recipes/slow` touches
 `$RUN/setup-began` and waits for `fault.sh <run> setup-go`, so a create or a
 template build can be caught mid-make.

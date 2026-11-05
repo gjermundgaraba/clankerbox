@@ -10,7 +10,7 @@ that drive it here, with `--json` fields to check. `cb` is
 | Create, pause, stop, start, delete | `cb create dev --base ubuntu --cpu 1 --ram 1G --disk 10G`, then `cb pause dev`, `cb stop dev`, `cb start dev`, `cb delete dev` | `cb get dev --json`: `state` and `desired` after each, and `phase` `settled`; `NotFound` after the delete. Also: a pause of a stopped machine leaves `state` `stopped` with `desired` `paused` |
 | Setup and host key | `cb create app --base ubuntu --cpu 1 --ram 1G --disk 10G --setup "$RUN/recipes/web"`, then `cat "$RUN/recipe-ran"` | `get --json` has `hostKey`; the `cat` prints `web-recipe` |
 | A setup that fails | `cb create bad --base ubuntu --cpu 1 --ram 1G --disk 10G --setup <script that exits 1> --json` | `error.tag` `ScriptFailed`; `get bad --json` has `phase` `failed`, `state` `missing` and the error; `delete bad` clears it; a create of the name replaces it |
-| Templates | `cb template build web "$RUN/recipes/web" --base ubuntu --cpu 1 --ram 1G --disk 10G`, `cb template list`, `cb create fast --template web`, `cb template build web "$RUN/recipes/web"`, `cb create old --template web@1 --ram 2G` | the builds print `web@1` and `web@2`; `template list` shows `web  ubuntu  web@1  ready`; `get fast --json` has `template` `web@1`; `runtime-calls.txt` has `restore fast` and no `create fast`; `checkpoint list` shows no copy |
+| Templates | `cb template build "$RUN/recipes/web.yaml"`, `cb template list`, `cb create fast --template web`, `cb template build "$RUN/recipes/web.yaml"`, `cb create old --template web@1 --ram 2G` | the builds print `web@1` and `web@2`; `template list` shows `web  ubuntu  web@1  ready`; `get fast --json` has `template` `web@1`; `runtime-calls.txt` has `restore fast` and no `create fast`; `checkpoint list` shows no copy |
 | Checkpoints, fork, restore | `cb checkpoint capture app snap`, `cb restore snap copy`, `cb fork app twin`, `cb checkpoint delete snap` | `checkpoint get snap --json` has `machine` and `kind` (`ram` on linux, `disk` on mac) |
 | Resize and capacity | `cb resize app --ram 2G --disk 20G`, `cb capacity --json` | a running machine's vCPUs and RAM only grow (`Unsizable`), a stopped one's shrink too; a disk never shrinks (`Unsizable`); a paused machine answers `WrongState`; `capacity` counts no stopped machine |
 | RAM budget, one host | `RUN=$(launch.sh linux 2048)`; create 2G, then 1G | the second create's `error.tag` is `Capacity`, `retryable` `true`; `capacity --json` has `limit` |
@@ -24,7 +24,7 @@ that drive it here, with `--json` fields to check. `cb` is
 | Labels, expiry and a pause that captures | `cb create tagged --base ubuntu --cpu 1 --ram 1G --disk 10G --label app=web`, `cb pause tagged --capture snap --label app=web --expires 1d`, `cb machines --label app=web`, `cb checkpoint list --label app=web`, `cb checkpoint get snap --json` | `runtime-calls.txt` has `capture snap` before `pause tagged`; each list shows only what carries the label, and `--label app=api` lists nothing; `checkpoint get` has `labels` and `expiresAt` |
 
 On a `mac` run (`launch.sh mac`) the base is `macos`, so drive with
-`--base macos`, on a create and a first template build. A capture or fork takes a
+`--base macos` on a create; the run's template files name `macos` already. A capture or fork takes a
 stopped machine, and a resize of a running one answers `WrongState`. A copy takes
 any vCPUs and RAM, and its disk still only grows; on linux a copy's vCPUs and RAM
 only grow too. A clone of a template's build takes at least its sizes on either kind.

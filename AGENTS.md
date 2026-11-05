@@ -138,7 +138,8 @@ and `ssh.ts`. The `.` entry loads no Node; `./node` (`node.ts`) holds what
 needs it.
 
 **App** (`apps/cli/src`). One file or folder per command group
-(`machines/`, `checkpoints.ts`, `templates.ts`, `hosts.ts`,
+(`machines/`, `checkpoints.ts`, `templates.ts` and `template-file.ts`, the
+YAML file a build reads, `hosts.ts`,
 `ssh.ts` and `ssh-config.ts`, the SSH config it keeps) over the CLI's shared kit
 (`command.ts`), the client config (`config.ts`) and flag units (`units.ts`).
 `clankerbox.ts` is the command tree.

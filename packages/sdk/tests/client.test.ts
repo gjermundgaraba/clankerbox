@@ -1694,9 +1694,7 @@ describe("client", () => {
         stub.scriptBuild("web@2", [{ phase: "failed", error: scriptFailed }]);
 
         const error = yield* withClient(stub, (client) =>
-          Effect.flip(
-            client.buildTemplate({ template: "web", setup: webBuild.setup })
-          )
+          Effect.flip(client.buildTemplate(webBuild))
         );
 
         expect(error._tag).toBe("ScriptFailed");
