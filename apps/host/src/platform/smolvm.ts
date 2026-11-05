@@ -761,6 +761,8 @@ export const make = (
 
     const retire = (base: string) =>
       Effect.gen(function* () {
+        yield* removeNative(freezerOf(base));
+
         if ((yield* status(base)) === "missing") {
           return true;
         }
@@ -895,11 +897,16 @@ export const make = (
         yield* parkAnew(base, build);
       });
 
-    const capturedHere = (build: string) =>
-      Effect.map(
-        indexOf(build),
-        ({ capturedUnder }) => capturedUnder === version
-      );
+    const capturedElsewhere = (build: string) =>
+      Effect.map(indexOf(build), ({ capturedUnder }) => {
+        if (capturedUnder === version) {
+          return undefined;
+        }
+
+        return capturedUnder === undefined
+          ? `${build}'s ${checkpointIndex} names no smolvm version`
+          : `${build} was captured under smolvm ${capturedUnder}, not this host's ${version}`;
+      });
 
     const parking = (build: string) =>
       alone(baseOf(build))(
@@ -908,14 +915,9 @@ export const make = (
             return;
           }
 
-          const { capturedUnder } = yield* indexOf(build);
+          const why = yield* capturedElsewhere(build);
 
-          if (capturedUnder !== version) {
-            const why =
-              capturedUnder === undefined
-                ? `${build}'s ${checkpointIndex} names no smolvm version`
-                : `${build} was captured under smolvm ${capturedUnder}, not this host's ${version}`;
-
+          if (why !== undefined) {
             return yield* Effect.logWarning(
               `${why}, so it parks no base and its copies restore`
             );
@@ -931,7 +933,7 @@ export const make = (
           return true;
         }
 
-        return !(yield* capturedHere(build));
+        return (yield* capturedElsewhere(build)) !== undefined;
       });
 
     const retireStale = (named: BaseName) => {
@@ -940,7 +942,6 @@ export const make = (
       return alone(base)(
         Effect.gen(function* () {
           if (yield* stale(named)) {
-            yield* removeNative(freezerOf(base));
             yield* retire(base);
           }
         })
