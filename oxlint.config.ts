@@ -250,6 +250,26 @@ export default config({
       },
     },
     {
+      excludeFiles: ["packages/amp-orbs/src/main.ts"],
+      files: ["packages/amp-orbs/src/**/*.ts"],
+      rules: {
+        "fence/allowed-imports": [
+          "error",
+          {
+            allow: [
+              "^\\./[a-z-]+\\.ts$",
+              "^effect$",
+              "^effect/cli$",
+              "^@gjermundgaraba/clankerbox-sdk$",
+              "^node:crypto$",
+            ],
+            because:
+              "Node's services and HTTP client and @effect/platform-node enter the Amp orb provider only in main.ts, its Layers",
+          },
+        ],
+      },
+    },
+    {
       excludeFiles: ["packages/sdk/src/node.ts"],
       files: ["packages/sdk/src/**/*.ts"],
       rules: {
