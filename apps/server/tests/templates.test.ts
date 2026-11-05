@@ -417,6 +417,27 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a build reads no VM from its host while its builder is made, as Tart's read opens the disk the boot locks",
+    () =>
+      Effect.gen(function* () {
+        const { client, host } = yield* withClient();
+        const { release, entered } = host.fake.holdNext("create");
+        const building = yield* Effect.forkChild(client.buildTemplate(web()));
+
+        yield* entered;
+        host.fake.observed.length = 0;
+        yield* Effect.sleep(Duration.millis(500));
+
+        const during = host.fake.observed.flat();
+
+        yield* release;
+
+        expect(yield* Fiber.join(building)).toMatchObject({ phase: "ready" });
+        expect(during).toStrictEqual([]);
+      })
+  );
+
+  it.effect(
     "a build asked for while one of the template runs is Conflict, and so is a delete",
     () =>
       Effect.gen(function* () {
@@ -648,11 +669,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       yield* held.entered;
 
       const loopRead = host.fake.holdNextObserve();
-      const restRead = host.fake.holdNextObserve();
 
       yield* held.release;
       yield* loopRead.entered;
-      yield* restRead.entered;
 
       const dying = yield* Effect.forkChild(host.dispose);
 
@@ -661,7 +680,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         ([only]) => only?.state === "unreachable"
       );
       yield* loopRead.release;
-      yield* restRead.release;
       yield* Fiber.join(dying);
 
       const error = yield* Fiber.join(built);

@@ -127,8 +127,9 @@ export interface Interface {
   ) => Effect.Effect<Executed, Declared<"execMachine">>;
   readonly capacity: Effect.Effect<CapacityRead, Internal>;
   /**
-   * Waits until a machine rests or is gone, for a template build's own steps. A machine that can't be read
-   * for a whole recheck ends the wait as `Unavailable`, whatever step it is in.
+   * Waits until a machine rests or is gone, for a template build's own steps, reading its VM only once
+   * its row rests. A host that can't be reached for a whole recheck ends the wait as `Unavailable`,
+   * whatever step the machine is in.
    */
   readonly rest: (
     name: string
@@ -738,6 +739,24 @@ export const make = (
           return true;
         }
 
+        const resting =
+          activityOf(found.value.state) !== "follow" &&
+          isResting(phaseOf(found.value.state));
+
+        // https://github.com/openai/tart/blob/2.41.1/Sources/tart/Commands/List.swift#L47
+        if (!resting) {
+          return yield* hosts.read(found.value.host).pipe(
+            Effect.as(false),
+            Effect.mapError(
+              ({ message }) =>
+                new Unavailable({
+                  message: `machine ${name}'s host can't be reached: ${message}`,
+                  readOnly: true,
+                })
+            )
+          );
+        }
+
         const phase = phaseShown(
           found.value,
           yield* stateOf(hosts, found.value)
@@ -750,7 +769,7 @@ export const make = (
           });
         }
 
-        return activityOf(found.value.state) !== "follow" && isResting(phase);
+        return true;
       });
 
     const held = (id: string, bound: Duration.Duration) =>
