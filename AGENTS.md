@@ -189,8 +189,8 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
   suites that serve a host or a control plane or run scripts in real time, which
   pass `excludeTestServices: true`. Effect is run by hand only in each app's
   `main.ts` and the provider's `provider.ts`, in the provider's tests that
-  drive its Promise API or a child program, in the Amp orb provider's `main.ts`
-  and its tests, which run its command, and in `tests/serve.ts` of the server
+  drive its Promise API or a child program, in the Amp orb provider's `main.ts`,
+  and in `tests/serve.ts` of the server
   and the host, the programs that serve them over the fake runtime for the
   `verify-clankerbox` skill.
 - **Property and model tests** cover IDs, units, the RAM budget, recipe

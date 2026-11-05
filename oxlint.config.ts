@@ -30,7 +30,6 @@ export default config({
         "apps/server/src/main.ts",
         "apps/server/tests/serve.ts",
         "packages/amp-orbs/src/main.ts",
-        "packages/amp-orbs/tests/dispatch.test.ts",
         "packages/rivet-sandbox-agent/src/provider.ts",
         "packages/rivet-sandbox-agent/tests/leave-tunnel.ts",
         "packages/rivet-sandbox-agent/tests/provider.test.ts",
