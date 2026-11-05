@@ -188,6 +188,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "admit dev",
           "create dev",
           "exec dev",
+          "exec dev",
           "start dev",
           "exec dev",
           "exec dev",
@@ -1799,35 +1800,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           `${theirs}\n${operatorKey}\n`
         );
         expect(fake.calls.filter((call) => call === "exec dev")).toHaveLength(
-          3
+          4
         );
         expect(yield* read(fresh)).toBe(`\n${operatorKey}\n`);
         expect((yield* stat(fresh)).mode & 0o777).toBe(0o600);
-      })
-  );
-
-  it.effect(
-    "a setup that leaves no login user fails, and deletes the machine",
-    () =>
-      Effect.gen(function* () {
-        const { client, fake } = yield* served();
-
-        const error = yield* Effect.flip(
-          client.create(
-            "dev",
-            request("dev", {
-              setup: { script: "#!/bin/sh\ntrue\n" },
-            })
-          )
-        );
-
-        expect(error._tag).toBe("ScriptFailed");
-        expect(error).toMatchObject({ script: "setup" });
-        expect(error.message).toContain("sudo: unknown user admin");
-        expect(error.message).toContain(
-          "couldn't install the authorized keys for admin: the machine's image, from its setup or its template, must have that user, and sudo"
-        );
-        expect(fake.machines.size).toBe(0);
       })
   );
 

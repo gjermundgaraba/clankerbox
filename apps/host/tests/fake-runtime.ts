@@ -14,6 +14,7 @@ import {
   readFile,
   rename,
   rm,
+  writeFile,
 } from "node:fs/promises";
 import path from "node:path";
 
@@ -70,7 +71,10 @@ export const loginSetup = [
   "",
 ].join("\n");
 
+const macLogin = "admin:x:501:20::/Users/admin:/bin/zsh\n";
+
 const guestTools = [
+  "awk",
   "cat",
   "chmod",
   "cp",
@@ -139,6 +143,29 @@ export const writeStubs = (dir: string, uname = "Linux"): string => {
       ].join("\n"),
     ],
     ["perl", `echo "perl $3" >>"$CLANKERBOX_ROOT/calls"`],
+    ["apt-get", `echo "apt-get $*" >>"$CLANKERBOX_ROOT/calls"`],
+    [
+      "useradd",
+      [
+        `echo "useradd $*" >>"$CLANKERBOX_ROOT/calls"`,
+        "for user do :; done",
+        'mkdir -p "$CLANKERBOX_ROOT/etc" "$CLANKERBOX_ROOT/home/$user"',
+        'echo "$user:x:1000:1000::/home/$user:/bin/sh" >>"$CLANKERBOX_ROOT/etc/passwd"',
+      ].join("\n"),
+    ],
+    [
+      "networksetup",
+      [
+        `echo "networksetup $*" >>"$CLANKERBOX_ROOT/calls"`,
+        'if [ "$1" = -listallnetworkservices ]; then',
+        "  echo 'An asterisk (*) denotes that a network service is disabled.'",
+        "  echo Ethernet",
+        "fi",
+      ].join("\n"),
+    ],
+    ["systemsetup", `echo "systemsetup $*" >>"$CLANKERBOX_ROOT/calls"`],
+    ["sntp", "echo '+0.000123 +/- 0.010000 time.apple.com 17.253.4.125'"],
+    ["brew", `echo "brew $*" >>"$CLANKERBOX_ROOT/calls"`],
     [
       "ssh-keygen",
       [
@@ -517,6 +544,12 @@ export const fakeRuntime = (options: FakeOptions) => {
 
               await mkdir(path.join(root, "dev"), { recursive: true });
               furnish(root, bin);
+
+              if (options.kind === "mac") {
+                await mkdir(path.join(root, "etc"), { recursive: true });
+                await writeFile(path.join(root, "etc", "passwd"), macLogin);
+              }
+
               machines.set(machine.name, { state: "running", root });
               sizes.set(machine.name, sizesOf(machine));
             })

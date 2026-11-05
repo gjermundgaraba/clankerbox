@@ -5,7 +5,7 @@ import {
   ScriptFailed,
   timedOutExitCode,
 } from "@gjermundgaraba/clankerbox-sdk";
-import type { Executed, Setup } from "@gjermundgaraba/clankerbox-sdk";
+import type { Executed, Kind, Setup } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Option, Redacted, Schema, Stream } from "effect";
 
 import { timeoutFail } from "./runtime.ts";
@@ -157,16 +157,107 @@ const addingMissingKeys = [
   "fi",
 ];
 
+const guestPath =
+  "PATH=$root/usr/local/sbin:$root/usr/local/bin:$root/usr/sbin:$root/usr/bin:$root/sbin:$root/bin";
+
+const sshdDropIn = "$root/etc/ssh/sshd_config.d/10-clankerbox.conf";
+
+const linuxBase = [
+  "if ! command -v apt-get >/dev/null 2>&1; then",
+  `  echo "clankerbox prepares a linux base with apt-get, and this image has none: build on a Debian or Ubuntu image"`,
+  "  exit 1",
+  "fi",
+  "export DEBIAN_FRONTEND=noninteractive",
+  "apt-get -o APT::Update::Error-Mode=any update",
+  "apt-get install -y --no-install-recommends ca-certificates curl openssh-server sudo perl libnss-myhostname",
+  `if [ "$joins" = joins ] && ! command -v tailscaled >/dev/null 2>&1; then`,
+  `  distro=$(. "$root/etc/os-release" && echo "$ID")`,
+  `  codename=$(. "$root/etc/os-release" && echo "$VERSION_CODENAME")`,
+  `  curl -fsSL "https://pkgs.tailscale.com/stable/$distro/$codename.noarmor.gpg" -o "$root/usr/share/keyrings/tailscale-archive-keyring.gpg"`,
+  `  chmod 0644 "$root/usr/share/keyrings/tailscale-archive-keyring.gpg"`,
+  `  curl -fsSL "https://pkgs.tailscale.com/stable/$distro/$codename.tailscale-keyring.list" -o "$root/etc/apt/sources.list.d/tailscale.list"`,
+  "  apt-get -o APT::Update::Error-Mode=any update",
+  "  apt-get install -y --no-install-recommends tailscale",
+  "fi",
+  `if ! grep -q "^$login:" "$root/etc/passwd"; then`,
+  `  useradd -m -s /bin/bash -U "$login"`,
+  "fi",
+  `mkdir -p "$root/etc/sudoers.d" "$root/etc/ssh/sshd_config.d"`,
+  `printf '%s ALL=(ALL) NOPASSWD: ALL\\n' "$login" >"$root/etc/sudoers.d/clankerbox.new"`,
+  `chmod 440 "$root/etc/sudoers.d/clankerbox.new"`,
+  `mv -f "$root/etc/sudoers.d/clankerbox.new" "$root/etc/sudoers.d/clankerbox"`,
+  `echo 'PermitRootLogin no' >"${sshdDropIn}"`,
+];
+
+const macBase = [
+  "networksetup -listallnetworkservices | while IFS= read -r service; do",
+  `  case "$service" in "An asterisk"*) continue ;; esac`,
+  '  networksetup -setdnsservers "${service#\\*}" 1.1.1.1 9.9.9.9',
+  "done",
+  "systemsetup -setnetworktimeserver time.apple.com >/dev/null 2>&1 || true",
+  "tries=24",
+  String.raw`until sntp time.apple.com 2>/dev/null | awk '/\+\/-/ { offset = $1 } END { exit !(offset != "" && offset > -2 && offset < 2) }'; do`,
+  "  tries=$((tries - 1))",
+  `  if [ "$tries" -le 0 ]; then`,
+  `    echo "the clock is still more than 2 seconds off time.apple.com"`,
+  "    exit 1",
+  "  fi",
+  "  sleep 5",
+  "done",
+  `if [ "$joins" = joins ] && ! command -v tailscaled >/dev/null 2>&1; then`,
+  `  sudo -n -u "$login" -H env HOMEBREW_NO_AUTO_UPDATE=1 "$root/opt/homebrew/bin/brew" install --quiet tailscale`,
+  "fi",
+];
+
+const baseScript = (kind: Kind) =>
+  [
+    "set -eu",
+    "login=$1",
+    "joins=$2",
+    "root=${CLANKERBOX_ROOT-}",
+    `${guestPath}:$root/opt/homebrew/bin`,
+    ...(kind === "linux" ? linuxBase : macBase),
+    "",
+  ].join("\n");
+
+const baseTimeout = Duration.minutes(10);
+
+/**
+ * Makes a base what a setup starts on: the login user with passwordless `sudo`, sshd that refuses
+ * root, and `tailscale` where the host joins its machines to the tailnet.
+ */
+export const prepareBase = (
+  runtime: Runtime,
+  machine: MachineRef,
+  kind: Kind,
+  joins: boolean
+): Effect.Effect<void, RuntimeError | ScriptFailed> =>
+  Effect.asVoid(
+    runInGuest(
+      runtime,
+      "preparation",
+      machine,
+      {
+        argv: [
+          "/bin/sh",
+          "-c",
+          baseScript(kind),
+          "clankerbox-base",
+          loginUser,
+          joins ? "joins" : "",
+        ],
+      },
+      baseTimeout
+    )
+  );
+
 const setupRunner = [
   "set -eu",
   "login=$1",
   "shift",
   "root=${CLANKERBOX_ROOT-}",
-  "script=$(mktemp /var/tmp/clankerbox-setup.XXXXXX)",
-  `trap 'rm -f "$script"' EXIT`,
-  `cat >"$script"`,
-  `chmod 700 "$script"`,
-  `"$script" </dev/null`,
+  ...addingMissingKeys,
+  `sudo -n -u "$login" -H /bin/sh -c 'script=$(mktemp /var/tmp/clankerbox-setup.XXXXXX) && trap "rm -f \\"$script\\"" EXIT && cat >"$script" && chmod 700 "$script" && cd "$HOME" && "$script" </dev/null'`,
   ...addingMissingKeys,
 ].join("\n");
 
@@ -417,6 +508,13 @@ export const startScript = [
   "set -eu",
   "root=${CLANKERBOX_ROOT-}",
   "PATH=$root/usr/local/sbin:$root/usr/local/bin:$root/usr/sbin:$root/usr/bin:$root/sbin:$root/bin",
+  `if [ -e "${sshdDropIn}" ] && [ -x "$root/usr/sbin/sshd" ]; then`,
+  `  mkdir -p "$root/run/sshd"`,
+  `  pid=$(cat "$root/run/sshd.pid" 2>/dev/null || true)`,
+  `  if [ -z "$pid" ] || [ "$(cat "$root/proc/$pid/comm" 2>/dev/null || true)" != sshd ]; then`,
+  `    "$root/usr/sbin/sshd"`,
+  "  fi",
+  "fi",
   `if [ -e "$root/etc/clankerbox/start" ]; then`,
   `  "$root/etc/clankerbox/start" </dev/null`,
   "fi",

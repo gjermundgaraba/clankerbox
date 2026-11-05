@@ -48,6 +48,7 @@ import {
   checkTailnet,
   identify,
   addMissingKeys,
+  prepareBase,
   prepare,
   runCommand,
   runSetup,
@@ -512,6 +513,7 @@ export const make = (
         }
 
         if (source._tag === "base" && source.setup !== undefined) {
+          yield* prepareBase(runtime, ref, config.kind, Option.isSome(tailnet));
           yield* runSetup(runtime, ref, source.setup, authorizedKeys);
         } else if (authorizedKeys !== undefined) {
           yield* addMissingKeys(runtime, ref, authorizedKeys);

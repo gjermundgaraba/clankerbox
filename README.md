@@ -146,7 +146,9 @@ Hosts and the control plane start fresh: 0.30's machines aren't carried over. Be
 
 ### Upgrading from 0.36
 
-State carries over, and nothing on a host changes. A template's build now holds the server config's `authorizedKeys`, installed once its setup exits 0. A build made before keeps none, and a create from it still installs them, so nothing needs a rebuild. A build whose setup leaves no login user, or no `sudo`, now fails as it ends, where before each create from it failed.
+State carries over. A template's build now holds the server config's `authorizedKeys`. A build made before keeps none, and a create from it still installs them, so nothing needs a rebuild.
+
+A host now prepares a base before its setup runs, and runs the setup as `admin` rather than root: see Writing a setup. A setup that creates `admin` itself fails where it does so unguarded, as `useradd` refuses a user that exists, and one that writes outside `admin`'s home needs `sudo`. Upgrade hosts and the control plane together.
 
 `template build` now takes one template file, `NAME.yaml`, which holds the base, the sizes, the setup and its timeout (see Templates), and `--base`, `--cpu`, `--ram`, `--disk` and `--setup-timeout` are gone from it. A build no longer takes anything from the build before it, so write each template's file in full: a file without `setupTimeout` gets the host's default. `client.buildTemplate` needs `base`, `cpu`, `ramMib` and `diskGib` on every build.
 
@@ -276,19 +278,21 @@ A host with `tailnet` joins each machine whose guest has `tailscale` and `tailsc
 
 ### Writing a setup
 
-Setup runs once, as root, after the machine's first boot; forks and restores carry its results. It must:
+A setup runs once, as the login user `admin` in its home, on a base clankerbox has prepared; forks, restores and every create from a template's build carry its results. Before the setup starts, clankerbox makes the base ready as root:
 
-- leave the login user, `admin`, and `sudo`: create `admin` and install `sudo` where the base has neither (smolvm's stock images; Tart's bases ship both). The recipes also give it passwordless `sudo`, which the host doesn't require;
-- install sshd where the base has none (smolvm's stock images), with `PermitRootLogin no`;
-- write `/etc/clankerbox/start`, if anything should run after each boot, fork or restore: idempotent, daemonizing what it launches, exiting 0 once it's up, and relaunching sshd if `/run/sshd.pid` is dead;
-- optionally write `/etc/clankerbox/new-identity`, run when a fork or restore gets its new identity, to reset per-machine state of its own;
-- install `tailscale` and `tailscaled`, without starting them, on a host that joins its machines to the tailnet.
+- on linux, it installs `openssh-server`, `sudo`, `perl`, `ca-certificates`, `curl` and `libnss-myhostname` with `apt-get`, creates `admin` where the image lacks it, and sets `PermitRootLogin no`. An image without `apt-get` is refused: build on a Debian or Ubuntu image;
+- on mac, whose Tart bases ship `admin`, it names public DNS resolvers, as Softnet blocks the gateway's, and waits for the clock, which the base boots behind;
+- on a host that joins its machines to the tailnet, it installs `tailscale` and `tailscaled` without starting them, with `apt-get` from Tailscale's repository on linux and with `brew` as `admin` on mac;
+- it gives `admin` passwordless `sudo`, and installs each key of the server config's `authorizedKeys` that its `~/.ssh/authorized_keys` lacks, so a template's build holds them.
+
+A setup that needs root uses `sudo`. It may:
+
+- write `/etc/clankerbox/start`, run as root after each boot, fork or restore: idempotent, daemonizing what it launches, and exiting 0 once it's up. clankerbox relaunches sshd itself, before the hook runs;
+- write `/etc/clankerbox/new-identity`, run when a fork or restore gets its new identity, to reset per-machine state of its own.
 
 A service of the login user that serves TLS on the tailnet can take the node's certificate from clankerbox's `tailscaled` (see above). The join comes after `/etc/clankerbox/start` has run, so the hook can't wait for the tailnet.
 
-Once a setup exits 0, and once a create clones a template's build, the host adds each key of the server config's `authorizedKeys` that the login user's `~/.ssh/authorized_keys` lacks, as that user through `sudo`, beside the keys already there, so a template's build holds them. A setup that leaves no login user, or no `sudo`, fails then, so a template's build of it fails, and the machine is deleted. Put no key in root's: nothing logs in as root.
-
-Linux guests need `perl`. On mac, Softnet blocks gateway DNS, so set public resolvers. A checkpoint, like a template's build, holds everything the machine had, credentials too.
+A create from a template's build adds each key of `authorizedKeys` that the build lacks, the same way. Put no key in root's: nothing logs in as root. A checkpoint, like a template's build, holds everything the machine had, credentials too.
 
 ## Deploy
 

@@ -16,6 +16,7 @@ import {
   symlink,
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import { Context, Duration, Effect, Exit, Layer, Schedule } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { expect } from "vite-plus/test";
@@ -24,6 +25,7 @@ import {
   hostKeyIn,
   lastLines,
   identityScript,
+  prepareBase,
   startScript,
   runCommand,
   runSetup,
@@ -223,16 +225,21 @@ const machine = {
   port: 2222,
 };
 
-const running = Effect.gen(function* () {
-  const runtime = Context.get(
-    yield* Layer.build(fakeRuntime({ dir: yield* scratch }).layer),
-    Runtime
-  );
+const based = Effect.gen(function* () {
+  const dir = yield* scratch;
+  const fake = fakeRuntime({ dir });
+  const runtime = Context.get(yield* Layer.build(fake.layer), Runtime);
 
   yield* runtime.create(machine, image);
 
-  return runtime;
+  return { runtime, fake, bin: path.join(dir, "bin") };
 });
+
+const running = Effect.map(based, ({ runtime }) => runtime);
+
+const preparedForSetup = Effect.tap(running, (runtime) =>
+  prepareBase(runtime, machine, "linux", false)
+);
 
 const numbered = (count: number) =>
   Array.from({ length: count }, (_, line) => `echo line ${line}`).join("\n");
@@ -254,7 +261,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a setup that exits non-zero fails with its output's tail, never its text, and leaves no copy of it",
     () =>
       Effect.gen(function* () {
-        const runtime = yield* running;
+        const runtime = yield* preparedForSetup;
         const secret = "token-4f1e9a";
 
         const script = [
@@ -367,10 +374,114 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a prepared base has the login user with passwordless sudo and sshd refusing root, however often it is prepared",
+    () =>
+      Effect.gen(function* () {
+        const { runtime, fake } = yield* based;
+        const root = fake.root(machine.name) ?? "";
+
+        yield* prepareBase(runtime, machine, "linux", false);
+
+        const once = yield* Effect.all([
+          readFile(path.join(root, "etc/passwd")),
+          readFile(path.join(root, "etc/sudoers.d/clankerbox")),
+          readFile(path.join(root, "etc/ssh/sshd_config.d/10-clankerbox.conf")),
+        ]);
+
+        yield* prepareBase(runtime, machine, "linux", false);
+
+        expect(
+          yield* Effect.all([
+            readFile(path.join(root, "etc/passwd")),
+            readFile(path.join(root, "etc/sudoers.d/clankerbox")),
+            readFile(
+              path.join(root, "etc/ssh/sshd_config.d/10-clankerbox.conf")
+            ),
+          ])
+        ).toStrictEqual(once);
+        expect(once).toStrictEqual([
+          "admin:x:1000:1000::/home/admin:/bin/sh\n",
+          "admin ALL=(ALL) NOPASSWD: ALL\n",
+          "PermitRootLogin no\n",
+        ]);
+      })
+  );
+
+  it.effect(
+    "a linux base without apt-get is refused, naming what clankerbox prepares",
+    () =>
+      Effect.gen(function* () {
+        const { runtime, bin } = yield* based;
+
+        yield* remove(path.join(bin, "apt-get"));
+
+        const error = yield* Effect.flip(
+          prepareBase(runtime, machine, "linux", false)
+        );
+
+        expect(error).toMatchObject({
+          _tag: "ScriptFailed",
+          script: "preparation",
+        });
+        expect(error.message).toContain("Debian or Ubuntu");
+      })
+  );
+
+  it.effect(
+    "a setup runs as the login user, in its home, with the step's keys already installed",
+    () =>
+      Effect.gen(function* () {
+        const { runtime, fake } = yield* based;
+        const root = fake.root(machine.name) ?? "";
+
+        yield* prepareBase(runtime, machine, "linux", false);
+        yield* runSetup(
+          runtime,
+          machine,
+          {
+            script: [
+              "#!/bin/sh",
+              'pwd >"$CLANKERBOX_ROOT/setup-cwd"',
+              'cp "$HOME/.ssh/authorized_keys" "$CLANKERBOX_ROOT/keys-seen"',
+            ].join("\n"),
+          },
+          operatorKey
+        );
+
+        expect(yield* readFile(path.join(root, "setup-cwd"))).toBe(
+          `${path.join(root, "home/admin")}\n`
+        );
+        expect(yield* readFile(path.join(root, "keys-seen"))).toBe(
+          `\n${operatorKey}\n`
+        );
+      })
+  );
+
+  it.effect(
+    "a mac base names public resolvers and installs tailscale with brew only where the host joins and it lacks it",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        const fake = fakeRuntime({ dir, kind: "mac" });
+        const runtime = Context.get(yield* Layer.build(fake.layer), Runtime);
+
+        yield* runtime.create(machine, image);
+        yield* prepareBase(runtime, machine, "mac", false);
+
+        const made = yield* calls(fake.root(machine.name) ?? "");
+
+        expect(made).toContain(
+          "networksetup -setdnsservers Ethernet 1.1.1.1 9.9.9.9"
+        );
+        expect(made.some((call) => call.startsWith("brew"))).toBe(false);
+      })
+  );
+
+  it.effect(
     "a setup that runs past its timeout is cut off, saying so with the output it had",
     () =>
       Effect.gen(function* () {
-        const runtime = yield* running;
+        const runtime = yield* preparedForSetup;
 
         const error = yield* Effect.flip(
           runSetup(

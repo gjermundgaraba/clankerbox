@@ -2090,6 +2090,37 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
+  it.effect(
+    "a make with a setup prepares the base first, then runs the setup as the login user with the step's keys",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner();
+
+        const report = yield* finished(
+          host,
+          makes("dev", {
+            setup: {
+              script:
+                '#!/bin/sh\necho "setup in $HOME with $(cat "$HOME/.ssh/authorized_keys" | grep -c ssh-)" >>"$CLANKERBOX_ROOT/calls"\n',
+            },
+            authorizedKeys: `${operatorKey}\n`,
+          })
+        );
+
+        const calls = yield* read(
+          path.join(host.fake.root("dev") ?? "", "calls")
+        );
+
+        expect(report.status).toBe("done");
+        expect(calls.split("\n").filter((line) => line !== "")).toStrictEqual([
+          "apt-get -o APT::Update::Error-Mode=any update",
+          "apt-get install -y --no-install-recommends ca-certificates curl openssh-server sudo perl libnss-myhostname",
+          "useradd -m -s /bin/bash -U admin",
+          `setup in ${path.join(host.fake.root("dev") ?? "", "home/admin")} with 1`,
+        ]);
+      })
+  );
+
   it.effect("a make from a base reports itself unprepared, for a start", () =>
     Effect.gen(function* () {
       const host = yield* runner();

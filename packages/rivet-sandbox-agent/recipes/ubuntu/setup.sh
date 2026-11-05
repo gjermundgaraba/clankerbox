@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+[ "$(id -u)" -eq 0 ] || exec sudo -n /bin/sh "$0" "$@"
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export DEBIAN_FRONTEND=noninteractive
 
@@ -9,21 +10,7 @@ node_version=22.23.4
 node_sha256=1805bcd35e6815559bd2eb97db438d3fdb0eb3a5e6a977b7c1badca76337e9ce
 
 apt-get update -qq
-apt-get install -y -qq --no-install-recommends \
-  openssh-server sudo curl ca-certificates xz-utils procps >/dev/null
-
-install -d /etc/ssh/sshd_config.d
-echo "PermitRootLogin no" >/etc/ssh/sshd_config.d/10-clankerbox.conf
-
-if ! id admin >/dev/null 2>&1; then
-  groupadd -f admin
-  useradd -m -s /bin/bash -g admin admin
-fi
-
-echo "admin ALL=(ALL) NOPASSWD: ALL" >/var/tmp/sudoers-admin
-visudo -cf /var/tmp/sudoers-admin >/dev/null
-install -m 440 /var/tmp/sudoers-admin /etc/sudoers.d/admin
-rm /var/tmp/sudoers-admin
+apt-get install -y -qq --no-install-recommends xz-utils procps >/dev/null
 
 fetch() {
   curl -fsSL "$1" -o "$3"
@@ -56,12 +43,6 @@ cat >/etc/clankerbox/start <<'START'
 #!/bin/sh
 set -eu
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-
-mkdir -p /run/sshd
-pid=$(cat /run/sshd.pid 2>/dev/null || true)
-if [ -z "$pid" ] || [ "$(cat "/proc/$pid/comm" 2>/dev/null || true)" != sshd ]; then
-  /usr/sbin/sshd
-fi
 
 answers() {
   curl -fs -m 2 -o /dev/null http://127.0.0.1:2468/v1/health
@@ -104,6 +85,3 @@ if ! answers_within 20; then
 fi
 START
 chmod 755 /etc/clankerbox/start
-
-mkdir -p /run/sshd
-/usr/sbin/sshd

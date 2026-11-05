@@ -1,18 +1,12 @@
 #!/bin/sh
 set -eu
+[ "$(id -u)" -eq 0 ] || exec sudo -n /bin/sh "$0" "$@"
 PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 
 agent_version=0.5.4
 agent_sha256=bbd978d96e1e835c98562b7f195f53bcc30e41253e23b41125def3896ddcbd2a
 node_version=22.23.4
 node_sha256=c9e1dbc748b33ed2d14f42445191ecaf14c56259c7a9a26d0042c49ec2b66428
-
-use_public_dns_past_softnet_host_block() {
-  networksetup -listallnetworkservices | tail -n +2 | sed 's/^\*//' | while IFS= read -r service; do
-    networksetup -setdnsservers "$service" 1.1.1.1 9.9.9.9
-  done
-}
-use_public_dns_past_softnet_host_block
 
 fetch() {
   curl -fsSL "$1" -o "$3"

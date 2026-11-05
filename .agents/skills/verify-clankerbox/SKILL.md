@@ -94,8 +94,10 @@ launch a new run. A control plane that is down answers `Unavailable`, exit 1.
 - Under the fake, setup scripts run **on this machine**, as you, with
   `CLANKERBOX_ROOT` as the guest's root and your own `HOME`. Only touch paths
   under `$CLANKERBOX_ROOT`.
-- A setup must leave the login user `admin` and `sudo`, as on a real stock
-  image (README's setup section). Start one from `$RUN/recipes/web/setup.sh`.
+- The host prepares the base before a setup, as on a real host (README's setup
+  section), and runs the setup through the fake's `sudo` as `admin`, with
+  `HOME` at `$CLANKERBOX_ROOT/home/admin`. Start one from
+  `$RUN/recipes/web/setup.sh`.
 
 ## Faults
 
