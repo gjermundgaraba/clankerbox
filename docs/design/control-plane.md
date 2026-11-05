@@ -130,10 +130,10 @@ Each duty has exactly one home. "Before" is the code at `adcacee`. "Deleted" is 
 | Check a host calls itself what the list says | `client.ts:273` `checkHost` | Server: `server/hosts.ts`, at `read` | `checkHost` in the client |
 | Keep the host list | `ClientConfig.hosts` (`apps/clankerbox/src/config.ts:10`), `HostEntry` (`client.ts:33`), provider `Options.hosts` (`packages/rivet-sandbox-agent/src/options.ts:18`) | Server: `hosts` in its config, `server/composition/config.ts` | All three. The client config and the provider take one URL. |
 | Refuse another release | `refusal` and `versionCheck` (`packages/host/src/composition/routes.ts:64,84`), header sent at `client.ts:156` | SDK: `release.ts` `versionCheck`, one helper, served at each hop | The host's own copy |
-| Tie prebuilds to a runtime | `nameOf` digests `host.runtimeVersion` (`prebuild.ts:25`) | Server: `server/prebuilds.ts` `nameOf`, with the host in the digest | `packages/sdk/src/prebuild.ts` |
-| Find or restore a prebuild | `Prebuild.create` (`prebuild.ts:75`) | Server: `Machines.create`, with `fresh` on the request | `Prebuild.create` |
-| Build a prebuild | `checkpoints.ts:180`, a host builds and captures | Server: `server/checkpoints.ts` `prebuild`, over `make`, `capture` and `remove` steps | `Prebuild.build` |
-| Amp find, resume, restore, create, delete, snapshot | `apps/clankerbox/src/amp-orb.ts` | Nowhere. Deleted. | All of `amp-orb.ts` and its tests |
+| Tie prebuilds to a runtime | `nameOf` digests `host.runtimeVersion` (`prebuild.ts:25`) | Server: a build records its host's runtime pin and image (`server/templates.ts`), and a copy under another reads outdated (`server/placement.ts` `outdated`), since templates (decision 16) | `packages/sdk/src/prebuild.ts` |
+| Find or restore a prebuild | `Prebuild.create` (`prebuild.ts:75`) | Server: `Machines.create` of a `template`, which clones a host's copy of the build (`server/machines.ts` `fromTemplate`), since templates (decision 16) | `Prebuild.create` |
+| Build a prebuild | `checkpoints.ts:180`, a host builds and captures | Server: `server/templates.ts` `build`, over a builder machine, its checkpoint and its delete, since templates (decision 16) | `Prebuild.build` |
+| Amp find, resume, restore, create, delete, snapshot | `apps/clankerbox/src/amp-orb.ts` | A package beside the control plane, `packages/amp-orbs`, over the client contract (decision 15) | All of `amp-orb.ts` and its tests |
 | Provider cleanup after a failed create | `discard` (`packages/rivet-sandbox-agent/src/sandboxes.ts:76`) | Provider: unchanged | Nothing. `error.made` is the bare name. |
 | Read a target and dial SSH | `sshTarget` (`packages/sdk/src/ssh.ts:18`), `ssh.ts:76,130,168` | Client: over `getMachine` | Nothing |
 | Keep the SSH config | `apps/clankerbox/src/ssh-config.ts:10-22`, one block per host | CLI: `apps/cli/src/ssh-config.ts`, one `Host *.cbx` block | The per-host blocks |
