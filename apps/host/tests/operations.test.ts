@@ -2113,8 +2113,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(report.status).toBe("done");
         expect(calls.split("\n").filter((line) => line !== "")).toStrictEqual([
-          "apt-get -o APT::Update::Error-Mode=any update",
-          "apt-get install -y --no-install-recommends ca-certificates curl openssh-server sudo perl libnss-myhostname",
+          "apt-get -o Acquire::Retries=5 -o APT::Update::Error-Mode=any update",
+          "apt-get -o Acquire::Retries=5 install -y --no-install-recommends ca-certificates curl openssh-server sudo perl libnss-myhostname",
           "useradd -m -s /bin/bash -U admin",
           `setup in ${path.join(host.fake.root("dev") ?? "", "home/admin")} with 1`,
         ]);
