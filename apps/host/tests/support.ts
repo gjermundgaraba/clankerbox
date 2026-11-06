@@ -22,7 +22,7 @@ import type { Tailnet } from "../src/tailnet.ts";
 import { fakeRuntime } from "./fake-runtime.ts";
 import type { FakeOptions, FakeRuntime } from "./fake-runtime.ts";
 
-export { loginSetup, writeTailscaleStubs } from "./fake-runtime.ts";
+export { hostKeySetup, writeTailscaleStubs } from "./fake-runtime.ts";
 
 export const image = "registry.example/ubuntu@sha256:00";
 

@@ -64,12 +64,7 @@ export interface FakeOptions {
   readonly onCall?: ((call: string) => void) | undefined;
 }
 
-export const loginSetup = [
-  'mkdir -p "$CLANKERBOX_ROOT/etc"',
-  'echo "admin:x:1000:1000::/home/admin:/bin/sh" >>"$CLANKERBOX_ROOT/etc/passwd"',
-  "ssh-keygen -A",
-  "",
-].join("\n");
+export const hostKeySetup = "ssh-keygen -A\n";
 
 const macLogin = "admin:x:501:20::/Users/admin:/bin/zsh\n";
 

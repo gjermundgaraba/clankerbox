@@ -21,7 +21,6 @@ import {
   at,
   clientOf,
   eventually,
-  addsLoginUser,
   callsTo,
   firstHost,
   machineNames,
@@ -36,7 +35,6 @@ import type { Plane, Started, running } from "./support.ts";
 const keyed = {
   script: [
     "#!/bin/sh",
-    addsLoginUser,
     'mkdir -p "$CLANKERBOX_ROOT/etc/ssh"',
     ': >"$CLANKERBOX_ROOT/etc/ssh/ssh_host_ed25519_key"',
     'echo "ssh-ed25519 AAAAimage root@image" >"$CLANKERBOX_ROOT/etc/ssh/ssh_host_ed25519_key.pub"',

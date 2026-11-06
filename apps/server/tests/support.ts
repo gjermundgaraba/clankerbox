@@ -43,7 +43,7 @@ import * as Templates from "../src/templates.ts";
 
 export {
   eventually,
-  loginSetup,
+  hostKeySetup,
   pause,
 } from "@gjermundgaraba/clankerbox-host/testing";
 
@@ -64,11 +64,6 @@ export const restartedHost = (
   });
 
 export const quiet = Duration.hours(1);
-
-export const addsLoginUser = [
-  'mkdir -p "$CLANKERBOX_ROOT/etc"',
-  'echo "admin:x:1000:1000::/home/admin:/bin/sh" >>"$CLANKERBOX_ROOT/etc/passwd"',
-].join("\n");
 
 type BaseRequest = Extract<CreateRequest, { readonly base: string }>;
 

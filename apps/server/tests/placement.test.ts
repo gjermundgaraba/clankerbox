@@ -6,13 +6,7 @@ import { Effect, Option, Result } from "effect";
 
 import type { Reached } from "../src/hosts.ts";
 import { holding, placing } from "../src/placement.ts";
-import {
-  clientOf,
-  addsLoginUser,
-  request,
-  restartedHost,
-  running,
-} from "./support.ts";
+import { clientOf, request, restartedHost, running } from "./support.ts";
 
 const info = (id: string, bases: readonly string[]): HostInfo => ({
   id,
@@ -64,7 +58,7 @@ const hostOf = (
   );
 
 const setup = {
-  script: `#!/bin/sh\n${addsLoginUser}\necho set up\n`,
+  script: `#!/bin/sh\necho set up\n`,
   timeoutSeconds: 30,
 };
 

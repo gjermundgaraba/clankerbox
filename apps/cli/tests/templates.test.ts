@@ -4,7 +4,10 @@ import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { mkdir, write } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { loginSetup, running } from "@gjermundgaraba/clankerbox-server/testing";
+import {
+  hostKeySetup,
+  running,
+} from "@gjermundgaraba/clankerbox-server/testing";
 import { Effect, Schema } from "effect";
 import { expect, vi } from "vite-plus/test";
 
@@ -59,7 +62,7 @@ const writeTemplate = (dir: string, contents: string) =>
     yield* mkdir(path.dirname(file));
     yield* write(
       path.join(recipe, "setup.sh"),
-      `#!/bin/sh\nset -eu\n${loginSetup}`
+      `#!/bin/sh\nset -eu\n${hostKeySetup}`
     );
     yield* write(file, contents);
 

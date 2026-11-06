@@ -20,7 +20,6 @@ import { Duration, Effect, Fiber, Logger, Option, References } from "effect";
 import { expect } from "vite-plus/test";
 
 import {
-  addsLoginUser,
   callsTo,
   clientOf,
   eventually,
@@ -34,7 +33,7 @@ import {
 import type { Started } from "./support.ts";
 
 const setup = {
-  script: `#!/bin/sh\n${addsLoginUser}\n`,
+  script: `#!/bin/sh\n`,
   timeoutSeconds: 30,
 };
 
@@ -757,7 +756,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const secret = "setup-secret-6f1c";
-        const script = `#!/bin/sh\n# ${secret}\nTOKEN=${secret}\n${addsLoginUser}\necho set up\n`;
+        const script = `#!/bin/sh\n# ${secret}\nTOKEN=${secret}\necho set up\n`;
         const [, key = ""] = operatorKey.split(" ");
         const logged: string[] = [];
 

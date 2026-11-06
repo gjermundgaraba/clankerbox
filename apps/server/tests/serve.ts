@@ -6,7 +6,7 @@ import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { loginSetup } from "@gjermundgaraba/clankerbox-host/testing";
+import { hostKeySetup } from "@gjermundgaraba/clankerbox-host/testing";
 import { readAuthorizedKeys } from "@gjermundgaraba/clankerbox-sdk";
 import { mkdir, write } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
@@ -30,11 +30,11 @@ const parsed = () => {
 };
 
 const webRecipe = (run: string) => `#!/bin/sh
-${loginSetup}echo web-recipe >"${run}/recipe-ran"
+${hostKeySetup}echo web-recipe >"${run}/recipe-ran"
 `;
 
 const slowRecipe = (run: string) => `#!/bin/sh
-${loginSetup}touch "${run}/setup-began"
+${hostKeySetup}touch "${run}/setup-began"
 while [ ! -e "${run}/setup-go" ]; do sleep 0.05; done
 echo slow-recipe >"${run}/recipe-ran"
 `;

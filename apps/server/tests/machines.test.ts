@@ -17,8 +17,7 @@ import {
   at,
   clientOf,
   eventually,
-  addsLoginUser,
-  loginSetup,
+  hostKeySetup,
   patched,
   pause,
   request,
@@ -33,7 +32,6 @@ const theirs =
 const installsStart = {
   script: [
     "#!/bin/sh",
-    addsLoginUser,
     'mkdir -p "$CLANKERBOX_ROOT/etc/clankerbox" "$CLANKERBOX_ROOT/etc/ssh"',
     'printf "#!/bin/sh\\necho start >>\\"\\$CLANKERBOX_ROOT/starts\\"\\n" >"$CLANKERBOX_ROOT/etc/clankerbox/start"',
     'chmod 755 "$CLANKERBOX_ROOT/etc/clankerbox/start"',
@@ -111,7 +109,7 @@ const unready = (
 };
 
 const countsRuns = (dir: string) => ({
-  script: `#!/bin/sh\n${addsLoginUser}\necho ran >>"${path.join(dir, "setup-runs")}"\n`,
+  script: `#!/bin/sh\necho ran >>"${path.join(dir, "setup-runs")}"\n`,
   timeoutSeconds: 30,
 });
 
@@ -1749,7 +1747,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { client, fake } = yield* servedWithBuildOf({
           script: [
             installsStart.script,
-            loginSetup,
+            hostKeySetup,
             'mkdir -p "$CLANKERBOX_ROOT/home/admin/.ssh"',
             `printf "${theirs}" >"$CLANKERBOX_ROOT/${keys}"`,
           ].join("\n"),
@@ -1758,7 +1756,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* client.buildTemplate({
           template: "fresh",
           ...request("unused"),
-          setup: { script: `#!/bin/sh\n${loginSetup}` },
+          setup: { script: `#!/bin/sh\n${hostKeySetup}` },
         });
         yield* client.create("dev", fromWeb);
         yield* client.create("fresh", { template: "fresh" });

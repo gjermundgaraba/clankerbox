@@ -10,13 +10,7 @@ import type { BuildRequest } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect } from "effect";
 import { expect } from "vite-plus/test";
 
-import {
-  addsLoginUser,
-  callsTo,
-  clientOf,
-  eventually,
-  running,
-} from "./support.ts";
+import { callsTo, clientOf, eventually, running } from "./support.ts";
 import type { Started } from "./support.ts";
 
 const web: BuildRequest = {
@@ -25,7 +19,7 @@ const web: BuildRequest = {
   cpu: 1,
   ramMib: 1024,
   diskGib: 10,
-  setup: { script: `#!/bin/sh\n${addsLoginUser}\n`, timeoutSeconds: 30 },
+  setup: { script: `#!/bin/sh\n`, timeoutSeconds: 30 },
 };
 
 const copiesOf = (served: Pick<Started, "templates">) =>

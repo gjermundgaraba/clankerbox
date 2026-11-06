@@ -24,10 +24,9 @@ import {
   unchecked,
 } from "../src/tailnet.ts";
 import {
-  addsLoginUser,
   clientOf,
   eventually,
-  loginSetup,
+  hostKeySetup,
   pause,
   plane,
   request,
@@ -38,7 +37,6 @@ const failed: TailnetStatus = { state: "failed", error: "no answer" };
 
 const tailnetSetup = [
   "#!/bin/sh",
-  addsLoginUser,
   'tailscale --socket="$CLANKERBOX_ROOT/var/lib/clankerbox/tailscale/tailscaled.sock" status --json >"$HOME/tailnet-status" || true',
   "",
 ].join("\n");
@@ -233,7 +231,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       yield* client.buildTemplate({
         ...request("unused"),
         template: "web",
-        setup: { script: `#!/bin/sh\n${loginSetup}`, timeoutSeconds: 30 },
+        setup: { script: `#!/bin/sh\n${hostKeySetup}`, timeoutSeconds: 30 },
       });
 
       const created = yield* client.create("box", { template: "web" });

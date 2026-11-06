@@ -10,7 +10,10 @@ import {
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { stubServer } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
-import { loginSetup, running } from "@gjermundgaraba/clankerbox-server/testing";
+import {
+  hostKeySetup,
+  running,
+} from "@gjermundgaraba/clankerbox-server/testing";
 import { Effect, Schema, Stdio, Stream } from "effect";
 import { expect, vi } from "vite-plus/test";
 
@@ -52,7 +55,7 @@ const sizes = [
 
 const setupScript = `#!/bin/sh
 set -eu
-${loginSetup}echo set-up >"$CLANKERBOX_ROOT/setup-ran"
+${hostKeySetup}echo set-up >"$CLANKERBOX_ROOT/setup-ran"
 `;
 
 const setupRuns = (dir: string) =>
@@ -69,7 +72,7 @@ const countedTemplate = (dir: string) =>
       path.join(dir, "web-setup.sh"),
       `#!/bin/sh
 set -eu
-${loginSetup}echo ran >>"${path.join(dir, "setup-runs")}"
+${hostKeySetup}echo ran >>"${path.join(dir, "setup-runs")}"
 `
     );
     yield* write(

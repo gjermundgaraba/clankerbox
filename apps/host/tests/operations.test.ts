@@ -59,7 +59,7 @@ import { smolvmModel } from "./smolvm-model.ts";
 import {
   eventually,
   image,
-  loginSetup,
+  hostKeySetup,
   memoryBuildStore,
   pause,
 } from "./support.ts";
@@ -620,7 +620,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const host = yield* runner();
 
       const { id, setup } = yield* Effect.suspend(() => {
-        const held: Setup = { script: loginSetup };
+        const held: Setup = { script: hostKeySetup };
         const operation = delivery(makes("dev", { setup: held }));
 
         return Effect.as(deliver(host, operation), {
@@ -981,11 +981,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const dev = ref("dev", { port: firstPort });
         const other = ref("other", { port: firstPort + 1 });
 
-        yield* finished(host, makes("dev", { setup: { script: loginSetup } }));
+        yield* finished(
+          host,
+          makes("dev", { setup: { script: hostKeySetup } })
+        );
         yield* finished(host, { _tag: "stop", machine: dev, machines: [] }, 2);
         yield* finished(
           host,
-          makes("other", { setup: { script: loginSetup } })
+          makes("other", { setup: { script: hostKeySetup } })
         );
 
         const refused = yield* finished(
@@ -1263,7 +1266,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* finished(
           host,
-          makes("builder", { setup: { script: loginSetup } })
+          makes("builder", { setup: { script: hostKeySetup } })
         );
         yield* finished(host, {
           _tag: "capture",
@@ -1336,7 +1339,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect("a stopped machine starts under any pin, as nothing resumes", () =>
     Effect.gen(function* () {
       const host = yield* runner();
-      const setup = { script: loginSetup };
+      const setup = { script: hostKeySetup };
 
       yield* finished(host, makes("dev", { setup }));
       yield* finished(
@@ -2044,7 +2047,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const keys = yield* minting();
         const host = yield* runner({ tailnet: keys.tailnet, tailscale: true });
 
-        yield* finished(host, makes("dev", { setup: { script: loginSetup } }));
+        yield* finished(
+          host,
+          makes("dev", { setup: { script: hostKeySetup } })
+        );
         yield* mkdir(rootOf(host, "var/lib/clankerbox/tailscale/state"));
         yield* write(
           rootOf(host, "var/lib/clankerbox/tailscale/state/source"),
@@ -2081,7 +2087,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* finished(
           host,
-          makes("builder", { setup: { script: loginSetup } })
+          makes("builder", { setup: { script: hostKeySetup } })
         );
 
         const hook = path.join(
@@ -2177,7 +2183,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       const report = yield* finished(
         host,
-        makes("dev", { setup: { script: loginSetup } })
+        makes("dev", { setup: { script: hostKeySetup } })
       );
 
       expect(report.status).toBe("done");
