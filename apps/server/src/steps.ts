@@ -204,7 +204,7 @@ export const checkpointStep = (
     }
 
     if (op.kind === "publish") {
-      return { _tag: "publish", checkpoint, as: published ?? name };
+      return { _tag: "publish", checkpoint, as: name };
     }
 
     if (op.kind === "fetch") {

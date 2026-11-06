@@ -25,7 +25,7 @@ const events = {
   read: types<Read>(),
   reported: types<Done | NotDone>(),
   lost: types<{ readonly error: HostError }>(),
-  publish: types<{ readonly as: string }>(),
+  publish: types<object>(),
 };
 
 export type CheckpointEvent = InferEvents<typeof events>;
@@ -94,9 +94,9 @@ export const checkpoint = setup({
       meta: { phase: "ready", activity: "none" },
       on: {
         delete: { target: "#checkpoint.deleting.due" },
-        publish: ({ event }) => ({
+        publish: ({ context }) => ({
           target: "#checkpoint.publishing.due",
-          context: { published: event.as },
+          context: { published: context.name },
         }),
       },
     },
