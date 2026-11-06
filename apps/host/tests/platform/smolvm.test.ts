@@ -81,6 +81,18 @@ const scripted = (reply: (call: Call) => Reply | undefined) =>
       : undefined;
   });
 
+const inGuest = (as: string, ...argv: readonly string[]) => [
+  "machine",
+  "exec",
+  "--name",
+  "dev-01234567",
+  "--user",
+  as,
+  "-i",
+  "--",
+  ...argv,
+];
+
 const baseStatus = [
   "machine",
   "status",
@@ -1328,9 +1340,14 @@ layer(NodeServices.layer)((it) => {
       })
   );
 
-  it.effect("exec runs the command as the user it names", () =>
+  const execsAs = (sudo: boolean) =>
     Effect.gen(function* () {
-      const spawner = scripted(() => {});
+      const spawner = scripted((call) =>
+        call.args.at(-1) === "command -v sudo"
+          ? { exitCode: sudo ? 0 : 1, stdout: "", stderr: "" }
+          : undefined
+      );
+
       const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
       yield* Effect.scoped(
@@ -1340,17 +1357,50 @@ layer(NodeServices.layer)((it) => {
         )
       );
 
-      expect(spawner.calls.at(-1)?.args).toStrictEqual([
-        "machine",
-        "exec",
-        "--name",
-        "dev-01234567",
-        "--user",
-        "user",
-        "-i",
-        "--",
-        "true",
-      ]);
+      return spawner.calls
+        .filter((call) => call.args[1] === "exec")
+        .map((call) => call.args);
+    });
+
+  it.effect(
+    "exec runs the command as the user it names through the guest's sudo, which gives it the user's groups",
+    () =>
+      Effect.gen(function* () {
+        expect(yield* execsAs(true)).toStrictEqual([
+          inGuest("root", "/bin/sh", "-c", "command -v sudo"),
+          inGuest("root", "sudo", "-n", "-u", "user", "-H", "--", "true"),
+        ]);
+      })
+  );
+
+  it.effect(
+    "exec runs the command as the user it names through smolvm when the guest has no sudo",
+    () =>
+      Effect.gen(function* () {
+        expect(yield* execsAs(false)).toStrictEqual([
+          inGuest("root", "/bin/sh", "-c", "command -v sudo"),
+          inGuest("user", "true"),
+        ]);
+      })
+  );
+
+  it.effect("exec as root asks nothing of the guest first", () =>
+    Effect.gen(function* () {
+      const spawner = scripted(() => {});
+      const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+      yield* Effect.scoped(
+        Effect.flatMap(
+          runtime.exec(machine, { argv: ["true"], user: "root" }),
+          (execution) => execution.exitCode
+        )
+      );
+
+      expect(
+        spawner.calls
+          .filter((call) => call.args[1] === "exec")
+          .map((call) => call.args)
+      ).toStrictEqual([inGuest("root", "true")]);
     })
   );
 

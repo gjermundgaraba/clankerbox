@@ -1378,24 +1378,44 @@ export const make = (
           }
         })
       ),
-      exec: Effect.fn("Smolvm.exec")((machine, { argv, stdin, user }) => {
+      exec: Effect.fn("Smolvm.exec")(function* (
+        machine,
+        { argv, stdin, user }
+      ) {
         const native = nativeName(machine);
+        const what = `smolvm machine exec ${native}`;
 
-        return exec(
+        const inGuest = (as: string, command: readonly string[]) => [
+          "machine",
+          "exec",
+          "--name",
+          native,
+          "--user",
+          as,
+          "-i",
+          "--",
+          ...command,
+        ];
+
+        if (user === undefined || user === "root") {
+          return yield* exec(binary, inGuest("root", argv), stdin, what);
+        }
+
+        // smolvm's --user hands crun only uid:gid, so the user's supplementary groups are lost:
+        // https://github.com/smol-machines/smolvm/blob/v1.33.0/crates/smolvm-agent/src/oci.rs#L272
+        const sudo = yield* run(
           binary,
-          [
-            "machine",
-            "exec",
-            "--name",
-            native,
-            "--user",
-            user ?? "root",
-            "-i",
-            "--",
-            ...argv,
-          ],
+          inGuest("root", ["/bin/sh", "-c", "command -v sudo"]),
+          what
+        );
+
+        return yield* exec(
+          binary,
+          sudo.exitCode === 0
+            ? inGuest("root", ["sudo", "-n", "-u", user, "-H", "--", ...argv])
+            : inGuest(user, argv),
           stdin,
-          `smolvm machine exec ${native}`
+          what
         );
       }),
       checkpointFiles: Effect.fn("Smolvm.checkpointFiles")((checkpoint) =>
