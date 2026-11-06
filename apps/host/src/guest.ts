@@ -160,6 +160,8 @@ const addingMissingKeys = [
 const guestPath =
   "PATH=$root/usr/local/sbin:$root/usr/local/bin:$root/usr/sbin:$root/usr/bin:$root/sbin:$root/bin";
 
+const brewedPath = `${guestPath}:$root/opt/homebrew/bin`;
+
 const sshdDropIn = "$root/etc/ssh/sshd_config.d/10-clankerbox.conf";
 
 const linuxBase = [
@@ -216,7 +218,7 @@ const baseScript = (kind: Kind) =>
     "login=$1",
     "joins=$2",
     "root=${CLANKERBOX_ROOT-}",
-    `${guestPath}:$root/opt/homebrew/bin`,
+    brewedPath,
     ...(kind === "linux" ? linuxBase : macBase),
     "",
   ].join("\n");
@@ -391,6 +393,47 @@ export const tailnetScript = [
   "  fi",
   "fi",
   `printf '${tailnetMarker}%s\\n' "$(status)"`,
+  "",
+].join("\n");
+
+const dnsBeforeJoin = "$root/var/lib/clankerbox/resolv.conf.before-join";
+
+export const beforeJoinScript = [
+  "set -eu",
+  "root=${CLANKERBOX_ROOT-}",
+  brewedPath,
+  `mkdir -p "$root/var/lib/clankerbox"`,
+  `rm -f "${dnsBeforeJoin}"`,
+  `if [ -e "$root/etc/resolv.conf" ]; then`,
+  `  cat "$root/etc/resolv.conf" >"${dnsBeforeJoin}"`,
+  "fi",
+  "",
+].join("\n");
+
+const scrubMarker = "clankerbox-scrub: ";
+
+export const scrubScript = [
+  "set -eu",
+  "root=${CLANKERBOX_ROOT-}",
+  brewedPath,
+  ...nodeProcess,
+  `case "$comm" in *tailscaled)`,
+  `  if ! tailscale --socket="${tailnetDir}/tailscaled.sock" logout >/dev/null 2>&1; then`,
+  `    echo '${scrubMarker}its logout failed, so its node stays on the tailnet until Tailscale drops it as ephemeral'`,
+  "  fi ;;",
+  "esac",
+  ...dropNode,
+  `if [ -e "${dnsBeforeJoin}" ]; then`,
+  `  if [ "$(cat "${dnsBeforeJoin}")" != "$(cat "$root/etc/resolv.conf" 2>/dev/null || true)" ]; then`,
+  `    if [ "$(uname -s)" = Linux ]; then`,
+  `      cat "${dnsBeforeJoin}" >"$root/etc/resolv.conf"`,
+  `      echo '${scrubMarker}its /etc/resolv.conf still differed after the logout from what it was before the join, so it is restored'`,
+  "    else",
+  `      echo '${scrubMarker}its /etc/resolv.conf differs from what it was before the join, and its build keeps it'`,
+  "    fi",
+  "  fi",
+  `  rm -f "${dnsBeforeJoin}"`,
+  "fi",
   "",
 ].join("\n");
 
@@ -621,3 +664,41 @@ export const checkTailnet = (
     },
     tailnetTimeout
   ).pipe(Effect.map(tailnetIn));
+
+/** Keeps what the guest resolves names with, so `scrubNode` can put it back after a join. */
+export const rememberDns = (
+  runtime: Runtime,
+  machine: MachineRef
+): Effect.Effect<void, RuntimeError | ScriptFailed> =>
+  Effect.asVoid(
+    runInGuest(
+      runtime,
+      "tailnet",
+      machine,
+      { argv: ["/bin/sh", "-c", beforeJoinScript, "clankerbox-dns"] },
+      preparationTimeout
+    )
+  );
+
+/**
+ * Logs the guest's node out of the tailnet, drops its state, and on linux puts back the DNS
+ * `rememberDns` kept, answering what it couldn't do cleanly.
+ */
+export const scrubNode = (
+  runtime: Runtime,
+  machine: MachineRef
+): Effect.Effect<readonly string[], RuntimeError | ScriptFailed> =>
+  runInGuest(
+    runtime,
+    "tailnet",
+    machine,
+    { argv: ["/bin/sh", "-c", scrubScript, "clankerbox-scrub"] },
+    tailnetTimeout
+  ).pipe(
+    Effect.map((output) =>
+      output
+        .split("\n")
+        .filter((line) => line.startsWith(scrubMarker))
+        .map((line) => line.slice(scrubMarker.length))
+    )
+  );

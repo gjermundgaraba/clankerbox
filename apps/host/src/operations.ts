@@ -50,8 +50,10 @@ import {
   addMissingKeys,
   prepareBase,
   prepare,
+  rememberDns,
   runCommand,
   runSetup,
+  scrubNode,
   unkey,
 } from "./guest.ts";
 import type { TailnetReport } from "./guest.ts";
@@ -434,7 +436,7 @@ export const make = (
       });
 
     const joined = (
-      { mint }: Tailnet["Service"],
+      mint: Tailnet["Service"]["mint"],
       machine: MachineRef,
       hostname: string
     ) =>
@@ -484,9 +486,63 @@ export const make = (
         };
       });
 
+    const scrubbed = (machine: MachineRef) =>
+      Effect.flatMap(scrubNode(runtime, machine), (notes) =>
+        Effect.forEach(
+          notes,
+          (note) => Effect.logWarning(`tailnet scrub ${machine.name}: ${note}`),
+          { discard: true }
+        )
+      );
+
+    const onTailnet = (
+      machine: MachineRef,
+      join: Make["join"],
+      setup: Effect.Effect<void, HostError>
+    ): Effect.Effect<void, HostError> => {
+      if (join === undefined) {
+        return setup;
+      }
+
+      return Option.match(tailnet, {
+        onNone: () =>
+          Effect.andThen(
+            Effect.logWarning(
+              `make ${machine.name}: its step asks for a tailnet join, and host ${config.id} has no tailnet setting, so its setup runs off the tailnet`
+            ),
+            setup
+          ),
+        onSome: ({ mintBuild }) =>
+          Effect.gen(function* () {
+            yield* rememberDns(runtime, machine);
+
+            const status = yield* joined(mintBuild, machine, join.hostname);
+
+            if (status.state !== "joined") {
+              return yield* new Internal({
+                message: `builder ${machine.name} didn't join the tailnet for its setup: ${status.state === "failed" ? status.error : "its guest has no tailscaled"}`,
+              });
+            }
+
+            yield* setup;
+          }).pipe(
+            Effect.onError(() =>
+              scrubbed(machine).pipe(
+                Effect.catch((error) =>
+                  Effect.logWarning(
+                    `tailnet scrub ${machine.name} failed: ${error.message}`
+                  )
+                )
+              )
+            ),
+            Effect.andThen(scrubbed(machine))
+          ),
+      });
+    };
+
     const made = (
       progress: Progress,
-      { machine, source, authorizedKeys, machines }: Make,
+      { machine, source, authorizedKeys, join, machines }: Make,
       port: number
     ): Effect.Effect<void, HostError> =>
       Effect.gen(function* () {
@@ -514,7 +570,11 @@ export const make = (
 
         if (source._tag === "base" && source.setup !== undefined) {
           yield* prepareBase(runtime, ref, config.kind, Option.isSome(tailnet));
-          yield* runSetup(runtime, ref, source.setup, authorizedKeys);
+          yield* onTailnet(
+            ref,
+            join,
+            runSetup(runtime, ref, source.setup, authorizedKeys)
+          );
         } else if (authorizedKeys !== undefined) {
           yield* addMissingKeys(runtime, ref, authorizedKeys);
         }
@@ -667,7 +727,7 @@ export const make = (
             onNone: () => Effect.void,
             onSome: (joining) =>
               Effect.map(
-                joined(joining, step.machine, step.hostname),
+                joined(joining.mint, step.machine, step.hostname),
                 (status) => {
                   progress.outcome = { ...progress.outcome, tailnet: status };
                 }

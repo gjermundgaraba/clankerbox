@@ -153,6 +153,11 @@ layer(NodeServices.layer)((it) => {
           },
           { ...config, tailnet: { tags: tailnet.tags } },
           { ...config, tailnet: { ...tailnet, authKey: clientSecret } },
+          { ...config, tailnet: { ...tailnet, buildTags: [] } },
+          {
+            ...config,
+            tailnet: { ...tailnet, buildTags: ["clankerbox-build"] },
+          },
         ];
 
         for (const contents of refused) {
@@ -163,6 +168,22 @@ layer(NodeServices.layer)((it) => {
           expect(error.message).not.toContain(clientSecret);
         }
       })
+  );
+
+  it.effect("a tailnet's buildTags are tags for a template's builder", () =>
+    Effect.gen(function* () {
+      const { loaded } = yield* load({
+        ...config,
+        tailnet: { ...tailnet, buildTags: ["tag:clankerbox-build"] },
+      });
+
+      const host = yield* loaded;
+
+      expect([host.tailnet?.tags, host.tailnet?.buildTags]).toStrictEqual([
+        ["tag:clankerbox-machine"],
+        ["tag:clankerbox-build"],
+      ]);
+    })
   );
 
   it.effect(

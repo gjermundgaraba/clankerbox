@@ -93,14 +93,15 @@ const sourceStep = (store: Store, found: MachineRow, held: Setup | undefined) =>
  * What a host is sent for a machine's operation, built afresh from the rows at each delivery, or
  * undefined when it can't be sent: its source went, or the setup `held` in memory for a template's
  * builder did. The keys go to a builder, so its build holds them, and to a clone of a build, which adds
- * any it lacks.
+ * any it lacks. A builder on a host that `joins` joins the tailnet for its setup.
  */
 export const machineStep = (
   store: Store,
   found: MachineRow,
   op: Operation,
   held: Setup | undefined,
-  authorizedKeys: string
+  authorizedKeys: string,
+  joins: boolean
 ): Effect.Effect<Step | undefined, Internal> =>
   Effect.gen(function* () {
     const ref = refOf(found);
@@ -128,6 +129,9 @@ export const machineStep = (
             source,
             ...(found.ephemeral || found.template !== undefined
               ? { authorizedKeys }
+              : {}),
+            ...(found.ephemeral && joins
+              ? { join: { hostname: `cbx-${name}` } }
               : {}),
             ports,
             machines,

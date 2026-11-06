@@ -452,7 +452,8 @@ export const make = (
             found,
             op,
             creates.get(found.name)?.setup,
-            settings.authorizedKeys
+            settings.authorizedKeys,
+            hosts.known(found.host)?.joins === true
           ),
         }),
       following,

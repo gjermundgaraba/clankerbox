@@ -22,6 +22,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { expect } from "vite-plus/test";
 
 import {
+  beforeJoinScript,
   hostKeyIn,
   lastLines,
   identityScript,
@@ -29,6 +30,7 @@ import {
   startScript,
   runCommand,
   runSetup,
+  scrubScript,
   tailnetIn,
   tailnetScript,
   unkeyScript,
@@ -214,6 +216,49 @@ const daemon = (root: string, comm: string) =>
         }
       }),
     };
+  });
+
+const guestScript = (
+  where: { readonly root: string },
+  script: string,
+  name: string
+) =>
+  Effect.map(
+    outputOf("/bin/sh", ["-c", script, name], {
+      env: { CLANKERBOX_ROOT: where.root, PATH: "/nowhere" },
+      extendEnv: true,
+    }),
+    ({ code, stdout, stderr }) => ({ code, output: `${stdout}${stderr}` })
+  );
+
+const joinedResolver = "nameserver 100.100.100.100\n";
+
+const baseResolver = "nameserver 192.168.64.1\n";
+
+const resolving = (root: string, text: string) =>
+  Effect.andThen(
+    mkdir(path.join(root, "etc")),
+    write(path.join(root, "etc", "resolv.conf"), text)
+  );
+
+const joinedWithDns = (uname: string) =>
+  Effect.gen(function* () {
+    const where = yield* guest(uname);
+
+    yield* Effect.sync(() => {
+      writeTailscaleStubs(where.bin);
+    });
+    yield* resolving(where.root, baseResolver);
+
+    const remembered = yield* guestScript(where, beforeJoinScript, "dns");
+
+    expect(remembered.code, remembered.output).toBe(0);
+
+    const node = yield* daemon(where.root, "tailscaled");
+
+    yield* resolving(where.root, joinedResolver);
+
+    return { where, node };
   });
 
 const machine = {
@@ -913,6 +958,93 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* isMissing(path.join(node.dir, "state", "tailscaled.state"))
       ).toBe(false);
     })
+  );
+
+  it.effect(
+    "a scrub logs the node out, kills its tailscaled, drops its state, and on linux puts back the DNS from before the join",
+    () =>
+      Effect.gen(function* () {
+        const { where, node } = yield* joinedWithDns("Linux");
+
+        const { code, output } = yield* guestScript(
+          where,
+          scrubScript,
+          "scrub"
+        );
+
+        const sock = `${node.dir}/tailscaled.sock`;
+
+        expect(code, output).toBe(0);
+        expect(yield* calls(where.root)).toStrictEqual([
+          `tailscale --socket=${sock} logout`,
+        ]);
+        expect(
+          yield* Effect.repeat(node.alive, {
+            while: (alive) => alive,
+            times: 50,
+          })
+        ).toBe(false);
+        expect(yield* isMissing(node.dir)).toBe(true);
+        expect(yield* read(where.root, "etc/resolv.conf")).toBe(baseResolver);
+        expect(
+          yield* isMissing(
+            path.join(where.root, "var/lib/clankerbox/resolv.conf.before-join")
+          )
+        ).toBe(true);
+        expect(output).toContain(
+          "clankerbox-scrub: its /etc/resolv.conf still differed after the logout"
+        );
+      })
+  );
+
+  it.effect(
+    "a scrub leaves a mac's DNS as the logout left it, and says so",
+    () =>
+      Effect.gen(function* () {
+        const { where } = yield* joinedWithDns("Darwin");
+
+        const { code, output } = yield* guestScript(
+          where,
+          scrubScript,
+          "scrub"
+        );
+
+        expect(code, output).toBe(0);
+        expect(yield* read(where.root, "etc/resolv.conf")).toBe(joinedResolver);
+        expect(output).toContain(
+          "clankerbox-scrub: its /etc/resolv.conf differs from what it was before the join, and its build keeps it"
+        );
+        expect(
+          yield* isMissing(
+            path.join(where.root, "var/lib/clankerbox/resolv.conf.before-join")
+          )
+        ).toBe(true);
+      })
+  );
+
+  it.effect(
+    "a scrub after a logout that restored the DNS writes nothing, and one with no tailscaled logs nothing out",
+    () =>
+      Effect.gen(function* () {
+        const where = yield* guest();
+
+        yield* Effect.sync(() => {
+          writeTailscaleStubs(where.bin);
+        });
+        yield* resolving(where.root, baseResolver);
+        yield* guestScript(where, beforeJoinScript, "dns");
+
+        const { code, output } = yield* guestScript(
+          where,
+          scrubScript,
+          "scrub"
+        );
+
+        expect(code, output).toBe(0);
+        expect(output).not.toContain("clankerbox-scrub: ");
+        expect(yield* calls(where.root)).toStrictEqual([]);
+        expect(yield* read(where.root, "etc/resolv.conf")).toBe(baseResolver);
+      })
   );
 
   it.effect(

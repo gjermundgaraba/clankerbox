@@ -1,7 +1,18 @@
+import path from "node:path";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, layer } from "@effect/vitest";
 import type { Machine, TailnetStatus } from "@gjermundgaraba/clankerbox-sdk";
-import { Deferred, Duration, Effect, Layer, Option, Redacted } from "effect";
+import { read } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import {
+  Deferred,
+  Duration,
+  Effect,
+  Layer,
+  Logger,
+  Option,
+  Redacted,
+} from "effect";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
 import {
@@ -25,6 +36,13 @@ import {
 
 const failed: TailnetStatus = { state: "failed", error: "no answer" };
 
+const tailnetSetup = [
+  "#!/bin/sh",
+  addsLoginUser,
+  'tailscale --socket="$CLANKERBOX_ROOT/var/lib/clankerbox/tailscale/tailscaled.sock" status --json >"$HOME/tailnet-status" || true',
+  "",
+].join("\n");
+
 const joinedName = { state: "joined", name: "linux-dev.example.ts.net" };
 
 const tailscaleApi = (
@@ -33,6 +51,7 @@ const tailscaleApi = (
     readonly refuse?: { count: number };
     readonly hold?: Deferred.Deferred<undefined>;
     readonly entered?: Deferred.Deferred<undefined>;
+    readonly holdingAfter?: number;
   }
 ) =>
   Layer.succeed(
@@ -40,12 +59,13 @@ const tailscaleApi = (
     HttpClient.make((sent, url) =>
       Effect.gen(function* () {
         const token = url.pathname.endsWith("/oauth/token");
+        const holding = minted.length >= (options?.holdingAfter ?? 0);
 
-        if (options?.entered !== undefined) {
+        if (holding && options?.entered !== undefined) {
           yield* Deferred.succeed(options.entered, undefined);
         }
 
-        if (options?.hold !== undefined) {
+        if (holding && options?.hold !== undefined) {
           yield* Deferred.await(options.hold);
         }
 
@@ -207,7 +227,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const entered = yield* Deferred.make<undefined>();
 
       const { client, hosts, shown, store } = yield* served(
-        joining(tailscaleApi(minted, { hold, entered }))
+        joining(tailscaleApi(minted, { hold, entered, holdingAfter: 1 }))
       );
 
       yield* client.buildTemplate({
@@ -240,7 +260,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       );
 
       expect(joined.tailnet).toStrictEqual(joinedName);
-      expect(minted).toHaveLength(1);
+      expect(minted).toHaveLength(2);
       expect(
         hosts[0]?.fake.calls.filter((call) => call.endsWith(" box"))
       ).toStrictEqual([
@@ -345,23 +365,74 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
-  it.effect("a template's builder joins no tailnet", () =>
-    Effect.gen(function* () {
-      const minted: string[] = [];
-      const { client } = yield* served(joining(tailscaleApi(minted)));
+  it.effect(
+    "a template's builder joins the tailnet for its setup, and a clone of its build joins as its own node",
+    () =>
+      Effect.gen(function* () {
+        const minted: string[] = [];
 
-      yield* client.buildTemplate({
-        ...request("unused"),
-        template: "web",
-        setup: {
-          script: `#!/bin/sh\n${addsLoginUser}\necho set up\n`,
-          timeoutSeconds: 30,
-        },
+        const { client, hosts, tailnetOf } = yield* served(
+          joining(tailscaleApi(minted))
+        );
+
+        yield* client.buildTemplate({
+          ...request("unused"),
+          template: "web",
+          setup: { script: tailnetSetup, timeoutSeconds: 30 },
+        });
+
+        expect(minted).toHaveLength(1);
+
+        yield* client.create("box", { template: "web" });
+
+        expect((yield* tailnetOf("box")).tailnet).toStrictEqual(joinedName);
+        expect(minted).toHaveLength(2);
+        expect(
+          yield* read(
+            path.join(
+              hosts[0]?.fake.root("box") ?? "",
+              "home/admin/tailnet-status"
+            )
+          )
+        ).toContain('"BackendState": "Running"');
+      })
+  );
+
+  it.effect(
+    "a builder on a host that joins no tailnet is sent no join, and its build ends ready",
+    () => {
+      const logged: string[] = [];
+
+      return Effect.gen(function* () {
+        const { client, hosts } = yield* served({
+          tailscaled: true,
+          runtime: {
+            logger: Logger.make(({ message }) => {
+              logged.push(String(message));
+            }),
+          },
+        });
+
+        const built = yield* client.buildTemplate({
+          ...request("unused"),
+          template: "web",
+          setup: { script: tailnetSetup, timeoutSeconds: 30 },
+        });
+
+        yield* client.create("box", { template: "web" });
+
+        expect(built.phase).toBe("ready");
+        expect(
+          yield* read(
+            path.join(
+              hosts[0]?.fake.root("box") ?? "",
+              "home/admin/tailnet-status"
+            )
+          )
+        ).not.toContain("Running");
+        expect(logged.join("\n")).not.toContain("tailnet");
       });
-      yield* Effect.sleep(Duration.millis(200));
-
-      expect(minted).toStrictEqual([]);
-    })
+    }
   );
 
   it.effect(

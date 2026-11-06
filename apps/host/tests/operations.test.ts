@@ -50,7 +50,11 @@ import * as Operations from "../src/operations.ts";
 import * as Smolvm from "../src/platform/smolvm.ts";
 import { Runtime } from "../src/runtime.ts";
 import { Tailnet } from "../src/tailnet.ts";
-import { fakeRuntime, writeTailscaleStubs } from "./fake-runtime.ts";
+import {
+  baseResolver,
+  fakeRuntime,
+  writeTailscaleStubs,
+} from "./fake-runtime.ts";
 import { smolvmModel } from "./smolvm-model.ts";
 import {
   eventually,
@@ -213,6 +217,7 @@ const makes = (
     readonly source?: Source;
     readonly setup?: Setup;
     readonly authorizedKeys?: string;
+    readonly join?: { readonly hostname: string };
     readonly ports?: readonly number[];
     readonly machines?: readonly MachineRef[];
   }
@@ -227,6 +232,7 @@ const makes = (
   ...(fields?.authorizedKeys === undefined
     ? {}
     : { authorizedKeys: fields.authorizedKeys }),
+  ...(fields?.join === undefined ? {} : { join: fields.join }),
   ports: fields?.ports ?? [],
   machines: fields?.machines ?? [],
 });
@@ -1932,21 +1938,31 @@ const minting = (failures = 0) =>
     const minted = yield* Ref.make(0);
     const failing = yield* Ref.make(failures);
 
-    const tailnet = {
-      mint: Effect.gen(function* () {
+    const mintedBuild = yield* Ref.make(0);
+
+    const keyFrom = (counter: Ref.Ref<number>, prefix: string) =>
+      Effect.gen(function* () {
         if ((yield* Ref.getAndUpdate(failing, (left) => left - 1)) > 0) {
           return yield* new Internal({
             message: "Tailscale refused the OAuth client",
           });
         }
 
-        const count = yield* Ref.updateAndGet(minted, (all) => all + 1);
+        const count = yield* Ref.updateAndGet(counter, (all) => all + 1);
 
-        return Redacted.make(`tskey-auth-${count}`);
-      }),
+        return Redacted.make(`${prefix}-${count}`);
+      });
+
+    const tailnet = {
+      mint: keyFrom(minted, "tskey-auth"),
+      mintBuild: keyFrom(mintedBuild, "tskey-auth-build"),
     };
 
-    return { tailnet, minted: Ref.get(minted) };
+    return {
+      tailnet,
+      minted: Ref.get(minted),
+      mintedBuild: Ref.get(mintedBuild),
+    };
   });
 
 const joining: Step = {
@@ -1956,6 +1972,40 @@ const joining: Step = {
 };
 
 const joinedAs = { state: "joined", name: "linux-dev.example.ts.net" };
+
+const tailnetDir = "var/lib/clankerbox/tailscale";
+
+const builderMake = (setupBody: string) =>
+  makes("building-1", {
+    setup: {
+      script: [
+        "#!/bin/sh",
+        "set -eu",
+        'echo setup >>"$CLANKERBOX_ROOT/calls"',
+        `tailscale --socket="$CLANKERBOX_ROOT/${tailnetDir}/tailscaled.sock" status --json >"$HOME/status.json" || true`,
+        setupBody,
+        "",
+      ].join("\n"),
+    },
+    join: { hostname: "cbx-building-1" },
+  });
+
+const inBuilder = (host: Runner, file: string) =>
+  path.join(host.fake.root("building-1") ?? "", file);
+
+const tailnetStep = (line: string) => {
+  if (line === "setup") {
+    return ["setup"];
+  }
+
+  return line.startsWith("tailscale ") ? [line.split(" ")[2] ?? ""] : [];
+};
+
+const tailnetSteps = (host: Runner) =>
+  Effect.map(
+    Effect.orElseSucceed(read(inBuilder(host, "calls")), () => ""),
+    (text) => text.split("\n").flatMap(tailnetStep)
+  );
 
 const rootOf = (host: Runner, file: string) =>
   path.join(host.fake.machines.get("dev")?.root ?? "", file);
@@ -2207,7 +2257,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect("a join whose mint dies is a failed join", () =>
     Effect.gen(function* () {
       const host = yield* runner({
-        tailnet: { mint: Effect.die(new Error("the API client blew up")) },
+        tailnet: {
+          mint: Effect.die(new Error("the API client blew up")),
+          mintBuild: Effect.die(new Error("the API client blew up")),
+        },
         tailscale: true,
       });
 
@@ -2248,6 +2301,125 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(report.status).toBe("done");
       expect(report.outcome.tailnet).toBeUndefined();
     })
+  );
+
+  it.effect(
+    "a builder's make joins the tailnet before its setup, and logs its node out and restores its DNS after it",
+    () => {
+      const logged: string[] = [];
+
+      return Effect.gen(function* () {
+        const keys = yield* minting();
+        const host = yield* runner({ tailnet: keys.tailnet, tailscale: true });
+
+        const report = yield* finished(host, builderMake("echo done"));
+
+        expect(report.status, report.error?.message).toBe("done");
+        expect(yield* tailnetSteps(host)).toStrictEqual([
+          "set",
+          "up",
+          "setup",
+          "logout",
+        ]);
+        expect(yield* read(inBuilder(host, "calls"))).toContain(
+          "--hostname=cbx-building-1"
+        );
+        expect(
+          yield* read(inBuilder(host, "home/admin/status.json"))
+        ).toContain('"BackendState": "Running"');
+        expect(yield* exists(inBuilder(host, tailnetDir))).toBe(false);
+        expect(yield* read(inBuilder(host, "etc/resolv.conf"))).toBe(
+          `nameserver ${baseResolver}\n`
+        );
+        expect(
+          yield* exists(
+            inBuilder(host, "var/lib/clankerbox/resolv.conf.before-join")
+          )
+        ).toBe(false);
+        expect([yield* keys.mintedBuild, yield* keys.minted]).toStrictEqual([
+          1, 0,
+        ]);
+        expect(report.outcome.tailnet).toBeUndefined();
+        expect(logged.join("\n")).toContain("so it is restored");
+        expect(logged.join("\n")).not.toContain("tskey-");
+      }).pipe(Effect.provide(Logger.layer([capturing(logged)])));
+    }
+  );
+
+  it.effect("a builder whose setup fails is logged out all the same", () =>
+    Effect.gen(function* () {
+      const keys = yield* minting();
+      const host = yield* runner({ tailnet: keys.tailnet, tailscale: true });
+
+      const report = yield* finished(host, builderMake("exit 1"));
+
+      expect(errorOf(report)).toStrictEqual(["failed", "ScriptFailed"]);
+      expect(yield* tailnetSteps(host)).toStrictEqual([
+        "set",
+        "up",
+        "setup",
+        "logout",
+      ]);
+      expect(yield* exists(inBuilder(host, tailnetDir))).toBe(false);
+      expect(yield* read(inBuilder(host, "etc/resolv.conf"))).toBe(
+        `nameserver ${baseResolver}\n`
+      );
+    })
+  );
+
+  it.effect(
+    "a builder that can't join fails before its setup, and leaves no node",
+    () =>
+      Effect.gen(function* () {
+        const keys = yield* minting(1);
+        const host = yield* runner({ tailnet: keys.tailnet, tailscale: true });
+
+        const report = yield* finished(host, builderMake("echo done"));
+
+        expect(errorOf(report)).toStrictEqual(["failed", "Internal"]);
+        expect(report.error?.message).toContain(
+          "didn't join the tailnet for its setup: Tailscale refused the OAuth client"
+        );
+        expect(yield* tailnetSteps(host)).toStrictEqual(["set", "logout"]);
+        expect(yield* exists(inBuilder(host, tailnetDir))).toBe(false);
+      })
+  );
+
+  it.effect("a make that asks no join mints no key, even with a setup", () =>
+    Effect.gen(function* () {
+      const keys = yield* minting();
+      const host = yield* runner({ tailnet: keys.tailnet, tailscale: true });
+
+      const report = yield* finished(
+        host,
+        makes("building-1", { setup: { script: "#!/bin/sh\necho done\n" } })
+      );
+
+      expect(report.status, report.error?.message).toBe("done");
+      expect(yield* tailnetSteps(host)).toStrictEqual([]);
+      expect([yield* keys.mintedBuild, yield* keys.minted]).toStrictEqual([
+        0, 0,
+      ]);
+    })
+  );
+
+  it.effect(
+    "a make that asks a join of a host with no tailnet runs its setup off the tailnet",
+    () => {
+      const logged: string[] = [];
+
+      return Effect.gen(function* () {
+        const host = yield* runner({ tailscale: true });
+
+        const report = yield* finished(host, builderMake("echo done"));
+
+        expect(report.status, report.error?.message).toBe("done");
+        expect(yield* tailnetSteps(host)).toStrictEqual(["setup"]);
+        expect(logged.join("\n")).toContain(
+          "make building-1: its step asks for a tailnet join, and host linux has no tailnet setting"
+        );
+      }).pipe(Effect.provide(Logger.layer([capturing(logged)])));
+    }
   );
 
   it.effect("a status longer than an error's tail still reads whole", () =>
@@ -2879,6 +3051,7 @@ layer(NodeServices.layer)((it) => {
             Deferred.succeed(mintingKey, undefined),
             Effect.never
           ),
+          mintBuild: Effect.never,
         },
       });
 

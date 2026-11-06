@@ -4,10 +4,12 @@ import type { Operation } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { read, scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { Effect, Layer, Redacted } from "effect";
+import { Effect, Layer, Redacted, Schema } from "effect";
+import type { HttpBody } from "effect/http";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { expect } from "vite-plus/test";
 
+import type { TailnetSettings } from "../src/platform/tailscale.ts";
 import { writeTailscaleStubs } from "./fake-runtime.ts";
 import { hostOn } from "./support.ts";
 
@@ -23,7 +25,26 @@ const joinsTailnet = Effect.gen(function* () {
   return dir;
 });
 
-const tailscaleApi = (minted: string[]) =>
+const KeyRequest = Schema.fromJsonString(
+  Schema.Struct({
+    capabilities: Schema.Struct({
+      devices: Schema.Struct({
+        create: Schema.Struct({ tags: Schema.Array(Schema.String) }),
+      }),
+    }),
+  })
+);
+
+const tagsOf = (body: HttpBody.HttpBody) =>
+  body._tag === "Uint8Array"
+    ? Schema.decodeUnknownSync(KeyRequest)(body.text).capabilities.devices
+        .create.tags
+    : [];
+
+const tailscaleApi = (
+  minted: string[],
+  tagged: Array<readonly string[]> = []
+) =>
   Layer.succeed(
     HttpClient.HttpClient,
     HttpClient.make((sent, url) =>
@@ -33,6 +54,7 @@ const tailscaleApi = (minted: string[]) =>
 
         if (!token) {
           minted.push(key);
+          tagged.push(tagsOf(sent.body));
         }
 
         return HttpClientResponse.fromWeb(
@@ -70,6 +92,64 @@ const join = (port: number): Omit<Operation, "boot"> => ({
     hostname: "linux-dev",
   },
 });
+
+const build: Omit<Operation, "boot"> = {
+  id: "build",
+  scope: "machine building-1",
+  sequence: 1,
+  step: {
+    _tag: "make",
+    machine: {
+      name: "building-1",
+      instance: `b${instance.slice(1)}`,
+      ...sizes,
+    },
+    source: {
+      _tag: "base",
+      base: "ubuntu",
+      setup: { script: "#!/bin/sh\necho set up\n" },
+    },
+    join: { hostname: "cbx-building-1" },
+    ports: [],
+    machines: [],
+  },
+};
+
+const client = {
+  oauthClient: { id: "k1", secret: Redacted.make("tskey-client-k1") },
+  tags: ["tag:clankerbox-machine"] as const,
+};
+
+const keysOf = (tailnetSettings: TailnetSettings) =>
+  Effect.gen(function* () {
+    const tagged: Array<readonly string[]> = [];
+
+    const { operations } = yield* host({
+      dir: yield* joinsTailnet,
+      tailnetSettings,
+      http: tailscaleApi([], tagged),
+    });
+
+    yield* operations.run({ ...build, boot: operations.boot });
+
+    const built = yield* operations.wait("build");
+
+    expect(built.status, built.error?.message).toBe("done");
+
+    const { outcome } = yield* operations.run({
+      ...make,
+      boot: operations.boot,
+    });
+
+    yield* operations.wait("make");
+    yield* operations.run({
+      ...join(outcome.port ?? 0),
+      boot: operations.boot,
+    });
+    yield* operations.wait("join");
+
+    return tagged;
+  });
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
@@ -110,6 +190,27 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             path.join(fake.machines.get("dev")?.root ?? "", "key-seen")
           )
         ).toBe("tskey-auth-api-1");
+      })
+  );
+
+  it.effect(
+    "a builder's key carries the tailnet's buildTags, and a machine's its tags",
+    () =>
+      Effect.gen(function* () {
+        expect(
+          yield* keysOf({ ...client, buildTags: ["tag:clankerbox-build"] })
+        ).toStrictEqual([["tag:clankerbox-build"], ["tag:clankerbox-machine"]]);
+      })
+  );
+
+  it.effect(
+    "a builder's key carries the tags when there are no buildTags",
+    () =>
+      Effect.gen(function* () {
+        expect(yield* keysOf(client)).toStrictEqual([
+          ["tag:clankerbox-machine"],
+          ["tag:clankerbox-machine"],
+        ]);
       })
   );
 });

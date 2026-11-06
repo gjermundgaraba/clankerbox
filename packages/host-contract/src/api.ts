@@ -81,17 +81,19 @@ const published = { published: Schema.optionalKey(Schema.String) };
  * `machines` the host's other machines, which admission counts beside the one a step boots. A step
  * that acts by what its VM is doing reads it from the runtime as it begins. A make's
  * `authorizedKeys` go to the login user once the machine is made, after its setup if it has one,
- * beside the keys already there. A copy's make then prepares it, as a start does. A `publish`
- * copies a checkpoint's files to the build store under the name `as`, and a `fetch` makes a
- * checkpoint from what was published as `from`, of template build `build`, downloading only what
- * this host doesn't hold. A delete of a checkpoint `published` also removes it from the build
- * store, with every key no other published checkpoint holds.
+ * beside the keys already there. A make's `join` puts the machine on the tailnet as `hostname` for
+ * its setup, and logs it out after, so its copies carry no node. A copy's make then prepares it, as
+ * a start does. A `publish` copies a checkpoint's files to the build store under the name `as`,
+ * and a `fetch` makes a checkpoint from what was published as `from`, of template build `build`,
+ * downloading only what this host doesn't hold. A delete of a checkpoint `published` also removes
+ * it from the build store, with every key no other published checkpoint holds.
  */
 export const Step = Schema.Union([
   Schema.TaggedStruct("make", {
     machine: NewMachine,
     source: Source,
     authorizedKeys: Schema.optionalKey(PublicKeys),
+    join: Schema.optionalKey(Schema.Struct({ hostname: Schema.String })),
     ports: Schema.Array(Port),
     ...others,
   }),

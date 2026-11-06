@@ -55,11 +55,14 @@ const parsed = () => {
 
 const fakeTailnet = process.env["CLANKERBOX_FAKE_TAILNET"] === "1";
 
+const slowKey = Effect.as(
+  Effect.sleep(Duration.seconds(1)),
+  Redacted.make("tskey-auth-fake")
+);
+
 const mintingAsSlowlyAsTailscale = Layer.succeed(Tailnet, {
-  mint: Effect.as(
-    Effect.sleep(Duration.seconds(1)),
-    Redacted.make("tskey-auth-fake")
-  ),
+  mint: slowKey,
+  mintBuild: slowKey,
 });
 
 const offered = {

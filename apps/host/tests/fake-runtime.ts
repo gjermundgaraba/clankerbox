@@ -188,6 +188,10 @@ export const writeStubs = (dir: string, uname = "Linux"): string => {
   return bin;
 };
 
+export const baseResolver = "192.168.64.1";
+
+export const tailnetResolver = "100.100.100.100";
+
 export const writeTailscaleStubs = (bin: string): void => {
   mkdirSync(bin, { recursive: true });
 
@@ -221,6 +225,12 @@ export const writeTailscaleStubs = (bin: string): void => {
         "      esac",
         "    done",
         `    printf '${running}' >"$CLANKERBOX_ROOT/status.json"`,
+        '    mkdir -p "$CLANKERBOX_ROOT/etc"',
+        `    echo 'nameserver ${tailnetResolver}' >"$CLANKERBOX_ROOT/etc/resolv.conf"`,
+        "    ;;",
+        '  *" logout "*)',
+        '    echo "tailscale $*" >>"$CLANKERBOX_ROOT/calls"',
+        '    rm -f "$CLANKERBOX_ROOT/status.json"',
         "    ;;",
         '  *" set "*)',
         '    echo "tailscale $*" >>"$CLANKERBOX_ROOT/calls"',
@@ -543,6 +553,11 @@ export const fakeRuntime = (options: FakeOptions) => {
               const root = path.join(options.dir, "roots", machine.instance);
 
               await mkdir(path.join(root, "dev"), { recursive: true });
+              await mkdir(path.join(root, "etc"), { recursive: true });
+              await writeFile(
+                path.join(root, "etc", "resolv.conf"),
+                `nameserver ${baseResolver}\n`
+              );
               furnish(root, bin);
 
               if (options.kind === "mac") {
