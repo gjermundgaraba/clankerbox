@@ -194,14 +194,13 @@ const readManifest = (store: Interface, name: string) =>
   );
 
 /**
- * Uploads `checkpoint`'s files under `as`, each object only when the store lacks it, and the
+ * Uploads `checkpoint`'s files under its name, each object only when the store lacks it, and the
  * manifest last, so whatever reads the manifest finds every object it names.
  */
 export const publish = (
   store: Interface,
   runtime: Runtime["Service"],
-  checkpoint: CheckpointRef,
-  as: string
+  checkpoint: CheckpointRef
 ): Effect.Effect<void, Internal, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -267,11 +266,11 @@ export const publish = (
     );
 
     yield* store.put(
-      manifestKey(as),
+      manifestKey(checkpoint.name),
       new TextEncoder().encode(encodeManifest({ files: listed }))
     );
     yield* Effect.logInfo(
-      `publish ${checkpoint.name} as ${as} uploaded ${uploaded} bytes for ${files.length} files`
+      `publish ${checkpoint.name} uploaded ${uploaded} bytes for ${files.length} files`
     );
   });
 

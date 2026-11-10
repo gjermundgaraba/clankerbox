@@ -7,7 +7,7 @@ import type {
 } from "@gjermundgaraba/clankerbox-host/testing";
 import { Internal, isBuildCopy } from "@gjermundgaraba/clankerbox-sdk";
 import type { BuildRequest } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect } from "effect";
+import { Duration, Effect, Option } from "effect";
 import { expect } from "vite-plus/test";
 
 import { callsTo, clientOf, eventually, running } from "./support.ts";
@@ -85,6 +85,42 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         served.shared.downloaded.filter((key) => key.startsWith("objects/"))
       ).not.toHaveLength(0);
     })
+  );
+
+  it.effect(
+    "a delete of a fetched copy leaves the build in the build store, and a delete of the published one removes it",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* onTwo();
+        const client = yield* clientOf(served.url);
+
+        yield* client.buildTemplate(web);
+        yield* eventually(copiesOf(served), (shown) =>
+          shown.includes("web@1 two ready")
+        );
+
+        const copies = yield* served.store.checkpoints;
+        const source = copies.find(({ host }) => host === "one");
+        const fetched = copies.find(({ host }) => host === "two");
+        const manifest = `builds/${source?.name}.json`;
+
+        const gone = (name = "") =>
+          Effect.andThen(
+            served.checkpoints.discard(name),
+            eventually(served.store.findCheckpoint(name), Option.isNone)
+          );
+
+        yield* gone(fetched?.name);
+
+        const afterFetched = served.shared.objects.has(manifest);
+
+        yield* gone(source?.name);
+
+        expect([
+          afterFetched,
+          served.shared.objects.has(manifest),
+        ]).toStrictEqual([true, false]);
+      })
   );
 
   it.effect("a host with another pin reads outdated and takes no create", () =>

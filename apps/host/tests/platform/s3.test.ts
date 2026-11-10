@@ -162,12 +162,7 @@ describe.skipIf(!dockerAnswers && process.env["CI"] === undefined)(
             "disk.raw": "the disk",
           });
 
-          yield* publish(
-            store,
-            yield* runtimeIn(from),
-            checkpointRef("built"),
-            "built"
-          );
+          yield* publish(store, yield* runtimeIn(from), checkpointRef("built"));
           yield* fetch(
             counted,
             yield* runtimeIn(to),

@@ -118,8 +118,7 @@ const published = (
     yield* publish(
       memory.store,
       yield* runtimeIn(from, kind),
-      checkpointRef("built"),
-      "built"
+      checkpointRef("built")
     );
 
     const to = path.join(root, "to");
@@ -393,7 +392,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           writeFileSync(target, content);
         }
 
-        yield* publish(memory.store, yield* smolvmIn(from), built, "built");
+        yield* publish(memory.store, yield* smolvmIn(from), built);
 
         const to = path.join(root, "to");
 

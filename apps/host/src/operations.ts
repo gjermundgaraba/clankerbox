@@ -703,18 +703,18 @@ export const make = (
         }
 
         case "deleteCheckpoint": {
-          const { checkpoint, published } = step;
+          const { checkpoint } = step;
 
           const unpublished =
-            published === undefined
-              ? Effect.void
-              : Option.match(builds, {
+            step.unpublish === true
+              ? Option.match(builds, {
                   onNone: () =>
                     Effect.logWarning(
-                      `delete ${checkpoint.name}: host ${config.id} has no builds setting, so what it published as ${published} stays in the build store`
+                      `delete ${checkpoint.name}: host ${config.id} has no builds setting, so what it published stays in the build store`
                     ),
-                  onSome: (store) => unpublish(store, published),
-                });
+                  onSome: (store) => unpublish(store, checkpoint.name),
+                })
+              : Effect.void;
 
           return Effect.andThen(
             unpublished,
@@ -737,7 +737,7 @@ export const make = (
 
         case "publish": {
           return withBuilds(`publish ${step.checkpoint.name}`, (store) =>
-            publish(store, runtime, step.checkpoint, step.as)
+            publish(store, runtime, step.checkpoint)
           );
         }
 

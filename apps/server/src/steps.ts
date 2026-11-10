@@ -2,6 +2,7 @@ import type { MachineRef, Step } from "@clankerbox/host-contract";
 import type { Internal, Setup } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Option } from "effect";
 
+import { isPublished } from "./checkpoint-chart.ts";
 import type { CheckpointRow } from "./checkpoint-chart.ts";
 import type { MachineRow } from "./machine-chart.ts";
 import type { Operation, Interface as Store } from "./store.ts";
@@ -193,18 +194,18 @@ export const checkpointStep = (
 ): Effect.Effect<Step | undefined, Internal> =>
   Effect.gen(function* () {
     const checkpoint = checkpointRefOf(record);
-    const { name, published, build } = record;
+    const { published, build } = record;
 
     if (op.kind === "deleteCheckpoint") {
       return {
         _tag: "deleteCheckpoint",
         checkpoint,
-        ...(published === name ? { published } : {}),
+        ...(isPublished(record) ? { unpublish: true } : {}),
       };
     }
 
     if (op.kind === "publish") {
-      return { _tag: "publish", checkpoint, as: name };
+      return { _tag: "publish", checkpoint };
     }
 
     if (op.kind === "fetch") {

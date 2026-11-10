@@ -159,6 +159,12 @@ export const { leaves, metaOf, phaseOf, activityOf } = rowLeavesOf<
   ShownPhase
 >(checkpoint);
 
+/** Whether the row is the copy whose files the build store holds under its name, not one fetched from it. */
+export const isPublished = ({
+  name,
+  published,
+}: Pick<CheckpointRow, "name" | "published">): boolean => published === name;
+
 /**
  * What every publish shares and a delete of what was published owns, so a delete that removes the
  * objects no other build holds never runs beside a publish that found one there and skipped it.
@@ -185,7 +191,7 @@ const leasesOf = (
     return [self, storeLease("share")];
   }
 
-  return kind === "deleteCheckpoint" && row.published === row.name
+  return kind === "deleteCheckpoint" && isPublished(row)
     ? [self, storeLease("own")]
     : [self];
 };

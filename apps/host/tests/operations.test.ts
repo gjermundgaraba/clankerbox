@@ -2599,11 +2599,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           checkpoint: built,
           pin,
         });
-        yield* finished(
-          builds,
-          { _tag: "publish", checkpoint: built, as: built.name },
-          2
-        );
+        yield* finished(builds, { _tag: "publish", checkpoint: built }, 2);
 
         const fetch = yield* finished(fetches, {
           _tag: "fetch",

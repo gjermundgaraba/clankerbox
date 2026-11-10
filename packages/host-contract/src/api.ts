@@ -74,8 +74,6 @@ export type Source = typeof Source.Type;
 
 const others = { machines: Schema.Array(MachineRef) };
 
-const published = { published: Schema.optionalKey(Schema.String) };
-
 /**
  * What a host runs. `pin` is the runtime pin a VM booted under, compared with the host's own, and
  * `machines` the host's other machines, which admission counts beside the one a step boots. A step
@@ -83,10 +81,10 @@ const published = { published: Schema.optionalKey(Schema.String) };
  * `authorizedKeys` go to the login user once the machine is made, after its setup if it has one,
  * beside the keys already there. A make's `join` puts the machine on the tailnet as `hostname` for
  * its setup, and logs it out after, so its copies carry no node. A copy's make then prepares it, as
- * a start does. A `publish` copies a checkpoint's files to the build store under the name `as`,
- * and a `fetch` makes a checkpoint from what was published as `from`, of template build `build`,
- * downloading only what this host doesn't hold. A delete of a checkpoint `published` also removes
- * it from the build store, with every key no other published checkpoint holds.
+ * a start does. A `publish` copies a checkpoint's files to the build store under its name, and a
+ * `fetch` makes a checkpoint from what was published as `from`, of template build `build`,
+ * downloading only what this host doesn't hold. A delete that will `unpublish` also removes the
+ * checkpoint from the build store, with every key no other published checkpoint holds.
  */
 export const Step = Schema.Union([
   Schema.TaggedStruct("make", {
@@ -117,16 +115,13 @@ export const Step = Schema.Union([
   }),
   Schema.TaggedStruct("deleteCheckpoint", {
     checkpoint: CheckpointRef,
-    ...published,
+    unpublish: Schema.optionalKey(Schema.Literal(true)),
   }),
   Schema.TaggedStruct("join", {
     machine: MachineRef,
     hostname: Schema.String,
   }),
-  Schema.TaggedStruct("publish", {
-    checkpoint: CheckpointRef,
-    as: Schema.String,
-  }),
+  Schema.TaggedStruct("publish", { checkpoint: CheckpointRef }),
   Schema.TaggedStruct("fetch", {
     checkpoint: CheckpointRef,
     from: Schema.String,

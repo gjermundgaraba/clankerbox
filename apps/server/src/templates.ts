@@ -29,6 +29,7 @@ import {
 } from "effect";
 import type { Scope, Duration } from "effect";
 
+import { isPublished } from "./checkpoint-chart.ts";
 import type { CheckpointRow } from "./checkpoint-chart.ts";
 import { Checkpoints } from "./checkpoints.ts";
 import { Hosts } from "./hosts.ts";
@@ -242,7 +243,7 @@ export const fetchesDue = (
       const copies = records.filter((record) => record.build === made.id);
 
       const source = copies.find(
-        (record) => record.published === record.name && record.state === "ready"
+        (record) => isPublished(record) && record.state === "ready"
       );
 
       return build.phase !== "ready" || source === undefined
