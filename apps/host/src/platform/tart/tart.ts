@@ -274,15 +274,12 @@ export const make = (
         expect(ran, `tart ${what}`, ok)
       );
 
-    const launchd = (args: readonly string[], what: string) =>
-      run("/bin/launchctl", args, `launchctl ${what}`);
-
     const launchctl = (
       args: readonly string[],
       what: string,
       ok?: readonly number[]
     ) =>
-      Effect.flatMap(launchd(args, what), (ran) =>
+      Effect.flatMap(run("/bin/launchctl", args, `launchctl ${what}`), (ran) =>
         expect(ran, `launchctl ${what}`, ok)
       );
 
@@ -506,7 +503,11 @@ export const make = (
         );
         yield* writeJob(vm);
 
-        const loaded = yield* launchd(["print", target], `print ${target}`);
+        const loaded = yield* launchctl(
+          ["print", target],
+          `print ${target}`,
+          [0, 113]
+        );
 
         const stale =
           loaded.exitCode === 0 &&
@@ -518,9 +519,9 @@ export const make = (
           yield* launchctl(["bootout", target], `bootout ${vm}`);
         }
 
-        yield* stale || loaded.exitCode === 113
-          ? launchctl(["bootstrap", domain, file], `bootstrap ${vm}`)
-          : expect(loaded, `launchctl print ${target}`);
+        if (stale || loaded.exitCode === 113) {
+          yield* launchctl(["bootstrap", domain, file], `bootstrap ${vm}`);
+        }
 
         const since = (yield* Clock.currentTimeMillis) - 1000;
 
