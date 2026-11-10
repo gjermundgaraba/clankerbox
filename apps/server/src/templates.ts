@@ -171,7 +171,7 @@ const ended = (
   row: TemplateRow,
   number: number,
   end: Pick<BuildRow, "phase" | "error">
-): TemplateRow | "removed" => {
+): Option.Option<TemplateRow> => {
   const builds = row.builds.map((each) =>
     each.number === number ? { ...each, ...end } : each
   );
@@ -184,9 +184,10 @@ const ended = (
     (each) => each.number === number || ready.has(each)
   );
 
-  return Arr.isReadonlyArrayNonEmpty(kept)
-    ? { ...row, builds: kept }
-    : "removed";
+  return Arr.isReadonlyArrayNonEmpty(kept) &&
+    kept.some((each) => each.number === number)
+    ? Option.some({ ...row, builds: kept })
+    : Option.none();
 };
 
 const begun =
@@ -307,14 +308,17 @@ export const make = (settings: {
       number: number,
       end: Pick<BuildRow, "phase" | "error">
     ) =>
-      store.advanceTemplate(name, (found) =>
-        Result.succeed(
-          Option.match(found, {
-            onNone: () => "removed" as const,
-            onSome: (row) => ended(row, number, end),
-          })
+      store
+        .advanceTemplate(name, (found) =>
+          Result.fromOption(
+            Option.flatMap(found, (row) => ended(row, number, end)),
+            () =>
+              new Cause.NoSuchElementError(
+                `build ${buildId(name, number)} ended, and its template holds no such build`
+              )
+          )
         )
-      );
+        .pipe(Effect.catchTag("NoSuchElementError", Effect.die));
 
     const tidied = Effect.gen(function* () {
       const recorded = yield* store.checkpoints;
