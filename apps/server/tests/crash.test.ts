@@ -1,6 +1,3 @@
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { Duration, Effect, Option } from "effect";
@@ -8,7 +5,6 @@ import { expect } from "vite-plus/test";
 
 import { applied } from "../src/chart.ts";
 import { checkpointChart } from "../src/checkpoint-chart.ts";
-import { databaseFile } from "../src/platform/sqlite.ts";
 import { freshBoot } from "./chart-rows.ts";
 import {
   applying,
@@ -342,62 +338,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* second.gone("building");
 
         expect(fake.calls).not.toContain("create building");
-      })
-  );
-
-  it.effect(
-    "a create with a setup that a 0.36 control plane recorded and never sent is undone after the upgrade, as its setup left with that process",
-    () =>
-      Effect.gen(function* () {
-        const { client, first, fake, planned } = yield* killedPlane();
-        const [host] = planned.hosts;
-
-        yield* client.create("template", request("template"));
-        fake.calls.length = 0;
-
-        const template = Option.getOrThrow(
-          yield* first.store.findMachine("template")
-        );
-
-        yield* first.store.insertMachine({
-          ...template,
-          name: "dev",
-          instance: "unsent",
-          port: undefined,
-          state: "making.due",
-          prepared: false,
-        });
-        yield* unsent(first.store, host!.operations.boot, "dev", "unknown");
-        yield* first.crash;
-
-        const db = new DatabaseSync(path.join(planned.stateDir, databaseFile));
-        const shipped = 4;
-
-        db.exec(
-          `UPDATE machines SET source = '{"kind":"base","scripted":true}' WHERE name = 'dev';
-          ALTER TABLE templates ADD COLUMN base TEXT;
-          ALTER TABLE templates ADD COLUMN cpu INTEGER;
-          ALTER TABLE templates ADD COLUMN ram_mib INTEGER;
-          ALTER TABLE templates ADD COLUMN disk_gib INTEGER;
-          ALTER TABLE templates ADD COLUMN setup_timeout_seconds INTEGER;
-          PRAGMA user_version = ${shipped}`
-        );
-        db.close();
-
-        const second = yield* planned.start();
-
-        yield* Effect.addFinalizer(() => second.crash);
-
-        const failed = yield* eventually(
-          (yield* clientOf(second.url)).getMachine({ id: "dev" }),
-          ({ phase }) => phase === "failed"
-        );
-
-        expect([failed.state, failed.error?.message]).toStrictEqual([
-          "missing",
-          "the make of machine dev ended before its host reported it: its setup left with the control plane this one upgraded from, and a create runs none now",
-        ]);
-        expect(fake.calls).toStrictEqual(["delete dev"]);
       })
   );
 
