@@ -16,10 +16,7 @@ export const version: string = packageJson.version;
 export const release = (of: string): string =>
   of.split(".").slice(0, 2).join(".");
 
-/**
- * The control plane and a host refuse a request whose `release` differs from their own, or that has
- * none, and name their own version in it on each reply.
- */
+/** The control plane and a host refuse a request whose `release` differs from their own, or that has none. */
 export const versionHeader = "clankerbox-version";
 
 const refusal = (
@@ -45,7 +42,7 @@ const refusal = (
 
 const encodeInvalid = Schema.encodeSync(Invalid);
 
-/** Refuses a caller of another release, for a server of either contract, and names this version on each reply. */
+/** Refuses a caller of another release, for a server of either contract. */
 export const versionCheck = (server: string) =>
   HttpRouter.middleware((handle) =>
     Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
@@ -60,6 +57,6 @@ export const versionCheck = (server: string) =>
               })
             ),
         }
-      ).pipe(Effect.map(HttpServerResponse.setHeader(versionHeader, version)))
+      )
     )
   );
