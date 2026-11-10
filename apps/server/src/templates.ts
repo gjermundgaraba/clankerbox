@@ -123,6 +123,13 @@ const shownBuild = (
     image: row.image,
     ...(row.pin === undefined ? {} : { pin: row.pin }),
     ...(row.error === undefined ? {} : { error: row.error }),
+    base: row.base,
+    cpu: row.cpu,
+    ramMib: row.ramMib,
+    diskGib: row.diskGib,
+    ...(row.setupTimeoutSeconds === undefined
+      ? {}
+      : { setupTimeoutSeconds: row.setupTimeoutSeconds }),
     copies: [
       ...records.flatMap((record) => {
         const copy = copyOf(
@@ -143,23 +150,12 @@ type Facts = Pick<
   "base" | "cpu" | "ramMib" | "diskGib" | "setupTimeoutSeconds"
 >;
 
-const currentOrNewest = ({ builds }: TemplateRow): Facts =>
-  builds.findLast(({ phase }) => phase === "ready") ?? Arr.lastNonEmpty(builds);
-
 const shown = (row: TemplateRow, seen: Seen): Template => {
   const builds = row.builds.map((each) => shownBuild(row, each, seen));
-
-  const { base, cpu, ramMib, diskGib, setupTimeoutSeconds } =
-    currentOrNewest(row);
 
   return {
     id: row.name,
     createdAt: row.createdAt,
-    base,
-    cpu,
-    ramMib,
-    diskGib,
-    ...(setupTimeoutSeconds === undefined ? {} : { setupTimeoutSeconds }),
     builds,
     ...builtFrom(builds),
   };

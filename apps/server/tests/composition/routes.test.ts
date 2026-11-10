@@ -446,7 +446,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(listed.map(({ id, current }) => [id, current])).toStrictEqual([
           ["web", "web@1"],
         ]);
-        expect(read).toMatchObject({ base: "ubuntu", state: "ready" });
+        expect(read).toMatchObject({
+          state: "ready",
+          builds: [{ id: "web@1", base: "ubuntu" }],
+        });
         expect(deleted).toBe("deleted");
         expect(yield* client.templates).toStrictEqual([]);
       })

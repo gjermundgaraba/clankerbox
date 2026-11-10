@@ -122,6 +122,10 @@ export const build = (id: string, fields?: Partial<Build>): Build => ({
   phase: "ready",
   host: "stub",
   image: "ubuntu",
+  base: "ubuntu",
+  cpu: 1,
+  ramMib: 1024,
+  diskGib: 10,
   copies:
     (fields?.phase ?? "ready") === "ready"
       ? [{ host: "stub", phase: "ready" }]
@@ -138,10 +142,6 @@ export const template = (
   return {
     id,
     createdAt: DateTime.makeUnsafe("2026-10-01T00:00:00Z"),
-    base: "ubuntu",
-    cpu: 1,
-    ramMib: 1024,
-    diskGib: 10,
     ...fields,
     builds,
     ...builtFrom(builds),
@@ -472,14 +472,14 @@ export const stubServer = (options: StubServerOptions = {}) => {
       (each) => each.id === id && each.phase === "ready"
     );
 
-    return found === undefined || ready === undefined
+    return ready === undefined
       ? Effect.fail(
           new NotBuilt({
             message: `template ${name} has no ready build${id === undefined ? "" : ` ${id}`}: run clankerbox template build ${name} to make one`,
             template: name,
           })
         )
-      : Effect.succeed({ found, id: ready.id });
+      : Effect.succeed(ready);
   };
 
   const recordCreate = (request: CreateRequest) =>
@@ -489,15 +489,15 @@ export const stubServer = (options: StubServerOptions = {}) => {
       }
 
       if ("template" in request) {
-        const { found, id } = yield* cloned(request.template);
+        const ready = yield* cloned(request.template);
 
         return yield* add(
           labelled(
             machine(request.id, {
               kind,
-              base: found.base,
-              ...sized(found, request),
-              template: id,
+              base: ready.base,
+              ...sized(ready, request),
+              template: ready.id,
               state: "unknown",
               phase: "observing",
             }),
@@ -621,7 +621,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
     request: BuildRequest
   ): Effect.Effect<Build, Declared<"buildTemplate">> =>
     Effect.sync(() => {
-      const { template: name, base, cpu, ramMib, diskGib } = request;
+      const { template: name, base, cpu, ramMib, diskGib, setup } = request;
       const found = templates.get(name);
 
       const earlier = found?.builds ?? [];
@@ -629,12 +629,16 @@ export const stubServer = (options: StubServerOptions = {}) => {
       const made = build(buildId(name, earlier.length + 1), {
         phase: "building",
         image: base,
+        base,
+        cpu,
+        ramMib,
+        diskGib,
+        ...(setup.timeoutSeconds === undefined
+          ? {}
+          : { setupTimeoutSeconds: setup.timeoutSeconds }),
       });
 
-      writeTemplate(template(name, { ...found, base, cpu, ramMib, diskGib }), [
-        ...earlier,
-        made,
-      ]);
+      writeTemplate(template(name, found), [...earlier, made]);
 
       return made;
     });

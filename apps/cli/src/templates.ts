@@ -37,7 +37,7 @@ export const templateRows = (templates: readonly Template[]) => [
   ["NAME", "BASE", "CURRENT", "STATE"],
   ...templates.map((template) => [
     template.id,
-    template.base,
+    template.builds.find(({ id }) => id === template.current)?.base ?? "-",
     template.current ?? "-",
     template.state,
   ]),
@@ -47,29 +47,33 @@ const templateText = (template: Template, now: DateTime.Utc) =>
   [
     table([
       ["NAME", template.id],
-      ["BASE", template.base],
-      ["CPU", String(template.cpu)],
-      ["RAM", formatMib(template.ramMib)],
-      ["DISK", formatGib(template.diskGib)],
-      [
-        "SETUP_TIMEOUT",
-        template.setupTimeoutSeconds === undefined
-          ? "-"
-          : formatSeconds(template.setupTimeoutSeconds),
-      ],
       ["CURRENT", template.current ?? "-"],
       ["STATE", template.state],
     ]),
     "",
     table([
-      ["BUILD", "PHASE", "HOST", "IMAGE", "AGE", "ERROR"],
+      ["BUILD", "PHASE", "HOST", "BASE", "IMAGE", "AGE", "ERROR"],
       ...template.builds.map((build) => [
         build.id,
         build.phase,
         build.host,
+        build.base,
         build.image,
         age(build.createdAt, now),
         failure(build.error),
+      ]),
+    ]),
+    "",
+    table([
+      ["BUILD", "CPU", "RAM", "DISK", "SETUP_TIMEOUT"],
+      ...template.builds.map((build) => [
+        build.id,
+        String(build.cpu),
+        formatMib(build.ramMib),
+        formatGib(build.diskGib),
+        build.setupTimeoutSeconds === undefined
+          ? "-"
+          : formatSeconds(build.setupTimeoutSeconds),
       ]),
     ]),
     "",
@@ -135,7 +139,7 @@ export const getTemplate = Command.make(
     })
 ).pipe(
   Command.withDescription(
-    `${actionsByName.getTemplate.description} Prints the sizes a create takes at least, and each build kept, with why one failed.`
+    `${actionsByName.getTemplate.description} Prints each build kept, with its base, the sizes a create from it takes at least, and why it failed if it did.`
   )
 );
 

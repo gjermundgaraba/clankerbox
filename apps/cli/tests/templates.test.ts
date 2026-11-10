@@ -24,13 +24,17 @@ const decodeFailure = Schema.decodeSync(
 
 const TemplateJson = Schema.fromJsonString(
   Schema.Struct({
-    base: Schema.String,
-    cpu: Schema.Int,
-    ramMib: Schema.Int,
-    diskGib: Schema.Int,
-    setupTimeoutSeconds: Schema.optionalKey(Schema.Int),
     current: Schema.String,
-    builds: Schema.Array(Schema.Struct({ id: Schema.String })),
+    builds: Schema.Array(
+      Schema.Struct({
+        id: Schema.String,
+        base: Schema.String,
+        cpu: Schema.Int,
+        ramMib: Schema.Int,
+        diskGib: Schema.Int,
+        setupTimeoutSeconds: Schema.optionalKey(Schema.Int),
+      })
+    ),
   })
 );
 
@@ -84,6 +88,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const rebuilt = yield* run(["template", "build", file]);
         const got = yield* run(["template", "get", "web", "--json"]);
+        const text = yield* run(["template", "get", "web"]);
 
         expect(
           [first, rebuilt].map(({ code, stdout }) => [code, stdout])
@@ -91,15 +96,30 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           [0, "web@1"],
           [0, "web@2"],
         ]);
-        expect(decodeTemplate(got.stdout)).toStrictEqual({
+
+        const sizes = {
           base: "ubuntu",
-          cpu: 2,
           ramMib: 1024,
           diskGib: 10,
           setupTimeoutSeconds: 90,
+        };
+
+        expect(decodeTemplate(got.stdout)).toStrictEqual({
           current: "web@2",
-          builds: [{ id: "web@1" }, { id: "web@2" }],
+          builds: [
+            { id: "web@1", ...sizes, cpu: 1 },
+            { id: "web@2", ...sizes, cpu: 2 },
+          ],
         });
+        expect(text.stdout.split("\n")).toStrictEqual(
+          expect.arrayContaining([
+            expect.stringMatching(
+              /^BUILD\s+CPU\s+RAM\s+DISK\s+SETUP_TIMEOUT$/u
+            ),
+            expect.stringMatching(/^web@1\s+1\s+1G\s+10G\s+1m30s$/u),
+            expect.stringMatching(/^web@2\s+2\s+1G\s+10G\s+1m30s$/u),
+          ])
+        );
       })
   );
 
