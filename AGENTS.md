@@ -42,13 +42,14 @@ release. Add a tool name to select part of the graph. For example, run
 | `apps/host/`                    | A host: runs operations on the two runtimes, and keeps no database     |
 | `apps/cli/`                     | The CLI: its commands, over the SDK                                    |
 | `packages/rivet-sandbox-agent/` | The Sandbox Agent provider and its recipes                             |
+| `packages/amp-orbs/`            | The Amp orb provider: the dispatch program `amp orb provider` runs     |
 | `tools/lint-fence/`             | The repository's own lint rules                                        |
 
 One app per program: `clankerbox`, `clankerbox-server` and `clankerbox-host`
 publish from `apps/`, at the SDK's version. The CLI imports the SDK; the server
 and the host import the SDK and the host contract, and the server never imports
-the host, which it reaches only over the network; the provider imports the SDK;
-the SDK imports none of them. A client never reaches a host's API: it knows one
+the host, which it reaches only over the network; each provider imports the
+SDK; the SDK imports none of them. A client never reaches a host's API: it knows one
 URL, and hosts only as the operator's views `hosts` and `capacity`. Each
 package's `package.json` dependencies hold that boundary, since pnpm resolves
 nothing else. Its dev dependencies resolve in `src` as well, so the lint fence
@@ -148,14 +149,20 @@ YAML file a build reads, `hosts.ts`,
 operations), `tunnel.ts` (the ssh tunnel), `options.ts`, `agent.ts`, and
 `provider.ts`, which runs them for the Sandbox Agent's Promise API.
 
+**Amp orbs** (`packages/amp-orbs/src`). `dispatch.ts` (a job's spawn, pause or
+delete, over the client), `job.ts` (the job, from the environment Amp gives),
+`settings.ts` (the sizes of each orb type, the user, the snapshot expiry),
+`names.ts` (a clankerbox name for an Amp ID), and `provider.ts`, the command.
+
 ## Where Layers are chosen
 
 Only at an entry: each app's `main.ts` (the CLI's: Node's services, HTTP client
 and TCP dial, and the path that runs it; the server's: the config's server Layer
 and Node's HTTP client, given to `serverLayer`; the host's: the config kind's
 runtime and Node's HTTP server, given to `hostLayer`), the SDK's `node.ts` (the
-client over Node's HTTP), and the provider's `index.ts` (the client over its
-server URL, given to `provider`). Tests pass their own: the host's `./testing`
+client over Node's HTTP), the provider's `index.ts` (the client over its
+server URL, given to `provider`), and the Amp orb provider's `main.ts` (Node's
+services and HTTP client, given to its command). Tests pass their own: the host's `./testing`
 export builds a host over a fake runtime, the server's `./testing` a control
 plane over such hosts with real HTTP between them, and the SDK's
 `./testing/stub-server` serves a stub control plane over an in-memory transport,
@@ -182,7 +189,8 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
   suites that serve a host or a control plane or run scripts in real time, which
   pass `excludeTestServices: true`. Effect is run by hand only in each app's
   `main.ts` and the provider's `provider.ts`, in the provider's tests that
-  drive its Promise API or a child program, and in `tests/serve.ts` of the server
+  drive its Promise API or a child program, in the Amp orb provider's `main.ts`,
+  and in `tests/serve.ts` of the server
   and the host, the programs that serve them over the fake runtime for the
   `verify-clankerbox` skill.
 - **Property and model tests** cover IDs, units, the RAM budget, recipe
@@ -267,7 +275,8 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
   imports `effect`, the SDK and effect-actions; an app command imports only
   `effect` (with its `cli`, `encoding`, `http`, `process` and `socket`), the SDK
   and its siblings, so a client can't reach the host contract; the provider takes
-  Node and `@effect/platform-node` only in `index.ts` and `tunnel.ts`; the SDK's
+  Node and `@effect/platform-node` only in `index.ts` and `tunnel.ts`, and the
+  Amp orb provider only in `main.ts`, but for `node:crypto`'s hash; the SDK's
   `.` entry imports no Node and uses no `Buffer` or `process`; and
   `fence/no-manual-run` keeps hand-run Effect to the files above.
 

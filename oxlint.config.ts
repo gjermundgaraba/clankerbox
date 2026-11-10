@@ -30,7 +30,6 @@ export default config({
         "apps/server/src/main.ts",
         "apps/server/tests/serve.ts",
         "packages/amp-orbs/src/main.ts",
-        "packages/amp-orbs/tests/dispatch.test.ts",
         "packages/rivet-sandbox-agent/src/provider.ts",
         "packages/rivet-sandbox-agent/tests/leave-tunnel.ts",
         "packages/rivet-sandbox-agent/tests/provider.test.ts",
@@ -245,6 +244,26 @@ export default config({
             ],
             because:
               "Node and @effect/platform-node enter the provider only in index.ts, its Layers, and tunnel.ts, the ssh tunnel",
+          },
+        ],
+      },
+    },
+    {
+      excludeFiles: ["packages/amp-orbs/src/main.ts"],
+      files: ["packages/amp-orbs/src/**/*.ts"],
+      rules: {
+        "fence/allowed-imports": [
+          "error",
+          {
+            allow: [
+              "^\\./[a-z-]+\\.ts$",
+              "^effect$",
+              "^effect/cli$",
+              "^@gjermundgaraba/clankerbox-sdk$",
+              "^node:crypto$",
+            ],
+            because:
+              "Node's services and HTTP client and @effect/platform-node enter the Amp orb provider only in main.ts, its Layers",
           },
         ],
       },

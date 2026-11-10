@@ -2,7 +2,15 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
-import { DateTime, Effect, Layer, Predicate } from "effect";
+import {
+  Clock,
+  Context,
+  DateTime,
+  Duration,
+  Effect,
+  Layer,
+  Predicate,
+} from "effect";
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";
 import type { HttpClient } from "effect/http";
 
@@ -11,6 +19,8 @@ import {
   builtFrom,
   Conflict,
   Http,
+  isResting,
+  isUndone,
   labelledWith,
   NotBuilt,
   NotFound,
@@ -19,7 +29,6 @@ import {
   offers,
   templateRef,
   version,
-  versionCheck,
   versionHeader,
   WrongState,
 } from "../src/index.ts";
@@ -49,7 +58,7 @@ import type {
  */
 export type Step<Row, Stage> = Stage | Partial<Row> | "gone" | "down";
 
-export type MachineStep = Step<Machine, Phase> | "versionless";
+export type MachineStep = Step<Machine, Phase>;
 
 export type CheckpointStep = Step<Checkpoint, Checkpoint["phase"]>;
 
@@ -69,7 +78,6 @@ export interface StubServerOptions {
   readonly checkpoints?: readonly Checkpoint[];
   readonly templates?: readonly Template[];
   readonly refuse?: Refusals;
-  readonly takesHold?: boolean;
   readonly create?: (
     request: CreateRequest
   ) => Effect.Effect<Machine, Declared<"createMachine">>;
@@ -114,6 +122,10 @@ export const build = (id: string, fields?: Partial<Build>): Build => ({
   phase: "ready",
   host: "stub",
   image: "ubuntu",
+  base: "ubuntu",
+  cpu: 1,
+  ramMib: 1024,
+  diskGib: 10,
   copies:
     (fields?.phase ?? "ready") === "ready"
       ? [{ host: "stub", phase: "ready" }]
@@ -130,10 +142,6 @@ export const template = (
   return {
     id,
     createdAt: DateTime.makeUnsafe("2026-10-01T00:00:00Z"),
-    base: "ubuntu",
-    cpu: 1,
-    ramMib: 1024,
-    diskGib: 10,
     ...fields,
     builds,
     ...builtFrom(builds),
@@ -185,9 +193,6 @@ const nextStep = <S>(
 const noMachine = (id: string) =>
   new NotFound({ message: `no machine ${id}`, id });
 
-const isUndone = ({ phase, state, desired }: Machine) =>
-  phase === "failed" && state === "missing" && desired !== "deleted";
-
 const noCheckpoint = (id: string) =>
   new NotFound({ message: `no checkpoint ${id}`, id });
 
@@ -217,7 +222,6 @@ export const stubServer = (options: StubServerOptions = {}) => {
   const versions: Array<string | null> = [];
   const holds: Array<number | undefined> = [];
   let replyDropped = false;
-  let replyVersionless = false;
 
   for (const held of options.machines ?? []) {
     machines.set(held.id, held);
@@ -303,12 +307,6 @@ export const stubServer = (options: StubServerOptions = {}) => {
 
       if (step === "down") {
         replyDropped = true;
-
-        return Effect.succeed(found);
-      }
-
-      if (step === "versionless") {
-        replyVersionless = true;
 
         return Effect.succeed(found);
       }
@@ -474,14 +472,14 @@ export const stubServer = (options: StubServerOptions = {}) => {
       (each) => each.id === id && each.phase === "ready"
     );
 
-    return found === undefined || ready === undefined
+    return ready === undefined
       ? Effect.fail(
           new NotBuilt({
             message: `template ${name} has no ready build${id === undefined ? "" : ` ${id}`}: run clankerbox template build ${name} to make one`,
             template: name,
           })
         )
-      : Effect.succeed({ found, id: ready.id });
+      : Effect.succeed(ready);
   };
 
   const recordCreate = (request: CreateRequest) =>
@@ -491,15 +489,15 @@ export const stubServer = (options: StubServerOptions = {}) => {
       }
 
       if ("template" in request) {
-        const { found, id } = yield* cloned(request.template);
+        const ready = yield* cloned(request.template);
 
         return yield* add(
           labelled(
             machine(request.id, {
               kind,
-              base: found.base,
-              ...sized(found, request),
-              template: id,
+              base: ready.base,
+              ...sized(ready, request),
+              template: ready.id,
               state: "unknown",
               phase: "observing",
             }),
@@ -623,7 +621,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
     request: BuildRequest
   ): Effect.Effect<Build, Declared<"buildTemplate">> =>
     Effect.sync(() => {
-      const { template: name, base, cpu, ramMib, diskGib } = request;
+      const { template: name, base, cpu, ramMib, diskGib, setup } = request;
       const found = templates.get(name);
 
       const earlier = found?.builds ?? [];
@@ -631,12 +629,16 @@ export const stubServer = (options: StubServerOptions = {}) => {
       const made = build(buildId(name, earlier.length + 1), {
         phase: "building",
         image: base,
+        base,
+        cpu,
+        ramMib,
+        diskGib,
+        ...(setup.timeoutSeconds === undefined
+          ? {}
+          : { setupTimeoutSeconds: setup.timeoutSeconds }),
       });
 
-      writeTemplate(template(name, { ...found, base, cpu, ramMib, diskGib }), [
-        ...earlier,
-        made,
-      ]);
+      writeTemplate(template(name, found), [...earlier, made]);
 
       return made;
     });
@@ -665,10 +667,17 @@ export const stubServer = (options: StubServerOptions = {}) => {
       recording(
         "getMachine",
         "machine.get",
-        Effect.andThen(
-          Effect.sync(() => holds.push(holdSeconds)),
-          readMachine(id)
-        )
+        Effect.suspend(() => {
+          const changes = machineScripts.has(id);
+
+          holds.push(holdSeconds);
+
+          return Effect.tap(readMachine(id), ({ phase }) =>
+            holdSeconds === undefined || changes || isResting(phase)
+              ? Effect.void
+              : Effect.sleep(Duration.seconds(holdSeconds))
+          );
+        })
       ),
     createMachine: (request) =>
       recording(
@@ -784,12 +793,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
       ),
   });
 
-  const routes =
-    options.takesHold === true
-      ? ActionHttp.layer(Http, [app]).pipe(
-          Layer.provide(versionCheck("stub control plane").layer)
-        )
-      : ActionHttp.layer(Http, [app]);
+  const routes = ActionHttp.layer(Http, [app]);
 
   const web = HttpRouter.toWebHandler(
     routes.pipe(Layer.provide(HttpServer.layerServices)),
@@ -823,29 +827,19 @@ export const stubServer = (options: StubServerOptions = {}) => {
     heldCheckpoints: () => [...checkpoints.keys()],
     row: (id: string) => machines.get(id),
     routes,
-    handler: async (request: Request): Promise<Response> => {
+    handler: async (
+      request: Request,
+      context?: Context.Context<never>
+    ): Promise<Response> => {
       versions.push(request.headers.get(versionHeader));
 
-      const response = await web.handler(request);
+      const response = await web.handler(request, context);
 
       if (replyDropped) {
         replyDropped = false;
 
         throw new TypeError("fetch failed", {
           cause: new Error("connect ECONNREFUSED"),
-        });
-      }
-
-      if (replyVersionless) {
-        replyVersionless = false;
-
-        const headers = new Headers(response.headers);
-
-        headers.delete(versionHeader);
-
-        return new Response(response.body, {
-          status: response.status,
-          headers,
         });
       }
 
@@ -895,9 +889,9 @@ const unanswered = async (
   return await promise;
 };
 
-/** Requests reach the endpoint of their URL's origin, and any other origin refuses them. */
-export const transport = (
-  endpoints: ReadonlyMap<string, Endpoint>
+const fetching = (
+  endpoints: ReadonlyMap<string, Endpoint>,
+  context: Context.Context<never>
 ): Layer.Layer<HttpClient.HttpClient> => {
   const fetch: typeof globalThis.fetch = async (input, init) => {
     const endpoint = endpoints.get(requestUrl(input).origin);
@@ -917,21 +911,34 @@ export const transport = (
     if ("slow" in endpoint) {
       await sleep(100);
 
-      return await endpoint.slow.handler(new Request(input, init));
+      return await endpoint.slow.handler(new Request(input, init), context);
     }
 
     if ("lost" in endpoint) {
-      await endpoint.lost.handler(new Request(input, init));
+      await endpoint.lost.handler(new Request(input, init), context);
 
       throw new TypeError("fetch failed", {
         cause: new Error("other side closed"),
       });
     }
 
-    return await endpoint.handler(new Request(input, init));
+    return await endpoint.handler(new Request(input, init), context);
   };
 
   return FetchHttpClient.layer.pipe(
     Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetch))
   );
 };
+
+/**
+ * Requests reach the endpoint of their URL's origin, and any other origin refuses them. An endpoint
+ * runs on the caller's clock, so a read it holds passes on the test clock.
+ */
+export const transport = (
+  endpoints: ReadonlyMap<string, Endpoint>
+): Layer.Layer<HttpClient.HttpClient> =>
+  Layer.unwrap(
+    Clock.clockWith((clock) =>
+      Effect.succeed(fetching(endpoints, Context.make(Clock.Clock, clock)))
+    )
+  );

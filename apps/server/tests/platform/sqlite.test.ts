@@ -35,6 +35,7 @@ import type {
   Interface,
   Lease,
   Operation,
+  BuildRow,
   TemplateRow,
 } from "../../src/store.ts";
 import { freshBoot } from "../chart-rows.ts";
@@ -1736,41 +1737,51 @@ layer(NodeServices.layer)((it) => {
       Effect.gen(function* () {
         const stateDir = yield* stateIn;
 
-        const web: TemplateRow = {
-          name: "web",
+        const ready: BuildRow = {
+          number: 1,
           createdAt: DateTime.makeUnsafe("2026-10-04T12:00:00Z"),
+          phase: "ready",
+          error: undefined,
+          host: "linux",
+          pin: "smolvm 0.0.0-test linux-x64",
+          image: "registry.example/ubuntu:24.04",
           base: "ubuntu",
           cpu: 2,
           ramMib: 4096,
           diskGib: 20,
           setupTimeoutSeconds: 600,
-          builds: [
-            {
-              number: 1,
-              createdAt: DateTime.makeUnsafe("2026-10-04T12:00:00Z"),
-              phase: "ready",
-              error: undefined,
-              host: "linux",
-              pin: "smolvm 0.0.0-test linux-x64",
-              image: "registry.example/ubuntu:24.04",
-            },
-            {
-              number: 2,
-              createdAt: DateTime.makeUnsafe("2026-10-04T12:05:00Z"),
-              phase: "failed",
-              error: new Internal({ message: "setup exited 3" }),
-              host: "linux",
-              pin: undefined,
-              image: "ubuntu",
-            },
-          ],
         };
 
-        const api = {
-          ...web,
-          name: "api",
+        const failed: BuildRow = {
+          number: 2,
+          createdAt: DateTime.makeUnsafe("2026-10-04T12:05:00Z"),
+          phase: "failed",
+          error: new Internal({ message: "setup exited 3" }),
+          host: "linux",
+          pin: undefined,
+          image: "debian",
+          base: "debian",
+          cpu: 1,
+          ramMib: 1024,
+          diskGib: 10,
           setupTimeoutSeconds: undefined,
-          builds: [],
+        };
+
+        const web: TemplateRow = {
+          name: "web",
+          createdAt: DateTime.makeUnsafe("2026-10-04T12:00:00Z"),
+          builds: [ready, failed],
+        };
+
+        const api: TemplateRow = {
+          name: "api",
+          createdAt: web.createdAt,
+          builds: [ready],
+        };
+
+        const rebuilt: TemplateRow = {
+          ...web,
+          builds: [{ ...failed, number: 3 }],
         };
 
         const [refused, unchanged] = yield* withStore(stateDir, (store) =>
@@ -1778,13 +1789,13 @@ layer(NodeServices.layer)((it) => {
             yield* store.advanceTemplate("web", () => Result.succeed(web));
             yield* store.advanceTemplate("api", () => Result.succeed(api));
 
-            const failed = yield* Effect.flip(
+            const conflict = yield* Effect.flip(
               store.advanceTemplate("web", () =>
                 Result.fail(new Conflict({ message: "building", id: "web" }))
               )
             );
 
-            return [failed, yield* store.findTemplate("web")] as const;
+            return [conflict, yield* store.findTemplate("web")] as const;
           })
         );
 
@@ -1795,9 +1806,7 @@ layer(NodeServices.layer)((it) => {
             yield* store.advanceTemplate("web", () =>
               Result.succeed("removed")
             );
-            yield* store.advanceTemplate("web", () =>
-              Result.succeed({ ...web, builds: [] })
-            );
+            yield* store.advanceTemplate("web", () => Result.succeed(rebuilt));
 
             return [read, yield* store.templates] as const;
           })
@@ -1808,7 +1817,60 @@ layer(NodeServices.layer)((it) => {
         );
         expect(unchanged).toStrictEqual(Option.some(web));
         expect(reopened).toStrictEqual([api, web]);
-        expect(removed).toStrictEqual([api, { ...web, builds: [] }]);
+        expect(removed).toStrictEqual([api, rebuilt]);
+      })
+  );
+
+  it.effect(
+    "a state dir that 0.37 wrote gives each build its template's base, sizes and setup timeout",
+    () =>
+      Effect.gen(function* () {
+        const stateDir = yield* stateDirAt(migrations.length - 1, (db) => {
+          for (const migration of migrations.slice(0, -1)) {
+            db.exec(migration);
+          }
+
+          db.exec(`INSERT INTO templates (name, created_at, base, cpu, ram_mib, disk_gib, setup_timeout_seconds)
+              VALUES ('web', '2026-10-04T12:00:00.000Z', 'ubuntu', 2, 4096, 20, 600);
+            INSERT INTO builds (template, number, created_at, phase, error, host, pin, image)
+              VALUES ('web', 1, '2026-10-04T12:00:00.000Z', 'ready', NULL, 'linux', NULL, 'ubuntu'),
+                ('web', 2, '2026-10-04T12:05:00.000Z', 'building', NULL, 'linux', NULL, 'ubuntu')`);
+        });
+
+        const read = yield* withStore(stateDir, (store) => store.templates);
+
+        const facts = {
+          error: undefined,
+          host: "linux",
+          pin: undefined,
+          image: "ubuntu",
+          base: "ubuntu",
+          cpu: 2,
+          ramMib: 4096,
+          diskGib: 20,
+          setupTimeoutSeconds: 600,
+        };
+
+        expect(read).toStrictEqual([
+          {
+            name: "web",
+            createdAt: DateTime.makeUnsafe("2026-10-04T12:00:00Z"),
+            builds: [
+              {
+                ...facts,
+                number: 1,
+                createdAt: DateTime.makeUnsafe("2026-10-04T12:00:00Z"),
+                phase: "ready",
+              },
+              {
+                ...facts,
+                number: 2,
+                createdAt: DateTime.makeUnsafe("2026-10-04T12:05:00Z"),
+                phase: "building",
+              },
+            ],
+          },
+        ]);
       })
   );
 });

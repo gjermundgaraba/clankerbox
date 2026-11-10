@@ -197,6 +197,14 @@ export const Machine = Schema.Struct({
 
 export type Machine = typeof Machine.Type;
 
+/** A create that failed and was undone: its row stays until a delete, or a create of its name replaces it. */
+export const isUndone = ({
+  phase,
+  state,
+  desired,
+}: Pick<Machine, "phase" | "state" | "desired">): boolean =>
+  phase === "failed" && state === "missing" && desired !== "deleted";
+
 /**
  * The state as people read it: `running` at rest, `running (failed)` where it is but not at rest,
  * and `stopped, wants running (starting)` on the way.
@@ -258,10 +266,11 @@ export const BuildCopy = Schema.Struct({
 export type BuildCopy = typeof BuildCopy.Type;
 
 /**
- * One build of a template: a machine made from its base on `host`, its setup run, captured under
- * the runtime `pin`, and deleted. `image` is what the base named on that host. A create clones a
- * build only `ready`, and a ready build never changes. A failed one, also one a restart of the
- * control plane ended, keeps its `error` until a later build ends. `copies` are where it is, by
+ * One build of a template: a machine made from `base` on `host` at the sizes given, its setup run
+ * within `setupTimeoutSeconds`, captured under the runtime `pin`, and deleted. `image` is what the
+ * base named on that host. A create clones a build only `ready`, at its sizes or larger ones, and a
+ * ready build never changes. A failed one, also one a restart of the control plane ended, keeps
+ * its `error` until a later build ends. `copies` are where it is, by
  * host: a create clones it on a host whose copy is ready.
  */
 export const Build = Schema.Struct({
@@ -272,6 +281,11 @@ export const Build = Schema.Struct({
   host: Schema.String,
   pin: Schema.optionalKey(Schema.String),
   image: Schema.String,
+  base: Schema.String,
+  cpu: Size,
+  ramMib: Size,
+  diskGib: Size,
+  setupTimeoutSeconds: Schema.optionalKey(Size),
   copies: Schema.Array(BuildCopy),
 }).annotate({ identifier: "Build" });
 
@@ -281,21 +295,14 @@ export type Build = typeof Build.Type;
 export const keptBuilds = 2;
 
 /**
- * A setup the control plane builds once, from `base` at the sizes given, and that a create clones
- * with no setup run. Each build is sent its own setup, which is never kept. `current` is the newest
- * ready build, which a create clones unless it pins another, at its sizes or larger ones. `state`
- * is `building` while a build runs, else `ready` once one is, else `failed`. `base`, the sizes and
- * `setupTimeoutSeconds` are the current build's, or the newest build's while none is ready, and a
- * rebuild takes each it leaves out from them.
+ * A setup the control plane builds, each time from the base and sizes its build asks, and that a
+ * create clones with no setup run. Each build is sent its own setup, which is never kept. `current`
+ * is the newest ready build, which a create clones unless it pins another. `state` is `building`
+ * while a build runs, else `ready` once one is, else `failed`.
  */
 export const Template = Schema.Struct({
   id: Name,
   createdAt: Schema.DateTimeUtcFromString,
-  base: Schema.String,
-  cpu: Size,
-  ramMib: Size,
-  diskGib: Size,
-  setupTimeoutSeconds: Schema.optionalKey(Size),
   current: Schema.optionalKey(BuildId),
   state: BuildPhase,
   builds: Schema.Array(Build),

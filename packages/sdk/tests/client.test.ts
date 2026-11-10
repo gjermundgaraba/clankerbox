@@ -150,8 +150,8 @@ describe("client", () => {
 
         const seen = yield* withClient(stub, (client) =>
           Effect.all({
-            machines: client.machines,
-            checkpoints: client.checkpoints,
+            machines: client.listMachines(),
+            checkpoints: client.listCheckpoints(),
             hosts: client.hosts,
             capacity: client.capacity,
           })
@@ -171,8 +171,8 @@ describe("client", () => {
         yield* withClient(stub, (client) =>
           Effect.gen(function* () {
             yield* client.hosts;
-            yield* client.machines;
-            yield* client.checkpoints;
+            yield* client.listMachines();
+            yield* client.listCheckpoints();
             yield* client.capacity;
             yield* client.create("dev", spec);
             yield* client.getMachine({ id: "dev" });
@@ -213,42 +213,6 @@ describe("client", () => {
             { id: "box", template: "web", ramMib: 2048 },
           ]);
           expect(made).toMatchObject({ template: "web@1", ramMib: 2048 });
-        })
-    );
-
-    it.effect(
-      "a create hands what the server recorded to `recorded` before its wait reads the machine",
-      () =>
-        Effect.gen(function* () {
-          const stub = server();
-
-          const seen: Array<{
-            readonly phase: string;
-            readonly reads: number;
-          }> = [];
-
-          stub.script("dev", [
-            { phase: "creating", state: "unknown" },
-            { phase: "settled", state: "running" },
-          ]);
-
-          const made = yield* ticking(
-            withClient(stub, (client) =>
-              client.create("dev", spec, {
-                recorded: ({ phase }) =>
-                  Effect.sync(() => {
-                    seen.push({
-                      phase,
-                      reads: stub.calls.filter((call) => call === "machine.get")
-                        .length,
-                    });
-                  }),
-              })
-            )
-          );
-
-          expect(seen).toStrictEqual([{ phase: "observing", reads: 0 }]);
-          expect(made.phase).toBe("settled");
         })
     );
 
@@ -818,7 +782,7 @@ describe("client", () => {
       () =>
         Effect.gen(function* () {
           const error = yield* withClient("down", (client) =>
-            Effect.flip(client.machines)
+            Effect.flip(client.listMachines())
           );
 
           expect(error._tag).toBe("Unavailable");
@@ -832,7 +796,7 @@ describe("client", () => {
         Effect.gen(function* () {
           const error = yield* Effect.flatMap(
             Client.make("http://elsewhere.test"),
-            (client) => Effect.flip(client.machines)
+            (client) => Effect.flip(client.listMachines())
           ).pipe(Effect.provide(transport(new Map())));
 
           expect(error._tag).toBe("Unavailable");
@@ -977,44 +941,28 @@ describe("client", () => {
     );
 
     it.effect(
-      "a wait holds its reads on a server that takes a hold, past a reply that names no version, and polls one that does not",
+      "a wait on a machine holds each of its reads on the server, and reads again as soon as one answers",
       () =>
         Effect.gen(function* () {
-          const holding = server({ takesHold: true, machines: [stoppedDev] });
-          const polling = server({ machines: [stoppedDev] });
+          const stub = server({ machines: [stoppedDev] });
 
-          for (const stub of [holding, polling]) {
-            stub.script("dev", [
-              "observing",
-              "versionless",
-              "starting",
-              "settled",
-            ]);
-          }
+          stub.script("dev", ["observing", "starting", "settled"]);
 
-          const held = yield* withClient(
-            holding,
-            (client) => client.startMachine({ id: "dev" }),
-            everyMinute
-          );
-
-          const { answer: polled, elapsed } = yield* clocked(
+          const { answer, elapsed } = yield* clocked(
             withClient(
-              polling,
+              stub,
               (client) => client.startMachine({ id: "dev" }),
               everyMinute
             )
           );
 
-          expect([held.phase, holding.holds]).toStrictEqual([
+          expect([answer.phase, stub.holds]).toStrictEqual([
             "settled",
-            [5, 5, 5, 5],
+            [5, 5, 5],
           ]);
-          expect([polled.phase, polling.holds]).toStrictEqual([
-            "settled",
-            [undefined, undefined, undefined, undefined],
-          ]);
-          expect(Duration.toMinutes(elapsed)).toBeGreaterThanOrEqual(2);
+          expect(Duration.isLessThan(elapsed, everyMinute.pollEvery)).toBe(
+            true
+          );
         })
     );
 

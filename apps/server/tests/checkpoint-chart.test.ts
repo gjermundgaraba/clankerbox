@@ -95,7 +95,7 @@ const cancelled: CheckpointEvent = {
 
 const gone: CheckpointEvent = { type: "lost", error };
 
-const publish: CheckpointEvent = { type: "publish", as: "snap" };
+const publish: CheckpointEvent = { type: "publish" };
 
 const events = { removal, read, done, failed, cancelled, gone, publish };
 

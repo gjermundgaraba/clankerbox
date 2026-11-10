@@ -8,16 +8,10 @@ import {
   Layer,
   Match,
   Option,
-  Ref,
   Schedule,
   Schema,
 } from "effect";
-import {
-  Headers,
-  HttpClient,
-  HttpClientError,
-  HttpClientRequest,
-} from "effect/http";
+import { HttpClient, HttpClientError, HttpClientRequest } from "effect/http";
 
 import {
   actionsByName as actions,
@@ -35,8 +29,8 @@ import {
   Unavailable,
 } from "./errors.ts";
 import type { ClankerboxError, HostError } from "./errors.ts";
-import { takesHold, version, versionHeader } from "./release.ts";
-import { isResting } from "./resources.ts";
+import { version, versionHeader } from "./release.ts";
+import { isResting, isUndone } from "./resources.ts";
 import type {
   Build,
   BuildRequest,
@@ -97,8 +91,8 @@ export interface Options {
   /** Answer a mutation as soon as the server has recorded it, instead of waiting for its rest. */
   readonly noWait?: boolean | undefined;
   /**
-   * How long a wait sleeps between reads, 250 ms by default, but for a wait on a machine on a control
-   * plane that holds its reads, which reads again as soon as one answers.
+   * How long a wait sleeps between reads, 250 ms by default, but for a wait on a machine, whose reads
+   * the control plane holds, which reads again as soon as one answers.
    */
   readonly pollEvery?: Duration.Duration | undefined;
 }
@@ -108,8 +102,6 @@ export type Deleted = "deleted" | "absent";
 
 export interface CreateOptions {
   readonly labels?: Labels | undefined;
-  /** Runs once the server has recorded the create, before the wait, with what it recorded. */
-  readonly recorded?: ((machine: Machine) => Effect.Effect<void>) | undefined;
 }
 
 /**
@@ -162,12 +154,6 @@ export type EnsureError =
 
 export interface Interface extends Calls {
   readonly hosts: Effect.Effect<readonly Host[], ErrorOf<"listHosts">>;
-  readonly machines: Effect.Effect<readonly Machine[], ErrorOf<"listMachines">>;
-  /** Every ready checkpoint; `listCheckpoints` takes a filter. */
-  readonly checkpoints: Effect.Effect<
-    readonly Checkpoint[],
-    ErrorOf<"listCheckpoints">
-  >;
   readonly capacity: Effect.Effect<CapacityReport, ErrorOf<"getCapacity">>;
   readonly templates: Effect.Effect<
     readonly Template[],
@@ -225,23 +211,12 @@ export class Client extends Context.Service<Client, Interface>()(
   "@gjermundgaraba/clankerbox-sdk/Client"
 ) {}
 
-const serverApi = (url: string, served: Ref.Ref<Option.Option<string>>) =>
+const serverApi = (url: string) =>
   ActionHttp.client(Http, {
     baseUrl: url,
-    transformClient: (client) =>
-      client.pipe(
-        HttpClient.mapRequest(
-          HttpClientRequest.setHeader(versionHeader, version)
-        ),
-        HttpClient.tap((response) =>
-          Ref.update(served, (known) =>
-            Option.orElse(
-              Headers.get(response.headers, versionHeader),
-              () => known
-            )
-          )
-        )
-      ),
+    transformClient: HttpClient.mapRequest(
+      HttpClientRequest.setHeader(versionHeader, version)
+    ),
   });
 
 type ServerApi = Effect.Success<ReturnType<typeof serverApi>>;
@@ -490,9 +465,6 @@ const builtAt =
       : endedAt<Build>("ready", "build")(build);
   };
 
-const undoneCreate = ({ phase, state, desired }: Machine) =>
-  phase === "failed" && state === "missing" && desired !== "deleted";
-
 /** A client of the control plane at `url`. It sends nothing until called. */
 export const make = (
   url: string,
@@ -506,8 +478,7 @@ export const make = (
       )
     );
 
-    const served = yield* Ref.make(Option.none<string>());
-    const api: ServerApi = yield* serverApi(url, served);
+    const api: ServerApi = yield* serverApi(url);
     const methods: Methods = api;
     const pollEvery = options?.pollEvery ?? defaultPoll;
     const noWait = options?.noWait === true;
@@ -599,24 +570,14 @@ export const make = (
     ): Effect.Effect<A, ClankerboxError> =>
       noWait ? Effect.succeed(recorded) : wait;
 
-    const holds = Effect.map(Ref.get(served), takesHold);
-
     const machineRead = (id: string) =>
-      Effect.flatMap(holds, (held) =>
-        held
-          ? call(
-              "getMachine",
-              { id, holdSeconds: Duration.toSeconds(longestHold) },
-              id,
-              undefined,
-              Duration.sum(longestHold, reply)
-            )
-          : call("getMachine", { id }, id)
+      call(
+        "getMachine",
+        { id, holdSeconds: Duration.toSeconds(longestHold) },
+        id,
+        undefined,
+        Duration.sum(longestHold, reply)
       );
-
-    const betweenMachineReads = Effect.flatMap(holds, (held) =>
-      held ? Effect.void : Effect.sleep(pollEvery)
-    );
 
     const machineRest = (
       recorded: Machine,
@@ -657,7 +618,7 @@ export const make = (
               : Option.none(),
           action,
           id,
-          betweenMachineReads
+          Effect.void
         )
       );
     };
@@ -672,22 +633,17 @@ export const make = (
           machineRest(recorded, desired, name)
         );
 
-    const create: Interface["create"] = (name, spec, placement) =>
+    const create: Interface["create"] = (name, spec, { labels } = {}) =>
       send(
         "createMachine",
         {
           ...spec,
           id: name,
-          ...(placement?.labels === undefined
-            ? {}
-            : { labels: placement.labels }),
+          ...(labels === undefined ? {} : { labels }),
         },
         name,
         name
       ).pipe(
-        Effect.tap(
-          (recorded) => placement?.recorded?.(recorded) ?? Effect.void
-        ),
         Effect.flatMap((recorded) =>
           machineRest(recorded, "running", "createMachine")
         ),
@@ -723,7 +679,7 @@ export const make = (
               }),
               "deleteMachine",
               id,
-              betweenMachineReads
+              Effect.void
             )
           )
         )
@@ -731,7 +687,7 @@ export const make = (
 
     const madeFrom = (
       name: string,
-      { checkpoint, spec, sizing, labels, recorded }: EnsureOptions
+      { checkpoint, spec, sizing, labels }: EnsureOptions
     ): Effect.Effect<Machine, EnsureError> =>
       Effect.gen(function* () {
         const ready =
@@ -749,7 +705,7 @@ export const make = (
               ...sizing,
               ...(labels === undefined ? {} : { labels }),
             })
-          : yield* create(name, spec, { labels, recorded });
+          : yield* create(name, spec, { labels });
       });
 
     const ensuring = (
@@ -763,7 +719,7 @@ export const make = (
           Effect.catchTag("NotFound", () => Effect.succeedNone)
         );
 
-        if (Option.isSome(found) && !undoneCreate(found.value)) {
+        if (Option.isSome(found) && !isUndone(found.value)) {
           return yield* startMachine({ id: name });
         }
 
@@ -817,8 +773,6 @@ export const make = (
 
     return {
       hosts: send("listHosts", {}),
-      machines: send("listMachines", {}),
-      checkpoints: send("listCheckpoints", {}),
       listMachines: (filter) => send("listMachines", filter ?? {}),
       listCheckpoints: (filter) => send("listCheckpoints", filter ?? {}),
       capacity: send("getCapacity", {}),

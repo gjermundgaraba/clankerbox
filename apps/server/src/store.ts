@@ -15,7 +15,14 @@ import type {
   Phase,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, Schema, SchemaGetter } from "effect";
-import type { DateTime, Effect, Option, Result, Scope } from "effect";
+import type {
+  Array as Arr,
+  DateTime,
+  Effect,
+  Option,
+  Result,
+  Scope,
+} from "effect";
 import { Hex } from "effect/encoding";
 
 import type { Decision } from "./chart.ts";
@@ -149,13 +156,6 @@ export const BuildRow = Schema.Struct({
   host: Schema.String,
   pin: UndefinedFromNull(Schema.String),
   image: Schema.String,
-});
-
-export type BuildRow = typeof BuildRow.Type;
-
-export const TemplateFacts = Schema.Struct({
-  name: Schema.String,
-  createdAt: Schema.DateTimeUtcFromString,
   base: Schema.String,
   cpu: Schema.Int,
   ramMib: Schema.Int,
@@ -163,8 +163,16 @@ export const TemplateFacts = Schema.Struct({
   setupTimeoutSeconds: UndefinedFromNull(Schema.Int),
 });
 
+export type BuildRow = typeof BuildRow.Type;
+
+export const TemplateFacts = Schema.Struct({
+  name: Schema.String,
+  createdAt: Schema.DateTimeUtcFromString,
+});
+
+/** A template is kept while it has a build, and its base, sizes and setup timeout are its builds'. */
 export type TemplateRow = typeof TemplateFacts.Type & {
-  readonly builds: readonly BuildRow[];
+  readonly builds: Arr.NonEmptyReadonlyArray<BuildRow>;
 };
 
 /** A row of each resource, as `advance` reads and writes it. */

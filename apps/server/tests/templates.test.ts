@@ -136,7 +136,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a failed rebuild leaves the template its current build's base, sizes and setup timeout, which a create takes",
+    "each build keeps the base, sizes and setup timeout it asked, also a failed one, and a create clones the current build at its own",
     () =>
       Effect.gen(function* () {
         const served = yield* withClient();
@@ -157,47 +157,71 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* noMachines(served);
 
         const read = yield* client.getTemplate({ id: "web" });
-        const { cpu, ramMib, diskGib } = read;
+
+        const current = read.builds.find(({ id }) => id === read.current)!;
 
         const made = yield* client.create("dev", {
           template: "web",
-          cpu,
-          ramMib,
-          diskGib,
+          cpu: current.cpu,
+          ramMib: current.ramMib,
+          diskGib: current.diskGib,
         });
 
-        expect(read).toMatchObject({
-          current: "web@1",
-          base: "ubuntu",
-          cpu: 2,
-          ramMib: 2048,
-          diskGib: 10,
-          setupTimeoutSeconds: 30,
-        });
+        expect(read.current).toBe("web@1");
+        expect(
+          read.builds.map(
+            ({ id, base, cpu, ramMib, diskGib, setupTimeoutSeconds }) => [
+              id,
+              base,
+              cpu,
+              ramMib,
+              diskGib,
+              setupTimeoutSeconds,
+            ]
+          )
+        ).toStrictEqual([
+          ["web@1", "ubuntu", 2, 2048, 10, 30],
+          ["web@2", "docker.io/library/debian:12", 1, 1024, 20, 60],
+        ]);
         expect(made).toMatchObject({ template: "web@1", cpu: 2, diskGib: 10 });
       })
   );
 
   it.effect(
-    "a template whose first builds failed shows the newest's sizes, and a ready build's once one is",
+    "a rebuild onto another base keeps the older build its own base, so a create pinned to it clones it",
     () =>
       Effect.gen(function* () {
-        const served = yield* withClient();
-        const { client } = served;
+        const { client } = yield* withClient();
 
-        yield* Effect.flip(client.buildTemplate(web({ setup: exits3 })));
-        yield* Effect.flip(
-          client.buildTemplate(web({ cpu: 2, setup: exits3 }))
+        yield* client.buildTemplate(web({ cpu: 2 }));
+        yield* client.buildTemplate(
+          web({ base: "docker.io/library/debian:12", cpu: 1 })
         );
 
-        const failed = yield* client.getTemplate({ id: "web" });
+        const read = yield* client.getTemplate({ id: "web" });
+        const made = yield* client.create("dev", { template: "web@1" });
 
-        yield* client.buildTemplate(web());
-
-        expect(failed).toMatchObject({ state: "failed", cpu: 2 });
-        expect(yield* client.getTemplate({ id: "web" })).toMatchObject({
-          current: "web@3",
-          cpu: 1,
+        expect(read.current).toBe("web@2");
+        expect(
+          read.builds.map(({ id, base, cpu, copies }) => [
+            id,
+            base,
+            cpu,
+            copies,
+          ])
+        ).toStrictEqual([
+          ["web@1", "ubuntu", 2, [{ host: "linux", phase: "ready" }]],
+          [
+            "web@2",
+            "docker.io/library/debian:12",
+            1,
+            [{ host: "linux", phase: "ready" }],
+          ],
+        ]);
+        expect(made).toMatchObject({
+          template: "web@1",
+          base: "ubuntu",
+          cpu: 2,
         });
       })
   );
@@ -384,7 +408,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const [copy] = yield* store.checkpoints;
         const name = copy?.name ?? "";
 
-        expect(yield* client.checkpoints).toStrictEqual([]);
+        expect(yield* client.listCheckpoints()).toStrictEqual([]);
         expect(
           yield* Effect.flip(client.getCheckpoint({ id: name }))
         ).toMatchObject({ _tag: "NotFound" });
@@ -408,7 +432,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       yield* entered;
 
       const rows = yield* machineNames(served);
-      const listed = yield* client.machines;
+      const listed = yield* client.listMachines();
 
       yield* release;
       yield* Fiber.join(building);
@@ -419,7 +443,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a build reads no VM from its host while its builder is made, as Tart's read opens the disk the boot locks",
+    "a build reads no VM from its host while a step runs on its builder, only whether the host answers",
     () =>
       Effect.gen(function* () {
         const { client, host } = yield* withClient();
@@ -486,14 +510,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const read = yield* client.getTemplate({ id: "web" });
         const copies = yield* store.checkpoints;
+        const latest = read.builds.at(-1);
 
-        expect(read).toMatchObject({
+        expect(latest).toMatchObject({
           base: "ubuntu",
           cpu: 1,
           ramMib: 2048,
           diskGib: 10,
         });
-        expect(read.setupTimeoutSeconds).toBeUndefined();
+        expect(latest?.setupTimeoutSeconds).toBeUndefined();
         expect(copies.map(({ cpu, ramMib }) => [cpu, ramMib])).toStrictEqual([
           [2, 1024],
           [1, 2048],

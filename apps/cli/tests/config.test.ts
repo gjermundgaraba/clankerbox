@@ -79,7 +79,7 @@ layer(NodeServices.layer)((it) => {
 
         yield* write(
           typo,
-          JSON.stringify({ server: serverUrl, profile: "profiles" })
+          JSON.stringify({ server: serverUrl, sever: serverUrl })
         );
         yield* write(unparsable, JSON.stringify({ server: "not a url" }));
 

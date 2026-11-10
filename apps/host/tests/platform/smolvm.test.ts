@@ -101,6 +101,14 @@ const baseStatus = [
   "--json",
 ];
 
+const freezerStatus = [
+  "machine",
+  "status",
+  "--name",
+  "base_b00710ad_snap-fedcba98_freeze",
+  "--json",
+];
+
 const prepared = (expanded: readonly string[] = templates) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -1919,6 +1927,36 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
+    "a delete of a build retires its base, also past a freezer an interrupted freeze left",
+    () =>
+      Effect.gen(function* () {
+        const model = smolvmModel();
+        const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
+        const builder = { ...machine, name: "building-1" };
+        const build = { ...ramCheckpoint, name: "built-0123456789abcdef" };
+        const base = `base_b00710ad_${nativeName(build)}`;
+
+        model.vms.set(nativeName(builder), {
+          state: "running",
+          forwards: [`${builder.port}:22`],
+        });
+
+        yield* runtime.capture(builder, build);
+        yield* runtime.bases?.settle ?? Effect.die("smolvm parks bases");
+        model.vms.set(`${base}_freeze`, {
+          state: "running",
+          parent: base,
+          forwards: [],
+        });
+        yield* runtime.deleteCheckpoint(build);
+
+        expect(
+          [...model.vms.keys()].filter((vm) => vm.startsWith("base_"))
+        ).toStrictEqual([]);
+      })
+  );
+
+  it.effect(
     "a build whose index names no smolvm version parks no base, and its warning says so",
     () =>
       Effect.gen(function* () {
@@ -2240,6 +2278,7 @@ layer(NodeServices.layer)((it) => {
         expect(yield* readDirectory(store)).toStrictEqual(["objects"]);
         expect(smolvmArgs(spawner.calls)).toStrictEqual([
           ["machine", "checkpoint-prune", "--store", store],
+          freezerStatus,
           baseStatus,
         ]);
       })
@@ -2256,7 +2295,10 @@ layer(NodeServices.layer)((it) => {
         yield* runtime.startup;
         yield* runtime.deleteCheckpoint(ramCheckpoint);
 
-        expect(smolvmArgs(spawner.calls)).toStrictEqual([baseStatus]);
+        expect(smolvmArgs(spawner.calls)).toStrictEqual([
+          freezerStatus,
+          baseStatus,
+        ]);
       })
   );
 });

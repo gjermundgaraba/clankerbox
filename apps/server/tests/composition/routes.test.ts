@@ -61,7 +61,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const stopped = yield* client.stopMachine({ id: "dev" });
         const resized = yield* client.resizeMachine({ id: "dev", cpu: 2 });
         const started = yield* client.startMachine({ id: "dev" });
-        const listed = yield* client.machines;
+        const listed = yield* client.listMachines();
 
         yield* client.deleteMachine({ id: "dev" });
 
@@ -225,7 +225,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           name: "snap",
         });
 
-        const listed = yield* client.checkpoints;
+        const listed = yield* client.listCheckpoints();
         const got = yield* client.getCheckpoint({ id: "snap" });
 
         const restored = yield* client.restoreMachine({
@@ -409,7 +409,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const errors = yield* Effect.flatMap(Client.make(url), (client) =>
           Effect.all([
             Effect.flip(client.hosts),
-            Effect.flip(client.machines),
+            Effect.flip(client.listMachines()),
             Effect.flip(client.getMachine({ id: "dev" })),
             Effect.flip(client.create("dev", spec)),
           ])
@@ -446,7 +446,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(listed.map(({ id, current }) => [id, current])).toStrictEqual([
           ["web", "web@1"],
         ]);
-        expect(read).toMatchObject({ base: "ubuntu", state: "ready" });
+        expect(read).toMatchObject({
+          state: "ready",
+          builds: [{ id: "web@1", base: "ubuntu" }],
+        });
         expect(deleted).toBe("deleted");
         expect(yield* client.templates).toStrictEqual([]);
       })

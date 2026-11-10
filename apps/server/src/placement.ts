@@ -1,5 +1,6 @@
 import type { HostInfo } from "@clankerbox/host-contract";
 import {
+  buildId,
   NotBuilt,
   NotOffered,
   offered,
@@ -9,7 +10,7 @@ import {
 import { Array as Arr, Result } from "effect";
 
 import type { Reached } from "./hosts.ts";
-import type { Source } from "./store.ts";
+import type { BuildRow, Source } from "./store.ts";
 
 const sifted = <A>(
   reached: readonly Reached[],
@@ -75,12 +76,14 @@ export const placing = (
 };
 
 /** What a template build was made under, which a host's copy of it needs to restore. */
-export interface BuiltUnder {
+export interface BuiltUnder extends Pick<BuildRow, "base" | "pin" | "image"> {
   readonly id: string;
-  readonly base: string;
-  readonly pin: string | undefined;
-  readonly image: string;
 }
+
+export const builtUnder = (
+  template: string,
+  { number, base, pin, image }: BuildRow
+): BuiltUnder => ({ id: buildId(template, number), base, pin, image });
 
 /**
  * Why a host's copy of `build` takes no create, if it doesn't: the host runs another runtime pin,

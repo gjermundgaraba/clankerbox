@@ -244,8 +244,8 @@ setup: gg-linux-dev
 ```sh
 clankerbox template build gg-linux-dev.yaml     # prints gg-linux-dev@1
 clankerbox template build gg-linux-dev.yaml     # prints gg-linux-dev@2, from the file as it is now
-clankerbox template list                        # each template's base, current build and state
-clankerbox template get gg-linux-dev            # its sizes, and each build kept
+clankerbox template list                        # each template's current build, its base, and state
+clankerbox template get gg-linux-dev            # each build kept, with its base and sizes
 clankerbox create box --template gg-linux-dev   # clones its current build
 clankerbox create old --template gg-linux-dev@1 --ram 32G # clones that build, with more RAM
 clankerbox template delete gg-linux-dev
@@ -253,7 +253,7 @@ clankerbox template delete gg-linux-dev
 
 - The file holds `base`, `cpu`, `ram`, `disk` and `setup`, and optionally `setupTimeout`, the host's 10 minutes by default; any other key fails the file. `ram` and `disk` are sizes, such as `16G`, and `setupTimeout` a duration, such as `15m`.
 - `setup` is a setup script, or a recipe directory with a `setup.sh`, found from the file's directory. The client reads it and sends it with the build. The control plane holds it in memory for that build only, and never stores or logs it, so each build sends it again.
-- Each build takes everything from its file and nothing from the build before it, so a file without `setupTimeout` gets the host's default even when the last build had one.
+- Each build takes everything from its file and nothing from the build before it, so a file without `setupTimeout` gets the host's default even when the last build had one. Each build keeps its own base, sizes and setup timeout, which `template get` shows per build, and a template has none of its own.
 - A build's ID is the template's name, `@` and its number, such as `web@2`. `template build` waits until the build ends and prints its ID; `--no-wait` prints it at once, and `template get` follows the build.
 - The current build is the newest that is ready: it moves to a build only once its setup has run and its copy is made, so a build that fails leaves the one before it current. The control plane keeps the last 2 ready builds, and deletes an older one's copy once the creates cloning it are done.
 - One build of a template runs at a time: a build or a delete asked meanwhile fails `Conflict`. A control plane that restarts during a build ends it failed and deletes its builder.
@@ -389,7 +389,7 @@ program.pipe(
 - `client.buildTemplate({ template, setup, base, cpu, ramMib, diskGib })` does what `clankerbox template build` does, and answers the `Build` once it ends; `client.templates`, `getTemplate` and `deleteTemplate` do the rest. `client.create(name, { template: "web" })` clones a template's current build, or the one `web@N` names, with the sizes given, and `machine.template` names the build. `{ recorded }` runs once the server has recorded the create, before the wait, with the machine it recorded.
 - `client.ensure(name, { spec, checkpoint, sizing, labels })` answers a machine of `name` that runs: the one that exists, started or resumed; else one restored from `checkpoint` when that is ready, at `sizing` or its own; else one created from `spec`. A failed create's row that still answers `Conflict` is deleted and the make tried once more, and a make whose reply was lost reads the machine and decides again, once. `labels` go on what it makes.
 - `client.pauseMachine({ id, capture })` waits for the machine to pause and then for the checkpoint to be ready, failing with the capture's error when it failed.
-- `client.execMachine({ id, argv, user, env, stdin, timeoutSeconds })` runs a command and answers `{ exitCode, output, truncated }`; the client waits as long as the command runs, or `timeoutSeconds` and the reply timeout. `client.listMachines({ labels })` and `client.listCheckpoints({ labels })` filter by labels; `client.machines` and `client.checkpoints` list everything.
+- `client.execMachine({ id, argv, user, env, stdin, timeoutSeconds })` runs a command and answers `{ exitCode, output, truncated }`; the client waits as long as the command runs, or `timeoutSeconds` and the reply timeout. `client.listMachines()` and `client.listCheckpoints()` list everything, and take `{ labels }` to filter by labels.
 
 ## Sandbox Agent provider
 

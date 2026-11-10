@@ -145,10 +145,17 @@ export const runCommand = (
 
 const preparationTimeout = Duration.seconds(60);
 
+const guestPath =
+  "PATH=$root/usr/local/sbin:$root/usr/local/bin:$root/usr/sbin:$root/usr/bin:$root/sbin:$root/bin";
+
+const brewedPath = `${guestPath}:$root/opt/homebrew/bin`;
+
+const stateDir = "$root/var/lib/clankerbox";
+
 const addingMissingKeys = [
   `if [ "$#" -gt 0 ]; then`,
   "  (",
-  "    PATH=$root/usr/local/sbin:$root/usr/local/bin:$root/usr/sbin:$root/usr/bin:$root/sbin:$root/bin",
+  `    ${guestPath}`,
   `    sudo -n -u "$login" -H sh -c 'umask 077 && mkdir -p "$HOME/.ssh" && for key do grep -qxF -e "$key" "$HOME/.ssh/authorized_keys" 2>/dev/null || printf "\\n%s\\n" "$key" >>"$HOME/.ssh/authorized_keys" || exit 1; done' clankerbox-keys "$@"`,
   "  ) || {",
   `    echo "couldn't install the authorized keys for $login: the machine's image, from its setup or its template, must have that user, and sudo"`,
@@ -156,11 +163,6 @@ const addingMissingKeys = [
   "  }",
   "fi",
 ];
-
-const guestPath =
-  "PATH=$root/usr/local/sbin:$root/usr/local/bin:$root/usr/sbin:$root/usr/bin:$root/sbin:$root/bin";
-
-const brewedPath = `${guestPath}:$root/opt/homebrew/bin`;
 
 const sshdDropIn = "$root/etc/ssh/sshd_config.d/10-clankerbox.conf";
 
@@ -334,7 +336,7 @@ export const addMissingKeys = (
 
 const hostKeyMarker = "clankerbox-host-key: ";
 
-const tailnetDir = "$root/var/lib/clankerbox/tailscale";
+const tailnetDir = `${stateDir}/tailscale`;
 
 const nodeProcess = [
   `pid=$(cat "${tailnetDir}/tailscaled.pid" 2>/dev/null || true)`,
@@ -354,7 +356,7 @@ export const tailnetScript = [
   "hostname=$1",
   "user=$2",
   "root=${CLANKERBOX_ROOT-}",
-  "PATH=$root/usr/local/sbin:$root/usr/local/bin:$root/usr/sbin:$root/usr/bin:$root/sbin:$root/bin:$root/opt/homebrew/bin",
+  brewedPath,
   `dir="${tailnetDir}"`,
   String.raw`ts() { tailscale --socket="$dir/tailscaled.sock" "$@"; }`,
   String.raw`status() { ts status --json --peers=false 2>/dev/null | tr -d '\n'; }`,
@@ -396,13 +398,13 @@ export const tailnetScript = [
   "",
 ].join("\n");
 
-const dnsBeforeJoin = "$root/var/lib/clankerbox/resolv.conf.before-join";
+const dnsBeforeJoin = `${stateDir}/resolv.conf.before-join`;
 
 export const beforeJoinScript = [
   "set -eu",
   "root=${CLANKERBOX_ROOT-}",
   brewedPath,
-  `mkdir -p "$root/var/lib/clankerbox"`,
+  `mkdir -p "${stateDir}"`,
   `rm -f "${dnsBeforeJoin}"`,
   `if [ -e "$root/etc/resolv.conf" ]; then`,
   `  cat "$root/etc/resolv.conf" >"${dnsBeforeJoin}"`,
@@ -500,8 +502,8 @@ const keyWanted = "$state/host-key-wanted";
 export const unkeyScript = [
   "set -eu",
   "root=${CLANKERBOX_ROOT-}",
-  "PATH=$root/usr/local/sbin:$root/usr/local/bin:$root/usr/sbin:$root/usr/bin:$root/sbin:$root/bin",
-  "state=$root/var/lib/clankerbox",
+  guestPath,
+  `state=${stateDir}`,
   `if ls "$root"/etc/ssh/ssh_host_*_key >/dev/null 2>&1; then`,
   `  mkdir -p "$state"`,
   `  : >"${keyWanted}"`,
@@ -515,8 +517,8 @@ export const identityScript = [
   "instance=$1",
   "id=$2",
   "root=${CLANKERBOX_ROOT-}",
-  "PATH=$root/usr/local/sbin:$root/usr/local/bin:$root/usr/sbin:$root/usr/bin:$root/sbin:$root/bin",
-  "state=$root/var/lib/clankerbox",
+  guestPath,
+  `state=${stateDir}`,
   `if [ "$(cat "$state/instance" 2>/dev/null || true)" != "$instance" ]; then`,
   `  cat >"$root/dev/random"`,
   `  if [ "$(uname -s)" = Linux ]; then`,
@@ -551,7 +553,7 @@ export const identityScript = [
 export const startScript = [
   "set -eu",
   "root=${CLANKERBOX_ROOT-}",
-  "PATH=$root/usr/local/sbin:$root/usr/local/bin:$root/usr/sbin:$root/usr/bin:$root/sbin:$root/bin",
+  guestPath,
   `if [ -e "${sshdDropIn}" ] && [ -x "$root/usr/sbin/sshd" ]; then`,
   `  mkdir -p "$root/run/sshd"`,
   `  pid=$(cat "$root/run/sshd.pid" 2>/dev/null || true)`,

@@ -382,7 +382,7 @@ export const make = (settings: {
         );
       }),
       publish: Effect.fn("Checkpoints.publish")((name) =>
-        applying(name, { type: "publish", as: name }).pipe(
+        applying(name, { type: "publish" }).pipe(
           Effect.andThen(drive(name)),
           Effect.andThen(rested(name))
         )

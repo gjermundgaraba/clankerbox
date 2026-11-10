@@ -3,6 +3,7 @@ import type { StatementSync } from "node:sqlite";
 
 import { Conflict, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import {
+  Array as Arr,
   DateTime,
   Effect,
   FileSystem,
@@ -147,6 +148,34 @@ export const migrations: readonly string[] = [
     WHERE ephemeral = 0 AND json_extract(source, '$.scripted') = 1 AND state LIKE 'making.%';
   UPDATE machines SET source = json_remove(source, '$.scripted')
     WHERE json_extract(source, '$.kind') = 'base'`,
+  `CREATE TABLE built (
+    template TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    error TEXT,
+    host TEXT NOT NULL,
+    pin TEXT,
+    image TEXT NOT NULL,
+    base TEXT NOT NULL,
+    cpu INTEGER NOT NULL,
+    ram_mib INTEGER NOT NULL,
+    disk_gib INTEGER NOT NULL,
+    setup_timeout_seconds INTEGER,
+    PRIMARY KEY (template, number)
+  ) STRICT;
+  INSERT INTO built
+    SELECT builds.template, builds.number, builds.created_at, builds.phase, builds.error,
+      builds.host, builds.pin, builds.image, templates.base, templates.cpu, templates.ram_mib,
+      templates.disk_gib, templates.setup_timeout_seconds
+    FROM builds JOIN templates ON templates.name = builds.template;
+  DROP TABLE builds;
+  ALTER TABLE built RENAME TO builds;
+  ALTER TABLE templates DROP COLUMN base;
+  ALTER TABLE templates DROP COLUMN cpu;
+  ALTER TABLE templates DROP COLUMN ram_mib;
+  ALTER TABLE templates DROP COLUMN disk_gib;
+  ALTER TABLE templates DROP COLUMN setup_timeout_seconds`,
 ];
 
 const isSqliteError = (
@@ -337,7 +366,7 @@ const decodeLastBuild = Schema.decodeUnknownSync(
   Schema.Struct({ last: Schema.Int })
 );
 
-const buildOf = Schema.decodeUnknownSync(StoredBuild);
+const buildsOf = Schema.decodeUnknownSync(Schema.NonEmptyArray(StoredBuild));
 
 const templateColumns = Schema.encodeSync(StoredTemplate);
 
@@ -637,11 +666,10 @@ export const open = (
 
       return {
         ...facts,
-        builds: selectBuilds.all(facts.name).map((stored) => {
-          const { template: _template, ...build } = buildOf(stored);
-
-          return build;
-        }),
+        builds: Arr.map(
+          buildsOf(selectBuilds.all(facts.name)),
+          ({ template: _template, ...build }) => build
+        ),
       };
     };
 
