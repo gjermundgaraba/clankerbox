@@ -2086,7 +2086,10 @@ const notRunning = [
   { step: "stop", before: pausing, sent: stopping, ends: "stopped" },
 ] as const;
 
-const hooked = (step: LeavingStep): Step => ({ ...step, hook: true });
+const hooked = (step: LeavingStep, timeoutSeconds = 30): Step => ({
+  ...step,
+  hook: { timeoutSeconds },
+});
 
 const runningStatus = (health: readonly string[]) =>
   JSON.stringify(
@@ -2139,19 +2142,21 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
   for (const { step, sent, hook, ends } of leavings) {
     it.effect(
-      `a ${step} that asks for its hook runs the guest's ${hook} hook while the VM runs, then ends it ${ends}`,
+      `a ${step} that asks for its hook reads the VM once, runs the guest's ${hook} hook while it runs, then ends it ${ends}`,
       () =>
         Effect.gen(function* () {
           const host = yield* runner();
 
           yield* finished(host, makes("dev"));
           yield* leaveHooks(host);
+          host.fake.observed.length = 0;
 
           const report = yield* finished(host, hooked(sent), 2);
 
           expect(report.status).toBe("done");
           expect(yield* hooksRun(host)).toStrictEqual([hook]);
           expect(stateOf(host)).toBe(ends);
+          expect(host.fake.observed).toStrictEqual([["dev"]]);
         })
     );
 
@@ -2275,13 +2280,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(report.status).toBe("done");
       expect(stateOf(host)).toBe("stopped");
       expect(logged.join("\n")).toContain(
-        "its stop hook exited 3; its last output:\nthe shipper is down"
+        "stop dev goes on: its stop hook exited 3; its last output:\nthe shipper is down"
       );
     }).pipe(Effect.provide(Logger.layer([capturing(logged)])));
   });
 
   it.effect(
-    "a hook past the guest's hook-timeout is cut short, and the delete goes on",
+    "a hook past its step's time limit is cut short, logged, and the delete goes on",
     () => {
       const logged: string[] = [];
 
@@ -2294,22 +2299,21 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "delete",
           `echo delete >>"${leftIn(host)}"\nexec sleep 30`
         );
-        yield* write(rootOf(host, "etc/clankerbox/hook-timeout"), "1\n");
 
-        const report = yield* finished(host, hooked(removing), 2);
+        const report = yield* finished(host, hooked(removing, 1), 2);
 
         expect(report.status).toBe("done");
         expect(yield* hooksRun(host)).toStrictEqual(["delete"]);
         expect(stateOf(host)).toBe("missing");
         expect(logged.join("\n")).toContain(
-          "its delete hook ran past its 1s timeout"
+          "delete dev goes on: its delete hook exited 124, as it ran past its 1s limit"
         );
       }).pipe(Effect.provide(Logger.layer([capturing(logged)])));
     }
   );
 
   it.effect(
-    "a hook-timeout that isn't a number of seconds is logged, and the hook runs under the default",
+    "a running VM with no hook for its step logs nothing of one, and the step goes on",
     () => {
       const logged: string[] = [];
 
@@ -2317,22 +2321,18 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const host = yield* runner();
 
         yield* finished(host, makes("dev"));
-        yield* leaveHooks(host);
-        yield* write(rootOf(host, "etc/clankerbox/hook-timeout"), "soon\n");
 
         const report = yield* finished(host, hooked(stopping), 2);
 
         expect(report.status).toBe("done");
-        expect(yield* hooksRun(host)).toStrictEqual(["stop"]);
-        expect(logged.join("\n")).toContain(
-          'hook-timeout holds "soon", not a whole number of seconds above 0, so its hook runs under the default 120s'
-        );
+        expect(stateOf(host)).toBe("stopped");
+        expect(logged.join("\n")).not.toContain("hook");
       }).pipe(Effect.provide(Logger.layer([capturing(logged)])));
     }
   );
 
   it.effect(
-    "a probe for a hook that fails is logged, and the step goes on without the hook",
+    "a hook whose command the runtime fails to run is logged, and the step goes on without it",
     () => {
       const logged: string[] = [];
 

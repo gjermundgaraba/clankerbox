@@ -1,6 +1,5 @@
 import type { ExecCommand } from "@clankerbox/host-contract";
 import {
-  Internal,
   loginUser,
   outputLimit,
   ScriptFailed,
@@ -77,35 +76,6 @@ const drained = (
     ([, exitCode]) => exitCode
   );
 
-const inGuest = <E>(
-  runtime: Runtime,
-  machine: Native,
-  command: Command,
-  timeout: Duration.Duration,
-  failed: (why: string) => E
-): Effect.Effect<string, RuntimeError | E> =>
-  Effect.gen(function* () {
-    const output = keptOutput();
-
-    const code = yield* drained(runtime, machine, command, output).pipe(
-      timeoutFail(timeout, () =>
-        failed(
-          `ran past its ${Duration.format(timeout)} timeout; its last output:\n${lastLines(output.text())}`
-        )
-      )
-    );
-
-    const text = output.text();
-
-    if (code !== 0) {
-      return yield* Effect.fail(
-        failed(`exited ${code}; its last output:\n${lastLines(text)}`)
-      );
-    }
-
-    return text;
-  });
-
 const runInGuest = (
   runtime: Runtime,
   script: "setup" | "preparation" | "tailnet",
@@ -113,17 +83,42 @@ const runInGuest = (
   command: Command,
   timeout: Duration.Duration
 ): Effect.Effect<string, RuntimeError | ScriptFailed> =>
-  inGuest(
-    runtime,
-    machine,
-    command,
-    timeout,
-    (why) => new ScriptFailed({ message: `${script} ${why}`, script })
-  );
+  Effect.gen(function* () {
+    const output = keptOutput();
+
+    const code = yield* drained(runtime, machine, command, output).pipe(
+      timeoutFail(
+        timeout,
+        () =>
+          new ScriptFailed({
+            message: `${script} ran past its ${Duration.format(timeout)} timeout; its last output:\n${lastLines(output.text())}`,
+            script,
+          })
+      )
+    );
+
+    const text = output.text();
+
+    if (code !== 0) {
+      return yield* new ScriptFailed({
+        message: `${script} exited ${code}; its last output:\n${lastLines(text)}`,
+        script,
+      });
+    }
+
+    return text;
+  });
 
 export const runCommand = (
   runtime: Runtime,
-  { machine, argv, user, env, stdin, timeoutSeconds }: ExecCommand
+  {
+    machine,
+    argv,
+    user,
+    env,
+    stdin,
+    timeoutSeconds,
+  }: Omit<ExecCommand, "machine"> & { readonly machine: Native }
 ): Effect.Effect<Executed, RuntimeError> =>
   Effect.gen(function* () {
     const output = keptOutput();
@@ -720,122 +715,22 @@ export const scrubNode = (
 /** What is about to happen to a running VM, each with its hook in `/etc/clankerbox`. */
 export type Leaving = "stop" | "pause" | "delete";
 
-const defaultHookSeconds = 120;
-
-const probeTimeout = Duration.seconds(10);
-
-const hookDir = "$root/etc/clankerbox";
-
-const leaveMarker = "clankerbox-leave: ";
-
-export const leaveProbeScript = [
-  "set -eu",
+const leaveScript = [
   "root=${CLANKERBOX_ROOT-}",
   guestPath,
-  `if [ ! -e "${hookDir}/$1" ]; then`,
-  `  echo '${leaveMarker}none'`,
-  `elif [ -e "${hookDir}/hook-timeout" ]; then`,
-  `  printf '${leaveMarker}timeout %s\\n' "$(tr '\\n' ' ' <"${hookDir}/hook-timeout")"`,
-  "else",
-  `  echo '${leaveMarker}default'`,
-  "fi",
+  `if [ -e "$root/etc/clankerbox/$1" ]; then exec "$root/etc/clankerbox/$1" </dev/null; fi`,
   "",
 ].join("\n");
 
-const hookRunner = [
-  "set -eu",
-  "root=${CLANKERBOX_ROOT-}",
-  guestPath,
-  `exec "${hookDir}/$1" </dev/null`,
-  "",
-].join("\n");
-
-type Hook =
-  | { readonly found: false }
-  | {
-      readonly found: true;
-      readonly seconds: number;
-      readonly invalid: string | undefined;
-    };
-
-const secondsPattern = /^[1-9]\d*$/u;
-
-export const hookIn = (output: string): Hook | undefined => {
-  const line = output
-    .split("\n")
-    .findLast((candidate) => candidate.startsWith(leaveMarker))
-    ?.slice(leaveMarker.length);
-
-  if (line === "none") {
-    return { found: false };
-  }
-
-  if (line === "default") {
-    return { found: true, seconds: defaultHookSeconds, invalid: undefined };
-  }
-
-  if (line?.startsWith("timeout ") !== true) {
-    return undefined;
-  }
-
-  const held = line.slice("timeout ".length).trim();
-  const seconds = Number(held);
-
-  return secondsPattern.test(held) && Number.isSafeInteger(seconds)
-    ? { found: true, seconds, invalid: undefined }
-    : { found: true, seconds: defaultHookSeconds, invalid: held };
-};
-
-/**
- * Runs the guest's hook for what is about to happen to its VM, if it has one, as root, under the
- * time its `hook-timeout` gives, failing with why when the hook or the probe for it doesn't end well.
- */
+/** Runs the guest's hook for what is about to happen to its VM, if it has one, as root. */
 export const leave = (
   runtime: Runtime,
   machine: Native,
-  leaving: Leaving
-): Effect.Effect<void, RuntimeError> =>
-  Effect.gen(function* () {
-    const probed = hookIn(
-      yield* inGuest(
-        runtime,
-        machine,
-        {
-          argv: [
-            "/bin/sh",
-            "-c",
-            leaveProbeScript,
-            "clankerbox-leave",
-            leaving,
-          ],
-        },
-        probeTimeout,
-        (why) =>
-          new Internal({ message: `the probe for its ${leaving} hook ${why}` })
-      )
-    );
-
-    if (probed === undefined) {
-      return yield* new Internal({
-        message: `the probe for its ${leaving} hook reported nothing readable`,
-      });
-    }
-
-    if (!probed.found) {
-      return;
-    }
-
-    if (probed.invalid !== undefined) {
-      yield* Effect.logWarning(
-        `${leaving} ${machine.name}: /etc/clankerbox/hook-timeout holds ${JSON.stringify(probed.invalid)}, not a whole number of seconds above 0, so its hook runs under the default ${defaultHookSeconds}s`
-      );
-    }
-
-    yield* inGuest(
-      runtime,
-      machine,
-      { argv: ["/bin/sh", "-c", hookRunner, "clankerbox-leave", leaving] },
-      Duration.seconds(probed.seconds),
-      (why) => new Internal({ message: `its ${leaving} hook ${why}` })
-    );
+  leaving: Leaving,
+  timeoutSeconds: number
+): Effect.Effect<Executed, RuntimeError> =>
+  runCommand(runtime, {
+    machine,
+    argv: ["/bin/sh", "-c", leaveScript, "clankerbox-leave", leaving],
+    timeoutSeconds,
   });

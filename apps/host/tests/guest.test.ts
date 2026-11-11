@@ -23,10 +23,8 @@ import { expect } from "vite-plus/test";
 
 import {
   beforeJoinScript,
-  hookIn,
   hostKeyIn,
   lastLines,
-  leaveProbeScript,
   identityScript,
   prepareBase,
   startScript,
@@ -290,40 +288,6 @@ const preparedForSetup = Effect.tap(running, (runtime) =>
 
 const numbered = (count: number) =>
   Array.from({ length: count }, (_, line) => `echo line ${line}`).join("\n");
-
-const probed = [
-  { hooked: false, timeout: undefined, found: { found: false } },
-  {
-    hooked: true,
-    timeout: undefined,
-    found: { found: true, seconds: 120, invalid: undefined },
-  },
-  {
-    hooked: true,
-    timeout: "45\n",
-    found: { found: true, seconds: 45, invalid: undefined },
-  },
-  {
-    hooked: true,
-    timeout: "0\n",
-    found: { found: true, seconds: 120, invalid: "0" },
-  },
-  {
-    hooked: true,
-    timeout: "1.5",
-    found: { found: true, seconds: 120, invalid: "1.5" },
-  },
-  {
-    hooked: true,
-    timeout: "30\nor more\n",
-    found: { found: true, seconds: 120, invalid: "30 or more" },
-  },
-  {
-    hooked: true,
-    timeout: "",
-    found: { found: true, seconds: 120, invalid: "" },
-  },
-] as const;
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it("an output's tail is its last 20 lines, at most 4000 characters, with no blank end", () => {
@@ -945,39 +909,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     expect(hostKeyIn("clankerbox-host-key: not a key\n")).toBeUndefined();
     expect(hostKeyIn("no key here\n")).toBeUndefined();
   });
-
-  for (const { hooked, timeout, found } of probed) {
-    it.effect(
-      `the probe for a stop hook, with ${hooked ? "a hook" : "none"} and hook-timeout ${JSON.stringify(timeout)}, answers whether it runs and for how long`,
-      () =>
-        Effect.gen(function* () {
-          const where = yield* guest();
-          const dir = path.join(where.root, "etc", "clankerbox");
-
-          yield* mkdir(dir);
-
-          if (hooked) {
-            yield* write(path.join(dir, "stop"), "#!/bin/sh\n");
-          }
-
-          if (timeout !== undefined) {
-            yield* write(path.join(dir, "hook-timeout"), timeout);
-          }
-
-          const { code, stdout, stderr } = yield* outputOf(
-            "/bin/sh",
-            ["-c", leaveProbeScript, "probe", "stop"],
-            {
-              env: { CLANKERBOX_ROOT: where.root, PATH: "/nowhere" },
-              extendEnv: true,
-            }
-          );
-
-          expect(code, stderr).toBe(0);
-          expect(hookIn(stdout)).toStrictEqual(found);
-        })
-    );
-  }
 
   it.effect(
     "a new instance stops the tailscaled its source left running before wiping its node",

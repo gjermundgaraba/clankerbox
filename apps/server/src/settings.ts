@@ -10,8 +10,12 @@ export interface ServerSettings {
   readonly recheck: Duration.Duration;
   readonly failedRowsLast: Duration.Duration;
   readonly authorizedKeys: string;
+  /** How long a machine's guest hook may run before its stop, pause or delete. */
+  readonly hookTimeout: Duration.Duration;
 }
 
 export const defaultRecheck = Duration.seconds(30);
+
+export const defaultHookTimeout = Duration.seconds(120);
 
 export const defaultFailedRowsLast = Duration.days(1);

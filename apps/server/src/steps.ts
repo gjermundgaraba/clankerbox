@@ -1,6 +1,6 @@
 import type { MachineRef, Step } from "@clankerbox/host-contract";
 import type { Internal, Setup } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Option } from "effect";
+import { Duration, Effect, Option } from "effect";
 
 import { isPublished } from "./checkpoint-chart.ts";
 import type { CheckpointRow } from "./checkpoint-chart.ts";
@@ -91,8 +91,10 @@ const sourceStep = (store: Store, found: MachineRow, held: Setup | undefined) =>
       : undefined;
   });
 
-const hooked = (found: MachineRow) =>
-  found.ephemeral ? {} : ({ hook: true } as const);
+const hooked = (found: MachineRow, hookTimeout: Duration.Duration) =>
+  found.ephemeral
+    ? {}
+    : { hook: { timeoutSeconds: Duration.toSeconds(hookTimeout) } };
 
 /**
  * What a host is sent for a machine's operation, built afresh from the rows at each delivery, or
@@ -108,7 +110,8 @@ export const machineStep = (
   op: Operation,
   held: Setup | undefined,
   authorizedKeys: string,
-  joins: boolean
+  joins: boolean,
+  hookTimeout: Duration.Duration
 ): Effect.Effect<Step | undefined, Internal> =>
   Effect.gen(function* () {
     const ref = refOf(found);
@@ -119,7 +122,9 @@ export const machineStep = (
       return {
         _tag: "remove",
         machine: { name, instance },
-        ...(stageOf(found.state) === "deleting" ? hooked(found) : {}),
+        ...(stageOf(found.state) === "deleting"
+          ? hooked(found, hookTimeout)
+          : {}),
       };
     }
 
@@ -169,7 +174,7 @@ export const machineStep = (
           machine: ref,
           ...pinned(found.pin),
           machines,
-          ...hooked(found),
+          ...hooked(found, hookTimeout),
         };
       }
 
@@ -178,7 +183,7 @@ export const machineStep = (
           _tag: "pause",
           machine: ref,
           ...pinned(found.pin),
-          ...hooked(found),
+          ...hooked(found, hookTimeout),
         };
       }
 

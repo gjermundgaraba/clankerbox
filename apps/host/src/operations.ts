@@ -2,6 +2,7 @@ import type {
   CheckpointRef,
   ExecCommand,
   MachineRef,
+  MachineState,
   Native,
   Operation,
   Outcome,
@@ -17,6 +18,7 @@ import {
   Internal,
   isBuildCopy,
   PinMismatch,
+  timedOutExitCode,
   Unsizable,
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -48,6 +50,7 @@ import {
   checkTailnet,
   identify,
   addMissingKeys,
+  lastLines,
   leave,
   prepareBase,
   prepare,
@@ -490,20 +493,37 @@ export const make = (
     const beforeLeaving = (
       machine: Native,
       leaving: Leaving,
-      hook: true | undefined
+      hook: { readonly timeoutSeconds: number } | undefined,
+      seen: Effect.Effect<MachineState, HostError> = stateNow(
+        machine,
+        `given its ${leaving} hook`
+      )
     ) =>
       hook === undefined
         ? Effect.void
         : surviving(
             `the ${leaving} hook of ${machine.name}`,
             Effect.gen(function* () {
-              const seen = yield* stateNow(
+              if ((yield* seen) !== "running") {
+                return;
+              }
+
+              const { exitCode, output } = yield* leave(
+                runtime,
                 machine,
-                `given its ${leaving} hook`
+                leaving,
+                hook.timeoutSeconds
               );
 
-              if (seen === "running") {
-                yield* leave(runtime, machine, leaving);
+              if (exitCode !== 0) {
+                const past =
+                  exitCode === timedOutExitCode
+                    ? `, as it ran past its ${hook.timeoutSeconds}s limit`
+                    : "";
+
+                yield* Effect.logWarning(
+                  `${leaving} ${machine.name} goes on: its ${leaving} hook exited ${exitCode}${past}; its last output:\n${lastLines(output)}`
+                );
               }
             })
           ).pipe(
@@ -669,19 +689,25 @@ export const make = (
           const { machine, pin, machines, hook } = step;
           const stopped = runtime.stop(machine);
 
-          return Effect.andThen(
-            beforeLeaving(machine, "stop", hook),
-            runtime.stopResumes
-              ? Effect.gen(function* () {
-                  if ((yield* stateNow(machine, "stopped")) !== "paused") {
-                    return yield* stopped;
-                  }
+          if (!runtime.stopResumes) {
+            return Effect.andThen(
+              beforeLeaving(machine, "stop", hook),
+              stopped
+            );
+          }
 
-                  yield* resumable(machine.name, pin);
-                  yield* withRoom("stopMachine", machine, machines, stopped);
-                })
-              : stopped
-          );
+          return Effect.gen(function* () {
+            const seen = yield* stateNow(machine, "stopped");
+
+            if (seen === "paused") {
+              yield* resumable(machine.name, pin);
+
+              return yield* withRoom("stopMachine", machine, machines, stopped);
+            }
+
+            yield* beforeLeaving(machine, "stop", hook, Effect.succeed(seen));
+            yield* stopped;
+          });
         }
 
         case "pause": {

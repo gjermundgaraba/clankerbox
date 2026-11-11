@@ -50,12 +50,12 @@ const exits3 = { script: "#!/bin/sh\nexit 3\n", timeoutSeconds: 30 };
 
 const leftIn = (dir: string) => path.join(dir, "left");
 
-const installsLeaveHooks = (dir: string) => ({
+const installsLeaveHooks = (dir: string, then = "") => ({
   script: [
     "#!/bin/sh",
     'mkdir -p "$CLANKERBOX_ROOT/etc/clankerbox"',
     ...["stop", "pause", "delete"].flatMap((hook) => [
-      `printf '#!/bin/sh\\necho %s >>"%s"\\n' ${hook} "${leftIn(dir)}" >"$CLANKERBOX_ROOT/etc/clankerbox/${hook}"`,
+      `printf '#!/bin/sh\\necho %s >>"%s"\\n${then}\\n' ${hook} "${leftIn(dir)}" >"$CLANKERBOX_ROOT/etc/clankerbox/${hook}"`,
       `chmod 755 "$CLANKERBOX_ROOT/etc/clankerbox/${hook}"`,
     ]),
   ].join("\n"),
@@ -216,23 +216,54 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
+  for (const kind of ["linux", "mac"] as const) {
+    it.effect(
+      `a ${kind} machine runs its guest's hook before each stop, pause and delete, and a template's builder runs none`,
+      () =>
+        Effect.gen(function* () {
+          const dir = yield* scratch;
+
+          const { client } = yield* servedWithBuildOf(installsLeaveHooks(dir), {
+            hosts: [{ id: kind, kind }],
+          });
+
+          const afterBuild = yield* hooksRun(dir);
+
+          yield* client.create("dev", fromWeb);
+          yield* client.stopMachine({ id: "dev" });
+          yield* client.startMachine({ id: "dev" });
+          yield* client.pauseMachine({ id: "dev" });
+          yield* client.startMachine({ id: "dev" });
+          yield* client.deleteMachine({ id: "dev" });
+
+          expect(afterBuild).toStrictEqual([]);
+          expect(yield* hooksRun(dir)).toStrictEqual([
+            "stop",
+            "pause",
+            "delete",
+          ]);
+        })
+    );
+  }
+
   it.effect(
-    "a machine runs its guest's hook before each stop, pause and delete, and a template's builder runs none",
+    "a guest's hook is cut short at the control plane's hookTimeout, and its stop goes on",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
-        const { client } = yield* servedWithBuildOf(installsLeaveHooks(dir));
-        const afterBuild = yield* hooksRun(dir);
+
+        const { client, fake } = yield* servedWithBuildOf(
+          installsLeaveHooks(dir, "exec sleep 60"),
+          { hookTimeout: Duration.seconds(1) }
+        );
 
         yield* client.create("dev", fromWeb);
-        yield* client.stopMachine({ id: "dev" });
-        yield* client.startMachine({ id: "dev" });
-        yield* client.pauseMachine({ id: "dev" });
-        yield* client.startMachine({ id: "dev" });
-        yield* client.deleteMachine({ id: "dev" });
 
-        expect(afterBuild).toStrictEqual([]);
-        expect(yield* hooksRun(dir)).toStrictEqual(["stop", "pause", "delete"]);
+        const stopped = yield* client.stopMachine({ id: "dev" });
+
+        expect(stopped).toMatchObject({ state: "stopped", phase: "settled" });
+        expect(fake.machines.get("dev")?.state).toBe("stopped");
+        expect(yield* hooksRun(dir)).toStrictEqual(["stop"]);
       })
   );
 
