@@ -2,6 +2,7 @@ import type {
   CheckpointRef,
   ExecCommand,
   MachineRef,
+  MachineState,
   Native,
   Operation,
   Outcome,
@@ -17,6 +18,7 @@ import {
   Internal,
   isBuildCopy,
   PinMismatch,
+  timedOutExitCode,
   Unsizable,
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -48,6 +50,8 @@ import {
   checkTailnet,
   identify,
   addMissingKeys,
+  lastLines,
+  leave,
   prepareBase,
   prepare,
   rememberDns,
@@ -56,7 +60,7 @@ import {
   scrubNode,
   unkey,
 } from "./guest.ts";
-import type { TailnetReport } from "./guest.ts";
+import type { Leaving, TailnetReport } from "./guest.ts";
 import { pickPort, PortProbe } from "./machine-ports.ts";
 import {
   missing,
@@ -340,7 +344,7 @@ export const make = (
         return yield* runtime.fork(source.machine, machine);
       });
 
-    const stateNow = (machine: MachineRef, what: string) =>
+    const stateNow = (machine: Native, what: string) =>
       Effect.gen(function* () {
         const seen = stateIn(
           yield* runtime
@@ -485,6 +489,51 @@ export const make = (
           ...(hostKey === undefined ? {} : { hostKey }),
         };
       });
+
+    const beforeLeaving = (
+      machine: Native,
+      leaving: Leaving,
+      hook: { readonly timeoutSeconds: number } | undefined,
+      seen: Effect.Effect<MachineState, HostError>
+    ) =>
+      hook === undefined
+        ? Effect.void
+        : surviving(
+            `the ${leaving} hook of ${machine.name}`,
+            Effect.gen(function* () {
+              if ((yield* seen) !== "running") {
+                return;
+              }
+
+              yield* Effect.logInfo(
+                `${leaving} ${machine.name}: running its ${leaving} hook, if its guest has one and has taken its identity, for at most ${hook.timeoutSeconds}s`
+              );
+
+              const { exitCode, output } = yield* leave(
+                runtime,
+                machine,
+                leaving,
+                hook.timeoutSeconds
+              );
+
+              if (exitCode !== 0) {
+                const past =
+                  exitCode === timedOutExitCode
+                    ? `, past its ${hook.timeoutSeconds}s limit or by a timeout of its own`
+                    : "";
+
+                yield* Effect.logWarning(
+                  `${leaving} ${machine.name} goes on: its ${leaving} hook exited ${exitCode}${past}; its last output:\n${lastLines(output)}`
+                );
+              }
+            })
+          ).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning(
+                `${leaving} ${machine.name} goes on: ${error.message}`
+              )
+            )
+          );
 
     const scrubbed = (machine: MachineRef) =>
       Effect.flatMap(scrubNode(runtime, machine), (notes) =>
@@ -638,36 +687,68 @@ export const make = (
         }
 
         case "stop": {
-          const { machine, pin, machines } = step;
+          const { machine, pin, machines, hook } = step;
           const stopped = runtime.stop(machine);
 
-          return runtime.stopResumes
-            ? Effect.gen(function* () {
-                if ((yield* stateNow(machine, "stopped")) !== "paused") {
-                  return yield* stopped;
-                }
+          if (!runtime.stopResumes) {
+            return Effect.andThen(
+              beforeLeaving(
+                machine,
+                "stop",
+                hook,
+                stateNow(machine, "given its stop hook")
+              ),
+              stopped
+            );
+          }
 
-                yield* resumable(machine.name, pin);
-                yield* withRoom("stopMachine", machine, machines, stopped);
-              })
-            : stopped;
+          return Effect.gen(function* () {
+            const seen = yield* stateNow(machine, "stopped");
+
+            if (seen === "paused") {
+              yield* resumable(machine.name, pin);
+
+              return yield* withRoom("stopMachine", machine, machines, stopped);
+            }
+
+            yield* beforeLeaving(machine, "stop", hook, Effect.succeed(seen));
+            yield* stopped;
+          });
         }
 
         case "pause": {
-          const { machine, pin } = step;
+          const { machine, pin, hook } = step;
 
-          return pin === runtime.pin
-            ? runtime.pause(machine)
-            : Effect.andThen(
-                Effect.logWarning(
-                  `pause ${machine.name}: its VM booted under ${pin ?? "an older host"}, and this host runs ${runtime.pin ?? "no pin"}, so it stops it instead`
-                ),
-                runtime.stop(machine)
-              );
+          return Effect.andThen(
+            beforeLeaving(
+              machine,
+              "pause",
+              hook,
+              stateNow(machine, "given its pause hook")
+            ),
+            pin === runtime.pin
+              ? runtime.pause(machine)
+              : Effect.andThen(
+                  Effect.logWarning(
+                    `pause ${machine.name}: its VM booted under ${pin ?? "an older host"}, and this host runs ${runtime.pin ?? "no pin"}, so it stops it instead`
+                  ),
+                  runtime.stop(machine)
+                )
+          );
         }
 
         case "remove": {
-          return runtime.delete(step.machine);
+          const { machine, hook } = step;
+
+          return Effect.andThen(
+            beforeLeaving(
+              machine,
+              "delete",
+              hook,
+              stateNow(machine, "given its delete hook")
+            ),
+            runtime.delete(machine)
+          );
         }
 
         case "resize": {

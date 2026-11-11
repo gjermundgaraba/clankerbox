@@ -31,7 +31,10 @@ import {
 } from "../src/machine-chart.ts";
 import type { MachineEvent, MachineRow } from "../src/machine-chart.ts";
 import * as Machines from "../src/machines.ts";
-import { defaultFailedRowsLast } from "../src/settings.ts";
+import {
+  defaultFailedRowsLast,
+  defaultHookTimeoutSeconds,
+} from "../src/settings.ts";
 import type { ServerSettings } from "../src/settings.ts";
 import { Store } from "../src/store.ts";
 import type {
@@ -189,6 +192,7 @@ export const plane = (options?: {
   readonly draining?: readonly string[];
   readonly recheck?: Duration.Duration;
   readonly failedRowsLast?: Duration.Duration;
+  readonly hookTimeoutSeconds?: number;
   readonly runtime?: Parameters<typeof startHost>[1];
   /** Gives every guest tailscaled and tailscale, so a host's tailnet check finds them. */
   readonly tailscaled?: boolean;
@@ -232,6 +236,8 @@ export const plane = (options?: {
       recheck: options?.recheck ?? quiet,
       failedRowsLast: options?.failedRowsLast ?? defaultFailedRowsLast,
       authorizedKeys: `${operatorKey}\n`,
+      hookTimeoutSeconds:
+        options?.hookTimeoutSeconds ?? defaultHookTimeoutSeconds,
     };
 
     const plan: Plane = {

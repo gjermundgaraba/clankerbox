@@ -9,13 +9,18 @@ import {
 import { Address } from "@gjermundgaraba/clankerbox-sdk/node";
 import { Effect, FileSystem, Path, Schema } from "effect";
 
-import { defaultFailedRowsLast, defaultRecheck } from "../settings.ts";
+import {
+  defaultFailedRowsLast,
+  defaultHookTimeoutSeconds,
+  defaultRecheck,
+} from "../settings.ts";
 import type { ServerSettings } from "../settings.ts";
 
 const ServerConfigFile = Schema.Struct({
   listen: Schema.Struct({ address: Address, port: Port }),
   stateDir: Schema.String,
   authorizedKeys: Schema.String,
+  hookTimeout: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
   hosts: Schema.Array(
     Schema.Struct({
       id: HostId,
@@ -83,5 +88,6 @@ export const loadConfig = (
       authorizedKeys: yield* readAuthorizedKeys(
         relative(decoded.authorizedKeys)
       ),
+      hookTimeoutSeconds: decoded.hookTimeout ?? defaultHookTimeoutSeconds,
     };
   });

@@ -74,6 +74,10 @@ export type Source = typeof Source.Type;
 
 const others = { machines: Schema.Array(MachineRef) };
 
+const hooked = {
+  hook: Schema.optionalKey(Schema.Struct({ timeoutSeconds: Size })),
+};
+
 /**
  * What a host runs. `pin` is the runtime pin a VM booted under, compared with the host's own, and
  * `machines` the host's other machines, which admission counts beside the one a step boots. A step
@@ -84,7 +88,9 @@ const others = { machines: Schema.Array(MachineRef) };
  * a start does. A `publish` copies a checkpoint's files to the build store under its name, and a
  * `fetch` makes a checkpoint from what was published as `from`, of template build `build`,
  * downloading only what this host doesn't hold. A delete that will `unpublish` also removes the
- * checkpoint from the build store, with every key no other published checkpoint holds.
+ * checkpoint from the build store, with every key no other published checkpoint holds. A stop, pause
+ * or remove with `hook` first runs the guest's hook for it, if its VM runs and its guest has taken the
+ * machine's identity, for at most `timeoutSeconds`, and goes on whatever the hook does.
  */
 export const Step = Schema.Union([
   Schema.TaggedStruct("make", {
@@ -100,9 +106,14 @@ export const Step = Schema.Union([
     ...pinned,
     ...others,
   }),
-  Schema.TaggedStruct("stop", { machine: MachineRef, ...pinned, ...others }),
-  Schema.TaggedStruct("pause", { machine: MachineRef, ...pinned }),
-  Schema.TaggedStruct("remove", { machine: Native }),
+  Schema.TaggedStruct("stop", {
+    machine: MachineRef,
+    ...pinned,
+    ...others,
+    ...hooked,
+  }),
+  Schema.TaggedStruct("pause", { machine: MachineRef, ...pinned, ...hooked }),
+  Schema.TaggedStruct("remove", { machine: Native, ...hooked }),
   Schema.TaggedStruct("resize", {
     machine: MachineRef,
     to: Sizing,

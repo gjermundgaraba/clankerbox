@@ -90,11 +90,17 @@ const sourceStep = (store: Store, found: MachineRow, held: Setup | undefined) =>
       : undefined;
   });
 
+const hooked = (found: MachineRow, timeoutSeconds: number) =>
+  found.ephemeral ? {} : { hook: { timeoutSeconds } };
+
 /**
  * What a host is sent for a machine's operation, built afresh from the rows at each delivery, or
  * undefined when it can't be sent: its source went, or the setup `held` in memory for a template's
  * builder did. The keys go to a builder, so its build holds them, and to a clone of a build, which adds
- * any it lacks. A builder on a host that `joins` joins the tailnet for its setup.
+ * any it lacks. A builder on a host that `joins` joins the tailnet for its setup. A stop, a pause and
+ * every remove ask the host to run the guest's hook first, for at most `hookTimeoutSeconds`, but a
+ * builder's: a mac build stops its builder before the copy, so a stop hook's effects would land in
+ * every clone, and a builder's delete has no user work to finish.
  */
 export const machineStep = (
   store: Store,
@@ -102,7 +108,8 @@ export const machineStep = (
   op: Operation,
   held: Setup | undefined,
   authorizedKeys: string,
-  joins: boolean
+  joins: boolean,
+  hookTimeoutSeconds: number
 ): Effect.Effect<Step | undefined, Internal> =>
   Effect.gen(function* () {
     const ref = refOf(found);
@@ -110,7 +117,11 @@ export const machineStep = (
     const { machines, ports } = yield* others(store, found);
 
     if (op.kind === "remove") {
-      return { _tag: "remove", machine: { name, instance } };
+      return {
+        _tag: "remove",
+        machine: { name, instance },
+        ...hooked(found, hookTimeoutSeconds),
+      };
     }
 
     if (op.kind === "make") {
@@ -159,11 +170,17 @@ export const machineStep = (
           machine: ref,
           ...pinned(found.pin),
           machines,
+          ...hooked(found, hookTimeoutSeconds),
         };
       }
 
       case "pause": {
-        return { _tag: "pause", machine: ref, ...pinned(found.pin) };
+        return {
+          _tag: "pause",
+          machine: ref,
+          ...pinned(found.pin),
+          ...hooked(found, hookTimeoutSeconds),
+        };
       }
 
       case "resize": {

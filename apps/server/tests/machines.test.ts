@@ -7,7 +7,12 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { Capacity, Internal, Unsizable } from "@gjermundgaraba/clankerbox-sdk";
 import type { Machine, Setup } from "@gjermundgaraba/clankerbox-sdk";
-import { read, stat } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import {
+  read,
+  scratch,
+  stat,
+  write,
+} from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import { Duration, Effect, Fiber, Option, Result } from "effect";
 import { expect } from "vite-plus/test";
@@ -43,6 +48,26 @@ const installsStart = {
 };
 
 const exits3 = { script: "#!/bin/sh\nexit 3\n", timeoutSeconds: 30 };
+
+const leftIn = (dir: string) => path.join(dir, "left");
+
+const installsLeaveHooks = (dir: string, then = "") => ({
+  script: [
+    "#!/bin/sh",
+    'mkdir -p "$CLANKERBOX_ROOT/etc/clankerbox"',
+    ...["stop", "pause", "delete"].flatMap((hook) => [
+      `printf '#!/bin/sh\\necho %s >>"%s"\\n${then}\\n' ${hook} "${leftIn(dir)}" >"$CLANKERBOX_ROOT/etc/clankerbox/${hook}"`,
+      `chmod 755 "$CLANKERBOX_ROOT/etc/clankerbox/${hook}"`,
+    ]),
+  ].join("\n"),
+  timeoutSeconds: 30,
+});
+
+const hooksRun = (dir: string) =>
+  Effect.map(
+    Effect.orElseSucceed(read(leftIn(dir)), () => ""),
+    (text) => text.split("\n").filter((line) => line !== "")
+  );
 
 const portsOfHere = { first: 21_900, last: 21_909 };
 
@@ -192,6 +217,102 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
+  for (const kind of ["linux", "mac"] as const) {
+    it.effect(
+      `a ${kind} machine runs its guest's hook before each stop, pause and delete, and a template's builder runs none`,
+      () =>
+        Effect.gen(function* () {
+          const dir = yield* scratch;
+
+          const { client } = yield* servedWithBuildOf(installsLeaveHooks(dir), {
+            hosts: [{ id: kind, kind }],
+          });
+
+          const afterBuild = yield* hooksRun(dir);
+
+          yield* client.create("dev", fromWeb);
+          yield* client.stopMachine({ id: "dev" });
+          yield* client.startMachine({ id: "dev" });
+          yield* client.pauseMachine({ id: "dev" });
+          yield* client.startMachine({ id: "dev" });
+          yield* client.deleteMachine({ id: "dev" });
+
+          expect(afterBuild).toStrictEqual([]);
+          expect(yield* hooksRun(dir)).toStrictEqual([
+            "stop",
+            "pause",
+            "delete",
+          ]);
+        })
+    );
+  }
+
+  it.effect(
+    "a guest's hook is cut short at the control plane's hookTimeout, and its stop goes on",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+
+        const { client, fake } = yield* servedWithBuildOf(
+          installsLeaveHooks(dir, "exec sleep 60"),
+          { hookTimeoutSeconds: 1 }
+        );
+
+        yield* client.create("dev", fromWeb);
+
+        const stopped = yield* client.stopMachine({ id: "dev" });
+
+        expect(stopped).toMatchObject({ state: "stopped", phase: "settled" });
+        expect(fake.machines.get("dev")?.state).toBe("stopped");
+        expect(yield* hooksRun(dir)).toStrictEqual(["stop"]);
+      })
+  );
+
+  it.effect(
+    "the undo of a copy whose make fails before it takes its identity runs no hook, as its guest is still its source",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+
+        const { client, fake, row } = yield* servedWithBuildOf(
+          installsLeaveHooks(dir)
+        );
+
+        fake.failNext("exec", new Internal({ message: "agent gone" }));
+        yield* Effect.flip(client.create("dev", fromWeb));
+        yield* eventually(row("dev"), ({ state }) => state === "undone");
+
+        expect(fake.calls.slice(-2)).toStrictEqual(["exec dev", "delete dev"]);
+        expect(yield* hooksRun(dir)).toStrictEqual([]);
+      })
+  );
+
+  it.effect(
+    "the undo of a copy whose start hook fails after it takes its identity runs the guest's delete hook",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        const startFails = path.join(dir, "start-fails");
+        const hooks = installsLeaveHooks(dir);
+
+        const { client, fake, row } = yield* servedWithBuildOf({
+          ...hooks,
+          script: [
+            hooks.script,
+            `printf '#!/bin/sh\\ntest ! -e "%s"\\n' "${startFails}" >"$CLANKERBOX_ROOT/etc/clankerbox/start"`,
+            'chmod 755 "$CLANKERBOX_ROOT/etc/clankerbox/start"',
+          ].join("\n"),
+        });
+
+        yield* write(startFails, "");
+        yield* Effect.flip(client.create("dev", fromWeb));
+        yield* eventually(row("dev"), ({ state }) => state === "undone");
+
+        expect(fake.calls.slice(-2)).toStrictEqual(["exec dev", "delete dev"]);
+        expect(yield* hooksRun(dir)).toStrictEqual(["delete"]);
+      })
+  );
+
   it.effect("a mac host's machine is mac", () =>
     Effect.gen(function* () {
       const { client } = yield* served({
@@ -240,9 +361,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(at(stopped)).toStrictEqual(["stopped", "stopped", "settled"]);
         expect(at(started)).toStrictEqual(["running", "running", "settled"]);
         expect(fake.calls).toStrictEqual([
+          "exec dev",
           "stop dev",
           "admit dev",
           "start dev",
+          "exec dev",
           "exec dev",
           "exec dev",
           "delete dev",
@@ -428,7 +551,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(at(unread)).toStrictEqual(["unknown", "stopped", "waiting"]);
         expect(whileUnread).toStrictEqual([]);
         expect(at(stopped)).toStrictEqual(["stopped", "stopped", "settled"]);
-        expect(fake.calls).toStrictEqual(["stop dev"]);
+        expect(fake.calls).toStrictEqual(["exec dev", "stop dev"]);
       })
   );
 
@@ -1097,7 +1220,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect((yield* Fiber.join(starting))._tag).toBe("Superseded");
         expect(at(stopped)).toStrictEqual(["stopped", "stopped", "settled"]);
-        expect(fake.calls).toStrictEqual(["start dev", "exec dev", "stop dev"]);
+        expect(fake.calls).toStrictEqual([
+          "start dev",
+          "exec dev",
+          "exec dev",
+          "stop dev",
+        ]);
       })
   );
 
@@ -1117,6 +1245,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       expect(at(started)).toStrictEqual(["running", "running", "settled"]);
       expect(fake.calls).toStrictEqual([
+        "exec dev",
         "stop dev",
         "start dev",
         "exec dev",
@@ -1141,6 +1270,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       expect(at(started)).toStrictEqual(["running", "running", "settled"]);
       expect(fake.calls).toStrictEqual([
+        "exec dev",
         "pause dev",
         "start dev",
         "exec dev",
@@ -1167,6 +1297,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(at(started)).toStrictEqual(["running", "running", "settled"]);
         expect(yield* pins).toStrictEqual(["fake 1"]);
         expect(fake.calls).toStrictEqual([
+          "exec dev",
           "pause dev",
           "admit dev",
           "start dev",
@@ -1199,7 +1330,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(answers).toStrictEqual(
           Array.from({ length: 2 }, () => [
             ["stopped", "paused", "settled"],
-            ["stop dev"],
+            ["exec dev", "stop dev"],
           ])
         );
         expect(yield* pins).toStrictEqual(["fake 1"]);
@@ -1656,7 +1787,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect((yield* Fiber.join(starting))._tag).toBe("Superseded");
         expect(at(stopped)).toStrictEqual(["stopped", "stopped", "settled"]);
         expect(fake.machines.get("dev")?.state).toBe("stopped");
-        expect(fake.calls.slice(-2)).toStrictEqual(["start dev", "stop dev"]);
+        expect(fake.calls.slice(-3)).toStrictEqual([
+          "start dev",
+          "exec dev",
+          "stop dev",
+        ]);
       })
   );
 
@@ -1682,7 +1817,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(refused).toMatchObject({ _tag: "Superseded", by: "deleted" });
         expect(still.desired).toBe("deleted");
-        expect(fake.calls).toStrictEqual(["delete dev"]);
+        expect(fake.calls).toStrictEqual(["exec dev", "delete dev"]);
       })
   );
 
@@ -3119,6 +3254,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(fake.calls.filter((call) => call.endsWith(" box"))).toStrictEqual([
         "admit box",
         "restore box",
+        "exec box",
         "exec box",
         "delete box",
       ]);

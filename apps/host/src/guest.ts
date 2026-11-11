@@ -12,7 +12,7 @@ import { timeoutFail } from "./runtime.ts";
 import type {
   Command,
   Interface as Runtime,
-  MachineRef,
+  Native,
   RuntimeError,
 } from "./runtime.ts";
 
@@ -53,7 +53,7 @@ const keptOutput = () => {
 
 const drained = (
   runtime: Runtime,
-  machine: MachineRef,
+  machine: Native,
   command: Command,
   output: ReturnType<typeof keptOutput>
 ): Effect.Effect<number, RuntimeError> =>
@@ -79,7 +79,7 @@ const drained = (
 const runInGuest = (
   runtime: Runtime,
   script: "setup" | "preparation" | "tailnet",
-  machine: MachineRef,
+  machine: Native,
   command: Command,
   timeout: Duration.Duration
 ): Effect.Effect<string, RuntimeError | ScriptFailed> =>
@@ -111,7 +111,14 @@ const runInGuest = (
 
 export const runCommand = (
   runtime: Runtime,
-  { machine, argv, user, env, stdin, timeoutSeconds }: ExecCommand
+  {
+    machine,
+    argv,
+    user,
+    env,
+    stdin,
+    timeoutSeconds,
+  }: Omit<ExecCommand, "machine"> & { readonly machine: Native }
 ): Effect.Effect<Executed, RuntimeError> =>
   Effect.gen(function* () {
     const output = keptOutput();
@@ -233,7 +240,7 @@ const baseTimeout = Duration.minutes(10);
  */
 export const prepareBase = (
   runtime: Runtime,
-  machine: MachineRef,
+  machine: Native,
   kind: Kind,
   joins: boolean
 ): Effect.Effect<void, RuntimeError | ScriptFailed> =>
@@ -281,7 +288,7 @@ const defaultSetupTimeoutSeconds = 600;
 
 export const runSetup = (
   runtime: Runtime,
-  machine: MachineRef,
+  machine: Native,
   setup: Setup,
   authorizedKeys: string | undefined
 ): Effect.Effect<void, RuntimeError | ScriptFailed> => {
@@ -312,7 +319,7 @@ export const runSetup = (
 
 export const addMissingKeys = (
   runtime: Runtime,
-  machine: MachineRef,
+  machine: Native,
   authorizedKeys: string
 ): Effect.Effect<void, RuntimeError | ScriptFailed> =>
   Effect.asVoid(
@@ -589,7 +596,7 @@ export const hostKeyIn = (output: string): string | undefined => {
 
 export const identify = (
   runtime: Runtime,
-  machine: MachineRef
+  machine: Native
 ): Effect.Effect<void, RuntimeError | ScriptFailed> =>
   Effect.asVoid(
     runInGuest(
@@ -613,7 +620,7 @@ export const identify = (
 
 export const unkey = (
   runtime: Runtime,
-  machine: MachineRef
+  machine: Native
 ): Effect.Effect<void, RuntimeError | ScriptFailed> =>
   Effect.asVoid(
     runInGuest(
@@ -627,7 +634,7 @@ export const unkey = (
 
 export const prepare = (
   runtime: Runtime,
-  machine: MachineRef
+  machine: Native
 ): Effect.Effect<string | undefined, RuntimeError | ScriptFailed> =>
   runInGuest(
     runtime,
@@ -641,7 +648,7 @@ const tailnetTimeout = Duration.seconds(90);
 
 export const checkTailnet = (
   runtime: Runtime,
-  machine: MachineRef,
+  machine: Native,
   hostname: string,
   key?: Redacted.Redacted
 ): Effect.Effect<TailnetReport | undefined, RuntimeError | ScriptFailed> =>
@@ -670,7 +677,7 @@ export const checkTailnet = (
 /** Keeps what the guest resolves names with, so `scrubNode` can put it back after a join. */
 export const rememberDns = (
   runtime: Runtime,
-  machine: MachineRef
+  machine: Native
 ): Effect.Effect<void, RuntimeError | ScriptFailed> =>
   Effect.asVoid(
     runInGuest(
@@ -688,7 +695,7 @@ export const rememberDns = (
  */
 export const scrubNode = (
   runtime: Runtime,
-  machine: MachineRef
+  machine: Native
 ): Effect.Effect<readonly string[], RuntimeError | ScriptFailed> =>
   runInGuest(
     runtime,
@@ -704,3 +711,37 @@ export const scrubNode = (
         .map((line) => line.slice(scrubMarker.length))
     )
   );
+
+/** What is about to happen to a running VM, each with its hook in `/etc/clankerbox`. */
+export type Leaving = "stop" | "pause" | "delete";
+
+const leaveScript = [
+  "root=${CLANKERBOX_ROOT-}",
+  guestPath,
+  "hook=$root/etc/clankerbox/$1",
+  `if [ -e "$hook" ] && [ "$(cat "${stateDir}/instance" 2>/dev/null || true)" = "$2" ]; then exec "$hook" </dev/null; fi`,
+  "",
+].join("\n");
+
+/**
+ * Runs the guest's hook for what is about to happen to its VM, if it has one, as root, but only in a
+ * guest that has taken this machine's identity: until then a copy is still its source.
+ */
+export const leave = (
+  runtime: Runtime,
+  machine: Native,
+  leaving: Leaving,
+  timeoutSeconds: number
+): Effect.Effect<Executed, RuntimeError> =>
+  runCommand(runtime, {
+    machine,
+    argv: [
+      "/bin/sh",
+      "-c",
+      leaveScript,
+      "clankerbox-leave",
+      leaving,
+      machine.instance,
+    ],
+    timeoutSeconds,
+  });

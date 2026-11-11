@@ -74,6 +74,7 @@ export interface Settings {
   readonly recheck: Duration.Duration;
   readonly failedRowsLast: Duration.Duration;
   readonly authorizedKeys: string;
+  readonly hookTimeoutSeconds: number;
 }
 
 const stepPoll = Duration.millis(100);
@@ -448,7 +449,8 @@ export const make = (
             op,
             creates.get(found.name)?.setup,
             settings.authorizedKeys,
-            hosts.known(found.host)?.joins === true
+            hosts.known(found.host)?.joins === true,
+            settings.hookTimeoutSeconds
           ),
         }),
       following,
