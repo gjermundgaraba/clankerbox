@@ -4,7 +4,6 @@ import path from "node:path";
 import {
   formatMib,
   Internal,
-  Invalid,
   isBuildCopy,
   Unsizable,
   WrongState,
@@ -53,22 +52,15 @@ export const SmolvmSettings = Schema.Struct({
 
 const mib = 1024 * 1024;
 
-const reservedMib = 2048;
+// https://github.com/smol-machines/smolvm/blob/v1.34.1/src/systemd_scope.rs#L222
+const reservedMib = (hostRamMib: number) =>
+  Math.min(
+    Math.max(Math.floor((hostRamMib * 6) / 100), 8192),
+    Math.floor(hostRamMib / 4)
+  );
 
-export const ramBudget = (
-  set: number | undefined
-): Effect.Effect<number, Invalid> => {
-  const ramBudgetMib = set ?? Math.floor(totalmem() / mib) - reservedMib;
-
-  return ramBudgetMib <= 0
-    ? Effect.fail(
-        new Invalid({
-          message:
-            "linux.ramBudgetMib: physical RAM leaves no default budget; set one",
-        })
-      )
-    : Effect.succeed(ramBudgetMib);
-};
+export const ramBudget = (set: number | undefined, hostRamMib: number) =>
+  set ?? hostRamMib - reservedMib(hostRamMib);
 
 export interface Settings {
   readonly prefix: string;
@@ -1478,7 +1470,6 @@ export const layer = (
     Runtime,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const ramBudgetMib = yield* ramBudget(config.linux.ramBudgetMib);
 
       const bootId = yield* files(
         `couldn't read the host's boot ID from ${bootIdFile}`,
@@ -1489,7 +1480,10 @@ export const layer = (
         {
           prefix: config.linux.prefix,
           publishAddress: config.listen.address,
-          ramBudgetMib,
+          ramBudgetMib: ramBudget(
+            config.linux.ramBudgetMib,
+            Math.floor(totalmem() / mib)
+          ),
           stateDir: config.stateDir,
           arch: process.arch,
           bootId: bootId.replaceAll("-", "").slice(0, 8),

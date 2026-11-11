@@ -415,9 +415,14 @@ as it is.
   files. systemd makes the top-level slice on demand, and only `serve` sets
   its CPU and memory limits (`configure_vm_slice`,
   `configure_vm_slice_memory`, from `SMOLVM_HOST_RESERVED_CPUS` and
-  `_MEMORY_MB`). Ours: `environment()` sets it; a host restart keeps VMs; the
-  slice has systemd's defaults, so the VMs together share one CPU weight
-  beside `system.slice`, the host's.
+  `_MEMORY_MB`): `MemoryMax` at physical RAM less `host_reserved_memory_mib`,
+  6% of it, at least 8 GiB and at most a quarter, runtime-only. Ours:
+  `environment()` sets it; a host restart keeps VMs; README's install writes
+  a `smolvm.slice` unit with `MemoryMax=97%`, and the default RAM budget
+  leaves `host_reserved_memory_mib` (`reservedMib`), at least 6%, so
+  admission stops below the cap; the VMs together share one CPU weight beside
+  `system.slice`, the host's. A smolvm that sets these limits from the CLI,
+  renames `VM_SLICE` or changes the reserve's formula changes this.
 - `SMOLVM_BOOT_BINARY` arms a parent-death watchdog (`watch_parent`,
   src/agent/launcher.rs; read in `start_via_subprocess`). Ours: never set.
 - As root each VM runs as its own uid from 2000000 up, with only the kvm group
@@ -711,18 +716,8 @@ as it is.
   and Notation above. Move every smolvm permalink to the target's
   tag and the line its code now sits on, edit a claim only where the target
   changed it, and add claims the new release introduced.
-- Tell the operator what moving a host to the new release does: install it
-  into a new prefix, expand its templates, change `linux.prefix` and restart (a
-  host whose floor rose refuses to start until then); running VMs
-  keep their old prefix, which must stay until its last machine is deleted; the
-  new prefix builds new image seeds; every existing `ram` checkpoint now fails
-  its restore with `PinMismatch`, since its pin names the old release; and so
-  does a start or stop of every paused machine, which smolvm can't stop without
-  resuming, leaving it only `delete`, disk and all: start or stop each paused
-  machine before the move (a stop needs room for one at a time). A machine left
-  running across the move booted under the old pin, so its next pause stops it,
-  and it pauses after its next start; a capture or fork of it is `PinMismatch`
-  until a stop and a start.
+- Tell the operator what moving a host to the new release does, as README's
+  Upgrading smolvm says, and fix that section where the target changes it.
 - Report the tag transition, the claims that changed and their fixes, the checks
   actually run, optional opportunities (with touchpoints and the smallest useful
   check), and remaining runtime resources and retained disk separately.

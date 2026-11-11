@@ -77,7 +77,25 @@ for t in storage-template.ext4 overlay-template.ext4; do
 done
 ```
 
+smolvm runs every VM in `smolvm.slice`. Cap it at 97% of physical RAM, once per host, so that VMs that outgrow the RAM budget are killed rather than the host's own services. The host doesn't check for it; `systemctl show smolvm.slice -p MemoryMax` does.
+
+```sh
+printf '[Slice]\nMemoryMax=97%%\n' > /etc/systemd/system/smolvm.slice
+systemctl daemon-reload
+```
+
 Softnet, for Tart: `sudo install -o root -g wheel -m 4755 softnet /usr/local/bin/softnet`.
+
+### Upgrading smolvm
+
+A linux host's runtime pin names the smolvm release in its `linux.prefix`, so moving it to another release:
+
+- Start or stop each paused machine first. It resumes only under the smolvm that paused it, so after the move a `start` or `stop` of it fails `PinMismatch` and it can only be deleted. A stop needs room for one machine at a time.
+- Install the new release into its own prefix, as above, point `linux.prefix` at it and restart the host. Keep the old prefix until its last machine is deleted, since running VMs and their disks still use it.
+- A machine left running across the move can't be forked or captured until it is stopped and started again, and its next pause stops it.
+- RAM checkpoints captured before can't be restored: delete them, and capture again where needed.
+- Each template build's copy on the host is `outdated`, so no create from it goes there: build each template again once every host of its kind has moved.
+- The first create of each base pulls its image again.
 
 ## Run a host
 
@@ -101,6 +119,7 @@ A host process runs one kind from one JSON config file:
 - `stateDir`, relative to the config, holds the runtime's files. On linux it is at most 52 bytes and outside every home directory, such as `/srv/clankerbox/smolvm`.
 - `bases` maps names clients ask for to images, pinned by digest. A name holds no `/`. Hosts offering the same image should use the same name, as a create may land on any of them. The release was checked on linux's `ubuntu` above and on mac's `macos`, `ghcr.io/cirruslabs/macos-golden-gate-xcode@sha256:d7641b1d985fd53fbac071c663bf249007b9b387e16b7d576144588acb1d93f9`, Cirrus's Xcode 27.2 on macOS 27, whose 140 GB ASIF disk takes a `diskGib` of 131 or more: 130 GiB rounds to 140 GB, and Tart refuses to set an ASIF disk to its own size as it refuses a smaller one. A linux host also creates from any image reference a create names as its base, one with a `/`, such as `registry.example/team/image:tag`. A template build records the image its base named and clones its own copy, so a build made from a tag keeps the image the tag named then.
 - The kind's block: `linux: {prefix, ramBudgetMib?}`, smolvm's install, or `mac: {binary}`, the `tart` executable of a versioned install.
+- `ramBudgetMib` is the RAM a linux host admits machines up to. By default it is physical RAM less smolvm's own reserve for the host, 6% of it, but at least 8 GiB and at most a quarter: at most 94% of it, below `smolvm.slice`'s cap of 97% (see Install), which leaves room for each VM's own memory beside its guest's. A budget set past the cap overcommits physical RAM, which works while branches share their bases' pages, and past the cap the kernel kills a VM.
 - `machinePorts: {first, last}`, optional, is the range machines' SSH ports come from, 10000–19999 by default; `listen.port` lies outside it.
 - `tailnet: {oauthClient: {id, secret}, tags, buildTags?}`, optional, joins the host's machines to the tailnet, and a template build's builder for its setup (see below). A builder's node carries `buildTags`, or `tags` without them, so the tailnet's policy can grant a build what it grants no machine, or the reverse. The client needs the `auth_keys` scope and every tag; its secret never leaves the host.
 - `builds: {endpoint, bucket, region, accessKeyId, secretAccessKey}`, optional, is the S3 bucket template builds are copied through, so a create from a template can land on any host of its kind (see Templates). `endpoint` is an `http(s)` URL with no path and no credentials, such as `http://127.0.0.1:8333`, and addressed path-style. Every host of a kind names the same bucket; the secret never leaves the host. A host without it keeps its builds to itself.
@@ -143,6 +162,10 @@ The control plane exits 130 on SIGINT or SIGTERM and 1 when it fails.
 ### Upgrading from 0.30
 
 Hosts and the control plane start fresh: 0.30's machines aren't carried over. Before you upgrade, delete each machine and checkpoint with the old release, then stop its host, and remove its `stateDir`. IDs no longer carry a host: `linux_dev` is `dev`, and `ssh dev.cbx` replaces `ssh linux_dev`. Client configs name `server` instead of `hosts`, and profiles lose `host`. `clankerbox host` is now `clankerbox-host`.
+
+### Upgrading from 0.38
+
+A linux host needs smolvm 1.34.0 or later, and one on an older release refuses to start: move it to 1.34.1 as Upgrading smolvm says, which leaves its RAM checkpoints and template builds from 1.33 unusable on it. Add `smolvm.slice`'s cap (see Install). A host without `ramBudgetMib` admits less than before: 12 GiB of machines' RAM on a 16 GiB host rather than 14 GiB, 56 GiB on a 64 GiB one rather than 62 GiB.
 
 ### Upgrading from 0.36
 
@@ -210,7 +233,7 @@ clankerbox capacity                        # for an operator: each host's resour
 - `fork` copies a running linux machine with its RAM, or a stopped mac machine's disk. `fork` and `restore` take `--cpu`, `--ram` and `--disk` for the copy, its source's by default: a linux copy, holding its source's RAM, only grows, live once it runs; a mac copy takes any vCPUs and RAM; a disk only grows. `checkpoint capture` does the same, so a linux checkpoint is `ram` and a mac one `disk`.
 - `start`, `stop` and `pause` ask for a state and wait until the machine is there; a request fails `Superseded` when a later one for the same machine asked for something else before it got there. `delete` waits until the machine is gone, and nothing supersedes it. A machine that stops by itself while asked to run is started again at the control plane's next check, every 30 s.
 - `pause` saves a running machine's RAM, processes and disks and stops its VM, so it holds no RAM, and on a Mac none of its two VMs, until a `start` resumes it where it was. A `pause` leaves a stopped machine stopped, and a paused machine can't be forked or captured. A `pause` stops a machine it can't save, which then reads `stopped`: on linux one booted under another smolvm build, or before its host recorded which, and on a Mac one an older host booted.
-- On linux a paused machine resumes only under the smolvm build that paused it: after a host moves to another one, a `start` of it fails `PinMismatch`, so start or stop paused machines before upgrading; a stop needs room for one machine at a time, where each start keeps its RAM. A machine left running across the move is stopped by its next pause, and pauses after a start. A Mac tries the resume under any Tart and macOS, and a restore it can't make fails, keeping the saved state: a `stop` discards it, and the next `start` boots from the disk.
+- On linux a paused machine resumes only under the smolvm build that paused it: after a host moves to another one, a `start` of it fails `PinMismatch` (see Upgrading smolvm). A Mac tries the resume under any Tart and macOS, and a restore it can't make fails, keeping the saved state: a `stop` discards it, and the next `start` boots from the disk.
 - A `stop` of a paused machine resumes it on linux to end its processes, needing room as a start does, and fails `PinMismatch` after an upgrade too; on a Mac it discards the saved state without booting. Either keeps the disk.
 - On a Mac, macOS restores a VM's state only in the operator's unlocked login session: a `start` of a paused machine while it is locked fails and keeps the saved state (see Deploy).
 - `resize` gives a stopped machine any vCPUs and RAM, and grows a running linux machine's live, needing room for its RAM as a start does; a running mac machine or a paused one is refused, so stop it first. A disk only grows: smolvm grows the guest's filesystem, at once when it runs, and on a Mac the base's Tart guest agent grows APFS at the next boot. A resize waits for a step under way, and keeps what the runtime gave when it fails part way, or when the host stops during it, which the machine's sizes then show; asking for the same sizes again finishes a live grow that failed part way. A `resize` answers at the machine's next rest under any later wish but a delete, as each runs after it.

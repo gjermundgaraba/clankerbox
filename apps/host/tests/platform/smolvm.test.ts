@@ -1,5 +1,4 @@
 import { mkdirSync } from "node:fs";
-import { totalmem } from "node:os";
 import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -232,16 +231,12 @@ layer(NodeServices.layer)((it) => {
     expect(nativeName(machine)).toBe("dev-01234567");
   });
 
-  it.effect(
-    "the RAM budget defaults to physical RAM less 2 GiB, and a set one is kept",
-    () =>
-      Effect.gen(function* () {
-        expect(yield* ramBudget(undefined)).toBe(
-          Math.floor(totalmem() / 1024 / 1024) - 2048
-        );
-        expect(yield* ramBudget(1_000_000)).toBe(1_000_000);
-      })
-  );
+  it("the RAM budget defaults to physical RAM less smolvm's own reserve, and a set one is kept", () => {
+    expect(ramBudget(undefined, 16_384)).toBe(12_288);
+    expect(ramBudget(undefined, 65_536)).toBe(57_344);
+    expect(ramBudget(undefined, 773_120)).toBe(726_733);
+    expect(ramBudget(1_000_000, 16_384)).toBe(1_000_000);
+  });
 
   it.effect(
     "every smolvm call runs the prefix's wrapper in one fixed environment, and nothing else",
