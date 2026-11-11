@@ -32,10 +32,10 @@ separately, and don't deploy, change production hosts, or commit unless asked.
   Fetch missing tags; read with `git show <tag>:<path>` and
   `git diff <old>..<new>`. Never edit, reset or switch it.
 - **Notation:** a citation is a path in smolvm's source at the tested release,
-  1.33.0, and the identifier beside it (a function, constant, environment
+  1.34.1, and the identifier beside it (a function, constant, environment
   variable or message) finds the code: `git grep -n <identifier> <tag> --
   <path>`. Code comments cite a permalink at the tested release, as
-  `// https://github.com/smol-machines/smolvm/blob/v1.33.0/<path>#L<line>`:
+  `// https://github.com/smol-machines/smolvm/blob/v1.34.1/<path>#L<line>`:
   `git grep -n 'github.com/smol-machines/smolvm/blob/'`.
 - Read the release notes and the full changed-file list between the tags first,
   then each claim's file. A changelog or a clean build is not evidence.
@@ -74,8 +74,9 @@ as it is.
   `${XDG_DATA_HOME:-$HOME/.local/share}/smolvm/agent-rootfs` (`data_dir` in
   `install_smolvm`). As root without `--prefix` it installs system-wide
   instead (`/opt/smolvm`, a `/usr/local/bin` link, no rc edits; `main`).
-  Ours: README's install command runs it with `HOME=<prefix>` and `--prefix`,
-  so everything lands in the prefix.
+  It extracts with `tar --no-same-owner`, so a root install's prefix is
+  root's. Ours: README's install command runs it with `HOME=<prefix>` and
+  `--prefix`, so everything lands in the prefix.
 - With `SMOLVM_DATA_DIR` set, smolvm sets `HOME` to the data dir and strips
   `XDG_*` (`apply_system_data_root`, src/process.rs, called first in
   src/main.rs), so it can't find the agent rootfs on its own: it copies an
@@ -161,7 +162,9 @@ as it is.
   other socket there is longer on virtio-net: only a machine without it gets
   the longer `port-forward.sock`, checked, and left out when too long
   (`PORT_FORWARD_SOCKET`, src/network/port_forward.rs; `launch_agent_vm`,
-  src/agent/launcher.rs). Linux allows 107 bytes
+  src/agent/launcher.rs), and only a machine with credential bindings serves
+  the longer, unchecked `credentials.sock` (`CREDENTIALS_SOCKET`,
+  `start_interceptor`, src/credentials.rs). Linux allows 107 bytes
   (`MAX_UNIX_SOCKET_PATH`, src/agent/launcher_dynamic.rs, which smolvm checks
   for its other sockets but not the control socket). Ours: `controlSocket` and
   `socketPathMax`; the state dir is at most 52 bytes.
@@ -200,12 +203,14 @@ as it is.
   crates/smolvm-protocol/src/lib.rs); `machine exec` sessions are never
   registered as workloads. Ours: stop returns that error rather than force
   it; delete's path; setup and `start` scripts' daemons are not signalled.
-- `stop`'s kill gives the VMM 2 s after SIGTERM and 3 s after SIGKILL
-  (`AGENT_STOP_TIMEOUT`, src/agent/manager.rs; `VM_SIGKILL_TIMEOUT`,
-  src/process.rs), then fails with "still alive after stop attempts", after
-  "orphan process still alive, preserving PID/socket files" when a fresh CLI
-  found the VM only through its PID file (`stop_inner`). A large VM is still
-  freeing its RAM then: one of 48 GiB exited 7 s after that failure. The
+- After the guest's ack, or with no handshake for a paused guest, `stop`'s
+  kill gives the VMM 15 s after SIGTERM to flush its disk images and 3 s
+  after SIGKILL (`VM_EXIT_FLUSH_TIMEOUT`, `stop_vm_process`,
+  src/agent/manager.rs; `VM_SIGKILL_TIMEOUT`, src/process.rs). It then fails with "still alive after stop
+  attempts", after "orphan process still alive, preserving PID/socket files"
+  when a fresh CLI found the VM only through its PID file (`stop_inner`). A
+  large VM may still be freeing its RAM then: one of 48 GiB exited 7 s after
+  that failure when the SIGTERM wait was 2 s. The
   record keeps `running` and the dead PID (`stop_vm_named_with_timeout`,
   src/cli/vm_common.rs), and `machine status` reads it `stopped` once the PID
   is gone (`resolve_state`); until then it reads `unreachable`, as the PID
@@ -273,8 +278,8 @@ as it is.
   `serve` or an embedder, never after a CLI start (src/vm_exit.rs;
   `register_vm_child`, src/process.rs).
   It reports a port count (`ports`), the booted agent rootfs's
-  `agent_rootfs_digest`, and `branchable: false` even after `start
-  --branchable`. For a machine whose state resolves `running` and that
+  `agent_rootfs_digest`, and `branchable` (and `forkable`) true while a VM
+  started `--branchable` runs (`branchable_now`). For a machine whose state resolves `running` and that
   publishes a port, it also runs `cat /proc/net/tcp /proc/net/tcp6` in the VM
   for `published_ports` (`status_vm_json`, src/cli/vm_common.rs;
   `probe_guest_listeners`, src/cli/port_listen.rs): a second agent connection
@@ -296,9 +301,14 @@ as it is.
   target, which finishes the guest's part and clears the intent; an intent
   left pending refuses a grow of another resource ("an unfinished resize
   belongs to a different target"), captures and branches, and no CLI command
-  shows or reconciles it (`grow_memory_locked`, `grow_cpus_locked`,
+  shows or reconciles it, but a RAM grow clears a RAM intent whose runtime is
+  gone and whose new boot already holds its target
+  (`clear_met_memory_intent`) (`grow_memory_locked`, `grow_cpus_locked`,
   `grow_disks_locked`, `begin_resize_intent`, src/agent/live_resize.rs;
-  `begin_resize`, src/db/resize.rs). `machine update --name X` with `--cpus`,
+  `begin_resize`, src/db/resize.rs). A guest whose driver didn't take the RAM
+  growth device at boot refuses every live `--mem`, the size it has included
+  ("did not take its RAM growth device", `grow_memory_locked`); smolvm's own
+  kernel takes it. `machine update --name X` with `--cpus`,
   `--mem` and `--storage` (only growing) takes a stopped or created machine,
   else `InvalidState`: it checks the vCPUs and RAM, at least 64 MiB
   (`MIN_MEMORY_MIB`, src/data/resources.rs), grows the disks, then writes all
@@ -356,12 +366,16 @@ as it is.
 - When a `machine exec` client is signalled, smolvm SIGKILLs the guest command
   and every descendant (`kill_child_on_disconnect`,
   crates/smolvm-agent/src/main.rs; `kill_child_tree`,
-  crates/smolvm-agent/src/process.rs); a `setsid -f` child whose parent exits
-  at once survives. The container's PID 1 is smolvm's keep-alive
+  crates/smolvm-agent/src/process.rs), and with them every process still
+  holding the command's own stdout or stderr pipe (`own_output_pipes`,
+  `pipe_writers`); a `setsid -f` child whose parent exits at once survives
+  unless it kept that output. A command that exits normally kills nothing.
+  The container's PID 1 is smolvm's keep-alive
   `container-init`, which the image's command is exec'd under and which reaps
   such a child. Ours: a setup killed by its timeout or a host crash runs no
   exit trap and may leave its file in `/var/tmp` (`setupRunner` in
-  `apps/host/src/guest.ts`); `start` scripts daemonize with `setsid -f`; a
+  `apps/host/src/guest.ts`); `start` scripts daemonize with `setsid -f`, and
+  ours (tailscaled in `guest.ts`, the provider's recipe) redirect its output; a
   guest script that passes its timeout, or a step cut short, ends the client,
   so smolvm kills its command.
   Live on 1.31.1: a SIGTERM to the client ended it with 143 and the guest
@@ -395,10 +409,15 @@ as it is.
 - The CLI starts the VMM as a detached child, in its own process group, in the
   caller's cgroup, with the CLI's environment (`start_via_subprocess`,
   src/agent/manager.rs). `SMOLVM_VM_USE_SCOPE=1`, root only, gives each VM
-  `system.slice/smolvm-vm-<name>.scope` with its limits (`is_available`,
-  `scope_name`, `adopt_into_scope`, src/systemd_scope.rs; read in
+  `smolvm.slice/smolvm-vm-<name>.scope` with its limits (`is_available`,
+  `scope_name`, `adopt_into_scope`, `VM_SLICE`, src/systemd_scope.rs; read in
   `start_via_subprocess`), so it survives the launching unit, with no unit
-  files. Ours: `environment()` sets it; a host restart keeps VMs.
+  files. systemd makes the top-level slice on demand, and only `serve` sets
+  its CPU and memory limits (`configure_vm_slice`,
+  `configure_vm_slice_memory`, from `SMOLVM_HOST_RESERVED_CPUS` and
+  `_MEMORY_MB`). Ours: `environment()` sets it; a host restart keeps VMs; the
+  slice has systemd's defaults, so the VMs together share one CPU weight
+  beside `system.slice`, the host's.
 - `SMOLVM_BOOT_BINARY` arms a parent-death watchdog (`watch_parent`,
   src/agent/launcher.rs; read in `start_via_subprocess`). Ours: never set.
 - As root each VM runs as its own uid from 2000000 up, with only the kvm group
@@ -459,9 +478,11 @@ as it is.
   src/cli/vm_common.rs), never for `-p`; a `-p`-only machine is denied all
   egress.
   Ours: every create passes `--net --net-backend virtio-net -p <port>:22`.
-- `-p` binds loopback, or `SMOLVM_PUBLISH_ADDR`, which the VMM reads (`bind`,
-  crates/smolvm-network/src/tcp_listeners.rs); it listened on that address and
-  `[::1]`. Ours: `SMOLVM_PUBLISH_ADDR` is the host's `listen.address`.
+- `-p` binds loopback, or `SMOLVM_PUBLISH_ADDR`, which the VMM reads, and
+  `[::1]` beside an address other than `0.0.0.0`; only a loopback bind refused
+  for its port falls back to the wildcard, filtered by peer (`publish_addr`,
+  `bind_with`, crates/smolvm-network/src/publish_bind.rs). Ours:
+  `SMOLVM_PUBLISH_ADDR` is the host's `listen.address`.
 - Setting `SMOLVM_PUBLISH_ADDR` makes the egress floor strict by default; the
   values are `strict`, `metadata` and `off` (`floor_mode`,
   crates/smolvm-network/src/egress.rs), and no per-machine flag weakens strict
@@ -470,11 +491,14 @@ as it is.
   not the host's public addresses. Ours: `SMOLVM_EGRESS_FLOOR=strict`; guests
   can't reach the host's API or any tailnet peer; no host service may listen
   on a public address.
-- The virtio-net gateway answers port 53 at every address and relays to the
-  host's first IPv4 nameserver in `/etc/resolv.conf`, a loopback stub such as
-  systemd-resolved's 127.0.0.53 included, dialled from the host, where the
-  egress floor doesn't apply (`effective_dns`, `select_dns`,
-  src/data/network.rs). So guests resolve names through the host's own
+- The virtio-net gateway answers port 53 at every address. UDP goes through a
+  host-side cache to up to three of the host's `/etc/resolv.conf`
+  nameservers, IPv6 ones and a loopback stub such as systemd-resolved's
+  127.0.0.53 included, else systemd-resolved's uplinks, else 1.1.1.1 and
+  8.8.8.8 (`dns_forwarder_upstreams`, src/data/network.rs;
+  `MAX_UPSTREAM_RESOLVERS`, crates/smolvm-network/src/lib.rs); TCP goes to
+  the first IPv4 one (`effective_dns`, `select_dns`). Both are dialled from
+  the host, where the egress floor doesn't apply. So guests resolve names through the host's own
   resolver, tailnet names included where it serves them, though the floor
   still refuses connecting to the answers. smolvm refuses to capture a machine
   with custom DNS (`validate_capture_profile`, src/portable_checkpoint.rs), so
@@ -483,11 +507,13 @@ as it is.
 - A checkpoint with published ports refuses any backend but virtio-net
   (`validate_compatibility`, src/portable_checkpoint.rs); a restore reuses the
   checkpoint's host ports verbatim (`checkpoint_network`,
-  `validate_compatibility`); `create --from` a live checkpoint refuses `-p`,
-  `--net` and every topology flag (`topology_overridden` in
-  `run_from_smolmachine`, src/cli/machine.rs). Ours: after `create --from`,
-  the port moves with `machine update --remove-port … -p …` before the first
-  start.
+  `validate_compatibility`); `create --from` a live checkpoint refuses every
+  option that differs from what the checkpoint holds, by name, and takes `-p`
+  only to move the host side of its captured guest ports, an empty `-p`
+  keeping them (`resolve`, `SpecSource::Checkpoint`, src/machine_spec.rs,
+  called in `run_from_smolmachine`, src/cli/machine.rs). Ours: `create --from`
+  passes none, and the port moves with `machine update --remove-port … -p …`
+  before the first start.
 - smolvm's own fork ports come from 20000–31999: `CLONE_PORT_FLOOR` (20000) up
   to `CLONE_PORT_CEILING` (32000), which is excluded (`alloc_free_host_port`,
   src/agent/fork.rs). The CLI allocates no other host port range. Ours:
@@ -525,8 +551,10 @@ as it is.
   guest CPU features, clock, state origin and network
   (`validate_compatibility`, src/portable_checkpoint.rs), but not the engine
   build, and its ABI string (`RUNTIME_ABI`) has stayed the same across libkrun
-  changes to restored device state, a vCPU's KVM nested state among them.
-  Only a branch compares its source VMM's binary with the engine's
+  changes to restored device state, a vCPU's KVM nested state and its CPUID
+  among them. Only a branch compares engines: the build its source was
+  started by, on its record, with its own (`engine_build`; `ENGINE_BUILD`,
+  src/lib.rs), or the source VMM's binary for a record without one
   (`source_runs_another_engine`, src/agent/fork.rs). The agent rootfs it does
   follow: each boot records the content digest of the rootfs it booted
   (`agent_rootfs_digest` in `VmRecord`, src/config.rs;
@@ -606,9 +634,12 @@ as it is.
   base for", `ensure_fork_base_delete_is_safe`, src/cli/vm_common.rs). Each
   child's re-mint runs `ssh-keygen -A` only when `/etc/ssh/ssh_host_*_key`
   exists, and sets the guest's clock, never the host's (`date -u -s`,
-  `build_rejuvenation_script`, src/agent/fork.rs). `create --from` a
-  checkpoint refuses `-p` (`topology_overridden`, src/cli/machine.rs) and
-  restores the forwards its `checkpoint.json` holds
+  `build_rejuvenation_script`, src/agent/fork.rs). A child of a frozen source
+  whose disk chain is deeper than 8 layers is layered over a fold of it, or
+  else a copy the source owns and its later children share
+  (`shallow_clone_base`, `CLONE_BASE_COMPACT_AT_DEPTH`,
+  src/agent/fork/compact.rs). `create --from` a checkpoint with no `-p`
+  (`resolve`, src/machine_spec.rs) restores the forwards its `checkpoint.json` holds
   (`manifest.checkpoint.network.ports`; `INDEX`,
   crates/smolvm-checkpoint/src/store.rs; `CheckpointNetwork`,
   crates/smolvm-pack/src/format.rs). `checkpoint.json` records the smolvm that
@@ -631,7 +662,9 @@ as it is.
   beside one a reboot left dead. The RAM budget counts each VM `machine ls`
   names as a base by its scope's `MemoryCurrent`. A build's builder loses its
   host key files before the capture, so no child's re-mint runs `ssh-keygen
-  -A`, and preparation mints the one key each child keeps.
+  -A`, and preparation mints the one key each child keeps. A base is one
+  restore of one capture, so its chain stays shallow (not checked live), and
+  a copy it owns would go with it.
 
 **Why things are avoided** (re-check whether the reason still holds)
 
@@ -655,7 +688,9 @@ as it is.
   `security.capability` included (no `--xattrs`, crates/smolvm-agent/src/main.rs).
   Ours: no `disk` checkpoints on smolvm.
 - `smolvm serve`: a process-global agent rootfs and HOME, forced virtio-net and
-  its own egress floor, lossy non-streamed exec output (src/api/handlers/).
+  its own egress floor (src/api/handlers/); its exec sessions now stream
+  output and stdin and survive a dropped connection (src/api/exec_sessions.rs),
+  untried here.
   The embedded engine: exec stdin only as text, one runtime per process
   (src/embedded/), no stability statement. Ours: the CLI.
 

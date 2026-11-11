@@ -7,7 +7,7 @@ export interface PortRange {
   readonly last: number;
 }
 
-// https://github.com/smol-machines/smolvm/blob/v1.33.0/src/agent/fork.rs#L4321-L4323
+// https://github.com/smol-machines/smolvm/blob/v1.34.1/src/agent/fork.rs#L4511-L4513
 export const reservedPorts: ReadonlyArray<
   PortRange & { readonly owner: string }
 > = [
