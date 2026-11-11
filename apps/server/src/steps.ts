@@ -1,6 +1,6 @@
 import type { MachineRef, Step } from "@clankerbox/host-contract";
 import type { Internal, Setup } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, Option } from "effect";
+import { Effect, Option } from "effect";
 
 import { isPublished } from "./checkpoint-chart.ts";
 import type { CheckpointRow } from "./checkpoint-chart.ts";
@@ -90,17 +90,15 @@ const sourceStep = (store: Store, found: MachineRow, held: Setup | undefined) =>
       : undefined;
   });
 
-const hooked = (found: MachineRow, hookTimeout: Duration.Duration) =>
-  found.ephemeral
-    ? {}
-    : { hook: { timeoutSeconds: Duration.toSeconds(hookTimeout) } };
+const hooked = (found: MachineRow, timeoutSeconds: number) =>
+  found.ephemeral ? {} : { hook: { timeoutSeconds } };
 
 /**
  * What a host is sent for a machine's operation, built afresh from the rows at each delivery, or
  * undefined when it can't be sent: its source went, or the setup `held` in memory for a template's
  * builder did. The keys go to a builder, so its build holds them, and to a clone of a build, which adds
  * any it lacks. A builder on a host that `joins` joins the tailnet for its setup. A stop, a pause and
- * every remove ask the host to run the guest's hook first, for at most `hookTimeout`, but a
+ * every remove ask the host to run the guest's hook first, for at most `hookTimeoutSeconds`, but a
  * builder's: a mac build stops its builder before the copy, so a stop hook's effects would land in
  * every clone, and a builder's delete has no user work to finish.
  */
@@ -111,7 +109,7 @@ export const machineStep = (
   held: Setup | undefined,
   authorizedKeys: string,
   joins: boolean,
-  hookTimeout: Duration.Duration
+  hookTimeoutSeconds: number
 ): Effect.Effect<Step | undefined, Internal> =>
   Effect.gen(function* () {
     const ref = refOf(found);
@@ -122,7 +120,7 @@ export const machineStep = (
       return {
         _tag: "remove",
         machine: { name, instance },
-        ...hooked(found, hookTimeout),
+        ...hooked(found, hookTimeoutSeconds),
       };
     }
 
@@ -172,7 +170,7 @@ export const machineStep = (
           machine: ref,
           ...pinned(found.pin),
           machines,
-          ...hooked(found, hookTimeout),
+          ...hooked(found, hookTimeoutSeconds),
         };
       }
 
@@ -181,7 +179,7 @@ export const machineStep = (
           _tag: "pause",
           machine: ref,
           ...pinned(found.pin),
-          ...hooked(found, hookTimeout),
+          ...hooked(found, hookTimeoutSeconds),
         };
       }
 

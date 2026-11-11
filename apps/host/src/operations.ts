@@ -494,10 +494,7 @@ export const make = (
       machine: Native,
       leaving: Leaving,
       hook: { readonly timeoutSeconds: number } | undefined,
-      seen: Effect.Effect<MachineState, HostError> = stateNow(
-        machine,
-        `given its ${leaving} hook`
-      )
+      seen: Effect.Effect<MachineState, HostError>
     ) =>
       hook === undefined
         ? Effect.void
@@ -507,6 +504,10 @@ export const make = (
               if ((yield* seen) !== "running") {
                 return;
               }
+
+              yield* Effect.logInfo(
+                `${leaving} ${machine.name}: running its ${leaving} hook, if its guest has one and has taken its identity, for at most ${hook.timeoutSeconds}s`
+              );
 
               const { exitCode, output } = yield* leave(
                 runtime,
@@ -518,7 +519,7 @@ export const make = (
               if (exitCode !== 0) {
                 const past =
                   exitCode === timedOutExitCode
-                    ? `, as it ran past its ${hook.timeoutSeconds}s limit`
+                    ? `, past its ${hook.timeoutSeconds}s limit or by a timeout of its own`
                     : "";
 
                 yield* Effect.logWarning(
@@ -691,7 +692,12 @@ export const make = (
 
           if (!runtime.stopResumes) {
             return Effect.andThen(
-              beforeLeaving(machine, "stop", hook),
+              beforeLeaving(
+                machine,
+                "stop",
+                hook,
+                stateNow(machine, "given its stop hook")
+              ),
               stopped
             );
           }
@@ -714,7 +720,12 @@ export const make = (
           const { machine, pin, hook } = step;
 
           return Effect.andThen(
-            beforeLeaving(machine, "pause", hook),
+            beforeLeaving(
+              machine,
+              "pause",
+              hook,
+              stateNow(machine, "given its pause hook")
+            ),
             pin === runtime.pin
               ? runtime.pause(machine)
               : Effect.andThen(
@@ -730,7 +741,12 @@ export const make = (
           const { machine, hook } = step;
 
           return Effect.andThen(
-            beforeLeaving(machine, "delete", hook),
+            beforeLeaving(
+              machine,
+              "delete",
+              hook,
+              stateNow(machine, "given its delete hook")
+            ),
             runtime.delete(machine)
           );
         }

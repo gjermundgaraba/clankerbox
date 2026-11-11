@@ -2037,6 +2037,14 @@ const leaveHooks = (host: Runner) =>
     { discard: true }
   );
 
+const identified = (host: Runner, instance = "dev-instance") =>
+  Effect.gen(function* () {
+    const file = rootOf(host, "var/lib/clankerbox/instance");
+
+    yield* mkdir(path.dirname(file));
+    yield* write(file, `${instance}\n`);
+  });
+
 const hooksRun = (host: Runner) =>
   Effect.map(
     Effect.orElseSucceed(read(leftIn(host)), () => ""),
@@ -2148,6 +2156,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           const host = yield* runner();
 
           yield* finished(host, makes("dev"));
+          yield* identified(host);
           yield* leaveHooks(host);
           host.fake.observed.length = 0;
 
@@ -2167,6 +2176,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           const host = yield* runner();
 
           yield* finished(host, makes("dev"));
+          yield* identified(host);
           yield* leaveHooks(host);
 
           const report = yield* finished(host, sent, 2);
@@ -2189,6 +2199,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
           yield* finished(host, makes("dev"));
           yield* finished(host, before, 2);
+          yield* identified(host);
           yield* leaveHooks(host);
 
           const report = yield* finished(host, hooked(sent), 3);
@@ -2209,6 +2220,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const host = yield* runner();
 
         yield* finished(host, makes("dev"));
+        yield* identified(host);
         yield* guestHook(
           host,
           "stop",
@@ -2252,6 +2264,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           const host = yield* runner();
 
           yield* finished(host, makes("dev"));
+          yield* identified(host);
           yield* leaveHooks(host);
           unread(host);
 
@@ -2273,6 +2286,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const host = yield* runner();
 
       yield* finished(host, makes("dev"));
+      yield* identified(host);
       yield* guestHook(host, "stop", "echo the shipper is down\nexit 3");
 
       const report = yield* finished(host, hooked(stopping), 2);
@@ -2294,6 +2308,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const host = yield* runner();
 
         yield* finished(host, makes("dev"));
+        yield* identified(host);
         yield* guestHook(
           host,
           "delete",
@@ -2305,31 +2320,57 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(report.status).toBe("done");
         expect(yield* hooksRun(host)).toStrictEqual(["delete"]);
         expect(stateOf(host)).toBe("missing");
+        expect(logged).toContain(
+          "delete dev: running its delete hook, if its guest has one and has taken its identity, for at most 1s"
+        );
         expect(logged.join("\n")).toContain(
-          "delete dev goes on: its delete hook exited 124, as it ran past its 1s limit"
+          "delete dev goes on: its delete hook exited 124, past its 1s limit or by a timeout of its own"
         );
       }).pipe(Effect.provide(Logger.layer([capturing(logged)])));
     }
   );
 
-  it.effect(
-    "a running VM with no hook for its step logs nothing of one, and the step goes on",
-    () => {
-      const logged: string[] = [];
+  for (const { guest, hooks, instance } of [
+    {
+      guest: "has no hook for its step",
+      hooks: false,
+      instance: "dev-instance",
+    },
+    { guest: "has no instance file", hooks: true, instance: undefined },
+    {
+      guest: "holds another machine's instance",
+      hooks: true,
+      instance: "src-instance",
+    },
+  ] as const) {
+    it.effect(
+      `a running VM whose guest ${guest} runs no hook, logs no failure, and its stop goes on`,
+      () => {
+        const logged: string[] = [];
 
-      return Effect.gen(function* () {
-        const host = yield* runner();
+        return Effect.gen(function* () {
+          const host = yield* runner();
 
-        yield* finished(host, makes("dev"));
+          yield* finished(host, makes("dev"));
 
-        const report = yield* finished(host, hooked(stopping), 2);
+          if (instance !== undefined) {
+            yield* identified(host, instance);
+          }
 
-        expect(report.status).toBe("done");
-        expect(stateOf(host)).toBe("stopped");
-        expect(logged.join("\n")).not.toContain("hook");
-      }).pipe(Effect.provide(Logger.layer([capturing(logged)])));
-    }
-  );
+          if (hooks) {
+            yield* leaveHooks(host);
+          }
+
+          const report = yield* finished(host, hooked(stopping), 2);
+
+          expect(report.status).toBe("done");
+          expect(yield* hooksRun(host)).toStrictEqual([]);
+          expect(stateOf(host)).toBe("stopped");
+          expect(logged.join("\n")).not.toContain("goes on");
+        }).pipe(Effect.provide(Logger.layer([capturing(logged)])));
+      }
+    );
+  }
 
   it.effect(
     "a hook whose command the runtime fails to run is logged, and the step goes on without it",
@@ -2340,6 +2381,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const host = yield* runner();
 
         yield* finished(host, makes("dev"));
+        yield* identified(host);
         yield* leaveHooks(host);
         host.fake.failNext("exec", new Internal({ message: "agent gone" }));
 

@@ -7,11 +7,11 @@ import {
   readAuthorizedKeys,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Address } from "@gjermundgaraba/clankerbox-sdk/node";
-import { Duration, Effect, FileSystem, Path, Schema } from "effect";
+import { Effect, FileSystem, Path, Schema } from "effect";
 
 import {
   defaultFailedRowsLast,
-  defaultHookTimeout,
+  defaultHookTimeoutSeconds,
   defaultRecheck,
 } from "../settings.ts";
 import type { ServerSettings } from "../settings.ts";
@@ -88,9 +88,6 @@ export const loadConfig = (
       authorizedKeys: yield* readAuthorizedKeys(
         relative(decoded.authorizedKeys)
       ),
-      hookTimeout:
-        decoded.hookTimeout === undefined
-          ? defaultHookTimeout
-          : Duration.seconds(decoded.hookTimeout),
+      hookTimeoutSeconds: decoded.hookTimeout ?? defaultHookTimeoutSeconds,
     };
   });

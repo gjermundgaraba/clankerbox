@@ -11,6 +11,7 @@ import {
   read,
   scratch,
   stat,
+  write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import { Duration, Effect, Fiber, Option, Result } from "effect";
@@ -254,7 +255,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const { client, fake } = yield* servedWithBuildOf(
           installsLeaveHooks(dir, "exec sleep 60"),
-          { hookTimeout: Duration.seconds(1) }
+          { hookTimeoutSeconds: 1 }
         );
 
         yield* client.create("dev", fromWeb);
@@ -268,7 +269,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "the undo of a failed create runs the guest's delete hook while its VM runs",
+    "the undo of a copy whose make fails before it takes its identity runs no hook, as its guest is still its source",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
@@ -278,6 +279,32 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
 
         fake.failNext("exec", new Internal({ message: "agent gone" }));
+        yield* Effect.flip(client.create("dev", fromWeb));
+        yield* eventually(row("dev"), ({ state }) => state === "undone");
+
+        expect(fake.calls.slice(-2)).toStrictEqual(["exec dev", "delete dev"]);
+        expect(yield* hooksRun(dir)).toStrictEqual([]);
+      })
+  );
+
+  it.effect(
+    "the undo of a copy whose start hook fails after it takes its identity runs the guest's delete hook",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        const startFails = path.join(dir, "start-fails");
+        const hooks = installsLeaveHooks(dir);
+
+        const { client, fake, row } = yield* servedWithBuildOf({
+          ...hooks,
+          script: [
+            hooks.script,
+            `printf '#!/bin/sh\\ntest ! -e "%s"\\n' "${startFails}" >"$CLANKERBOX_ROOT/etc/clankerbox/start"`,
+            'chmod 755 "$CLANKERBOX_ROOT/etc/clankerbox/start"',
+          ].join("\n"),
+        });
+
+        yield* write(startFails, "");
         yield* Effect.flip(client.create("dev", fromWeb));
         yield* eventually(row("dev"), ({ state }) => state === "undone");
 

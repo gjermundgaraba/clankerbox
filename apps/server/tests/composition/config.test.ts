@@ -4,7 +4,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
-import { Duration, Effect } from "effect";
+import { Effect } from "effect";
 import type { Schema } from "effect";
 import { expect } from "vite-plus/test";
 
@@ -53,7 +53,7 @@ layer(NodeServices.layer)((it) => {
           recheck: defaultRecheck,
           failedRowsLast: defaultFailedRowsLast,
           authorizedKeys: `${operatorKey}\n`,
-          hookTimeout: Duration.seconds(120),
+          hookTimeoutSeconds: 120,
         });
       })
   );
@@ -62,7 +62,7 @@ layer(NodeServices.layer)((it) => {
     Effect.gen(function* () {
       const { loaded } = yield* load({ ...config, hookTimeout: 45 });
 
-      expect((yield* loaded).hookTimeout).toStrictEqual(Duration.seconds(45));
+      expect((yield* loaded).hookTimeoutSeconds).toBe(45);
     })
   );
 

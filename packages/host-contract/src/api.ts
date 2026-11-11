@@ -89,8 +89,8 @@ const hooked = {
  * `fetch` makes a checkpoint from what was published as `from`, of template build `build`,
  * downloading only what this host doesn't hold. A delete that will `unpublish` also removes the
  * checkpoint from the build store, with every key no other published checkpoint holds. A stop, pause
- * or remove with `hook` first runs the guest's hook for it, if its VM runs, for at most
- * `timeoutSeconds`, and goes on whatever the hook does.
+ * or remove with `hook` first runs the guest's hook for it, if its VM runs and its guest has taken the
+ * machine's identity, for at most `timeoutSeconds`, and goes on whatever the hook does.
  */
 export const Step = Schema.Union([
   Schema.TaggedStruct("make", {

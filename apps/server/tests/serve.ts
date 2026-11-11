@@ -14,7 +14,10 @@ import { Console, Duration, Effect, FileSystem, Layer, Logger } from "effect";
 import { HttpServer } from "effect/http";
 
 import { serverLayer } from "../src/composition/server.ts";
-import { defaultFailedRowsLast, defaultHookTimeout } from "../src/settings.ts";
+import {
+  defaultFailedRowsLast,
+  defaultHookTimeoutSeconds,
+} from "../src/settings.ts";
 
 const usage =
   "usage: serve.ts <run-dir>, with hosts in <run-dir>/hosts, each draining while <run-dir>/hosts/<id>.draining exists";
@@ -108,7 +111,7 @@ const serve = Effect.gen(function* () {
     recheck: Duration.seconds(2),
     failedRowsLast: defaultFailedRowsLast,
     authorizedKeys: yield* readAuthorizedKeys(keys),
-    hookTimeout: defaultHookTimeout,
+    hookTimeoutSeconds: defaultHookTimeoutSeconds,
   };
 
   return yield* Layer.launch(

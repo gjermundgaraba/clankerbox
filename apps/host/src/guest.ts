@@ -718,11 +718,15 @@ export type Leaving = "stop" | "pause" | "delete";
 const leaveScript = [
   "root=${CLANKERBOX_ROOT-}",
   guestPath,
-  `if [ -e "$root/etc/clankerbox/$1" ]; then exec "$root/etc/clankerbox/$1" </dev/null; fi`,
+  "hook=$root/etc/clankerbox/$1",
+  `if [ -e "$hook" ] && [ "$(cat "${stateDir}/instance" 2>/dev/null || true)" = "$2" ]; then exec "$hook" </dev/null; fi`,
   "",
 ].join("\n");
 
-/** Runs the guest's hook for what is about to happen to its VM, if it has one, as root. */
+/**
+ * Runs the guest's hook for what is about to happen to its VM, if it has one, as root, but only in a
+ * guest that has taken this machine's identity: until then a copy is still its source.
+ */
 export const leave = (
   runtime: Runtime,
   machine: Native,
@@ -731,6 +735,13 @@ export const leave = (
 ): Effect.Effect<Executed, RuntimeError> =>
   runCommand(runtime, {
     machine,
-    argv: ["/bin/sh", "-c", leaveScript, "clankerbox-leave", leaving],
+    argv: [
+      "/bin/sh",
+      "-c",
+      leaveScript,
+      "clankerbox-leave",
+      leaving,
+      machine.instance,
+    ],
     timeoutSeconds,
   });
