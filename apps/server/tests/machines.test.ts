@@ -267,21 +267,23 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
-  it.effect("the undo of a failed create runs no delete hook", () =>
-    Effect.gen(function* () {
-      const dir = yield* scratch;
+  it.effect(
+    "the undo of a failed create runs the guest's delete hook while its VM runs",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
 
-      const { client, fake, row } = yield* servedWithBuildOf(
-        installsLeaveHooks(dir)
-      );
+        const { client, fake, row } = yield* servedWithBuildOf(
+          installsLeaveHooks(dir)
+        );
 
-      fake.failNext("exec", new Internal({ message: "agent gone" }));
-      yield* Effect.flip(client.create("dev", fromWeb));
-      yield* eventually(row("dev"), ({ state }) => state === "undone");
+        fake.failNext("exec", new Internal({ message: "agent gone" }));
+        yield* Effect.flip(client.create("dev", fromWeb));
+        yield* eventually(row("dev"), ({ state }) => state === "undone");
 
-      expect(fake.calls).toContain("delete dev");
-      expect(yield* hooksRun(dir)).toStrictEqual([]);
-    })
+        expect(fake.calls.slice(-2)).toStrictEqual(["exec dev", "delete dev"]);
+        expect(yield* hooksRun(dir)).toStrictEqual(["delete"]);
+      })
   );
 
   it.effect("a mac host's machine is mac", () =>
@@ -3225,6 +3227,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(fake.calls.filter((call) => call.endsWith(" box"))).toStrictEqual([
         "admit box",
         "restore box",
+        "exec box",
         "exec box",
         "delete box",
       ]);

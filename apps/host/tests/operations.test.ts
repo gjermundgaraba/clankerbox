@@ -2075,7 +2075,7 @@ const leavings = [
   {
     step: "pause under another pin",
     sent: { ...pausing, pin: "fake 0" },
-    hook: "stop",
+    hook: "pause",
     ends: "stopped",
   },
   { step: "remove", sent: removing, hook: "delete", ends: "missing" },

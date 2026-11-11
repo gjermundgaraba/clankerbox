@@ -713,17 +713,17 @@ export const make = (
         case "pause": {
           const { machine, pin, hook } = step;
 
-          return pin === runtime.pin
-            ? Effect.andThen(
-                beforeLeaving(machine, "pause", hook),
-                runtime.pause(machine)
-              )
-            : Effect.logWarning(
-                `pause ${machine.name}: its VM booted under ${pin ?? "an older host"}, and this host runs ${runtime.pin ?? "no pin"}, so it stops it instead`
-              ).pipe(
-                Effect.andThen(beforeLeaving(machine, "stop", hook)),
-                Effect.andThen(runtime.stop(machine))
-              );
+          return Effect.andThen(
+            beforeLeaving(machine, "pause", hook),
+            pin === runtime.pin
+              ? runtime.pause(machine)
+              : Effect.andThen(
+                  Effect.logWarning(
+                    `pause ${machine.name}: its VM booted under ${pin ?? "an older host"}, and this host runs ${runtime.pin ?? "no pin"}, so it stops it instead`
+                  ),
+                  runtime.stop(machine)
+                )
+          );
         }
 
         case "remove": {

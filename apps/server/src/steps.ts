@@ -4,7 +4,6 @@ import { Duration, Effect, Option } from "effect";
 
 import { isPublished } from "./checkpoint-chart.ts";
 import type { CheckpointRow } from "./checkpoint-chart.ts";
-import { stageOf } from "./machine-chart.ts";
 import type { MachineRow } from "./machine-chart.ts";
 import type { Operation, Interface as Store } from "./store.ts";
 
@@ -101,8 +100,9 @@ const hooked = (found: MachineRow, hookTimeout: Duration.Duration) =>
  * undefined when it can't be sent: its source went, or the setup `held` in memory for a template's
  * builder did. The keys go to a builder, so its build holds them, and to a clone of a build, which adds
  * any it lacks. A builder on a host that `joins` joins the tailnet for its setup. A stop, a pause and
- * a delete ask the host to run the guest's hook first. A builder's never do, as it is off the tailnet
- * after its setup, nor does the remove that undoes a failed create.
+ * every remove ask the host to run the guest's hook first, for at most `hookTimeout`, but a
+ * builder's: a mac build stops its builder before the copy, so a stop hook's effects would land in
+ * every clone, and a builder's delete has no user work to finish.
  */
 export const machineStep = (
   store: Store,
@@ -122,9 +122,7 @@ export const machineStep = (
       return {
         _tag: "remove",
         machine: { name, instance },
-        ...(stageOf(found.state) === "deleting"
-          ? hooked(found, hookTimeout)
-          : {}),
+        ...hooked(found, hookTimeout),
       };
     }
 
