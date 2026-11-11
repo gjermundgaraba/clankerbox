@@ -48,6 +48,7 @@ import {
   checkTailnet,
   identify,
   addMissingKeys,
+  leave,
   prepareBase,
   prepare,
   rememberDns,
@@ -56,7 +57,7 @@ import {
   scrubNode,
   unkey,
 } from "./guest.ts";
-import type { TailnetReport } from "./guest.ts";
+import type { Leaving, TailnetReport } from "./guest.ts";
 import { pickPort, PortProbe } from "./machine-ports.ts";
 import {
   missing,
@@ -340,7 +341,7 @@ export const make = (
         return yield* runtime.fork(source.machine, machine);
       });
 
-    const stateNow = (machine: MachineRef, what: string) =>
+    const stateNow = (machine: Native, what: string) =>
       Effect.gen(function* () {
         const seen = stateIn(
           yield* runtime
@@ -485,6 +486,33 @@ export const make = (
           ...(hostKey === undefined ? {} : { hostKey }),
         };
       });
+
+    const beforeLeaving = (
+      machine: Native,
+      leaving: Leaving,
+      hook: true | undefined
+    ) =>
+      hook === undefined
+        ? Effect.void
+        : surviving(
+            `the ${leaving} hook of ${machine.name}`,
+            Effect.gen(function* () {
+              const seen = yield* stateNow(
+                machine,
+                `given its ${leaving} hook`
+              );
+
+              if (seen === "running") {
+                yield* leave(runtime, machine, leaving);
+              }
+            })
+          ).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning(
+                `${leaving} ${machine.name} goes on: ${error.message}`
+              )
+            )
+          );
 
     const scrubbed = (machine: MachineRef) =>
       Effect.flatMap(scrubNode(runtime, machine), (notes) =>
@@ -638,36 +666,47 @@ export const make = (
         }
 
         case "stop": {
-          const { machine, pin, machines } = step;
+          const { machine, pin, machines, hook } = step;
           const stopped = runtime.stop(machine);
 
-          return runtime.stopResumes
-            ? Effect.gen(function* () {
-                if ((yield* stateNow(machine, "stopped")) !== "paused") {
-                  return yield* stopped;
-                }
+          return Effect.andThen(
+            beforeLeaving(machine, "stop", hook),
+            runtime.stopResumes
+              ? Effect.gen(function* () {
+                  if ((yield* stateNow(machine, "stopped")) !== "paused") {
+                    return yield* stopped;
+                  }
 
-                yield* resumable(machine.name, pin);
-                yield* withRoom("stopMachine", machine, machines, stopped);
-              })
-            : stopped;
+                  yield* resumable(machine.name, pin);
+                  yield* withRoom("stopMachine", machine, machines, stopped);
+                })
+              : stopped
+          );
         }
 
         case "pause": {
-          const { machine, pin } = step;
+          const { machine, pin, hook } = step;
 
           return pin === runtime.pin
-            ? runtime.pause(machine)
-            : Effect.andThen(
-                Effect.logWarning(
-                  `pause ${machine.name}: its VM booted under ${pin ?? "an older host"}, and this host runs ${runtime.pin ?? "no pin"}, so it stops it instead`
-                ),
-                runtime.stop(machine)
+            ? Effect.andThen(
+                beforeLeaving(machine, "pause", hook),
+                runtime.pause(machine)
+              )
+            : Effect.logWarning(
+                `pause ${machine.name}: its VM booted under ${pin ?? "an older host"}, and this host runs ${runtime.pin ?? "no pin"}, so it stops it instead`
+              ).pipe(
+                Effect.andThen(beforeLeaving(machine, "stop", hook)),
+                Effect.andThen(runtime.stop(machine))
               );
         }
 
         case "remove": {
-          return runtime.delete(step.machine);
+          const { machine, hook } = step;
+
+          return Effect.andThen(
+            beforeLeaving(machine, "delete", hook),
+            runtime.delete(machine)
+          );
         }
 
         case "resize": {

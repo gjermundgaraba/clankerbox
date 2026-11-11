@@ -2019,14 +2019,74 @@ const starting: Step = {
   machines: [],
 };
 
-const startHook = (host: Runner, body: string) =>
+const guestHook = (host: Runner, hook: string, body: string) =>
   Effect.gen(function* () {
-    const file = rootOf(host, "etc/clankerbox/start");
+    const file = rootOf(host, `etc/clankerbox/${hook}`);
 
     yield* mkdir(path.dirname(file));
     yield* write(file, `#!/bin/sh\nset -eu\n${body}\n`);
     yield* chmod(file, 0o755);
   });
+
+const leftIn = (host: Runner) => path.join(host.dir, "left");
+
+const leaveHooks = (host: Runner) =>
+  Effect.forEach(
+    ["stop", "pause", "delete"],
+    (hook) => guestHook(host, hook, `echo ${hook} >>"${leftIn(host)}"`),
+    { discard: true }
+  );
+
+const hooksRun = (host: Runner) =>
+  Effect.map(
+    Effect.orElseSucceed(read(leftIn(host)), () => ""),
+    (text) => text.split("\n").filter((line) => line !== "")
+  );
+
+const stateOf = (host: Runner) =>
+  host.fake.machines.get("dev")?.state ?? "missing";
+
+type LeavingStep = Extract<
+  Step,
+  { readonly _tag: "stop" | "pause" | "remove" }
+>;
+
+const stopping: LeavingStep = {
+  _tag: "stop",
+  machine: ref("dev"),
+  pin: "fake 1",
+  machines: [],
+};
+
+const pausing: LeavingStep = {
+  _tag: "pause",
+  machine: ref("dev"),
+  pin: "fake 1",
+};
+
+const removing: LeavingStep = {
+  _tag: "remove",
+  machine: { name: "dev", instance: "dev-instance" },
+};
+
+const leavings = [
+  { step: "stop", sent: stopping, hook: "stop", ends: "stopped" },
+  { step: "pause", sent: pausing, hook: "pause", ends: "paused" },
+  {
+    step: "pause under another pin",
+    sent: { ...pausing, pin: "fake 0" },
+    hook: "stop",
+    ends: "stopped",
+  },
+  { step: "remove", sent: removing, hook: "delete", ends: "missing" },
+] as const;
+
+const notRunning = [
+  { step: "remove", before: stopping, sent: removing, ends: "missing" },
+  { step: "stop", before: pausing, sent: stopping, ends: "stopped" },
+] as const;
+
+const hooked = (step: LeavingStep): Step => ({ ...step, hook: true });
 
 const runningStatus = (health: readonly string[]) =>
   JSON.stringify(
@@ -2056,8 +2116,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           rootOf(host, "var/lib/clankerbox/tailscale/state/source"),
           "source node"
         );
-        yield* startHook(
+        yield* guestHook(
           host,
+          "start",
           [
             'test ! -e "$CLANKERBOX_ROOT/var/lib/clankerbox/tailscale/state/source"',
             'test "$(cat "$CLANKERBOX_ROOT/var/lib/clankerbox/instance")" = dev-instance',
@@ -2074,6 +2135,222 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(yield* read(rootOf(host, "calls"))).not.toContain("tailscale");
         expect(yield* keys.minted).toBe(0);
       })
+  );
+
+  for (const { step, sent, hook, ends } of leavings) {
+    it.effect(
+      `a ${step} that asks for its hook runs the guest's ${hook} hook while the VM runs, then ends it ${ends}`,
+      () =>
+        Effect.gen(function* () {
+          const host = yield* runner();
+
+          yield* finished(host, makes("dev"));
+          yield* leaveHooks(host);
+
+          const report = yield* finished(host, hooked(sent), 2);
+
+          expect(report.status).toBe("done");
+          expect(yield* hooksRun(host)).toStrictEqual([hook]);
+          expect(stateOf(host)).toBe(ends);
+        })
+    );
+
+    it.effect(
+      `a ${step} that doesn't ask for a hook runs none, and ends the VM ${ends}`,
+      () =>
+        Effect.gen(function* () {
+          const host = yield* runner();
+
+          yield* finished(host, makes("dev"));
+          yield* leaveHooks(host);
+
+          const report = yield* finished(host, sent, 2);
+
+          expect(report.status).toBe("done");
+          expect(yield* hooksRun(host)).toStrictEqual([]);
+          expect(stateOf(host)).toBe(ends);
+        })
+    );
+  }
+
+  for (const { step, before, sent, ends } of notRunning) {
+    it.effect(
+      `a ${step} of a VM that isn't running runs no hook, nor tries to`,
+      () => {
+        const logged: string[] = [];
+
+        return Effect.gen(function* () {
+          const host = yield* runner();
+
+          yield* finished(host, makes("dev"));
+          yield* finished(host, before, 2);
+          yield* leaveHooks(host);
+
+          const report = yield* finished(host, hooked(sent), 3);
+
+          expect(report.status).toBe("done");
+          expect(yield* hooksRun(host)).toStrictEqual([]);
+          expect(stateOf(host)).toBe(ends);
+          expect(logged.join("\n")).not.toContain("hook");
+        }).pipe(Effect.provide(Logger.layer([capturing(logged)])));
+      }
+    );
+  }
+
+  it.effect(
+    "a hook cut short ends its step cancelled, leaving the VM running",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner();
+
+        yield* finished(host, makes("dev"));
+        yield* guestHook(
+          host,
+          "stop",
+          `echo stop >>"${leftIn(host)}"\nexec sleep 30`
+        );
+
+        const operation = delivery(hooked(stopping), 2);
+
+        yield* deliver(host, operation);
+        yield* Effect.eventually(read(leftIn(host)));
+        yield* host.operations.cancel(operation.id);
+
+        const report = yield* ended(host, operation.id);
+
+        expect(report.status).toBe("cancelled");
+        expect(stateOf(host)).toBe("running");
+        expect(host.fake.calls).not.toContain("stop dev");
+      })
+  );
+
+  for (const [what, unread] of [
+    [
+      "fails",
+      (host: Runner) => {
+        host.fake.failNextObserve(new Internal({ message: "agent gone" }));
+      },
+    ],
+    [
+      "dies",
+      (host: Runner) => {
+        host.fake.dieNextObserve();
+      },
+    ],
+  ] as const) {
+    it.effect(
+      `a delete whose read of the VM ${what} runs no hook, logs it, and goes on`,
+      () => {
+        const logged: string[] = [];
+
+        return Effect.gen(function* () {
+          const host = yield* runner();
+
+          yield* finished(host, makes("dev"));
+          yield* leaveHooks(host);
+          unread(host);
+
+          const report = yield* finished(host, hooked(removing), 2);
+
+          expect(report.status).toBe("done");
+          expect(yield* hooksRun(host)).toStrictEqual([]);
+          expect(stateOf(host)).toBe("missing");
+          expect(logged.join("\n")).toContain("delete dev goes on");
+        }).pipe(Effect.provide(Logger.layer([capturing(logged)])));
+      }
+    );
+  }
+
+  it.effect("a hook that fails is logged, and its stop goes on", () => {
+    const logged: string[] = [];
+
+    return Effect.gen(function* () {
+      const host = yield* runner();
+
+      yield* finished(host, makes("dev"));
+      yield* guestHook(host, "stop", "echo the shipper is down\nexit 3");
+
+      const report = yield* finished(host, hooked(stopping), 2);
+
+      expect(report.status).toBe("done");
+      expect(stateOf(host)).toBe("stopped");
+      expect(logged.join("\n")).toContain(
+        "its stop hook exited 3; its last output:\nthe shipper is down"
+      );
+    }).pipe(Effect.provide(Logger.layer([capturing(logged)])));
+  });
+
+  it.effect(
+    "a hook past the guest's hook-timeout is cut short, and the delete goes on",
+    () => {
+      const logged: string[] = [];
+
+      return Effect.gen(function* () {
+        const host = yield* runner();
+
+        yield* finished(host, makes("dev"));
+        yield* guestHook(
+          host,
+          "delete",
+          `echo delete >>"${leftIn(host)}"\nexec sleep 30`
+        );
+        yield* write(rootOf(host, "etc/clankerbox/hook-timeout"), "1\n");
+
+        const report = yield* finished(host, hooked(removing), 2);
+
+        expect(report.status).toBe("done");
+        expect(yield* hooksRun(host)).toStrictEqual(["delete"]);
+        expect(stateOf(host)).toBe("missing");
+        expect(logged.join("\n")).toContain(
+          "its delete hook ran past its 1s timeout"
+        );
+      }).pipe(Effect.provide(Logger.layer([capturing(logged)])));
+    }
+  );
+
+  it.effect(
+    "a hook-timeout that isn't a number of seconds is logged, and the hook runs under the default",
+    () => {
+      const logged: string[] = [];
+
+      return Effect.gen(function* () {
+        const host = yield* runner();
+
+        yield* finished(host, makes("dev"));
+        yield* leaveHooks(host);
+        yield* write(rootOf(host, "etc/clankerbox/hook-timeout"), "soon\n");
+
+        const report = yield* finished(host, hooked(stopping), 2);
+
+        expect(report.status).toBe("done");
+        expect(yield* hooksRun(host)).toStrictEqual(["stop"]);
+        expect(logged.join("\n")).toContain(
+          'hook-timeout holds "soon", not a whole number of seconds above 0, so its hook runs under the default 120s'
+        );
+      }).pipe(Effect.provide(Logger.layer([capturing(logged)])));
+    }
+  );
+
+  it.effect(
+    "a probe for a hook that fails is logged, and the step goes on without the hook",
+    () => {
+      const logged: string[] = [];
+
+      return Effect.gen(function* () {
+        const host = yield* runner();
+
+        yield* finished(host, makes("dev"));
+        yield* leaveHooks(host);
+        host.fake.failNext("exec", new Internal({ message: "agent gone" }));
+
+        const report = yield* finished(host, hooked(pausing), 2);
+
+        expect(report.status).toBe("done");
+        expect(yield* hooksRun(host)).toStrictEqual([]);
+        expect(stateOf(host)).toBe("paused");
+        expect(logged.join("\n")).toContain("agent gone");
+      }).pipe(Effect.provide(Logger.layer([capturing(logged)])));
+    }
   );
 
   it.effect(
