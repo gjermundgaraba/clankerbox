@@ -303,6 +303,9 @@ const filesIn = async (root: string): Promise<readonly string[]> => {
   return found;
 };
 
+const uninterruptibleWrite = <A>(write: () => Promise<A>) =>
+  Effect.uninterruptible(Effect.promise(write));
+
 export const fakeRuntime = (options: FakeOptions) => {
   const machines = new Map<string, FakeMachine>();
   const images = new Map<string, string>();
@@ -443,20 +446,22 @@ export const fakeRuntime = (options: FakeOptions) => {
     path.join(options.dir, "checkpoints", checkpoint.instance);
 
   const copyInto = (from: string, machine: MachineRef) =>
-    Effect.tryPromise({
-      try: async () => {
-        const root = path.join(options.dir, "roots", machine.instance);
+    Effect.uninterruptible(
+      Effect.tryPromise({
+        try: async () => {
+          const root = path.join(options.dir, "roots", machine.instance);
 
-        await access(from);
-        await cp(from, root, { recursive: true });
-        machines.set(machine.name, { state: "running", root });
-        sizes.set(machine.name, sizesOf(machine));
-      },
-      catch: (cause) =>
-        new Internal({
-          message: `copy into ${machine.name}: ${String(cause)}`,
-        }),
-    });
+          await access(from);
+          await cp(from, root, { recursive: true });
+          machines.set(machine.name, { state: "running", root });
+          sizes.set(machine.name, sizesOf(machine));
+        },
+        catch: (cause) =>
+          new Internal({
+            message: `copy into ${machine.name}: ${String(cause)}`,
+          }),
+      })
+    );
 
   const copyable = (machine: MachineRef) => {
     const state = machines.get(machine.name)?.state ?? "missing";
@@ -543,7 +548,7 @@ export const fakeRuntime = (options: FakeOptions) => {
           call(
             "create",
             machine,
-            Effect.promise(async () => {
+            uninterruptibleWrite(async () => {
               images.set(machine.name, image);
               const root = path.join(options.dir, "roots", machine.instance);
 
@@ -686,7 +691,7 @@ export const fakeRuntime = (options: FakeOptions) => {
             Effect.andThen(
               copyable(machine),
               Effect.flatMap(rootOf(machine), (root) =>
-                Effect.promise(async () => {
+                uninterruptibleWrite(async () => {
                   await cp(root, checkpointRoot(checkpoint), {
                     recursive: true,
                   });
@@ -713,7 +718,7 @@ export const fakeRuntime = (options: FakeOptions) => {
           call(
             "deleteCheckpoint",
             checkpoint,
-            Effect.promise(async () => {
+            uninterruptibleWrite(async () => {
               await rm(checkpointRoot(checkpoint), {
                 recursive: true,
                 force: true,
@@ -750,7 +755,7 @@ export const fakeRuntime = (options: FakeOptions) => {
           call(
             "install",
             checkpoint,
-            Effect.promise(async () => {
+            uninterruptibleWrite(async () => {
               const root = checkpointRoot(checkpoint);
 
               await rename(staged, root);
