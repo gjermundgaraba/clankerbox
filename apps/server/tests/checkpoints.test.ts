@@ -786,7 +786,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "settled",
         ]);
         expect(snap).toMatchObject({ phase: "ready", labels: { app: "web" } });
-        expect(host.fake.calls).toStrictEqual(["capture snap", "pause dev"]);
+        expect(host.fake.calls).toStrictEqual([
+          "capture snap",
+          "exec dev",
+          "pause dev",
+        ]);
       })
   );
 
@@ -840,7 +844,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(taken._tag).toBe("Conflict");
         expect(stopped).toMatchObject({ _tag: "WrongState", state: "stopped" });
         expect(dev.desired).toBe("stopped");
-        expect(host.fake.calls).toStrictEqual(["stop dev"]);
+        expect(host.fake.calls).toStrictEqual(["exec dev", "stop dev"]);
         expect(yield* checkpointIds(client)).toStrictEqual(["snap"]);
       })
   );
@@ -880,7 +884,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(paused.desired).toBe("paused");
         expect(snap.phase).toBe("ready");
-        expect(host.fake.calls).toStrictEqual(["capture snap", "pause dev"]);
+        expect(host.fake.calls).toStrictEqual([
+          "capture snap",
+          "exec dev",
+          "pause dev",
+        ]);
       })
   );
 

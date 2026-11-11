@@ -136,7 +136,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* deleting.release;
         yield* second.gone("dev");
 
-        expect(fake.calls).toStrictEqual(["delete dev"]);
+        expect(fake.calls).toStrictEqual(["exec dev", "delete dev"]);
         expect(fake.machines.size).toBe(0);
       })
   );
@@ -236,7 +236,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* second.rests("dev");
 
-        expect(fake.calls).toStrictEqual(["stop dev"]);
+        expect(fake.calls).toStrictEqual(["exec dev", "stop dev"]);
         expect(fake.machines.get("dev")?.state).toBe("stopped");
       })
   );

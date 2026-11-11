@@ -107,7 +107,8 @@ or `composition/`.
 
 - `operations.ts`: the `Operations` service. It runs a step to its end, keeps its
   report until collected, fences by sequence, and tells a restart by `boot`.
-- `guest.ts`: setup and preparation, run in the guest.
+- `guest.ts`: setup, preparation, and the hook a stop, pause or delete
+  runs first, all run in the guest.
 - `usage.ts`: the machines in use, and the RAM a runtime holds beside them, for the RAM budget and capacity.
 - `settings.ts`: what a host runs on.
 - `builds.ts`: `publish`, `fetch` and `unpublish` of a checkpoint through the

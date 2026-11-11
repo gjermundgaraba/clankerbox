@@ -4,6 +4,7 @@ import { Effect, Option } from "effect";
 
 import { isPublished } from "./checkpoint-chart.ts";
 import type { CheckpointRow } from "./checkpoint-chart.ts";
+import { stageOf } from "./machine-chart.ts";
 import type { MachineRow } from "./machine-chart.ts";
 import type { Operation, Interface as Store } from "./store.ts";
 
@@ -90,11 +91,16 @@ const sourceStep = (store: Store, found: MachineRow, held: Setup | undefined) =>
       : undefined;
   });
 
+const hooked = (found: MachineRow) =>
+  found.ephemeral ? {} : ({ hook: true } as const);
+
 /**
  * What a host is sent for a machine's operation, built afresh from the rows at each delivery, or
  * undefined when it can't be sent: its source went, or the setup `held` in memory for a template's
  * builder did. The keys go to a builder, so its build holds them, and to a clone of a build, which adds
- * any it lacks. A builder on a host that `joins` joins the tailnet for its setup.
+ * any it lacks. A builder on a host that `joins` joins the tailnet for its setup. A stop, a pause and
+ * a delete ask the host to run the guest's hook first. A builder's never do, as it is off the tailnet
+ * after its setup, nor does the remove that undoes a failed create.
  */
 export const machineStep = (
   store: Store,
@@ -110,7 +116,11 @@ export const machineStep = (
     const { machines, ports } = yield* others(store, found);
 
     if (op.kind === "remove") {
-      return { _tag: "remove", machine: { name, instance } };
+      return {
+        _tag: "remove",
+        machine: { name, instance },
+        ...(stageOf(found.state) === "deleting" ? hooked(found) : {}),
+      };
     }
 
     if (op.kind === "make") {
@@ -159,11 +169,17 @@ export const machineStep = (
           machine: ref,
           ...pinned(found.pin),
           machines,
+          ...hooked(found),
         };
       }
 
       case "pause": {
-        return { _tag: "pause", machine: ref, ...pinned(found.pin) };
+        return {
+          _tag: "pause",
+          machine: ref,
+          ...pinned(found.pin),
+          ...hooked(found),
+        };
       }
 
       case "resize": {
