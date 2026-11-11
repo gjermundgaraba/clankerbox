@@ -203,7 +203,7 @@ export interface Interface {
     checkpoint: CheckpointRef
   ) => Effect.Effect<void, RuntimeError>;
   readonly exec: (
-    machine: MachineRef,
+    machine: Native,
     command: Command
   ) => Effect.Effect<Execution, RuntimeError, Scope.Scope>;
   readonly checkpointFiles: (

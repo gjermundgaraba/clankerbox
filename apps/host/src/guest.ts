@@ -12,7 +12,7 @@ import { timeoutFail } from "./runtime.ts";
 import type {
   Command,
   Interface as Runtime,
-  MachineRef,
+  Native,
   RuntimeError,
 } from "./runtime.ts";
 
@@ -53,7 +53,7 @@ const keptOutput = () => {
 
 const drained = (
   runtime: Runtime,
-  machine: MachineRef,
+  machine: Native,
   command: Command,
   output: ReturnType<typeof keptOutput>
 ): Effect.Effect<number, RuntimeError> =>
@@ -79,7 +79,7 @@ const drained = (
 const runInGuest = (
   runtime: Runtime,
   script: "setup" | "preparation" | "tailnet",
-  machine: MachineRef,
+  machine: Native,
   command: Command,
   timeout: Duration.Duration
 ): Effect.Effect<string, RuntimeError | ScriptFailed> =>
@@ -233,7 +233,7 @@ const baseTimeout = Duration.minutes(10);
  */
 export const prepareBase = (
   runtime: Runtime,
-  machine: MachineRef,
+  machine: Native,
   kind: Kind,
   joins: boolean
 ): Effect.Effect<void, RuntimeError | ScriptFailed> =>
@@ -281,7 +281,7 @@ const defaultSetupTimeoutSeconds = 600;
 
 export const runSetup = (
   runtime: Runtime,
-  machine: MachineRef,
+  machine: Native,
   setup: Setup,
   authorizedKeys: string | undefined
 ): Effect.Effect<void, RuntimeError | ScriptFailed> => {
@@ -312,7 +312,7 @@ export const runSetup = (
 
 export const addMissingKeys = (
   runtime: Runtime,
-  machine: MachineRef,
+  machine: Native,
   authorizedKeys: string
 ): Effect.Effect<void, RuntimeError | ScriptFailed> =>
   Effect.asVoid(
@@ -589,7 +589,7 @@ export const hostKeyIn = (output: string): string | undefined => {
 
 export const identify = (
   runtime: Runtime,
-  machine: MachineRef
+  machine: Native
 ): Effect.Effect<void, RuntimeError | ScriptFailed> =>
   Effect.asVoid(
     runInGuest(
@@ -613,7 +613,7 @@ export const identify = (
 
 export const unkey = (
   runtime: Runtime,
-  machine: MachineRef
+  machine: Native
 ): Effect.Effect<void, RuntimeError | ScriptFailed> =>
   Effect.asVoid(
     runInGuest(
@@ -627,7 +627,7 @@ export const unkey = (
 
 export const prepare = (
   runtime: Runtime,
-  machine: MachineRef
+  machine: Native
 ): Effect.Effect<string | undefined, RuntimeError | ScriptFailed> =>
   runInGuest(
     runtime,
@@ -641,7 +641,7 @@ const tailnetTimeout = Duration.seconds(90);
 
 export const checkTailnet = (
   runtime: Runtime,
-  machine: MachineRef,
+  machine: Native,
   hostname: string,
   key?: Redacted.Redacted
 ): Effect.Effect<TailnetReport | undefined, RuntimeError | ScriptFailed> =>
@@ -670,7 +670,7 @@ export const checkTailnet = (
 /** Keeps what the guest resolves names with, so `scrubNode` can put it back after a join. */
 export const rememberDns = (
   runtime: Runtime,
-  machine: MachineRef
+  machine: Native
 ): Effect.Effect<void, RuntimeError | ScriptFailed> =>
   Effect.asVoid(
     runInGuest(
@@ -688,7 +688,7 @@ export const rememberDns = (
  */
 export const scrubNode = (
   runtime: Runtime,
-  machine: MachineRef
+  machine: Native
 ): Effect.Effect<readonly string[], RuntimeError | ScriptFailed> =>
   runInGuest(
     runtime,
