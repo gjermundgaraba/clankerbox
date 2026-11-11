@@ -343,7 +343,7 @@ layer(NodeServices.layer)((it) => {
       Effect.gen(function* () {
         const settings = yield* prepared();
 
-        for (const reported of ["smolvm 1.32.9", "smolvm dev", "1.33.0"]) {
+        for (const reported of ["smolvm 1.33.9", "smolvm dev", "1.34.0"]) {
           const error = yield* startupError(
             settings,
             scripted(() => ({ stdout: `${reported}\n` }))
@@ -1796,7 +1796,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a ram restore creates from the store with no restore cache, moves the port, then boots",
+    "a ram restore creates from the store with no restore cache, its port moved, then boots",
     () =>
       Effect.gen(function* () {
         const settings = yield* prepared();
@@ -1818,18 +1818,10 @@ layer(NodeServices.layer)((it) => {
               "checkpoints",
               "snap-fedcba98.checkpoint"
             ),
-            "--restore-cache-entries",
-            "0",
-          ],
-          [
-            "machine",
-            "update",
-            "--name",
-            "copy-abcdefab",
-            "--remove-port",
-            "10000:22",
             "-p",
             "10001:22",
+            "--restore-cache-entries",
+            "0",
           ],
           ["machine", "start", "--name", "copy-abcdefab", "--branchable"],
         ]);
@@ -1877,7 +1869,7 @@ layer(NodeServices.layer)((it) => {
           ["machine", "resize", "--name", "copy-abcdefab", "--mem", "4096"],
         ]);
         expect(smolvmArgs(unparked.calls).map((args) => args[1])).toStrictEqual(
-          ["status", "create", "update", "start"]
+          ["status", "create", "start"]
         );
         expect(smolvmArgs(unparked.calls)[1]).toContain(
           path.join(
@@ -2137,12 +2129,12 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a restore whose port move, boot or live grow fails returns its error, and leaves its VM to delete",
+    "a restore whose create, boot or live grow fails returns its error, and leaves its VM to delete",
     () =>
       Effect.gen(function* () {
         const larger = { ...copy, ramMib: 4096 };
 
-        for (const failing of ["update", "start", "resize"]) {
+        for (const failing of ["create", "start", "resize"]) {
           const spawner = scripted((call) =>
             call.args[1] === failing
               ? { exitCode: 1, stderr: "Error: database is locked\n" }
@@ -2155,7 +2147,7 @@ layer(NodeServices.layer)((it) => {
             runtime.restore(ramCheckpoint, larger)
           );
 
-          const steps = ["status", "create", "update", "start", "resize"];
+          const steps = ["status", "create", "start", "resize"];
 
           expect(error.message).toBe(
             `smolvm machine ${failing} copy-abcdefab exited 1: Error: database is locked`
@@ -2219,18 +2211,10 @@ layer(NodeServices.layer)((it) => {
             "copy-abcdefab",
             "--from",
             path.join(store, "copy-abcdefab.checkpoint"),
-            "--restore-cache-entries",
-            "0",
-          ],
-          [
-            "machine",
-            "update",
-            "--name",
-            "copy-abcdefab",
-            "--remove-port",
-            "10000:22",
             "-p",
             "10001:22",
+            "--restore-cache-entries",
+            "0",
           ],
           ["machine", "start", "--name", "copy-abcdefab", "--branchable"],
         ]);

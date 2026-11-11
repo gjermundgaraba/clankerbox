@@ -110,7 +110,7 @@ export const pathsIn = (stateDir: string) => ({
 });
 
 /** The oldest smolvm a linux host starts under; the `bump-smolvm` skill owns it. */
-export const minimumVersion = "1.33.0";
+export const minimumVersion = "1.34.0";
 
 const supported = atLeast(minimumVersion);
 
@@ -700,59 +700,33 @@ export const make = (
         : Effect.void;
     };
 
-    const booted = (
+    // https://github.com/smol-machines/smolvm/blob/v1.34.1/src/machine_spec.rs#L1181
+    const createdFrom = (
       native: string,
       from: string,
-      ports: {
-        readonly remove: readonly string[];
-        readonly add: readonly string[];
-      }
+      forwards: readonly string[]
     ) =>
-      Effect.gen(function* () {
-        yield* call(
-          [
-            "machine",
-            "create",
-            "--name",
-            native,
-            "--from",
-            from,
-            "--restore-cache-entries",
-            "0",
-          ],
-          `machine create ${native}`
-        );
+      call(
+        [
+          "machine",
+          "create",
+          "--name",
+          native,
+          "--from",
+          from,
+          ...forwards.flatMap((forward) => ["-p", forward]),
+          "--restore-cache-entries",
+          "0",
+        ],
+        `machine create ${native}`
+      );
 
-        if (ports.remove.length > 0 || ports.add.length > 0) {
-          yield* call(
-            [
-              "machine",
-              "update",
-              "--name",
-              native,
-              ...ports.remove.flatMap((forward) => ["--remove-port", forward]),
-              ...ports.add.flatMap((forward) => ["-p", forward]),
-            ],
-            `machine update ${native}`
-          );
-        }
-
-        yield* boot(native);
-      });
-
-    const restoreRam = (
-      from: string,
-      source: Pick<MachineRef, "port"> & Sizes,
-      machine: MachineRef
-    ) =>
+    const restoreRam = (from: string, source: Sizes, machine: MachineRef) =>
       Effect.gen(function* () {
         const native = nativeName(machine);
-        const moved = source.port !== machine.port;
 
-        yield* booted(native, from, {
-          remove: moved ? [`${source.port}:22`] : [],
-          add: moved ? [`${machine.port}:22`] : [],
-        });
+        yield* createdFrom(native, from, [`${machine.port}:22`]);
+        yield* boot(native);
         yield* grown(native, source, changes(source, machine));
       });
 
@@ -847,10 +821,25 @@ export const make = (
           Effect.gen(function* () {
             const { forwards } = yield* indexOf(build);
 
-            yield* booted(base, storedAt(build), {
-              remove: forwards.map(({ host, guest }) => `${host}:${guest}`),
-              add: [],
-            });
+            yield* createdFrom(base, storedAt(build), []);
+
+            if (forwards.length > 0) {
+              yield* call(
+                [
+                  "machine",
+                  "update",
+                  "--name",
+                  base,
+                  ...forwards.flatMap(({ host, guest }) => [
+                    "--remove-port",
+                    `${host}:${guest}`,
+                  ]),
+                ],
+                `machine update ${base}`
+              );
+            }
+
+            yield* boot(base);
             yield* freeze(base);
           })
         );

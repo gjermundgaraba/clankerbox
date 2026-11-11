@@ -51,6 +51,12 @@ const forwardsIn = (directory: string): readonly string[] =>
     ({ host, guest }) => `${host}:${guest}`
   );
 
+const guestPorts = (forwards: readonly string[]) =>
+  forwards
+    .map((forward) => Number(forward.split(":")[1]))
+    .toSorted((one, other) => one - other)
+    .join(",");
+
 const inUse = (forward: string): Reply => ({
   exitCode: 1,
   stderr: `Error: port ${forward.split(":")[0]} is already in use\n`,
@@ -100,10 +106,24 @@ export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
 
   const create = (name: string, args: readonly string[]): Reply => {
     const [from] = valuesOf(args, "--from");
+    const given = valuesOf(args, "-p");
+    const captured = from === undefined ? [] : forwardsIn(from);
+
+    if (
+      from !== undefined &&
+      given.length > 0 &&
+      guestPorts(given) !== guestPorts(captured)
+    ) {
+      return {
+        exitCode: 1,
+        stderr:
+          "Error: ports cannot be set when restoring a live checkpoint: a restore may move the host side of the captured guest ports, but must keep the same guest ports\n",
+      };
+    }
 
     vms.set(name, {
       state: "created",
-      forwards: from === undefined ? valuesOf(args, "-p") : forwardsIn(from),
+      forwards: from === undefined || given.length > 0 ? given : captured,
     });
 
     return {};

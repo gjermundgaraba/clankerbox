@@ -507,13 +507,15 @@ as it is.
 - A checkpoint with published ports refuses any backend but virtio-net
   (`validate_compatibility`, src/portable_checkpoint.rs); a restore reuses the
   checkpoint's host ports verbatim (`checkpoint_network`,
-  `validate_compatibility`); `create --from` a live checkpoint refuses every
-  option that differs from what the checkpoint holds, by name, and takes `-p`
-  only to move the host side of its captured guest ports, an empty `-p`
-  keeping them (`resolve`, `SpecSource::Checkpoint`, src/machine_spec.rs,
-  called in `run_from_smolmachine`, src/cli/machine.rs). Ours: `create --from`
-  passes none, and the port moves with `machine update --remove-port … -p …`
-  before the first start.
+  `validate_compatibility`); since 1.34.0, `create --from` a live checkpoint
+  refuses every option that differs from what the checkpoint holds, by name,
+  and takes `-p` only to move the host side of its captured guest ports, an
+  empty `-p` keeping them (`resolve`, `SpecSource::Checkpoint`,
+  src/machine_spec.rs, called in `run_from_smolmachine`, src/cli/machine.rs).
+  Ours: the floor is 1.34.0 for it; a restore or fork passes `-p <port>:22`,
+  every machine's one forward, in the create (`createdFrom`, `restoreRam`), and
+  a base's park passes none and removes the forwards with `machine update
+  --remove-port` before its first start.
 - smolvm's own fork ports come from 20000–31999: `CLONE_PORT_FLOOR` (20000) up
   to `CLONE_PORT_CEILING` (32000), which is excluded (`alloc_free_host_port`,
   src/agent/fork.rs). The CLI allocates no other host port range. Ours:
