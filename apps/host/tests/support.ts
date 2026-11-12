@@ -50,8 +50,16 @@ export const hostConfig = (
   machinePorts,
 });
 
+/**
+ * A test host's server, which ends as a kill does: it cuts the requests still open, as a control
+ * plane's wait on a step, instead of answering them before it closes.
+ */
 export const loopbackServer = (port = 0) =>
-  NodeHttpServer.layer(createServer, { host: "127.0.0.1", port });
+  NodeHttpServer.layer(createServer, {
+    host: "127.0.0.1",
+    port,
+    disablePreemptiveShutdown: true,
+  });
 
 export interface TestHost {
   readonly id: string;

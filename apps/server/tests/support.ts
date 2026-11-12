@@ -146,7 +146,11 @@ const started = (
     const context = yield* Layer.buildWithScope(
       serverLayer(
         settings,
-        NodeHttpServer.layer(createServer, { host: "127.0.0.1", port })
+        NodeHttpServer.layer(createServer, {
+          host: "127.0.0.1",
+          port,
+          disablePreemptiveShutdown: true,
+        })
       ).pipe(
         Layer.provideMerge(Logger.layer(logger === undefined ? [] : [logger])),
         Layer.provide(NodeHttpClient.layerNodeHttp),
