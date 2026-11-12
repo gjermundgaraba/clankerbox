@@ -128,23 +128,6 @@ export interface CheckpointFile {
   readonly key?: string | undefined;
 }
 
-/**
- * A runtime that copies a build by branching a parked base of it, a VM kept from the build's
- * checkpoint, so a copy takes no restore. Its restore of a build branches once the base is parked.
- */
-export interface Bases {
-  /**
-   * Parks `build`'s base, from whatever an earlier try left, unless the build is gone or the
-   * checkpoint is no build's copy.
-   */
-  readonly park: (build: CheckpointRef) => Effect.Effect<void, RuntimeError>;
-  /**
-   * Parks a base for each build the host keeps, and deletes each base whose build or boot is gone
-   * once no copy is branched from it, by what the runtime reads.
-   */
-  readonly settle: Effect.Effect<void, RuntimeError>;
-}
-
 export type Dial = (
   input: Stream.Stream<Uint8Array>
 ) => Stream.Stream<Uint8Array, RuntimeError>;
@@ -184,7 +167,6 @@ export interface Interface {
   readonly admission: Admission | undefined;
   readonly files: CheckpointFiles | undefined;
   readonly growsLive: boolean;
-  readonly bases?: Bases | undefined;
   readonly sizable: (
     machine: Pick<MachineRef, "name">,
     from: Sizes,

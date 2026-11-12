@@ -33,12 +33,13 @@ import {
   Context,
   Deferred,
   Effect,
+  Exit,
   Fiber,
-  FileSystem,
   Layer,
   Logger,
   Redacted,
   Ref,
+  Scope,
 } from "effect";
 import { TestClock } from "effect/testing";
 import { expect } from "vite-plus/test";
@@ -48,7 +49,6 @@ import { PortProbe } from "../src/machine-ports.ts";
 import type { Probe } from "../src/machine-ports.ts";
 import * as Operations from "../src/operations.ts";
 import * as Relay from "../src/platform/relay.ts";
-import * as Smolvm from "../src/platform/smolvm/smolvm.ts";
 import * as Reach from "../src/reach.ts";
 import { Runtime } from "../src/runtime.ts";
 import { Tailnet } from "../src/tailnet.ts";
@@ -57,10 +57,8 @@ import {
   fakeRuntime,
   writeTailscaleStubs,
 } from "./fake-runtime.ts";
-import { smolvmModel } from "./smolvm-model.ts";
 import {
   accepts,
-  eventually,
   holding,
   image,
   hostKeySetup,
@@ -80,12 +78,14 @@ const freePorts: ReadonlyMap<Kind, string> = new Map([
 ]);
 
 interface RunnerOptions {
+  readonly builds?: Layer.Layer<BuildStore>;
   readonly kind?: Kind;
   readonly pin?: string;
   readonly ramBudgetMib?: number;
   readonly ports?: number;
   readonly probe?: Probe;
   readonly relayed?: boolean;
+  readonly runtime?: (fake: Runtime["Service"]) => Runtime["Service"];
   readonly tailnet?: Tailnet["Service"];
   readonly tailscale?: boolean;
 }
@@ -118,7 +118,13 @@ const runner = (options?: RunnerOptions) =>
         Layer.provide(
           Reach.layer({ first, last: first + (options?.ports ?? 10) - 1 })
         ),
-        Layer.provideMerge(fake.layer),
+        Layer.provideMerge(
+          options?.runtime === undefined
+            ? fake.layer
+            : Layer.effect(Runtime, Effect.map(Runtime, options.runtime)).pipe(
+                Layer.provide(fake.layer)
+              )
+        ),
         Layer.provide(
           Layer.merge(
             Layer.succeed(PortProbe, options?.probe ?? allFree),
@@ -129,7 +135,8 @@ const runner = (options?: RunnerOptions) =>
           options?.tailnet === undefined
             ? Layer.empty
             : Layer.succeed(Tailnet, options.tailnet)
-        )
+        ),
+        Layer.provide(options?.builds ?? Layer.empty)
       )
     ).pipe(Effect.map(Context.get(Operations.Operations)));
 
@@ -137,76 +144,6 @@ const runner = (options?: RunnerOptions) =>
   });
 
 type Runner = Effect.Success<ReturnType<typeof runner>>;
-
-const smolvmHost = (
-  model: ReturnType<typeof smolvmModel>,
-  stateDir: string,
-  bootId: string,
-  builds: Layer.Layer<never> | Layer.Layer<BuildStore> = Layer.empty
-) =>
-  Effect.gen(function* () {
-    const prefix = path.join(yield* scratch, "smolvm");
-
-    yield* mkdir(prefix);
-
-    for (const template of Smolvm.templates) {
-      yield* write(path.join(prefix, template), "");
-    }
-
-    const smolvm = Layer.effect(
-      Runtime,
-      Effect.tap(
-        Smolvm.make(
-          {
-            prefix,
-            publishAddress: "127.0.0.1",
-            ramBudgetMib: 8192,
-            stateDir,
-            arch: "x64",
-            bootId,
-          },
-          0
-        ),
-        (runtime) => runtime.startup
-      )
-    );
-
-    return yield* Layer.build(
-      Operations.layer({
-        id: "linux",
-        kind: "linux",
-        bases: new Map([["ubuntu", image]]),
-      }).pipe(
-        Layer.provide(Reach.layer({ first: firstPort, last: firstPort + 9 })),
-        Layer.provideMerge(smolvm),
-        Layer.provide(
-          Layer.merge(
-            Layer.succeed(PortProbe, allFree),
-            Relay.layer("127.0.0.1")
-          )
-        ),
-        Layer.provide(builds),
-        Layer.provide(Layer.merge(NodeServices.layer, model.spawner.layer))
-      )
-    ).pipe(Effect.map(Context.get(Operations.Operations)));
-  });
-
-const onSmolvm = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem;
-  const model = smolvmModel();
-
-  const stateDir = yield* fs.makeTempDirectoryScoped({
-    directory: "/tmp",
-    prefix: "cbx-",
-  });
-
-  return {
-    model,
-    stateDir,
-    operations: yield* smolvmHost(model, stateDir, "b00710ad"),
-    pin: `smolvm ${Smolvm.minimumVersion} ${process.platform}-${process.arch}`,
-  };
-});
 
 const ref = (name: string, fields?: Partial<MachineRef>): MachineRef => ({
   name,
@@ -219,6 +156,19 @@ const ref = (name: string, fields?: Partial<MachineRef>): MachineRef => ({
 });
 
 const checkpoint = (name: string) => ref(name, { port: 11_001 });
+
+const capturingSnap: Step = {
+  _tag: "capture",
+  machine: ref("dev"),
+  checkpoint: checkpoint("snap"),
+  pin: "fake 1",
+};
+
+const stored = (host: Runner, name: string, suffix = "") =>
+  exists(path.join(host.dir, "checkpoints", `${name}-instance${suffix}`));
+
+const ofSnap = (host: Runner) =>
+  host.fake.calls.filter((call) => call.endsWith(" snap"));
 
 const fresh = (name: string, fields?: Partial<NewMachine>): NewMachine => ({
   name,
@@ -714,6 +664,62 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         firstPort + 4,
       ]);
     })
+  );
+
+  it.effect(
+    "a make hands the runtime the port it reports, from a base, a checkpoint or a machine",
+    () =>
+      Effect.gen(function* () {
+        const given: Array<readonly [string, number]> = [];
+
+        const noted = (machine: MachineRef) =>
+          Effect.sync(() => given.push([machine.name, machine.port]));
+
+        const host = yield* runner({
+          runtime: (fake) => ({
+            ...fake,
+            create: (machine, base) =>
+              Effect.andThen(noted(machine), fake.create(machine, base)),
+            restore: (from, machine) =>
+              Effect.andThen(noted(machine), fake.restore(from, machine)),
+            fork: (source, machine) =>
+              Effect.andThen(noted(machine), fake.fork(source, machine)),
+          }),
+        });
+
+        const dev = yield* finished(host, makes("dev"));
+
+        yield* finished(host, capturingSnap);
+
+        const restored = yield* finished(
+          host,
+          makes("web", {
+            source: {
+              _tag: "checkpoint",
+              checkpoint: checkpoint("snap"),
+              pin: "fake 1",
+            },
+          })
+        );
+
+        const forked = yield* finished(
+          host,
+          makes("twin", {
+            source: { _tag: "machine", machine: ref("dev"), pin: "fake 1" },
+          })
+        );
+
+        expect([dev, restored, forked].map(portOf)).toStrictEqual([
+          firstPort,
+          firstPort + 1,
+          firstPort + 2,
+        ]);
+        expect(given).toStrictEqual([
+          ["dev", firstPort],
+          ["web", firstPort + 1],
+          ["twin", firstPort + 2],
+        ]);
+      })
   );
 
   it.effect("a port a bind probe finds taken is skipped", () =>
@@ -1234,12 +1240,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* finished(host, makes("dev"));
 
-        const taken = yield* finished(host, {
-          _tag: "capture",
-          machine: ref("dev"),
-          checkpoint: checkpoint("snap"),
-          pin: "fake 1",
-        });
+        const taken = yield* finished(host, capturingSnap);
 
         const restored = yield* finished(
           host,
@@ -1517,12 +1518,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       yield* finished(host, makes("dev"));
       host.fake.failNext("capture", new Internal({ message: "no disk" }));
 
-      const report = yield* finished(host, {
-        _tag: "capture",
-        machine: ref("dev"),
-        checkpoint: checkpoint("snap"),
-        pin: "fake 1",
-      });
+      const report = yield* finished(host, capturingSnap);
 
       expect(errorOf(report)).toStrictEqual(["failed", "Internal"]);
       expect(host.fake.calls).toContain("deleteCheckpoint snap");
@@ -1541,34 +1537,136 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         new Internal({ message: "EBUSY" })
       );
 
-      const report = yield* finished(host, {
-        _tag: "capture",
-        machine: ref("dev"),
-        checkpoint: checkpoint("snap"),
-        pin: "fake 1",
-      });
+      const report = yield* finished(host, capturingSnap);
 
       expect(errorOf(report)).toStrictEqual(["failed", "Internal"]);
       expect(report.outcome.cleared).toBeUndefined();
     })
   );
 
-  it.effect("a capture that ends well leaves nothing to clear", () =>
-    Effect.gen(function* () {
-      const host = yield* runner();
+  it.effect(
+    "a capture that ends done keeps its checkpoint and leaves nothing to clear",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner();
 
-      yield* finished(host, makes("dev"));
+        yield* finished(host, makes("dev"));
 
-      const report = yield* finished(host, {
-        _tag: "capture",
-        machine: ref("dev"),
-        checkpoint: checkpoint("snap"),
-        pin: "fake 1",
-      });
+        const report = yield* finished(host, capturingSnap);
 
-      expect(report.status).toBe("done");
-      expect(report.outcome.cleared).toBeUndefined();
-    })
+        expect(report.status).toBe("done");
+        expect(report.outcome.cleared).toBeUndefined();
+        expect(host.fake.calls).not.toContain("deleteCheckpoint snap");
+        expect(yield* stored(host, "snap")).toBe(true);
+      })
+  );
+
+  it.effect(
+    "a capture cut short after it copied ends cancelled, deletes its checkpoint, and says it cleared",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner();
+
+        yield* finished(host, makes("dev"));
+
+        const { entered, release } = host.fake.holdNext("capture", {
+          runsOn: true,
+        });
+
+        const operation = delivery(capturingSnap);
+
+        yield* deliver(host, operation);
+        yield* entered;
+        yield* host.operations.cancel(operation.id);
+        yield* release;
+
+        const report = yield* ended(host, operation.id);
+
+        expect(report.status).toBe("cancelled");
+        expect(report.outcome.cleared).toBe(true);
+        expect(ofSnap(host)).toStrictEqual([
+          "capture snap",
+          "deleteCheckpoint snap",
+        ]);
+        expect(yield* stored(host, "snap")).toBe(false);
+      })
+  );
+
+  it.effect(
+    "a host that stops during a capture deletes what the capture copied before it has stopped",
+    () =>
+      Effect.gen(function* () {
+        const scope = yield* Scope.make();
+        const host = yield* runner().pipe(Scope.provide(scope));
+
+        yield* finished(host, makes("dev"));
+
+        const { entered, release } = host.fake.holdNext("capture", {
+          runsOn: true,
+        });
+
+        const deleting = host.fake.holdNext("deleteCheckpoint");
+
+        yield* deliver(host, delivery(capturingSnap));
+        yield* entered;
+
+        const stopping = yield* Effect.forkChild(Scope.close(scope, Exit.void));
+
+        yield* release;
+        yield* deleting.entered;
+        yield* pause;
+
+        const stoppedFirst = stopping.pollUnsafe() !== undefined;
+
+        yield* deleting.release;
+        yield* Fiber.join(stopping);
+
+        expect(stoppedFirst).toBe(false);
+        expect(ofSnap(host)).toStrictEqual([
+          "capture snap",
+          "deleteCheckpoint snap",
+        ]);
+      })
+  );
+
+  it.effect(
+    "a fetch cut short after its install ends cancelled, keeps the checkpoint it installed, and leaves no staging folder",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner({ builds: memoryBuildStore().layer });
+
+        yield* finished(host, makes("dev"));
+        yield* finished(host, capturingSnap);
+        yield* finished(
+          host,
+          { _tag: "publish", checkpoint: checkpoint("snap") },
+          2
+        );
+
+        const { entered, release } = host.fake.holdNext("install", {
+          runsOn: true,
+        });
+
+        const operation = delivery({
+          _tag: "fetch",
+          checkpoint: checkpoint("fetched"),
+          from: "snap",
+          build: "web@1",
+        });
+
+        yield* deliver(host, operation);
+        yield* entered;
+        yield* host.operations.cancel(operation.id);
+        yield* release;
+
+        const report = yield* ended(host, operation.id);
+
+        expect(report.status).toBe("cancelled");
+        expect(report.outcome.cleared).toBeUndefined();
+        expect(host.fake.calls).not.toContain("deleteCheckpoint fetched");
+        expect(yield* stored(host, "fetched")).toBe(true);
+        expect(yield* stored(host, "fetched", ".fetching")).toBe(false);
+      })
   );
 
   it.effect("a resize answers the sizes the runtime reads back", () =>
@@ -1915,12 +2013,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       host.fake.dieNext("deleteCheckpoint", "the cleanup blew up");
 
-      const operation = delivery({
-        _tag: "capture",
-        machine: ref("dev"),
-        checkpoint: checkpoint("snap"),
-        pin: "fake 1",
-      });
+      const operation = delivery(capturingSnap);
 
       yield* deliver(host, operation);
       yield* entered;
@@ -2786,596 +2879,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         joinedAs
       );
     })
-  );
-
-  it.effect("a base outlives its build until its last child is deleted", () =>
-    Effect.gen(function* () {
-      const { model, operations, pin } = yield* onSmolvm;
-      const host = { operations };
-      const builder = ref("building-1");
-      const build = checkpoint("built-0123456789abcdef");
-      const base = `base_b00710ad_${Smolvm.nativeName(build)}`;
-      const child = Smolvm.nativeName(ref("web-1"));
-
-      model.vms.set(Smolvm.nativeName(builder), {
-        state: "running",
-        forwards: [`${builder.port}:22`],
-      });
-
-      const captured = yield* finished(host, {
-        _tag: "capture",
-        machine: builder,
-        checkpoint: build,
-        pin,
-      });
-
-      const parked = [...model.vms].map(([name, { state }]) => [name, state]);
-
-      const made = yield* finished(
-        host,
-        makes("web-1", {
-          source: { _tag: "checkpoint", checkpoint: build, pin },
-        })
-      );
-
-      const branched = model.vms.get(child);
-
-      yield* finished(host, { _tag: "deleteCheckpoint", checkpoint: build }, 2);
-
-      const kept = model.vms.get(base)?.state;
-
-      yield* finished(host, { _tag: "remove", machine: ref("web-1") }, 2);
-
-      expect([captured.status, made.status]).toStrictEqual(["done", "done"]);
-      expect(parked).toStrictEqual([
-        [Smolvm.nativeName(builder), "running"],
-        [base, "frozen"],
-      ]);
-      expect(branched?.parent).toBe(base);
-      expect(branched?.forwards).toStrictEqual([`${firstPort}:22`]);
-      expect(kept).toBe("frozen");
-      expect([...model.vms.keys()]).toStrictEqual([Smolvm.nativeName(builder)]);
-    })
-  );
-
-  it.effect(
-    "a capture of a build's copy drops the guest's host keys and parks a base, and one of any other checkpoint does neither",
-    () =>
-      Effect.gen(function* () {
-        const { model, operations, pin } = yield* onSmolvm;
-        const builder = ref("building-1");
-
-        const unkeyed = () =>
-          model.spawner.calls.filter(({ args }) =>
-            args.includes("clankerbox-unkey")
-          ).length;
-
-        model.vms.set(Smolvm.nativeName(builder), {
-          state: "running",
-          forwards: [`${builder.port}:22`],
-        });
-
-        const captures = yield* Effect.forEach(
-          ["snap", "built-0123456789abcdef"],
-          (name) =>
-            Effect.gen(function* () {
-              const before = unkeyed();
-
-              const { status } = yield* finished(
-                { operations },
-                {
-                  _tag: "capture",
-                  machine: builder,
-                  checkpoint: checkpoint(name),
-                  pin,
-                }
-              );
-
-              return {
-                status,
-                unkeyed: unkeyed() - before,
-                bases: [...model.vms.keys()].filter((vm) =>
-                  vm.startsWith("base_")
-                ),
-              };
-            })
-        );
-
-        expect(captures).toStrictEqual([
-          { status: "done", unkeyed: 0, bases: [] },
-          {
-            status: "done",
-            unkeyed: 1,
-            bases: [
-              `base_b00710ad_${Smolvm.nativeName(checkpoint("built-0123456789abcdef"))}`,
-            ],
-          },
-        ]);
-      })
-  );
-
-  it.effect(
-    "a host that fetches a build's copy parks its base before the fetch ends, so its first create branches, and parks one again when it starts",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const { layer: shared } = memoryBuildStore();
-        const builder = ref("building-1");
-        const built = checkpoint("built-0123456789abcdef");
-        const fetched = checkpoint("fetched-fedcba9876543210");
-        const base = `base_5bfae059_${Smolvm.nativeName(fetched)}`;
-        const building = smolvmModel();
-        const other = smolvmModel();
-        const pin = `smolvm ${Smolvm.minimumVersion} ${process.platform}-${process.arch}`;
-
-        const scratchDir = () =>
-          fs.makeTempDirectoryScoped({ directory: "/tmp", prefix: "cbx-" });
-
-        const builds = {
-          operations: yield* smolvmHost(
-            building,
-            yield* scratchDir(),
-            "b00710ad",
-            shared
-          ),
-        };
-
-        const otherDir = yield* scratchDir();
-
-        const fetches = {
-          operations: yield* smolvmHost(other, otherDir, "5bfae059", shared),
-        };
-
-        building.vms.set(Smolvm.nativeName(builder), {
-          state: "running",
-          forwards: [`${builder.port}:22`],
-        });
-
-        yield* finished(builds, {
-          _tag: "capture",
-          machine: builder,
-          checkpoint: built,
-          pin,
-        });
-        yield* finished(builds, { _tag: "publish", checkpoint: built }, 2);
-
-        const fetch = yield* finished(fetches, {
-          _tag: "fetch",
-          checkpoint: fetched,
-          from: built.name,
-          build: "web@1",
-        });
-
-        const parked = other.vms.get(base)?.state;
-
-        const made = yield* finished(
-          fetches,
-          makes("web-1", {
-            source: { _tag: "checkpoint", checkpoint: fetched, pin },
-          })
-        );
-
-        yield* smolvmHost(other, otherDir, "c0ffee00", shared);
-
-        yield* eventually(
-          Effect.sync(
-            () =>
-              other.vms.get(`base_c0ffee00_${Smolvm.nativeName(fetched)}`)
-                ?.state
-          ),
-          (state) => state === "frozen"
-        );
-
-        expect([fetch.status, made.status]).toStrictEqual(["done", "done"]);
-        expect(parked).toBe("frozen");
-        expect(other.vms.get(Smolvm.nativeName(ref("web-1")))?.parent).toBe(
-          base
-        );
-      })
-  );
-
-  it.effect(
-    "a host that starts under another smolvm than a build was captured under drops the build's base and parks none, so its copies restore",
-    () => {
-      const logged: string[] = [];
-
-      return Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const { model, stateDir, operations, pin } = yield* onSmolvm;
-        const builder = ref("building-1");
-        const build = checkpoint("built-0123456789abcdef");
-        const base = `base_b00710ad_${Smolvm.nativeName(build)}`;
-
-        const index = path.join(
-          stateDir,
-          "checkpoints",
-          `${Smolvm.nativeName(build)}.checkpoint`,
-          "checkpoint.json"
-        );
-
-        model.vms.set(Smolvm.nativeName(builder), {
-          state: "running",
-          forwards: [`${builder.port}:22`],
-        });
-
-        yield* finished(
-          { operations },
-          { _tag: "capture", machine: builder, checkpoint: build, pin }
-        );
-
-        const parked = model.vms.get(base)?.state;
-
-        model.vms.delete(Smolvm.nativeName(builder));
-
-        yield* fs.writeFileString(
-          index,
-          (yield* fs.readFileString(index)).replace(
-            `"smolvm_version":"${Smolvm.minimumVersion}"`,
-            '"smolvm_version":"1.32.0"'
-          )
-        );
-
-        const upgraded = {
-          operations: yield* smolvmHost(model, stateDir, "b00710ad"),
-        };
-
-        yield* eventually(
-          Effect.sync(() => model.vms.has(base)),
-          (kept) => !kept
-        );
-
-        const made = yield* finished(
-          upgraded,
-          makes("web-1", {
-            source: { _tag: "checkpoint", checkpoint: build, pin },
-          })
-        );
-
-        yield* eventually(
-          Effect.sync(
-            () =>
-              logged.filter((line) =>
-                line.includes("captured under smolvm 1.32.0, not this host's")
-              ).length
-          ),
-          (skipped) => skipped === 2
-        );
-
-        expect(parked).toBe("frozen");
-        expect(made.status).toBe("done");
-        expect(
-          model.vms.get(Smolvm.nativeName(ref("web-1")))?.parent
-        ).toBeUndefined();
-        expect(
-          [...model.vms.keys()].filter((vm) => vm.startsWith("base_"))
-        ).toStrictEqual([]);
-      }).pipe(Effect.provide(Logger.layer([capturing(logged)])));
-    }
-  );
-
-  it.effect(
-    "a child's delete that can't retire its base still ends done, and a delete again retires it",
-    () =>
-      Effect.gen(function* () {
-        const { model, operations, pin } = yield* onSmolvm;
-        const host = { operations };
-        const builder = ref("building-1");
-        const build = checkpoint("built-0123456789abcdef");
-        const base = `base_b00710ad_${Smolvm.nativeName(build)}`;
-
-        model.vms.set(Smolvm.nativeName(builder), {
-          state: "running",
-          forwards: [`${builder.port}:22`],
-        });
-
-        yield* finished(host, {
-          _tag: "capture",
-          machine: builder,
-          checkpoint: build,
-          pin,
-        });
-        model.vms.delete(Smolvm.nativeName(builder));
-        yield* finished(
-          host,
-          makes("web-1", {
-            source: { _tag: "checkpoint", checkpoint: build, pin },
-          })
-        );
-        yield* finished(
-          host,
-          { _tag: "deleteCheckpoint", checkpoint: build },
-          2
-        );
-
-        model.faults.reply = ({ args }) =>
-          args[1] === "delete" && args.includes(base)
-            ? { exitCode: 1, stderr: "Error: database is locked\n" }
-            : undefined;
-
-        const first = yield* finished(
-          host,
-          { _tag: "remove", machine: ref("web-1") },
-          2
-        );
-
-        const kept = model.vms.has(base);
-
-        model.faults.reply = undefined;
-
-        const again = yield* finished(
-          host,
-          { _tag: "remove", machine: ref("web-1") },
-          3
-        );
-
-        expect([first.status, again.status]).toStrictEqual(["done", "done"]);
-        expect(kept).toBe(true);
-        expect([...model.vms.keys()]).toStrictEqual([]);
-      })
-  );
-
-  it.effect(
-    "a create restores the build when its base can't be read or goes before the branch, and fails when the branch fails beside a frozen base",
-    () =>
-      Effect.gen(function* () {
-        const { model, operations, pin } = yield* onSmolvm;
-        const host = { operations };
-        const builder = ref("building-1", { port: 11_001 });
-        const build = checkpoint("built-0123456789abcdef");
-        const base = `base_b00710ad_${Smolvm.nativeName(build)}`;
-
-        const created = (name: string) =>
-          Effect.map(
-            finished(
-              host,
-              makes(name, {
-                source: { _tag: "checkpoint", checkpoint: build, pin },
-              })
-            ),
-            ({ status }) => ({
-              status,
-              parent: model.vms.get(Smolvm.nativeName(ref(name)))?.parent,
-            })
-          );
-
-        model.vms.set(Smolvm.nativeName(builder), {
-          state: "running",
-          forwards: [`${builder.port}:22`],
-        });
-
-        yield* finished(host, {
-          _tag: "capture",
-          machine: builder,
-          checkpoint: build,
-          pin,
-        });
-        model.vms.delete(Smolvm.nativeName(builder));
-
-        model.faults.reply = ({ args }) =>
-          args[1] === "status" && args.includes(base)
-            ? { exitCode: 1, stderr: "Error: database is locked\n" }
-            : undefined;
-
-        const unread = yield* created("web-1");
-
-        model.faults.reply = ({ args }) =>
-          args[1] === "branch" && !args.includes(`${base}_freeze`)
-            ? { exitCode: 1, stderr: "Error: port 10001 is already in use\n" }
-            : undefined;
-
-        const refused = yield* created("web-2");
-
-        model.faults.reply = ({ args }) => {
-          if (args[1] !== "branch") {
-            return undefined;
-          }
-
-          model.vms.delete(base);
-
-          return {
-            exitCode: 1,
-            stderr: `Error: machine '${base}' not found\n`,
-          };
-        };
-
-        const gone = yield* created("web-3");
-
-        expect([unread, refused, gone]).toStrictEqual([
-          { status: "done", parent: undefined },
-          { status: "failed", parent: undefined },
-          { status: "done", parent: undefined },
-        ]);
-      })
-  );
-
-  it.effect(
-    "a create whose base goes before its branch, and whose half-made VM can't be removed, fails with the branch's error and logs the removal's",
-    () => {
-      const logged: string[] = [];
-
-      return Effect.gen(function* () {
-        const { model, operations, pin } = yield* onSmolvm;
-        const builder = ref("building-1", { port: 11_001 });
-        const build = checkpoint("built-0123456789abcdef");
-        const base = `base_b00710ad_${Smolvm.nativeName(build)}`;
-        const native = Smolvm.nativeName(ref("web-1"));
-        let branched = false;
-
-        model.vms.set(Smolvm.nativeName(builder), {
-          state: "running",
-          forwards: [`${builder.port}:22`],
-        });
-
-        yield* finished(
-          { operations },
-          { _tag: "capture", machine: builder, checkpoint: build, pin }
-        );
-        model.vms.delete(Smolvm.nativeName(builder));
-
-        model.faults.reply = ({ args }) => {
-          if (args[1] === "branch") {
-            branched = true;
-            model.vms.delete(base);
-
-            return {
-              exitCode: 1,
-              stderr: `Error: machine '${base}' not found\n`,
-            };
-          }
-
-          return branched && args[1] === "status" && args.includes(native)
-            ? { exitCode: 1, stderr: "Error: database is locked\n" }
-            : undefined;
-        };
-
-        const report = yield* finished(
-          { operations },
-          makes("web-1", {
-            source: { _tag: "checkpoint", checkpoint: build, pin },
-          })
-        );
-
-        expect(report.status).toBe("failed");
-        expect(report.error?.message).toContain(`machine '${base}' not found`);
-        expect(
-          logged.filter(
-            (line) =>
-              line.includes(`${native} couldn't be removed`) &&
-              line.includes("database is locked")
-          )
-        ).toHaveLength(1);
-      }).pipe(Effect.provide(Logger.layer([capturing(logged)])));
-    }
-  );
-
-  it.effect(
-    "a capture of a build whose park fails ends done, and one cut short in its park ends cancelled, and both keep the checkpoint",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const { model, stateDir, operations, pin } = yield* onSmolvm;
-        const host = { operations };
-        const builder = ref("building-1");
-
-        const parks = (build: MachineRef) =>
-          model.spawner.calls.some(
-            ({ args }) =>
-              args[1] === "create" &&
-              args.includes(`base_b00710ad_${Smolvm.nativeName(build)}`)
-          );
-
-        const kept = (build: MachineRef) =>
-          fs.exists(
-            path.join(
-              stateDir,
-              "checkpoints",
-              `${Smolvm.nativeName(build)}.checkpoint`
-            )
-          );
-
-        model.vms.set(Smolvm.nativeName(builder), {
-          state: "running",
-          forwards: [`${builder.port}:22`],
-        });
-
-        model.faults.reply = ({ args }) =>
-          args[1] === "create" && args.some((arg) => arg.startsWith("base_"))
-            ? { exitCode: 1, stderr: "Error: database is locked\n" }
-            : undefined;
-
-        const failing = checkpoint("built-0123456789abcdef");
-
-        const failed = yield* finished(host, {
-          _tag: "capture",
-          machine: builder,
-          checkpoint: failing,
-          pin,
-        });
-
-        model.faults.reply = ({ args }) =>
-          args[1] === "create" && args.some((arg) => arg.startsWith("base_"))
-            ? { hangs: true }
-            : undefined;
-
-        const cut = checkpoint("built-fedcba9876543210");
-
-        const operation = delivery({
-          _tag: "capture",
-          machine: builder,
-          checkpoint: cut,
-          pin,
-        });
-
-        yield* deliver(host, operation);
-        yield* eventually(
-          Effect.sync(() => parks(cut)),
-          (parking) => parking
-        );
-        yield* operations.cancel(operation.id);
-
-        const cancelled = yield* ended(host, operation.id);
-
-        expect([failed.status, cancelled.status]).toStrictEqual([
-          "done",
-          "cancelled",
-        ]);
-        expect(cancelled.outcome.cleared).toBeUndefined();
-        expect([yield* kept(failing), yield* kept(cut)]).toStrictEqual([
-          true,
-          true,
-        ]);
-      })
-  );
-
-  it.effect(
-    "a host that boots again parks each build it keeps anew, and drops the old base with its last child",
-    () =>
-      Effect.gen(function* () {
-        const { model, stateDir, operations, pin } = yield* onSmolvm;
-        const builder = ref("building-1");
-        const build = checkpoint("built-0123456789abcdef");
-        const before = `base_b00710ad_${Smolvm.nativeName(build)}`;
-        const after = `base_5bfae059_${Smolvm.nativeName(build)}`;
-
-        model.vms.set(Smolvm.nativeName(builder), {
-          state: "running",
-          forwards: [`${builder.port}:22`],
-        });
-
-        yield* finished(
-          { operations },
-          { _tag: "capture", machine: builder, checkpoint: build, pin }
-        );
-        yield* finished(
-          { operations },
-          makes("web-1", {
-            source: { _tag: "checkpoint", checkpoint: build, pin },
-          })
-        );
-
-        for (const vm of model.vms.values()) {
-          vm.state = "stopped";
-        }
-
-        const rebooted = {
-          operations: yield* smolvmHost(model, stateDir, "5bfae059"),
-        };
-
-        yield* eventually(
-          Effect.sync(() => model.vms.get(after)?.state),
-          (state) => state === "frozen"
-        );
-
-        const pinned = model.vms.get(before)?.state;
-
-        yield* finished(rebooted, { _tag: "remove", machine: ref("web-1") }, 2);
-
-        expect(pinned).toBe("stopped");
-        expect(model.vms.get(after)?.forwards).toStrictEqual([]);
-        expect([...model.vms.keys()].toSorted()).toStrictEqual(
-          [Smolvm.nativeName(builder), after].toSorted()
-        );
-      })
   );
 });
 

@@ -383,7 +383,9 @@ as it is.
   returned at once and ended the exec with exit 1, "io operation failed:
   connection closed", its command gone after a resume; an exec of a stopped
   machine exits 1, "is not running". Ours: a guest script ended that way is
-  `ScriptFailed`, with smolvm's message in its last output.
+  `ScriptFailed`, with smolvm's message in its last output, except the drop of
+  a builder's host keys before a build's capture, which is `Internal` with the
+  same output in its message.
 - A `machine exec` sent while `machine start` is still making the guest's
   container made the start fail ("smolvm-fork-ready: No such file", "`/bin/bash`
   not found"). Ours: a guest command runs only in a step holding the machine's

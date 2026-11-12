@@ -52,7 +52,7 @@ const keptOutput = () => {
 };
 
 const drained = (
-  runtime: Runtime,
+  runtime: Pick<Runtime, "exec">,
   machine: Native,
   command: Command,
   output: ReturnType<typeof keptOutput>
@@ -77,7 +77,7 @@ const drained = (
   );
 
 const runInGuest = (
-  runtime: Runtime,
+  runtime: Pick<Runtime, "exec">,
   script: "setup" | "preparation" | "tailnet",
   machine: Native,
   command: Command,
@@ -517,11 +517,6 @@ export const tailnetIn = (output: string): TailnetReport | undefined => {
 
 const keyWanted = "$state/host-key-wanted";
 
-// https://github.com/smol-machines/smolvm/blob/v1.34.1/src/agent/fork.rs#L3781
-/**
- * Runs just before a build is captured. Its copies then hold no host key, so smolvm's re-mint of
- * each skips `ssh-keygen -A`, and their new identity mints the one key each keeps.
- */
 export const unkeyScript = [
   "set -eu",
   "root=${CLANKERBOX_ROOT-}",
@@ -635,7 +630,7 @@ export const identify = (
   );
 
 export const unkey = (
-  runtime: Runtime,
+  runtime: Pick<Runtime, "exec">,
   machine: Native
 ): Effect.Effect<void, RuntimeError | ScriptFailed> =>
   Effect.asVoid(

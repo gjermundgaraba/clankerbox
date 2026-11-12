@@ -1,5 +1,4 @@
 import type {
-  CheckpointRef,
   ExecCommand,
   MachineRef,
   MachineState,
@@ -16,7 +15,6 @@ import {
   formatGib,
   formatMib,
   Internal,
-  isBuildCopy,
   PinMismatch,
   timedOutExitCode,
   Unsizable,
@@ -58,7 +56,6 @@ import {
   runCommand,
   runSetup,
   scrubNode,
-  unkey,
 } from "./guest.ts";
 import type { Leaving, TailnetReport } from "./guest.ts";
 import { Reaches } from "./reach.ts";
@@ -217,36 +214,12 @@ export const make = (
 
     const reaches = yield* Reaches;
     const hostScope = yield* Effect.scope;
-    const admission = yield* Semaphore.make(1);
+    const admitting = yield* Semaphore.make(1);
     const accepting = yield* Semaphore.make(1);
 
     const boot = Hex.encode(
       globalThis.crypto.getRandomValues(new Uint8Array(8))
     );
-
-    const { bases } = runtime;
-
-    const parked = (build: CheckpointRef) =>
-      bases === undefined
-        ? Effect.void
-        : bases
-            .park(build)
-            .pipe(
-              Effect.catch((error) =>
-                Effect.logWarning(`park build ${build.name}: ${error.message}`)
-              )
-            );
-
-    if (bases !== undefined) {
-      yield* Effect.forkIn(
-        bases.settle.pipe(
-          Effect.catch((error) =>
-            Effect.logWarning(`settle the parked bases: ${error.message}`)
-          )
-        ),
-        hostScope
-      );
-    }
 
     const entries = new Map<string, Entry>();
     const scopes = new Map<string, { sequence: number; id: string }>();
@@ -271,7 +244,7 @@ export const make = (
       machine: MachineRef,
       machines: readonly MachineRef[]
     ) =>
-      admission.withPermits(1)(
+      admitting.withPermits(1)(
         Effect.gen(function* () {
           if (runtime.admission !== undefined) {
             yield* runtime.admission
@@ -615,10 +588,6 @@ export const make = (
           )
         );
 
-        if (source._tag === "checkpoint") {
-          yield* Effect.forkIn(parked(source.checkpoint), hostScope);
-        }
-
         if (source._tag === "base" && source.setup !== undefined) {
           yield* prepareBase(runtime, ref, config.kind, Option.isSome(tailnet));
           yield* onTailnet(
@@ -762,26 +731,19 @@ export const make = (
         case "capture": {
           const { machine, checkpoint, pin } = step;
 
-          const keyless =
-            bases !== undefined && isBuildCopy(checkpoint.name)
-              ? unkey(runtime, machine)
-              : Effect.void;
-
           return Effect.andThen(
-            Effect.tapError(
-              Effect.andThen(copyable(machine.name, pin), keyless),
-              () => cleared
-            ),
-            runtime.capture(machine, checkpoint).pipe(
-              Effect.onExit((exit) =>
-                Exit.isSuccess(exit)
-                  ? Effect.void
-                  : runtime
-                      .deleteCheckpoint(checkpoint)
-                      .pipe(Effect.andThen(cleared), Effect.ignore)
-              ),
-              Effect.andThen(parked(checkpoint))
-            )
+            Effect.tapError(copyable(machine.name, pin), () => cleared),
+            runtime
+              .capture(machine, checkpoint)
+              .pipe(
+                Effect.onExit((exit) =>
+                  Exit.isSuccess(exit)
+                    ? Effect.void
+                    : runtime
+                        .deleteCheckpoint(checkpoint)
+                        .pipe(Effect.andThen(cleared), Effect.ignore)
+                )
+              )
           );
         }
 
@@ -832,7 +794,7 @@ export const make = (
               fetch(store, runtime, checkpoint, from, build)
             ),
             () => cleared
-          ).pipe(Effect.andThen(parked(checkpoint)));
+          );
         }
       }
     };

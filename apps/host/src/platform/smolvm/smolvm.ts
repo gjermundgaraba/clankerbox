@@ -18,8 +18,10 @@ import {
   Schema,
   Semaphore,
 } from "effect";
+import type { Scope } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 
+import { unkey } from "../../guest.ts";
 import {
   atLeast,
   CannotStart,
@@ -31,6 +33,7 @@ import {
 } from "../../runtime.ts";
 import type {
   CheckpointRef,
+  Command,
   Interface,
   MachineRef,
   MachineState,
@@ -340,10 +343,11 @@ export const make = (
 ): Effect.Effect<
   Interface,
   HostError | CannotStart,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Scope.Scope
 > =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
+    const layerScope = yield* Effect.scope;
     const binary = path.join(settings.prefix, "smolvm");
     const paths = pathsIn(settings.stateDir);
     const { run, exec } = yield* cliIn(environment(settings));
@@ -964,25 +968,34 @@ export const make = (
       });
     });
 
-    const bases = {
-      park: Effect.fn("Smolvm.park")((build: CheckpointRef) =>
-        isBuildCopy(build.name) ? parking(nativeName(build)) : Effect.void
-      ),
-      settle: Effect.gen(function* () {
-        yield* retireAllStale;
+    const parked = Effect.fn("Smolvm.park")((build: CheckpointRef) =>
+      isBuildCopy(build.name)
+        ? parking(nativeName(build)).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning(`park build ${build.name}: ${error.message}`)
+            )
+          )
+        : Effect.void
+    );
 
-        yield* Effect.forEach(
-          yield* builds,
-          (build) =>
-            parking(build).pipe(
-              Effect.catch((error) =>
-                Effect.logWarning(`park ${baseOf(build)}: ${error.message}`)
-              )
-            ),
-          { discard: true }
-        );
-      }),
-    };
+    const settle = Effect.gen(function* () {
+      yield* retireAllStale;
+
+      yield* Effect.forEach(
+        yield* builds,
+        (build) =>
+          parking(build).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning(`park ${baseOf(build)}: ${error.message}`)
+            )
+          ),
+        { discard: true }
+      );
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning(`settle the parked bases: ${error.message}`)
+      )
+    );
 
     const heldMib = Effect.gen(function* () {
       const held = (yield* listed).flatMap(({ name }) =>
@@ -1032,6 +1045,47 @@ export const make = (
           `branched ${native} from ${base} in ${Duration.format(took)}`
         );
       });
+
+    const execIn = Effect.fn("Smolvm.exec")(function* (
+      machine: Native,
+      { argv, stdin, user }: Command
+    ) {
+      const native = nativeName(machine);
+      const what = `smolvm machine exec ${native}`;
+
+      const inGuest = (as: string, command: readonly string[]) => [
+        "machine",
+        "exec",
+        "--name",
+        native,
+        "--user",
+        as,
+        "-i",
+        "--",
+        ...command,
+      ];
+
+      if (user === undefined || user === "root") {
+        return yield* exec(binary, inGuest("root", argv), stdin, what);
+      }
+
+      // smolvm's --user hands crun only uid:gid, so the user's supplementary groups are lost:
+      // https://github.com/smol-machines/smolvm/blob/v1.34.1/crates/smolvm-agent/src/oci.rs#L272
+      const sudo = yield* run(
+        binary,
+        inGuest("root", ["/bin/sh", "-c", "command -v sudo"]),
+        what
+      );
+
+      return yield* exec(
+        binary,
+        sudo.exitCode === 0
+          ? inGuest("root", ["sudo", "-n", "-u", user, "-H", "--", ...argv])
+          : inGuest(user, argv),
+        stdin,
+        what
+      );
+    });
 
     return {
       version,
@@ -1112,11 +1166,11 @@ export const make = (
               `couldn't install checkpoint ${checkpoint.name}`,
               fs.rename(staged, checkpointDir(checkpoint))
             );
+            yield* parked(checkpoint);
           })
         ),
       },
       growsLive: traits.resize.running !== "none",
-      bases,
       startup: Effect.gen(function* () {
         yield* removeAll(paths.forks);
 
@@ -1135,6 +1189,8 @@ export const make = (
             yield* removeAll(path.join(paths.store, entry));
           }
         }
+
+        yield* Effect.forkIn(settle, layerScope);
       }),
       adopt: () => Effect.void,
       observe: Effect.fn("Smolvm.observe")(observe),
@@ -1143,15 +1199,28 @@ export const make = (
           allotted(running, unread, settings.ramBudgetMib)
         )
       ),
-      capture: Effect.fn("Smolvm.capture")((machine, checkpoint) =>
-        Effect.andThen(
-          copyable(
-            machine,
-            `a smolvm checkpoint holds a running machine's RAM, and ${machine.name} is stopped: start it first`
-          ),
-          captureRam(machine, paths.store, checkpointDir(checkpoint))
-        )
-      ),
+      capture: Effect.fn("Smolvm.capture")(function* (machine, checkpoint) {
+        if (isBuildCopy(checkpoint.name)) {
+          // A copy whose source holds no host key files skips `ssh-keygen -A` in its re-mint:
+          // https://github.com/smol-machines/smolvm/blob/v1.34.1/src/agent/fork.rs#L3781
+          yield* unkey({ exec: execIn }, machine).pipe(
+            Effect.catchTag("ScriptFailed", (error) =>
+              Effect.fail(
+                new Internal({
+                  message: `couldn't drop ${machine.name}'s host keys before its capture: ${error.message}`,
+                })
+              )
+            )
+          );
+        }
+
+        yield* copyable(
+          machine,
+          `a smolvm checkpoint holds a running machine's RAM, and ${machine.name} is stopped: start it first`
+        );
+        yield* captureRam(machine, paths.store, checkpointDir(checkpoint));
+        yield* parked(checkpoint);
+      }),
       restore: Effect.fn("Smolvm.restore")((checkpoint, machine) =>
         Effect.gen(function* () {
           const base = baseOf(nativeName(checkpoint));
@@ -1208,7 +1277,10 @@ export const make = (
           }
 
           yield* grown(native, checkpoint, changes(checkpoint, machine));
-        })
+        }).pipe(
+          Effect.andThen(Effect.forkIn(parked(checkpoint), layerScope)),
+          Effect.asVoid
+        )
       ),
       fork: Effect.fn("Smolvm.fork")((source, machine) => {
         const store = path.join(paths.forks, nativeName(machine));
@@ -1419,46 +1491,7 @@ export const make = (
           }
         })
       ),
-      exec: Effect.fn("Smolvm.exec")(function* (
-        machine,
-        { argv, stdin, user }
-      ) {
-        const native = nativeName(machine);
-        const what = `smolvm machine exec ${native}`;
-
-        const inGuest = (as: string, command: readonly string[]) => [
-          "machine",
-          "exec",
-          "--name",
-          native,
-          "--user",
-          as,
-          "-i",
-          "--",
-          ...command,
-        ];
-
-        if (user === undefined || user === "root") {
-          return yield* exec(binary, inGuest("root", argv), stdin, what);
-        }
-
-        // smolvm's --user hands crun only uid:gid, so the user's supplementary groups are lost:
-        // https://github.com/smol-machines/smolvm/blob/v1.34.1/crates/smolvm-agent/src/oci.rs#L272
-        const sudo = yield* run(
-          binary,
-          inGuest("root", ["/bin/sh", "-c", "command -v sudo"]),
-          what
-        );
-
-        return yield* exec(
-          binary,
-          sudo.exitCode === 0
-            ? inGuest("root", ["sudo", "-n", "-u", user, "-H", "--", ...argv])
-            : inGuest(user, argv),
-          stdin,
-          what
-        );
-      }),
+      exec: execIn,
     } satisfies Interface;
   });
 
