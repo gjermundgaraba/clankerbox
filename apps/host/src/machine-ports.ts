@@ -1,6 +1,6 @@
 import type { Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Capacity } from "@gjermundgaraba/clankerbox-sdk";
-import { Context, Effect } from "effect";
+import { Context } from "effect";
+import type { Effect } from "effect";
 
 export interface PortRange {
   readonly first: number;
@@ -28,21 +28,3 @@ export interface Probe {
 export class PortProbe extends Context.Service<PortProbe, Probe>()(
   "@clankerbox/host/PortProbe"
 ) {}
-
-export const pickPort = (
-  probe: Probe,
-  address: string,
-  range: PortRange,
-  taken: ReadonlySet<number>
-): Effect.Effect<number, Capacity | Internal> =>
-  Effect.gen(function* () {
-    for (let port = range.first; port <= range.last; port += 1) {
-      if (!taken.has(port) && (yield* probe.free(address, port))) {
-        return port;
-      }
-    }
-
-    return yield* new Capacity({
-      message: `no free port in ${range.first}-${range.last} on ${address}`,
-    });
-  });

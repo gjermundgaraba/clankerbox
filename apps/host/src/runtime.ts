@@ -145,11 +145,44 @@ export interface Bases {
   readonly settle: Effect.Effect<void, RuntimeError>;
 }
 
+export type Dial = (
+  input: Stream.Stream<Uint8Array>
+) => Stream.Stream<Uint8Array, RuntimeError>;
+
+export type Reach =
+  | { readonly _tag: "published"; readonly address: string }
+  | {
+      readonly _tag: "relayed";
+      readonly address: string;
+      readonly dial: (machine: Native) => Dial;
+    };
+
+export interface Admission {
+  readonly admit: (activation: Activation) => Effect.Effect<void, RoomError>;
+  readonly stopBoots: boolean;
+}
+
+export interface CheckpointFiles {
+  readonly checkpointFiles: (
+    checkpoint: CheckpointRef
+  ) => Effect.Effect<readonly CheckpointFile[], RuntimeError>;
+  /** Where a file of `key` lies on this host, in any of its checkpoints, if one does. */
+  readonly held: (key: string) => Effect.Effect<string | undefined>;
+  /** Where a copy of `checkpoint` is put together, on the filesystem it will lie on. */
+  readonly staging: (checkpoint: CheckpointRef) => string;
+  /** Makes `checkpoint` of the files put together in `staged`, which it takes. */
+  readonly install: (
+    checkpoint: CheckpointRef,
+    staged: string
+  ) => Effect.Effect<void, RuntimeError>;
+}
+
 export interface Interface {
   readonly version: string;
-  readonly publishAddress: string;
   readonly pin: string | undefined;
-  readonly stopResumes: boolean;
+  readonly reach: Reach;
+  readonly admission: Admission | undefined;
+  readonly files: CheckpointFiles | undefined;
   readonly growsLive: boolean;
   readonly bases?: Bases | undefined;
   readonly sizable: (
@@ -165,7 +198,6 @@ export interface Interface {
   readonly observe: (
     machines: readonly Native[]
   ) => Effect.Effect<Observed, RuntimeError>;
-  readonly admit: (activation: Activation) => Effect.Effect<void, RoomError>;
   readonly capacity: (
     machines: readonly Held[]
   ) => Effect.Effect<readonly Reading[], RuntimeError>;
@@ -206,18 +238,6 @@ export interface Interface {
     machine: Native,
     command: Command
   ) => Effect.Effect<Execution, RuntimeError, Scope.Scope>;
-  readonly checkpointFiles: (
-    checkpoint: CheckpointRef
-  ) => Effect.Effect<readonly CheckpointFile[], RuntimeError>;
-  /** Where a file of `key` lies on this host, in any of its checkpoints, if one does. */
-  readonly held: (key: string) => Effect.Effect<string | undefined>;
-  /** Where a copy of `checkpoint` is put together, on the filesystem it will lie on. */
-  readonly staging: (checkpoint: CheckpointRef) => string;
-  /** Makes `checkpoint` of the files put together in `staged`, which it takes. */
-  readonly install: (
-    checkpoint: CheckpointRef,
-    staged: string
-  ) => Effect.Effect<void, RuntimeError>;
 }
 
 export class Runtime extends Context.Service<Runtime, Interface>()(

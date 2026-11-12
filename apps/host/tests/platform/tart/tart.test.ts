@@ -6,8 +6,6 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { connect, createServer } from "node:net";
-import type { Server } from "node:net";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -20,16 +18,7 @@ import {
   scratch,
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import {
-  Deferred,
-  Duration,
-  Effect,
-  Exit,
-  Fiber,
-  Layer,
-  Logger,
-  Stream,
-} from "effect";
+import { Deferred, Duration, Effect, Exit, Fiber, Layer, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { expect } from "vite-plus/test";
 
@@ -49,6 +38,7 @@ import type { Settings } from "../../../src/platform/tart/tart.ts";
 import type { Interface, MachineRef } from "../../../src/runtime.ts";
 import { scripted } from "../../scripted.ts";
 import type { Call, Reply } from "../../scripted.ts";
+import { admitOn } from "../../support.ts";
 
 const failure = (error: HostError) => [error._tag, error.message];
 
@@ -64,35 +54,6 @@ const ownPort = () => {
 
   return port;
 };
-
-const holding = (port: number | undefined) =>
-  Effect.acquireRelease(
-    Effect.callback<Server>((resume) => {
-      const server = createServer();
-
-      server.listen({ host: "127.0.0.1", port }, () => {
-        resume(Effect.succeed(server));
-      });
-    }),
-    (server) =>
-      Effect.callback<undefined>((resume) => {
-        server.close(() => {
-          resume(Effect.undefined);
-        });
-      })
-  );
-
-const accepts = (port: number) =>
-  Effect.callback<boolean>((resume) => {
-    const socket = connect({ host: "127.0.0.1", port }, () => {
-      socket.destroy();
-      resume(Effect.succeed(true));
-    });
-
-    socket.once("error", () => {
-      resume(Effect.succeed(false));
-    });
-  });
 
 const machineOn = (name: string): MachineRef => ({
   name,
@@ -485,7 +446,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(runtime.version).toBe("2.41.1");
         expect(runtime.pin).toBeUndefined();
-        expect(runtime.stopResumes).toBe(false);
+        expect(runtime.admission?.stopBoots).toBe(false);
 
         for (const call of mac.spawner.calls) {
           expect(call.file).toBe(binary);
@@ -543,7 +504,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             log,
           })
         );
-        expect(yield* accepts(machine.port)).toBe(true);
         expect(yield* runtime.observe([machine])).toStrictEqual(
           new Map([[machine.name, "running"]])
         );
@@ -637,25 +597,21 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
-  it.effect("start of a running VM listens and boots nothing", () =>
+  it.effect("start of a running VM boots nothing", () =>
     Effect.gen(function* () {
       const { mac, runtime } = yield* runtimeOn();
       const machine = machineOn("dev");
 
       mac.vms.set(vmOf(machine), "running");
 
-      const listened = yield* accepts(machine.port);
-
       yield* runtime.start(machine);
 
-      expect(listened).toBe(false);
       expect(calls(mac)).toStrictEqual([]);
-      expect(yield* accepts(machine.port)).toBe(true);
     })
   );
 
   it.effect(
-    "start of a VM Tart no longer has is refused before anything is written: no job, no log, no listener",
+    "start of a VM Tart no longer has is refused before anything is written: no job, no log",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -674,7 +630,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           existsSync(path.join(dir, `${vm}.plist`)),
           existsSync(path.join(dir, `${vm}.log`)),
         ]).toStrictEqual([false, false]);
-        expect(yield* accepts(machine.port)).toBe(false);
       })
   );
 
@@ -756,7 +711,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a boot whose guest agent never answers leaves its VM running, reachable through its listener",
+    "a boot whose guest agent never answers leaves its VM running",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -796,63 +751,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           calls(mac).filter((line) => line.includes("stop"))
         ).toStrictEqual([]);
         expect(mac.vms.get(vm)).toBe("running");
-        expect(yield* accepts(machine.port)).toBe(true);
-      })
-  );
-
-  it.effect(
-    "a create, fork or restore whose forwarder can't listen is refused before anything native",
-    () =>
-      Effect.gen(function* () {
-        const { mac, runtime } = yield* runtimeOn();
-        const [source, machine] = [machineOn("src"), machineOn("dev")];
-
-        const checkpoint = {
-          name: "snap",
-          instance: "fedcba9876543210fedcba9876543210",
-          port: source.port,
-          cpu: 4,
-          ramMib: 8192,
-          diskGib: 60,
-        };
-
-        mac.vms.set(vmOf(source), "stopped");
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            yield* holding(machine.port);
-
-            const errors = yield* Effect.forEach(
-              [
-                runtime.create(machine, "base"),
-                runtime.fork(source, machine),
-                runtime.restore(checkpoint, machine),
-              ],
-              (making) => Effect.flip(making)
-            );
-
-            for (const error of errors) {
-              expect(failure(error)).toStrictEqual([
-                "Internal",
-                expect.stringMatching(
-                  new RegExp(
-                    `^the forwarder couldn't listen on 127\\.0\\.0\\.1:${machine.port}: `,
-                    "u"
-                  )
-                ),
-              ]);
-            }
-
-            expect(calls(mac)).toStrictEqual([]);
-            expect(
-              existsSync(
-                path.join(
-                  jobsDir(mac.settings.stateDir),
-                  `${vmOf(machine)}.plist`
-                )
-              )
-            ).toBe(false);
-          })
-        );
       })
   );
 
@@ -990,7 +888,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         mac.vms.set(vmOf(b), "stopped");
 
         const refused = yield* Effect.flip(
-          runtime.admit({
+          admitOn(runtime)({
             action: "startMachine",
             machine: b,
             machines: [
@@ -1008,7 +906,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         mac.vms.delete("operators-own");
 
         const crowded = yield* Effect.flip(
-          runtime.admit({
+          admitOn(runtime)({
             action: "startMachine",
             machine: b,
             machines: [
@@ -1021,7 +919,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(crowded._tag).toBe("Capacity");
 
-        yield* runtime.admit({
+        yield* admitOn(runtime)({
           action: "startMachine",
           machine: b,
           machines: [
@@ -1085,7 +983,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         mac.vms.set("operators-own", "running");
         mac.vms.set(vmOf(target), "running");
 
-        yield* runtime.admit({
+        yield* admitOn(runtime)({
           action: "startMachine",
           machine: target,
           machines: [{ machine: target, booting: true }],
@@ -1094,7 +992,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         mac.vms.set("operators-other", "running");
 
         const crowded = yield* Effect.flip(
-          runtime.admit({
+          admitOn(runtime)({
             action: "startMachine",
             machine: target,
             machines: [{ machine: target, booting: true }],
@@ -1155,7 +1053,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             path.join(jobsDir(mac.settings.stateDir), `${vmOf(copy)}.plist`)
           )
         ).toBe(false);
-        expect(yield* accepts(copy.port)).toBe(false);
       })
   );
 
@@ -1425,11 +1322,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         mac.vms.set(vmOf(source), "stopped");
         mac.vms.set("operators-own", "running");
-        yield* runtime.admit(forking);
+        yield* admitOn(runtime)(forking);
 
         mac.vms.set("operators-other", "running");
 
-        expect((yield* Effect.flip(runtime.admit(forking)))._tag).toBe(
+        expect((yield* Effect.flip(admitOn(runtime)(forking)))._tag).toBe(
           "Capacity"
         );
       })
@@ -1522,7 +1419,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "stop shuts the guest down from inside and waits for its VM to stop; its listener stays",
+    "stop shuts the guest down from inside and waits for its VM to stop",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -1539,7 +1436,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           `tart exec ${vm} sudo -n /sbin/shutdown -h now`,
         ]);
         expect(mac.vms.get(vm)).toBe("stopped");
-        expect(yield* accepts(machine.port)).toBe(true);
       })
   );
 
@@ -1671,7 +1567,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           existsSync(path.join(dir, `${vm}.plist`)),
           existsSync(path.join(dir, `${vm}.log`)),
         ]).toStrictEqual([false, false]);
-        expect(yield* accepts(machine.port)).toBe(false);
       })
   );
 
@@ -1693,7 +1588,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "delete fails, keeping the job and the listener, when Tart can't delete the VM",
+    "delete fails, keeping the job, when Tart can't delete the VM",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -1720,7 +1615,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           `tart delete ${vm}`,
         ]);
         expect(mac.jobs.has(vm)).toBe(true);
-        expect(yield* accepts(machine.port)).toBe(true);
       })
   );
 
@@ -1819,130 +1713,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
-  it.effect(
-    "startup makes the jobs dir, and adopt listens again for every machine, running or not",
-    () =>
-      Effect.gen(function* () {
-        const { mac, runtime } = yield* runtimeOn();
-        const [up, down] = [machineOn("up"), machineOn("down")];
+  it.effect("startup makes the jobs dir", () =>
+    Effect.gen(function* () {
+      const { mac, runtime } = yield* runtimeOn();
 
-        mac.vms.set(vmOf(up), "running");
-        mac.vms.set(vmOf(down), "stopped");
-        yield* runtime.startup;
+      yield* runtime.startup;
 
-        expect(existsSync(jobsDir(mac.settings.stateDir))).toBe(true);
-
-        yield* runtime.adopt([up, down]);
-
-        expect([
-          yield* accepts(up.port),
-          yield* accepts(down.port),
-        ]).toStrictEqual([true, true]);
-      })
-  );
-
-  it.effect(
-    "a port adopt can't listen on is logged and the rest served, and start listens again before it boots",
-    () =>
-      Effect.gen(function* () {
-        const { mac, runtime } = yield* runtimeOn();
-        const [blocked, other] = [machineOn("dev"), machineOn("other")];
-        const vm = vmOf(blocked);
-        const logged: unknown[] = [];
-        const listenError = `the forwarder couldn't listen on 127\\.0\\.0\\.1:${blocked.port}: `;
-
-        mac.vms.set(vm, "stopped");
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            yield* holding(blocked.port);
-
-            yield* runtime
-              .adopt([blocked, other])
-              .pipe(
-                Effect.provide(
-                  Logger.layer([
-                    Logger.make(({ message }) => logged.push(message)),
-                  ])
-                )
-              );
-
-            expect(logged).toStrictEqual([
-              [
-                expect.stringMatching(
-                  new RegExp(
-                    `^adopt: no forwarder for dev: ${listenError}`,
-                    "u"
-                  )
-                ),
-              ],
-            ]);
-            expect(yield* accepts(other.port)).toBe(true);
-
-            const before = calls(mac).length;
-            const error = yield* Effect.flip(runtime.start(blocked));
-
-            expect([error._tag, error.message]).toStrictEqual([
-              "Internal",
-              expect.stringMatching(new RegExp(`^${listenError}`, "u")),
-            ]);
-            expect(calls(mac).slice(before)).toStrictEqual([]);
-            expect(mac.vms.get(vm)).toBe("stopped");
-          })
-        );
-
-        yield* runtime.start(blocked);
-        expect(mac.vms.get(vm)).toBe("running");
-        expect(yield* accepts(blocked.port)).toBe(true);
-      })
-  );
-
-  it.effect(
-    "delete works for a machine whose port adopt couldn't listen on",
-    () =>
-      Effect.gen(function* () {
-        const { mac, runtime } = yield* runtimeOn();
-        const machine = machineOn("dev");
-        const vm = vmOf(machine);
-
-        mac.vms.set(vm, "stopped");
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            yield* holding(machine.port);
-
-            yield* runtime
-              .adopt([machine])
-              .pipe(Effect.provide(Logger.layer([])));
-            yield* runtime.delete(machine);
-
-            expect(calls(mac)).toStrictEqual([
-              `tart delete ${vm}`,
-              `launchctl bootout gui/501/${vm}`,
-            ]);
-            expect(mac.vms.has(vm)).toBe(false);
-          })
-        );
-      })
-  );
-
-  it.effect(
-    "a delete after adopt closes the forwarder, knowing the machine only by name",
-    () =>
-      Effect.gen(function* () {
-        const { mac, runtime } = yield* runtimeOn();
-        const machine = machineOn("dev");
-
-        mac.vms.set(vmOf(machine), "stopped");
-        yield* runtime.adopt([machine]);
-
-        expect(yield* accepts(machine.port)).toBe(true);
-
-        yield* runtime.delete({
-          name: machine.name,
-          instance: machine.instance,
-        });
-
-        expect(yield* accepts(machine.port)).toBe(false);
-      })
+      expect(existsSync(jobsDir(mac.settings.stateDir))).toBe(true);
+    })
   );
 
   it.effect("observe reads every machine's state with one tart list", () =>

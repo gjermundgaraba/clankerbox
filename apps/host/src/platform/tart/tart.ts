@@ -20,7 +20,6 @@ import {
   Schedule,
   Schema,
 } from "effect";
-import type { Scope } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 
 import { lastLines } from "../../guest.ts";
@@ -47,7 +46,7 @@ import type { HostSettings } from "../../settings.ts";
 import { allotted, inUse } from "../../usage.ts";
 import { cliIn, expect, files, regularFiles } from "../process.ts";
 import * as DiskGate from "./disk-gate.ts";
-import * as Forwarder from "./forwarder.ts";
+import { traits } from "./traits.ts";
 
 export const TartSettings = Schema.Struct({
   binary: Schema.String,
@@ -240,12 +239,12 @@ export const make = (
 ): Effect.Effect<
   Interface,
   HostError | CannotStart,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Scope.Scope
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
 > =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const env = environment(settings);
-    const { command, run, exec } = yield* cliIn(env);
+    const { run, exec, dial } = yield* cliIn(env);
     const jobs = jobsDir(settings.stateDir);
 
     if (settings.uid === undefined) {
@@ -255,8 +254,6 @@ export const make = (
     }
 
     const domain = `gui/${settings.uid}`;
-    const forwarder = yield* Forwarder.make(settings.publishAddress);
-    const forwarded = new Map<string, number>();
     const vmOf = (machine: Native) => machineName(settings.hostId, machine);
 
     const checkpointVm = (checkpoint: CheckpointRef) =>
@@ -377,27 +374,6 @@ export const make = (
 
     const logOf = (vm: string) =>
       fs.readFileString(job(vm).log).pipe(Effect.orElseSucceed(() => ""));
-
-    const listen = (machine: MachineRef) =>
-      Effect.andThen(
-        Effect.sync(() => forwarded.set(machine.name, machine.port)),
-        forwarder.listen(machine.port, (input) =>
-          command(
-            settings.binary,
-            ["exec", "-i", vmOf(machine), "nc", "127.0.0.1", "22"],
-            input
-          )
-        )
-      );
-
-    const unlisten = ({ name }: Native) =>
-      Effect.suspend(() => {
-        const port = forwarded.get(name);
-
-        forwarded.delete(name);
-
-        return port === undefined ? Effect.void : forwarder.close(port);
-      });
 
     const ready = (machine: MachineRef) => {
       const vm = vmOf(machine);
@@ -614,7 +590,6 @@ export const make = (
       const vm = vmOf(machine);
 
       return Effect.gen(function* () {
-        yield* listen(machine);
         yield* call(["clone", from, vm], `clone ${from} ${vm}`);
         yield* disks.opening(
           Effect.andThen(
@@ -722,10 +697,59 @@ export const make = (
 
     return {
       version: reported,
-      publishAddress: settings.publishAddress,
       pin: undefined,
-      stopResumes: false,
-      growsLive: false,
+      reach: {
+        _tag: "relayed",
+        address: settings.publishAddress,
+        dial: (machine) =>
+          dial(settings.binary, [
+            "exec",
+            "-i",
+            vmOf(machine),
+            "nc",
+            "127.0.0.1",
+            "22",
+          ]),
+      },
+      admission: {
+        admit: Effect.fn("Tart.admit")(({ action, machine, machines }) =>
+          Effect.gen(function* () {
+            const counted = countedIn(yield* list, machines);
+
+            if (counted.size > vmLimit) {
+              return yield* new Capacity({
+                message: `${action} ${machine.name} would run ${counted.size} macOS VMs on this Mac, and Apple allows ${vmLimit}: ${[...counted].toSorted().join(", ")}`,
+              });
+            }
+          })
+        ),
+        stopBoots: false,
+      },
+      files: {
+        checkpointFiles: Effect.fn("Tart.checkpointFiles")((checkpoint) => {
+          const dir = path.join(vmsDir(settings), checkpointVm(checkpoint));
+
+          return Effect.map(regularFiles(fs, dir), (found) =>
+            found.map((file) => ({ path: file, file: path.join(dir, file) }))
+          );
+        }),
+        held: () => Effect.undefined,
+        staging: (checkpoint) =>
+          path.join(fetchingDir(settings), checkpointVm(checkpoint)),
+        install: Effect.fn("Tart.install")((checkpoint, staged) =>
+          files(
+            `couldn't install checkpoint ${checkpoint.name}`,
+            Effect.andThen(
+              fs.makeDirectory(vmsDir(settings), { recursive: true }),
+              fs.rename(
+                staged,
+                path.join(vmsDir(settings), checkpointVm(checkpoint))
+              )
+            )
+          )
+        ),
+      },
+      growsLive: traits.resize.running !== "none",
       startup: Effect.andThen(
         files(
           `couldn't create ${jobs}`,
@@ -736,33 +760,9 @@ export const make = (
           fs.remove(fetchingDir(settings), { recursive: true, force: true })
         )
       ),
-      adopt: Effect.fn("Tart.adopt")((machines) =>
-        Effect.forEach(
-          machines,
-          (machine) =>
-            listen(machine).pipe(
-              Effect.catch((error) =>
-                Effect.logWarning(
-                  `adopt: no forwarder for ${machine.name}: ${error.message}`
-                )
-              )
-            ),
-          { discard: true }
-        )
-      ),
+      adopt: () => Effect.void,
       observe: Effect.fn("Tart.observe")((machines) =>
         Effect.map(list, (vms) => observedIn(vms, machines))
-      ),
-      admit: Effect.fn("Tart.admit")(({ action, machine, machines }) =>
-        Effect.gen(function* () {
-          const counted = countedIn(yield* list, machines);
-
-          if (counted.size > vmLimit) {
-            return yield* new Capacity({
-              message: `${action} ${machine.name} would run ${counted.size} macOS VMs on this Mac, and Apple allows ${vmLimit}: ${[...counted].toSorted().join(", ")}`,
-            });
-          }
-        })
       ),
       capacity: Effect.fn("Tart.capacity")((machines) =>
         Effect.gen(function* () {
@@ -793,8 +793,6 @@ export const make = (
             return yield* missing("mac", machine);
           }
 
-          yield* listen(machine);
-
           if (observed === "stopped") {
             yield* boot(machine);
           }
@@ -821,8 +819,6 @@ export const make = (
               fs.remove(leftover, { force: true })
             );
           }
-
-          yield* unlisten(machine);
         })
       ),
       capture: Effect.fn("Tart.capture")((machine, checkpoint) =>
@@ -908,28 +904,6 @@ export const make = (
           `tart exec ${vm}`
         );
       }),
-      checkpointFiles: Effect.fn("Tart.checkpointFiles")((checkpoint) => {
-        const dir = path.join(vmsDir(settings), checkpointVm(checkpoint));
-
-        return Effect.map(regularFiles(fs, dir), (found) =>
-          found.map((file) => ({ path: file, file: path.join(dir, file) }))
-        );
-      }),
-      held: () => Effect.undefined,
-      staging: (checkpoint) =>
-        path.join(fetchingDir(settings), checkpointVm(checkpoint)),
-      install: Effect.fn("Tart.install")((checkpoint, staged) =>
-        files(
-          `couldn't install checkpoint ${checkpoint.name}`,
-          Effect.andThen(
-            fs.makeDirectory(vmsDir(settings), { recursive: true }),
-            fs.rename(
-              staged,
-              path.join(vmsDir(settings), checkpointVm(checkpoint))
-            )
-          )
-        )
-      ),
     } satisfies Interface;
   });
 

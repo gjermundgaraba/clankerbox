@@ -61,7 +61,7 @@ import {
   unkey,
 } from "./guest.ts";
 import type { Leaving, TailnetReport } from "./guest.ts";
-import { pickPort, PortProbe } from "./machine-ports.ts";
+import { Reaches } from "./reach.ts";
 import {
   missing,
   Runtime,
@@ -196,14 +196,14 @@ const ended = (
 
 type Make = Extract<Step, { readonly _tag: "make" }>;
 
-type Settings = Pick<HostSettings, "id" | "kind" | "bases" | "machinePorts">;
+type Settings = Pick<HostSettings, "id" | "kind" | "bases">;
 
 export const make = (
   config: Settings
 ): Effect.Effect<
   Interface,
   never,
-  Runtime | PortProbe | FileSystem.FileSystem | Path.Path | Scope.Scope
+  Runtime | Reaches | FileSystem.FileSystem | Path.Path | Scope.Scope
 > =>
   Effect.gen(function* () {
     const runtime = yield* Runtime;
@@ -215,7 +215,7 @@ export const make = (
       yield* FileSystem.FileSystem
     ).pipe(Context.add(Path.Path, yield* Path.Path));
 
-    const probe = yield* PortProbe;
+    const reaches = yield* Reaches;
     const hostScope = yield* Effect.scope;
     const admission = yield* Semaphore.make(1);
     const accepting = yield* Semaphore.make(1);
@@ -273,22 +273,24 @@ export const make = (
     ) =>
       admission.withPermits(1)(
         Effect.gen(function* () {
-          yield* runtime
-            .admit({
-              action,
-              machine,
-              machines: [
-                ...heldBy(machines).filter(
-                  (held) => held.machine.name !== machine.name
-                ),
-                { machine, booting: true },
-              ],
-            })
-            .pipe(
-              inTime(
-                `${action} ${machine.name}: the ${config.kind} runtime's admission check`
-              )
-            );
+          if (runtime.admission !== undefined) {
+            yield* runtime.admission
+              .admit({
+                action,
+                machine,
+                machines: [
+                  ...heldBy(machines).filter(
+                    (held) => held.machine.name !== machine.name
+                  ),
+                  { machine, booting: true },
+                ],
+              })
+              .pipe(
+                inTime(
+                  `${action} ${machine.name}: the ${config.kind} runtime's admission check`
+                )
+              );
+          }
 
           yield* Effect.acquireRelease(
             Effect.sync(() => booting.set(machine.name, machine)),
@@ -609,7 +611,7 @@ export const make = (
         yield* Effect.scoped(
           Effect.andThen(
             admitted(booted[source._tag], ref, machines),
-            copied(source, ref)
+            Effect.andThen(reaches.open(ref), copied(source, ref))
           )
         );
 
@@ -673,14 +675,14 @@ export const make = (
               yield* resumable(machine.name, pin);
             }
 
+            const started = Effect.andThen(
+              reaches.open(machine),
+              runtime.start(machine)
+            );
+
             yield* seen === "running"
-              ? runtime.start(machine)
-              : withRoom(
-                  "startMachine",
-                  machine,
-                  machines,
-                  runtime.start(machine)
-                );
+              ? started
+              : withRoom("startMachine", machine, machines, started);
 
             yield* readied(progress, machine);
           });
@@ -690,7 +692,7 @@ export const make = (
           const { machine, pin, machines, hook } = step;
           const stopped = runtime.stop(machine);
 
-          if (!runtime.stopResumes) {
+          if (runtime.admission?.stopBoots !== true) {
             return Effect.andThen(
               beforeLeaving(
                 machine,
@@ -747,7 +749,7 @@ export const make = (
               hook,
               stateNow(machine, "given its delete hook")
             ),
-            runtime.delete(machine)
+            Effect.andThen(runtime.delete(machine), reaches.close(machine))
           );
         }
 
@@ -855,23 +857,15 @@ export const make = (
       );
 
     const picking = (progress: Progress, step: Make) =>
-      Effect.match(
-        pickPort(
-          probe,
-          runtime.publishAddress,
-          config.machinePorts,
-          new Set([...step.ports, ...heldPorts()])
-        ),
-        {
-          onFailure: (error): Effect.Effect<void, HostError> =>
-            Effect.fail(error),
-          onSuccess: (port) => {
-            progress.outcome = { port };
+      Effect.match(reaches.pick(new Set([...step.ports, ...heldPorts()])), {
+        onFailure: (error): Effect.Effect<void, HostError> =>
+          Effect.fail(error),
+        onSuccess: (port) => {
+          progress.outcome = { port };
 
-            return made(progress, step, port);
-          },
-        }
-      );
+          return made(progress, step, port);
+        },
+      });
 
     const forgetting = (id: string) =>
       Effect.suspend(() => {
@@ -1041,5 +1035,5 @@ export const layer = (
 ): Layer.Layer<
   Operations,
   never,
-  Runtime | PortProbe | FileSystem.FileSystem | Path.Path
+  Runtime | Reaches | FileSystem.FileSystem | Path.Path
 > => Layer.effect(Operations, make(config));

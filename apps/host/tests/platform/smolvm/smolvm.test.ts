@@ -36,16 +36,17 @@ import {
   stateOf,
   templates,
   ramBudget,
-} from "../../src/platform/smolvm.ts";
-import type { Settings } from "../../src/platform/smolvm.ts";
+} from "../../../src/platform/smolvm/smolvm.ts";
+import type { Settings } from "../../../src/platform/smolvm/smolvm.ts";
 import type {
   CheckpointRef,
   MachineRef,
   MachineState,
-} from "../../src/runtime.ts";
-import { scripted as scriptedSpawner } from "../scripted.ts";
-import type { Call, Reply } from "../scripted.ts";
-import { smolvmModel } from "../smolvm-model.ts";
+} from "../../../src/runtime.ts";
+import { scripted as scriptedSpawner } from "../../scripted.ts";
+import type { Call, Reply } from "../../scripted.ts";
+import { smolvmModel } from "../../smolvm-model.ts";
+import { admitOn } from "../../support.ts";
 
 const failure = (error: HostError) => [error._tag, error.message];
 
@@ -1466,7 +1467,7 @@ layer(NodeServices.layer)((it) => {
         };
 
         const error = yield* Effect.flip(
-          runtime.admit({
+          admitOn(runtime)({
             action: "startMachine",
             machine,
             machines: [
@@ -1516,7 +1517,7 @@ layer(NodeServices.layer)((it) => {
         const admitNext = (ramMib: number) => {
           const target = { ...machine, name: "next", ramMib };
 
-          return runtime.admit({
+          return admitOn(runtime)({
             action: "createMachine",
             machine: target,
             machines: [...held, { machine: target, booting: true }],
@@ -1570,7 +1571,7 @@ layer(NodeServices.layer)((it) => {
         const admitNext = (ramMib: number) => {
           const target = { ...machine, name: "next", ramMib };
 
-          return runtime.admit({
+          return admitOn(runtime)({
             action: "createMachine",
             machine: target,
             machines: [{ machine: target, booting: true }],
@@ -1603,7 +1604,7 @@ layer(NodeServices.layer)((it) => {
         });
 
         const refused = yield* Effect.flip(
-          runtime.admit({
+          admitOn(runtime)({
             action: "createMachine",
             machine: target,
             machines: [{ machine: target, booting: true }],

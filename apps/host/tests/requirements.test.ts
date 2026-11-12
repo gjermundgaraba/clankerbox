@@ -7,7 +7,7 @@ import { read } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { Effect } from "effect";
 import { expect } from "vite-plus/test";
 
-import { minimumVersion as smolvm } from "../src/platform/smolvm.ts";
+import { minimumVersion as smolvm } from "../src/platform/smolvm/smolvm.ts";
 import { minimumVersion as tart } from "../src/platform/tart/tart.ts";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));

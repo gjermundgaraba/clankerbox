@@ -1,4 +1,6 @@
 import { createServer } from "node:http";
+import { connect, createServer as createTcpServer } from "node:net";
+import type { Server } from "node:net";
 import path from "node:path";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
@@ -17,6 +19,10 @@ import { Operations } from "../src/operations.ts";
 import type { Interface as OperationsInterface } from "../src/operations.ts";
 import type { BuildsSettings } from "../src/platform/s3.ts";
 import type { TailnetSettings } from "../src/platform/tailscale.ts";
+import type {
+  Admission,
+  Interface as RuntimeInterface,
+} from "../src/runtime.ts";
 import type { HostSettings } from "../src/settings.ts";
 import type { Tailnet } from "../src/tailnet.ts";
 import { fakeRuntime } from "./fake-runtime.ts";
@@ -180,6 +186,38 @@ export const memoryBuildStore = () => {
     downloaded,
   };
 };
+
+export const admitOn = (runtime: RuntimeInterface): Admission["admit"] =>
+  runtime.admission?.admit ?? (() => Effect.die("the runtime admits"));
+
+export const accepts = (port: number) =>
+  Effect.callback<boolean>((resume) => {
+    const socket = connect({ host: "127.0.0.1", port }, () => {
+      socket.destroy();
+      resume(Effect.succeed(true));
+    });
+
+    socket.once("error", () => {
+      resume(Effect.succeed(false));
+    });
+  });
+
+export const holding = (port: number) =>
+  Effect.acquireRelease(
+    Effect.callback<Server>((resume) => {
+      const server = createTcpServer();
+
+      server.listen({ host: "127.0.0.1", port }, () => {
+        resume(Effect.succeed(server));
+      });
+    }),
+    (server) =>
+      Effect.callback<undefined>((resume) => {
+        server.close(() => {
+          resume(Effect.undefined);
+        });
+      })
+  );
 
 export const pause = Effect.sleep(Duration.millis(50));
 

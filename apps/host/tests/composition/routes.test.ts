@@ -12,10 +12,10 @@ import {
   version,
   versionHeader,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Exit, Fiber, Schema } from "effect";
+import { Effect, Exit, Fiber, Logger, Schema } from "effect";
 import { expect } from "vite-plus/test";
 
-import { hostOn, image } from "../support.ts";
+import { accepts, holding, hostOn, image } from "../support.ts";
 
 const serve = hostOn({ first: 21_130, last: 21_139 });
 
@@ -80,6 +80,16 @@ const made = (id: string, sequence = 1): Omit<Operation, "boot"> => ({
     ports: [],
     machines: [],
   },
+});
+
+const removed = (
+  id: string,
+  { name, instance }: { readonly name: string; readonly instance: string }
+): Omit<Operation, "boot"> => ({
+  id,
+  scope: `machine ${name}`,
+  sequence: 1,
+  step: { _tag: "remove", machine: { name, instance } },
 });
 
 type Body<N extends HostAction> =
@@ -238,6 +248,71 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(answer.status).toBeLessThan(300);
       expect(fake.calls).toContain("adopt dev");
     })
+  );
+
+  it.effect(
+    "adoptMachines on a relayed host reopens each machine's relay, and its remove closes it",
+    () =>
+      Effect.gen(function* () {
+        const { url, fake } = yield* serve({ runtime: { relayed: true } });
+        const up = { ...dev, name: "up", port: 21_138 };
+
+        const answer = yield* post(url, "adoptMachines", { machines: [up] });
+        const listening = yield* accepts(up.port);
+
+        yield* deliver(url, removed("op-1", up));
+
+        const report = yield* finished(url, "op-1");
+
+        expect([
+          answer.status < 300,
+          fake.calls.includes("adopt up"),
+          listening,
+          report.status,
+          yield* accepts(up.port),
+        ]).toStrictEqual([true, true, true, "done", false]);
+      })
+  );
+
+  it.effect(
+    "a machine whose relay adoptMachines couldn't listen on is logged, and its remove is done",
+    () =>
+      Effect.gen(function* () {
+        const logged: unknown[] = [];
+
+        const { url, fake } = yield* serve({
+          runtime: { relayed: true },
+          logger: Logger.make(({ message }) => logged.push(message)),
+        });
+
+        const blocked = { ...dev, name: "blocked", port: 21_139 };
+
+        const [answer, report] = yield* Effect.scoped(
+          Effect.andThen(
+            holding(blocked.port),
+            Effect.gen(function* () {
+              const adopted = yield* post(url, "adoptMachines", {
+                machines: [blocked],
+              });
+
+              yield* deliver(url, removed("op-1", blocked));
+
+              return [adopted, yield* finished(url, "op-1")] as const;
+            })
+          )
+        );
+
+        expect(answer.status).toBeLessThan(300);
+        expect(logged.flat()).toContainEqual(
+          expect.stringMatching(
+            /^adopt: no forwarder for blocked: the forwarder couldn't listen on 127\.0\.0\.1:21139: /u
+          )
+        );
+        expect([
+          report.status,
+          fake.calls.includes("delete blocked"),
+        ]).toStrictEqual(["done", true]);
+      })
   );
 
   it.effect("a malformed operation is refused and runs nothing", () =>

@@ -28,7 +28,7 @@ import {
   Runtime,
   stateReadWait,
   timeoutFail,
-} from "../runtime.ts";
+} from "../../runtime.ts";
 import type {
   CheckpointRef,
   Interface,
@@ -38,10 +38,11 @@ import type {
   Observed,
   Sizes,
   StateError,
-} from "../runtime.ts";
-import type { HostSettings } from "../settings.ts";
-import { allotted, checkRamBudget, inUse } from "../usage.ts";
-import { cliIn, expect, failure, files, regularFiles } from "./process.ts";
+} from "../../runtime.ts";
+import type { HostSettings } from "../../settings.ts";
+import { allotted, checkRamBudget, inUse } from "../../usage.ts";
+import { cliIn, expect, failure, files, regularFiles } from "../process.ts";
+import { traits } from "./traits.ts";
 
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
 
@@ -1034,10 +1035,87 @@ export const make = (
 
     return {
       version,
-      publishAddress: settings.publishAddress,
       pin,
-      stopResumes: true,
-      growsLive: true,
+      reach: { _tag: "published", address: settings.publishAddress },
+      admission: {
+        admit: Effect.fn("Smolvm.admit")((activation) =>
+          Effect.flatMap(heldMib, (held) =>
+            checkRamBudget(settings.ramBudgetMib, activation, observe, held)
+          )
+        ),
+        stopBoots: true,
+      },
+      files: {
+        checkpointFiles: Effect.fn("Smolvm.checkpointFiles")((checkpoint) =>
+          Effect.map(regularFiles(fs, checkpointDir(checkpoint)), (found) =>
+            found.flatMap((file) => {
+              const object = storedObject(file);
+
+              return file === captureOwner
+                ? []
+                : [
+                    {
+                      path: file,
+                      file: path.join(checkpointDir(checkpoint), file),
+                      ...(object === undefined
+                        ? {}
+                        : { key: `${objectKeyPrefix}${object}` }),
+                    },
+                  ];
+            })
+          )
+        ),
+        held: (key) => {
+          const hash = key.slice(objectKeyPrefix.length);
+          const file = path.join(paths.store, "objects", hash);
+
+          return key.startsWith(objectKeyPrefix) && objectName.test(hash)
+            ? Effect.map(
+                Effect.orElseSucceed(fs.exists(file), () => false),
+                (exists) => (exists ? file : undefined)
+              )
+            : Effect.undefined;
+        },
+        staging: (checkpoint) =>
+          path.join(paths.store, `${nativeName(checkpoint)}.fetching`),
+        install: Effect.fn("Smolvm.install")((checkpoint, staged) =>
+          Effect.gen(function* () {
+            const objects = path.join(paths.store, "objects");
+
+            yield* files(
+              `couldn't create ${objects}`,
+              fs.makeDirectory(objects, { recursive: true, mode: 0o700 })
+            );
+
+            // Prune removes every store object with one link, so each takes the store's name too.
+            // https://github.com/smol-machines/smolvm/blob/v1.34.1/crates/smolvm-checkpoint/src/store.rs#L3021
+            for (const file of yield* regularFiles(fs, staged)) {
+              const object = storedObject(file);
+
+              if (object !== undefined) {
+                yield* files(
+                  `couldn't add object ${object} to the store`,
+                  fs
+                    .link(path.join(staged, file), path.join(objects, object))
+                    .pipe(
+                      Effect.catchReason(
+                        "PlatformError",
+                        "AlreadyExists",
+                        () => Effect.void
+                      )
+                    )
+                );
+              }
+            }
+
+            yield* files(
+              `couldn't install checkpoint ${checkpoint.name}`,
+              fs.rename(staged, checkpointDir(checkpoint))
+            );
+          })
+        ),
+      },
+      growsLive: traits.resize.running !== "none",
       bases,
       startup: Effect.gen(function* () {
         yield* removeAll(paths.forks);
@@ -1060,11 +1138,6 @@ export const make = (
       }),
       adopt: () => Effect.void,
       observe: Effect.fn("Smolvm.observe")(observe),
-      admit: Effect.fn("Smolvm.admit")((activation) =>
-        Effect.flatMap(heldMib, (held) =>
-          checkRamBudget(settings.ramBudgetMib, activation, observe, held)
-        )
-      ),
       capacity: Effect.fn("Smolvm.capacity")((machines) =>
         Effect.map(inUse(machines, observe), ({ running, unread }) =>
           allotted(running, unread, settings.ramBudgetMib)
@@ -1386,74 +1459,6 @@ export const make = (
           what
         );
       }),
-      checkpointFiles: Effect.fn("Smolvm.checkpointFiles")((checkpoint) =>
-        Effect.map(regularFiles(fs, checkpointDir(checkpoint)), (found) =>
-          found.flatMap((file) => {
-            const object = storedObject(file);
-
-            return file === captureOwner
-              ? []
-              : [
-                  {
-                    path: file,
-                    file: path.join(checkpointDir(checkpoint), file),
-                    ...(object === undefined
-                      ? {}
-                      : { key: `${objectKeyPrefix}${object}` }),
-                  },
-                ];
-          })
-        )
-      ),
-      held: (key) => {
-        const hash = key.slice(objectKeyPrefix.length);
-        const file = path.join(paths.store, "objects", hash);
-
-        return key.startsWith(objectKeyPrefix) && objectName.test(hash)
-          ? Effect.map(
-              Effect.orElseSucceed(fs.exists(file), () => false),
-              (exists) => (exists ? file : undefined)
-            )
-          : Effect.undefined;
-      },
-      staging: (checkpoint) =>
-        path.join(paths.store, `${nativeName(checkpoint)}.fetching`),
-      install: Effect.fn("Smolvm.install")((checkpoint, staged) =>
-        Effect.gen(function* () {
-          const objects = path.join(paths.store, "objects");
-
-          yield* files(
-            `couldn't create ${objects}`,
-            fs.makeDirectory(objects, { recursive: true, mode: 0o700 })
-          );
-
-          // Prune removes every store object with one link, so each takes the store's name too.
-          // https://github.com/smol-machines/smolvm/blob/v1.34.1/crates/smolvm-checkpoint/src/store.rs#L3021
-          for (const file of yield* regularFiles(fs, staged)) {
-            const object = storedObject(file);
-
-            if (object !== undefined) {
-              yield* files(
-                `couldn't add object ${object} to the store`,
-                fs
-                  .link(path.join(staged, file), path.join(objects, object))
-                  .pipe(
-                    Effect.catchReason(
-                      "PlatformError",
-                      "AlreadyExists",
-                      () => Effect.void
-                    )
-                  )
-              );
-            }
-          }
-
-          yield* files(
-            `couldn't install checkpoint ${checkpoint.name}`,
-            fs.rename(staged, checkpointDir(checkpoint))
-          );
-        })
-      ),
     } satisfies Interface;
   });
 

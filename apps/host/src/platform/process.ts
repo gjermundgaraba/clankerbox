@@ -1,10 +1,10 @@
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, Stream } from "effect";
+import { Duration, Effect, Fiber, Stream } from "effect";
 import type { FileSystem, PlatformError, Scope } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { lastLines } from "../guest.ts";
-import type { Execution } from "../runtime.ts";
+import type { Dial, Execution } from "../runtime.ts";
 
 export const describe = (error: PlatformError.PlatformError): string =>
   `${error.reason._tag}: ${error.reason.method}${error.reason.description === undefined ? "" : `: ${error.reason.description}`}`;
@@ -121,5 +121,39 @@ export const cliIn = (env: Readonly<Record<string, string | undefined>>) =>
       );
     };
 
-    return { command, run, exec };
+    const dial =
+      (file: string, args: readonly string[]): Dial =>
+      (input) =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            const handle = yield* spawner.spawn(command(file, args, input));
+
+            const errors = yield* Effect.forkScoped(
+              Stream.mkString(Stream.decodeText(handle.stderr))
+            );
+
+            return Stream.concat(
+              handle.stdout,
+              Stream.fromEffectDrain(
+                Effect.gen(function* () {
+                  const exitCode = yield* handle.exitCode;
+
+                  if (exitCode !== 0) {
+                    return yield* new Internal({
+                      message: `its connection's command exited ${exitCode}: ${lastLines(yield* Fiber.join(errors))}`,
+                    });
+                  }
+                })
+              )
+            );
+          })
+        ).pipe(
+          Stream.mapError((error) =>
+            error._tag === "Internal"
+              ? error
+              : new Internal({ message: error.message })
+          )
+        );
+
+    return { run, exec, dial };
   });

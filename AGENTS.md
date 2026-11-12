@@ -113,21 +113,27 @@ or `composition/`.
 - `settings.ts`: what a host runs on.
 - `builds.ts`: `publish`, `fetch` and `unpublish` of a checkpoint through the
   `BuildStore` port, objects by key and a manifest per build, written last.
-- Ports: `Runtime` (`runtime.ts`), `PortProbe` (`machine-ports.ts`), `Tailnet`
+- `reach.ts`: the `Reaches` service. It picks a make's port, and opens, closes
+  and on adopt reopens the relays of a `relayed` runtime.
+- Ports: `Runtime` (`runtime.ts`), with its `reach` (`published` or `relayed`)
+  and the facets `admission` and `files`, each present or absent as a whole,
+  `PortProbe` (`machine-ports.ts`), `Relays` (`reach.ts`), `Tailnet`
   (`tailnet.ts`), which mints a machine's tailnet key, provided only on a host
   that joins a tailnet, and `BuildStore` (`builds.ts`), provided only on a host
   with a `builds` setting.
 
-Adapters live in `platform/`: `bind-probe.ts` (`PortProbe`), `tailscale.ts`
-(`Tailnet`, over Tailscale's API), `s3.ts` (`BuildStore`, over S3, path-style
-and signed), the runtimes `smolvm.ts` (`linux`) and `tart/`
-(`mac`), and what they share, `process.ts`. A domain file never
-imports `platform/` or `composition/`.
+Adapters live in `platform/`: `bind-probe.ts` (`PortProbe`), `relay.ts`
+(`Relays`, a TCP listener that carries each connection through a runtime's
+dial), `tailscale.ts` (`Tailnet`, over Tailscale's API), `s3.ts` (`BuildStore`,
+over S3, path-style and signed), the runtimes `smolvm/` (`linux`) and `tart/`
+(`mac`), each with its facts in its `traits.ts`, and what they share,
+`process.ts`. A domain file never imports `platform/` or `composition/`.
 
 `composition/` assembles the host: `config.ts` reads the config file,
-`runtimes.ts` picks the kind's runtime Layer, `routes.ts` serves the host
-contract, and `host.ts` builds the host over a runtime Layer and a server Layer
-it is given, with the config's tailnet and build store, if any.
+`runtimes.ts` is the registry of runtimes, one entry each, whose kind picks the
+runtime Layer, `routes.ts` serves the host contract, and `host.ts` builds the
+host over a runtime Layer and a server Layer it is given, with the config's
+tailnet and build store, if any.
 
 **Host contract** (`packages/host-contract/src`). `api.ts`: `HostHttp`, the
 `Step`s, `Operation`, `Report`, `HostInfo`.

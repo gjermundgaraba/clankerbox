@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { Schema } from "effect";
 
-import { minimumVersion } from "../src/platform/smolvm.ts";
+import { minimumVersion } from "../src/platform/smolvm/smolvm.ts";
 import { scripted } from "./scripted.ts";
 import type { Call, Reply } from "./scripted.ts";
 

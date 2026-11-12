@@ -234,7 +234,7 @@ Each: what Tart does, where, and what of ours depends on it.
   boots a stopped one, its log emptied first.
 - `tart stop` of a suspended VM removes its `state.vzvmsave` and exits 0,
   booting nothing (`stopSuspended`, Commands/Stop.swift). Ours: `stop` of a
-  paused machine is `tart stop <vm>`, and `stopResumes` is false, so the core
+  paused machine is `tart stop <vm>`, and `admission.stopBoots` is false, so the core
   neither admits it nor checks its pin.
 - Virtualization.framework seals saved state with a key in the operator's
   session keychain: a restore while the session is locked fails, printed by
@@ -284,17 +284,17 @@ Each: what Tart does, where, and what of ours depends on it.
 - `tart exec -i` reads stdin into an unbounded stream (`stdinStream`,
   Commands/Exec.swift): a raw 1 GiB upload peaked at 2+ GiB RSS in the
   host's `tart`. A killed `tart exec` leaves the guest's command (and over the
-  forwarder its `nc` and `sshd-session`) until its session next writes (the
+  relay its `nc` and `sshd-session`) until its session next writes (the
   proxy in `executeThenClose`, ControlSocket.swift). Ours: bulk data goes
-  over ssh through the forwarder (`tart exec -i <vm> nc 127.0.0.1 22`), whose
-  window keeps it at about 20 MiB; the forwarder ends a connection by closing
+  over ssh through the relay (`tart exec -i <vm> nc 127.0.0.1 22`), whose
+  window keeps it at about 20 MiB; the relay ends a connection by closing
   the exec's stdin.
 - From 2.41.1 `tart exec` asks the guest agent for 64 KiB HTTP/2 windows
   (`targetWindowSize`, GuestAgentChannel.swift), so at most 64 KiB of
   guest output is in flight per stream, against virtio-vsock dropping whole
   blocks of fast output from macOS 12–15 guests (openai/tart#1347). Tahoe
   guests didn't lose any, and Golden Gate guests are unmeasured. Ours: the
-  pinned base is a Golden Gate guest; the forwarder's guest-to-host direction
+  pinned base is a Golden Gate guest; the relay's guest-to-host direction
   (ssh downloads) runs under that window, and its throughput at 2.41.1 is
   unmeasured.
 - An exec before the VM runs fails at once (exit 2); one sent while it boots
@@ -350,7 +350,7 @@ times, and the disk's capacity and format)
 
 ## Verify
 
-- Unit: `vp test` in `apps/host` (`platform/tart/tart.test.ts`, `platform/tart/forwarder.test.ts`,
+- Unit: `vp test` in `apps/host` (`platform/tart/tart.test.ts`, `platform/relay.test.ts`,
   `config.test.ts`), then `vp run --no-cache ready`. Change the fake's answers
   only to match Tart's real output at the target. `vp test` in `packages/sdk`
   holds README to the new base.

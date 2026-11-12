@@ -3,19 +3,12 @@ import type { Server, Socket } from "node:net";
 
 import * as NodeStream from "@effect/platform-node/NodeStream";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, FiberSet, Function, Stream } from "effect";
+import { Effect, FiberSet, Function, Layer, Stream } from "effect";
 import type { Scope } from "effect";
-import { ChildProcessSpawner } from "effect/process";
-import type { ChildProcess } from "effect/process";
 
-import { lastLines } from "../../guest.ts";
-
-export type Dial = (input: Stream.Stream<Uint8Array>) => ChildProcess.Command;
-
-export interface Forwarder {
-  readonly listen: (port: number, dial: Dial) => Effect.Effect<void, Internal>;
-  readonly close: (port: number) => Effect.Effect<void>;
-}
+import { Relays } from "../reach.ts";
+import type { RelaysInterface } from "../reach.ts";
+import type { Dial } from "../runtime.ts";
 
 const write = (socket: Socket, chunk: Uint8Array): Effect.Effect<void> =>
   Effect.callback((resume) => {
@@ -41,53 +34,37 @@ const write = (socket: Socket, chunk: Uint8Array): Effect.Effect<void> =>
     socket.on("close", done);
   });
 
+const connection = (
+  address: string,
+  socket: Socket,
+  port: number,
+  dial: Dial
+) =>
+  Stream.runForEach(
+    dial(
+      NodeStream.fromReadable({
+        evaluate: () => socket,
+        closeOnDone: false,
+      }).pipe(Stream.ignore)
+    ),
+    (chunk) => write(socket, chunk)
+  ).pipe(
+    Effect.catch((error) =>
+      Effect.logWarning(`forwarder ${address}:${port}: ${error.message}`)
+    ),
+    Effect.ensuring(
+      Effect.sync(() => {
+        socket.destroySoon();
+      })
+    )
+  );
+
 export const make = (
   address: string
-): Effect.Effect<
-  Forwarder,
-  never,
-  Scope.Scope | ChildProcessSpawner.ChildProcessSpawner
-> =>
+): Effect.Effect<RelaysInterface, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const run = yield* FiberSet.makeRuntime<never, unknown, never>();
     const listeners = new Map<number, Server>();
-
-    const connection = (socket: Socket, port: number, dial: Dial) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const input = NodeStream.fromReadable({
-            evaluate: () => socket,
-            closeOnDone: false,
-          }).pipe(Stream.ignore);
-
-          const handle = yield* spawner.spawn(dial(input));
-
-          const [, errors, exitCode] = yield* Effect.all(
-            [
-              Stream.runForEach(handle.stdout, (chunk) => write(socket, chunk)),
-              Stream.mkString(Stream.decodeText(handle.stderr)),
-              handle.exitCode,
-            ],
-            { concurrency: "unbounded" }
-          );
-
-          if (exitCode !== 0) {
-            yield* Effect.logWarning(
-              `forwarder ${address}:${port}: its connection's command exited ${exitCode}: ${lastLines(errors)}`
-            );
-          }
-        })
-      ).pipe(
-        Effect.catch((error) =>
-          Effect.logWarning(`forwarder ${address}:${port}: ${error.message}`)
-        ),
-        Effect.ensuring(
-          Effect.sync(() => {
-            socket.destroySoon();
-          })
-        )
-      );
 
     const close = (port: number) =>
       Effect.sync(() => {
@@ -109,7 +86,7 @@ export const make = (
 
         const server = createServer({ allowHalfOpen: true }, (socket) => {
           socket.on("error", Function.constVoid);
-          run(connection(socket, port, dial));
+          run(connection(address, socket, port, dial));
         });
 
         const refused = (error: Error) => {
@@ -146,3 +123,6 @@ export const make = (
 
     return { listen, close };
   });
+
+export const layer = (address: string): Layer.Layer<Relays> =>
+  Layer.effect(Relays, make(address));

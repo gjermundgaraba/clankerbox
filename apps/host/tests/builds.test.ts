@@ -23,7 +23,7 @@ import {
   minimumVersion,
   nativeName,
   templates,
-} from "../src/platform/smolvm.ts";
+} from "../src/platform/smolvm/smolvm.ts";
 import { Runtime } from "../src/runtime.ts";
 import { fakeRuntime } from "./fake-runtime.ts";
 import { scripted } from "./scripted.ts";

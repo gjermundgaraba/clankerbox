@@ -10,23 +10,20 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { Effect, Fiber } from "effect";
-import type { Stream } from "effect";
-import { ChildProcess } from "effect/process";
 import { expect } from "vite-plus/test";
 
-import { make } from "../../../src/platform/tart/forwarder.ts";
+import { cliIn } from "../../src/platform/process.ts";
+import { make } from "../../src/platform/relay.ts";
 
-const forwarder = make("127.0.0.1");
+const relaying = make("127.0.0.1");
 
-const echo = (marker: string) => (input: Stream.Stream<Uint8Array>) =>
-  ChildProcess.make(
-    process.execPath,
-    [
+const echo = (marker: string) =>
+  Effect.map(cliIn({}), ({ dial }) =>
+    dial(process.execPath, [
       "-e",
       `process.stdin.pipe(process.stdout); process.stdin.on("end", () => require("node:fs").appendFileSync(process.argv[1], "closed\\n"))`,
       marker,
-    ],
-    { stdin: input }
+    ])
   );
 
 let nextPort = 21_300;
@@ -102,7 +99,7 @@ layer(NodeServices.layer)((it) => {
         const port = ownPort();
         const payload = randomBytes(4 * 1024 * 1024);
 
-        yield* (yield* forwarder).listen(port, echo(marker));
+        yield* (yield* relaying).listen(port, yield* echo(marker));
 
         expect(
           (yield* Effect.promise(
@@ -120,7 +117,7 @@ layer(NodeServices.layer)((it) => {
         const marker = path.join(yield* scratch, "marker");
         const port = ownPort();
 
-        yield* (yield* forwarder).listen(port, echo(marker));
+        yield* (yield* relaying).listen(port, yield* echo(marker));
 
         const socket = yield* Effect.promise(async () => await connected(port));
 
@@ -142,7 +139,7 @@ layer(NodeServices.layer)((it) => {
           randomBytes(64 * 1024)
         );
 
-        yield* (yield* forwarder).listen(port, echo(marker));
+        yield* (yield* relaying).listen(port, yield* echo(marker));
 
         const echoed = yield* Effect.promise(
           async () =>
@@ -168,10 +165,10 @@ layer(NodeServices.layer)((it) => {
       Effect.gen(function* () {
         const marker = path.join(yield* scratch, "marker");
         const port = ownPort();
-        const forwarding = yield* forwarder;
+        const relays = yield* relaying;
 
-        yield* forwarding.listen(port, echo(marker));
-        yield* forwarding.listen(port, echo(marker));
+        yield* relays.listen(port, yield* echo(marker));
+        yield* relays.listen(port, yield* echo(marker));
 
         const open = yield* Effect.promise(async () => await connected(port));
         const chunks: Buffer[] = [];
@@ -188,7 +185,7 @@ layer(NodeServices.layer)((it) => {
         yield* Effect.promise(async () => {
           await echoed;
         });
-        yield* forwarding.close(port);
+        yield* relays.close(port);
         expect(yield* refusal(port)).toHaveProperty("code", "ECONNREFUSED");
 
         open.end("still here");
@@ -222,7 +219,7 @@ layer(NodeServices.layer)((it) => {
       );
 
       const error = yield* Effect.flip(
-        (yield* forwarder).listen(port, echo(marker))
+        (yield* relaying).listen(port, yield* echo(marker))
       );
 
       expect(error._tag).toBe("Internal");
@@ -236,10 +233,10 @@ layer(NodeServices.layer)((it) => {
       Effect.gen(function* () {
         const marker = path.join(yield* scratch, "marker");
         const port = ownPort();
-        const forwarding = yield* forwarder;
+        const relays = yield* relaying;
 
         const fiber = yield* Effect.forkChild(
-          forwarding.listen(port, echo(marker)),
+          relays.listen(port, yield* echo(marker)),
           {
             startImmediately: true,
           }
@@ -249,7 +246,7 @@ layer(NodeServices.layer)((it) => {
 
         expect(yield* refusal(port)).toHaveProperty("code", "ECONNREFUSED");
 
-        yield* forwarding.listen(port, echo(marker));
+        yield* relays.listen(port, yield* echo(marker));
 
         expect(
           (yield* Effect.promise(

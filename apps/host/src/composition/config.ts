@@ -12,7 +12,7 @@ import { Effect, FileSystem, Path, Schema } from "effect";
 
 import { defaultMachinePorts, reservedPorts } from "../machine-ports.ts";
 import { BuildsSettings } from "../platform/s3.ts";
-import { SmolvmSettings } from "../platform/smolvm.ts";
+import { SmolvmSettings } from "../platform/smolvm/smolvm.ts";
 import { TailnetSettings } from "../platform/tailscale.ts";
 import { TartSettings } from "../platform/tart/tart.ts";
 import type { HostSettings } from "../settings.ts";

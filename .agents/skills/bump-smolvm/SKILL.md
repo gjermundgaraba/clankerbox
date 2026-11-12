@@ -16,7 +16,7 @@ separately, and don't deploy, change production hosts, or commit unless asked.
 ## Source and scope
 
 - **Pinned in this repo:** `minimumVersion` in
-  `apps/host/src/platform/smolvm.ts` is a floor: startup refuses a
+  `apps/host/src/platform/smolvm/smolvm.ts` is a floor: startup refuses a
   `smolvm --version` that isn't a `major.minor.patch` at or above it.
   `requirements.test.ts` fails until README states it. `pin` (`smolvm
   <version> <platform>-<arch>`) names the release the host's smolvm reports,
@@ -703,7 +703,7 @@ as it is.
 
 ## Verify
 
-- Unit: `vp test` in `apps/host` (`platform/smolvm.test.ts` fakes each smolvm call
+- Unit: `vp test` in `apps/host` (`platform/smolvm/smolvm.test.ts` fakes each smolvm call
   as the tested release answers it; `platform/sqlite.test.ts`) and `packages/sdk`
   (`ids.test.ts`), then `vp run --no-cache ready`. Update a fake only to match
   smolvm's real behaviour at the target.

@@ -193,6 +193,15 @@ const readManifest = (store: Interface, name: string) =>
     )
   );
 
+const filesOf = (runtime: Runtime["Service"], what: string) =>
+  runtime.files === undefined
+    ? Effect.fail(
+        new Internal({
+          message: `this host's runtime keeps no checkpoint as files, so it can't ${what}`,
+        })
+      )
+    : Effect.succeed(runtime.files);
+
 /**
  * Uploads `checkpoint`'s files under its name, each object only when the store lacks it, and the
  * manifest last, so whatever reads the manifest finds every object it names.
@@ -204,6 +213,7 @@ export const publish = (
 ): Effect.Effect<void, Internal, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
+    const local = yield* filesOf(runtime, `publish ${checkpoint.name}`);
     const present = new Set(yield* store.list(objects));
     let uploaded = 0;
 
@@ -245,7 +255,7 @@ export const publish = (
         })
       );
 
-    const files = yield* runtime.checkpointFiles(checkpoint);
+    const files = yield* local.checkpointFiles(checkpoint);
 
     const listed = yield* Effect.forEach(
       files,
@@ -288,7 +298,8 @@ export const fetch = (
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const paths = yield* Path.Path;
-    const staged = runtime.staging(checkpoint);
+    const local = yield* filesOf(runtime, `fetch build ${build}`);
+    const staged = local.staging(checkpoint);
     const manifest = yield* readManifest(store, from);
     let downloaded = 0;
     let fetched = 0;
@@ -311,7 +322,7 @@ export const fetch = (
         );
 
         if ("key" in file) {
-          const local = yield* runtime.held(file.key);
+          const held = yield* local.held(file.key);
 
           const fromStore = Effect.gen(function* () {
             const bytes = yield* object(file.key);
@@ -325,9 +336,9 @@ export const fetch = (
             yield* writing(fs.writeFile(target, bytes));
           });
 
-          return yield* local === undefined
+          return yield* held === undefined
             ? fromStore
-            : fs.link(local, target).pipe(Effect.catch(() => fromStore));
+            : fs.link(held, target).pipe(Effect.catch(() => fromStore));
         }
 
         yield* Effect.scoped(
@@ -378,7 +389,7 @@ export const fetch = (
         concurrency,
         discard: true,
       });
-      yield* runtime.install(checkpoint, staged);
+      yield* local.install(checkpoint, staged);
     }).pipe(
       Effect.ensuring(
         Effect.ignore(fs.remove(staged, { recursive: true, force: true }))

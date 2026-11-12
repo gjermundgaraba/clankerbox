@@ -13,8 +13,10 @@ import type {
 
 import * as Operations from "../operations.ts";
 import * as BindProbe from "../platform/bind-probe.ts";
+import * as Relay from "../platform/relay.ts";
 import * as S3 from "../platform/s3.ts";
 import * as Tailscale from "../platform/tailscale.ts";
+import * as Reach from "../reach.ts";
 import { Runtime } from "../runtime.ts";
 import type { CannotStart } from "../runtime.ts";
 import type { HostSettings } from "../settings.ts";
@@ -43,7 +45,7 @@ export const hostLayer = <E, R>(
   runtime: Layer.Layer<Runtime, E, R>,
   server: ServerLayer
 ): Layer.Layer<
-  HttpServer.HttpServer | Operations.Operations | Runtime,
+  HttpServer.HttpServer | Operations.Operations | Reach.Reaches | Runtime,
   HostError | CannotStart | E,
   R | FileSystem.FileSystem | Path.Path | HttpClient.HttpClient
 > =>
@@ -60,7 +62,14 @@ export const hostLayer = <E, R>(
       )
     ),
     Layer.provideMerge(Operations.layer(config)),
-    Layer.provide(Layer.merge(BindProbe.layer, startedUp)),
+    Layer.provideMerge(Reach.layer(config.machinePorts)),
+    Layer.provide(
+      Layer.mergeAll(
+        BindProbe.layer,
+        Relay.layer(config.listen.address),
+        startedUp
+      )
+    ),
     Layer.provideMerge(runtime),
     Layer.provide(
       config.tailnet === undefined

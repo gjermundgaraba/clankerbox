@@ -26,6 +26,8 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { missing, Runtime } from "../src/runtime.ts";
 import type {
   Activation,
+  Admission,
+  CheckpointFiles,
   CheckpointRef,
   Held,
   MachineRef,
@@ -61,6 +63,7 @@ export interface FakeOptions {
   readonly kind?: Kind | undefined;
   readonly ramBudgetMib?: number | undefined;
   readonly pin?: string | undefined;
+  readonly relayed?: boolean | undefined;
   readonly onCall?: ((call: string) => void) | undefined;
 }
 
@@ -283,7 +286,11 @@ type Injection<O extends Operation> =
 
 type Injections = { readonly [O in Operation]: Array<Injection<O>> };
 
-type FailureOf<O extends Operation> = Interface[O] extends (
+type Calls = Omit<Interface, "admission" | "files"> &
+  Admission &
+  CheckpointFiles;
+
+type FailureOf<O extends Operation> = Calls[O] extends (
   ...args: never
 ) => Effect.Effect<unknown, infer E, unknown>
   ? E
@@ -521,9 +528,72 @@ export const fakeRuntime = (options: FakeOptions) => {
 
       return Runtime.of({
         version: "fake",
-        publishAddress: "127.0.0.1",
         pin: options.pin ?? (kind === "linux" ? "fake 1" : undefined),
-        stopResumes: kind === "linux",
+        reach:
+          options.relayed === true
+            ? {
+                _tag: "relayed",
+                address: "127.0.0.1",
+                dial: () => (input) => input,
+              }
+            : { _tag: "published", address: "127.0.0.1" },
+        admission: {
+          admit: (activation: Activation) =>
+            Effect.andThen(
+              Effect.sync(() => activations.push(activation)),
+              call(
+                "admit",
+                activation.machine,
+                options.ramBudgetMib === undefined
+                  ? Effect.void
+                  : checkRamBudget(options.ramBudgetMib, activation, states, 0)
+              )
+            ),
+          stopBoots: kind === "linux",
+        },
+        files: {
+          checkpointFiles: (checkpoint) =>
+            Effect.promise(async () => {
+              const root = checkpointRoot(checkpoint);
+              const found = await filesIn(root);
+
+              return await Promise.all(
+                found.map(async (file) => ({
+                  path: path.relative(root, file),
+                  file,
+                  ...(kind === "linux" ? { key: await keyOf(file) } : {}),
+                }))
+              );
+            }),
+          held: (key) =>
+            Effect.promise(async () => {
+              const all = path.join(options.dir, "checkpoints");
+
+              for (const file of existsSync(all) ? await filesIn(all) : []) {
+                if (
+                  !file.includes(".fetching") &&
+                  (await keyOf(file)) === key
+                ) {
+                  return file;
+                }
+              }
+
+              return undefined;
+            }),
+          staging: (checkpoint) => `${checkpointRoot(checkpoint)}.fetching`,
+          install: (checkpoint, staged) =>
+            call(
+              "install",
+              checkpoint,
+              uninterruptibleWrite(async () => {
+                const root = checkpointRoot(checkpoint);
+
+                await rename(staged, root);
+                await mkdir(path.join(root, "dev"), { recursive: true });
+                furnish(root, bin);
+              })
+            ),
+        },
         growsLive: kind === "linux",
         sizable: (machine, from, to, live) => {
           sized.push([machine.name, sizesOf(from), sizesOf(to), live]);
@@ -540,17 +610,6 @@ export const fakeRuntime = (options: FakeOptions) => {
             record(`adopt ${refs.map(({ name }) => name).join(" ")}`);
           }),
         observe,
-        admit: (activation: Activation) =>
-          Effect.andThen(
-            Effect.sync(() => activations.push(activation)),
-            call(
-              "admit",
-              activation.machine,
-              options.ramBudgetMib === undefined
-                ? Effect.void
-                : checkRamBudget(options.ramBudgetMib, activation, states, 0)
-            )
-          ),
         capacity,
         create: (machine, image) =>
           call(
@@ -731,44 +790,6 @@ export const fakeRuntime = (options: FakeOptions) => {
                 recursive: true,
                 force: true,
               });
-            })
-          ),
-        checkpointFiles: (checkpoint) =>
-          Effect.promise(async () => {
-            const root = checkpointRoot(checkpoint);
-            const found = await filesIn(root);
-
-            return await Promise.all(
-              found.map(async (file) => ({
-                path: path.relative(root, file),
-                file,
-                ...(kind === "linux" ? { key: await keyOf(file) } : {}),
-              }))
-            );
-          }),
-        held: (key) =>
-          Effect.promise(async () => {
-            const all = path.join(options.dir, "checkpoints");
-
-            for (const file of existsSync(all) ? await filesIn(all) : []) {
-              if (!file.includes(".fetching") && (await keyOf(file)) === key) {
-                return file;
-              }
-            }
-
-            return undefined;
-          }),
-        staging: (checkpoint) => `${checkpointRoot(checkpoint)}.fetching`,
-        install: (checkpoint, staged) =>
-          call(
-            "install",
-            checkpoint,
-            uninterruptibleWrite(async () => {
-              const root = checkpointRoot(checkpoint);
-
-              await rename(staged, root);
-              await mkdir(path.join(root, "dev"), { recursive: true });
-              furnish(root, bin);
             })
           ),
         exec: (machine, command) =>
