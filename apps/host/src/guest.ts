@@ -356,6 +356,21 @@ const dropNode = [
   `rm -rf "${tailnetDir}"`,
 ];
 
+const resolver = `${stateDir}/resolv.conf`;
+
+// smolvm writes the guest's /etc/resolv.conf again at every exec:
+// https://github.com/smol-machines/smolvm/blob/v1.34.1/crates/smolvm-agent/src/storage.rs#L4546
+// Tailscale puts its own back only while the overwrites differ and stay under 10 in 5 seconds:
+// https://github.com/tailscale/tailscale/blob/v1.104.6/net/dns/direct.go#L511
+// and writes in place a file it can't rename, as a bind mount is:
+// https://github.com/tailscale/tailscale/blob/v1.104.6/net/dns/direct.go#L270
+const ownResolver = [
+  `if [ "$(uname -s)" = Linux ] && [ -f "$root/etc/resolv.conf" ] && [ ! -L "$root/etc/resolv.conf" ] && ! mountpoint -q "$root/etc/resolv.conf"; then`,
+  `  cat "$root/etc/resolv.conf" >"${resolver}"`,
+  `  mount --bind "${resolver}" "$root/etc/resolv.conf"`,
+  "fi",
+];
+
 const tailnetMarker = "clankerbox-tailnet: ";
 
 export const tailnetScript = [
@@ -376,6 +391,7 @@ export const tailnetScript = [
   `if [ "$(uname -s)" = Linux ]; then prefs="$prefs --netfilter-mode=off"; fi`,
   `mkdir -p "$dir"`,
   `chmod 711 "$dir"`,
+  ...ownResolver,
   `if [ "\${3-}" = join ]; then`,
   `  key=$(mktemp "$dir/key.XXXXXX")`,
   `  trap 'rm -f "$key"' EXIT`,
