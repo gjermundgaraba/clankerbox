@@ -137,6 +137,14 @@ export const writeStubs = (dir: string, uname = "Linux"): string => {
         'HOME=$CLANKERBOX_ROOT/home/$user exec "$@"',
       ].join("\n"),
     ],
+    ["mountpoint", 'grep -qxF -e "$2" "$CLANKERBOX_ROOT/mounted" 2>/dev/null'],
+    [
+      "mount",
+      [
+        'echo "$3" >>"$CLANKERBOX_ROOT/mounted"',
+        'echo "mount $*" >>"$CLANKERBOX_ROOT/mounts"',
+      ].join("\n"),
+    ],
     ["perl", `echo "perl $3" >>"$CLANKERBOX_ROOT/calls"`],
     ["apt-get", `echo "apt-get $*" >>"$CLANKERBOX_ROOT/calls"`],
     [

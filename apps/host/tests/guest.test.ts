@@ -1128,6 +1128,70 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "on linux the check binds a resolver of the guest's own over /etc/resolv.conf, once, so that smolvm's write at each exec misses what Tailscale wrote",
+    () =>
+      Effect.gen(function* () {
+        const where = yield* guest();
+        const bound = path.join(where.root, "var/lib/clankerbox/resolv.conf");
+        const mounted = `mount --bind ${bound} ${where.root}/etc/resolv.conf`;
+
+        yield* Effect.sync(() => {
+          writeTailscaleStubs(where.bin);
+        });
+        yield* resolving(where.root, baseResolver);
+
+        const first = yield* tailnet(where, ["linux-dev", "user"]);
+
+        expect(first.code, first.output).toBe(0);
+        expect(yield* readFile(bound)).toBe(baseResolver);
+        expect(yield* read(where.root, "mounts")).toBe(`${mounted}\n`);
+
+        yield* write(bound, joinedResolver);
+
+        const second = yield* tailnet(where, ["linux-dev", "user"]);
+
+        expect(second.code, second.output).toBe(0);
+        expect(yield* readFile(bound)).toBe(joinedResolver);
+        expect(yield* read(where.root, "mounts")).toBe(`${mounted}\n`);
+      })
+  );
+
+  it.effect(
+    "the check leaves /etc/resolv.conf as it is on mac, and a linux guest's link to a resolver of its image's own",
+    () =>
+      Effect.gen(function* () {
+        const mac = yield* guest("Darwin");
+
+        yield* Effect.sync(() => {
+          writeTailscaleStubs(mac.bin);
+        });
+        yield* resolving(mac.root, baseResolver);
+
+        const onMac = yield* tailnet(mac, ["mac-dev", "admin"]);
+
+        expect(onMac.code, onMac.output).toBe(0);
+        expect(yield* isMissing(path.join(mac.root, "mounts"))).toBe(true);
+
+        const linked = yield* guest();
+
+        yield* Effect.sync(() => {
+          writeTailscaleStubs(linked.bin);
+        });
+        yield* mkdir(path.join(linked.root, "etc"));
+        yield* write(path.join(linked.root, "etc", "stub.conf"), baseResolver);
+        yield* symlink(
+          "stub.conf",
+          path.join(linked.root, "etc", "resolv.conf")
+        );
+
+        const onLinked = yield* tailnet(linked, ["linux-dev", "user"]);
+
+        expect(onLinked.code, onLinked.output).toBe(0);
+        expect(yield* isMissing(path.join(linked.root, "mounts"))).toBe(true);
+      })
+  );
+
+  it.effect(
     "the check lets the login user fetch the node's certificate, and reach the socket across rechecks",
     () =>
       Effect.gen(function* () {
