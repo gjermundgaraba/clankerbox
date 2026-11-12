@@ -3,3 +3,4 @@ dist/
 *.sqlite*
 __pycache__/
 .vitest/
+.envrc
