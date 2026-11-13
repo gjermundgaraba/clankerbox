@@ -176,6 +176,8 @@ The control plane exits 130 on SIGINT or SIGTERM and 1 when it fails.
 
 ### Upgrading from 0.40
 
+In a smolvm host's unit, set `KillMode=mixed` and `TimeoutStopSec=300` where `KillMode=control-group` stood, and run `systemctl daemon-reload` before the restart, so the restart's own stop already spares a smolvm call the host has begun (see Deploy).
+
 Stop a 0.40 smolvm host before you start the new one on its box, as an upgrade does in its unit: a 0.40 host holds no box lock, so the new one can't tell it runs.
 
 A host config's `kind` and its block become `runtime`, an object naming the host's one runtime with that block's settings: `"kind": "linux"` with `"linux": { "prefix": ... }` becomes `"runtime": { "smolvm": { "prefix": ... } }`, and `"kind": "mac"` with `"mac": { "binary": ... }` becomes `"runtime": { "tart": { "binary": ... } }`. A host whose config still says `kind` refuses to start, saying so. Nothing else in a host config or the server config changes, host IDs included. The host contract changed, so upgrade hosts and the control plane together.
@@ -364,7 +366,8 @@ After=network-online.target tailscaled.service
 [Service]
 Type=exec
 ExecStart=/opt/clankerbox/<version>/bin/clankerbox-host --config /etc/clankerbox/smolvm-1.json
-KillMode=control-group
+KillMode=mixed
+TimeoutStopSec=300
 SuccessExitStatus=130
 Restart=on-failure
 RestartSec=5
@@ -373,7 +376,7 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-VMs run in their own scopes, so restarting the unit leaves them running.
+VMs run in their own scopes, so restarting the unit leaves them running. `KillMode=mixed` sends a stop's SIGTERM to the host alone, which ends at once, cutting each exec and step in flight, but first lets a smolvm stop or pause it has begun finish, as a SIGTERM to that smolvm call would leave it half done, and removes a setup's script from its guest, which waits up to 10 s on a guest that doesn't answer. `TimeoutStopSec=300` bounds that wait, with room for smolvm's longest stop; systemd then kills what is left, and a host that starts resumes a machine a killed pause left half-paused.
 
 A host's log holds one info line for each step it ends, done, cancelled or failed with its error's first line, annotated with its `operation`, its `step` and its machine or checkpoint, as the operation's report carries a setup's output; an error for a step that died, with its cause; a warning for what a host went on past, such as a leftover it couldn't remove; and no line for a request it answered: the control plane reads and polls each host every few seconds. A request that fails with a 5xx logs an error with its cause. `--log-level debug` on `ExecStart` logs every response too, with its method, path and status.
 
