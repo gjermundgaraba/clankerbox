@@ -1,6 +1,7 @@
 import { ManagedRuntime } from "effect";
 import type { Layer } from "effect";
 
+import { agentFetch } from "./fetch.ts";
 import type { ClankerboxProvider, Options } from "./options.ts";
 import { defaultCwd, make, name } from "./sandboxes.ts";
 import type { Services } from "./sandboxes.ts";
@@ -32,6 +33,7 @@ export const provider = <E>(
       await runtime.runPromise(sandboxes.ensureServer(id));
     },
     getUrl: async (id) => await runtime.runPromise(sandboxes.url(id)),
+    getFetch: async (id) => agentFetch(id),
     dispose: async () => {
       await runtime.runPromise(sandboxes.closeAll);
       await runtime.dispose();

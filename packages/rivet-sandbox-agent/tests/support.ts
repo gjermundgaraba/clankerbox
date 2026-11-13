@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { connect, Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -188,4 +188,16 @@ export const until = async (what: string, check: () => Promise<boolean>) => {
 
     await sleep(20);
   }
+};
+
+/** Waits for the stand-in agent in `dir` to hold a prompt. */
+export const prompted = async (dir: string) => {
+  await until(
+    "the agent to hold a prompt",
+    async () =>
+      await access(path.join(dir, "prompted")).then(
+        () => true,
+        () => false
+      )
+  );
 };

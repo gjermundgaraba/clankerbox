@@ -266,6 +266,7 @@ export default config({
     },
     {
       excludeFiles: [
+        "packages/rivet-sandbox-agent/src/fetch.ts",
         "packages/rivet-sandbox-agent/src/index.ts",
         "packages/rivet-sandbox-agent/src/tunnel.ts",
       ],
@@ -282,7 +283,7 @@ export default config({
               "^sandbox-agent$",
             ],
             because:
-              "Node and @effect/platform-node enter the provider only in index.ts, its Layers, and tunnel.ts, the ssh tunnel",
+              "Node and @effect/platform-node enter the provider only in index.ts, its Layers, tunnel.ts, the ssh tunnel, and fetch.ts, the SDK's fetch through it",
           },
         ],
       },

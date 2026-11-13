@@ -209,7 +209,8 @@ YAML file a build reads, `hosts.ts`,
 `clankerbox.ts` is the command tree.
 
 **Provider** (`packages/rivet-sandbox-agent/src`). `sandboxes.ts` (the
-operations), `tunnel.ts` (the ssh tunnel), `options.ts`, `agent.ts`, and
+operations), `tunnel.ts` (the ssh tunnel), `fetch.ts` (the SDK's fetch through
+it), `options.ts`, `agent.ts`, and
 `provider.ts`, which runs them for the Sandbox Agent's Promise API.
 
 **Amp orbs** (`packages/amp-orbs/src`). `dispatch.ts` (a job's spawn, pause or
@@ -399,7 +400,8 @@ the server's and the CLI's tests each run to claim a slot for the run.
   only its journal; an app command imports only
   `effect` (with its `cli`, `encoding`, `http`, `process` and `socket`), the SDK
   and its siblings, so a client can't reach the host contract; the provider takes
-  Node and `@effect/platform-node` only in `index.ts` and `tunnel.ts`, and the
+  Node and `@effect/platform-node` only in `index.ts`, `tunnel.ts` and
+  `fetch.ts`, and the
   Amp orb provider only in `main.ts`, but for `node:crypto`'s hash; the SDK's
   `.` entry imports no Node and uses no `Buffer` or `process`; and
   `fence/no-manual-run` keeps hand-run Effect to the files above.

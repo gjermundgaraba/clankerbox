@@ -3,6 +3,8 @@ import { appendFileSync, existsSync } from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
 
+import { fakeAgent } from "./fake-agent.ts";
+
 const dir = process.env["FAKE_SSH_DIR"] ?? "";
 
 const args = process.argv.slice(2);
@@ -19,12 +21,7 @@ if (existsSync(path.join(dir, "refuse"))) {
   process.exit(255);
 }
 
-createServer((_request, reply) => {
-  const healthy = !existsSync(path.join(dir, "unhealthy"));
-
-  reply.writeHead(healthy ? 200 : 503, { "content-type": "application/json" });
-  reply.end(JSON.stringify({ status: healthy ? "ok" : "down" }));
-}).listen(port, "127.0.0.1");
+createServer(fakeAgent(dir)).listen(port, "127.0.0.1");
 
 process.stdin.on("end", () => process.exit(0));
 

@@ -42,8 +42,8 @@ publish, change production hosts, or commit unless asked.
 - `SandboxProvider` (dist:types-*.d.ts) is `name`, `create()`, `destroy(id)`
   and the optional `reconnect`, `pause`, `kill`, `getUrl`, `getFetch`,
   `getInspectorUrl`, `ensureServer` and `defaultCwd`. Ours implements
-  `create`, `destroy`, `pause`, `reconnect`, `ensureServer`, `getUrl` and
-  `defaultCwd`, and adds `dispose`, which the SDK never calls: no `kill` (the
+  `create`, `destroy`, `pause`, `reconnect`, `ensureServer`, `getUrl`,
+  `getFetch` and `defaultCwd`, and adds `dispose`, which the SDK never calls: no `kill` (the
   SDK falls back to `destroy`), no token (the
   server runs with `--no-token`; the SDK also reads an undeclared `getToken`,
   `maybeGetToken`). A member the target adds or makes required needs a
@@ -65,6 +65,46 @@ publish, change production hosts, or commit unless asked.
   signal bounds it. The health wait runs once, from the client's constructor,
   and `start` is the SDK's only other call to `ensureServer`: a tunnel that
   ends later is the caller's to bring back (README).
+- `start` resolves `getFetch(rawId)` and uses `options.fetch ?? ` its answer
+  for every request the client makes, the ACP connection's included
+  (`resolveProviderFetch`). A `session/prompt` POST has no reply headers until
+  the turn ends, and Node's fetch gives up on headers after 300 s (undici's
+  `headersTimeout`), which the next claim turns into an ended process. Ours:
+  `agentFetch` in `fetch.ts`, over `node:http`, which bounds no wait for a
+  reply, a new one at each `getFetch`, each with an `http.Agent` of its own,
+  so a cap on Node's global agent's sockets or a proxy it takes from
+  `NODE_USE_ENV_PROXY` never reaches the tunnel.
+- The ACP connection posts each message to `/v1/acp/<server>` (`API_PREFIX`,
+  dist:chunk-*.js, `new AcpHttpClient`) without awaiting it:
+  `acp-http-client`'s `StreamableHttpAcpTransport.postMessage` takes a 2xx
+  as accepted, pushing in the JSON-RPC message a 200 carries, and logs any
+  other outcome as `ACP write
+  error` and errors the transport's stream unless the transport is closed.
+  `@agentclientprotocol/sdk` 0.16's `Connection` never catches `#receive()`,
+  so that error is an unhandled rejection that ends Node; 0.18.1 catches it.
+  The transport's `close` (`closeImpl`) sets `closed` before it sends a
+  DELETE to the same path, and `pushInbound` drops what arrives once
+  `closed` is set; ACP 0.16's `Connection` never rejects its pending
+  requests when its stream closes. So a request still waiting when
+  `dispose()` closes its connection never settles. `close` passes no signal
+  to a POST, so a POST still waiting outlives it. `destroySandbox`,
+  `pauseSandbox` and `killSandbox` call the provider before `dispose()`.
+  Ours: `fetch.ts` answers a request (a message with `id` and `method`)
+  posted on `/v1/acp/` that is cut or refused as a 200 carrying that request's
+  JSON-RPC error, which `postMessage` pushes in and `#handleResponse` rejects
+  the caller's promise with, and any other message as 202 with no body,
+  logging its loss as `postMessage` does, `ACP write error`. A refused POST's
+  `AcpHttpError` never reached a caller, since `writeMessage` doesn't await
+  `postMessage`. The DELETE aborts the POSTs still waiting on its path, so
+  their sockets don't keep the process alive. `responseEnvelopeId` drops
+  whichever of that error and the event stream's answer comes second.
+  `tests/fetch.test.ts` holds each case; `tests/session.test.ts` ends a
+  sandbox both ways under a reply the stand-in agent holds, cuts a prompt,
+  rejects a held prompt under `destroySandbox`, `pauseSandbox` and the
+  provider's `dispose`, and has a held prompt never settle under the SDK's
+  `dispose()` while the process ends at once. When ACP 0.18.1 or later is
+  under the SDK and the transport fails its pending requests rather than its
+  stream, the fetch can stop answering failures.
 - `SandboxDestroyedError(sandboxId, provider, { cause })` is a runtime export,
   and what `start` expects of a `reconnect` to a sandbox that no longer
   exists. Ours: `reconnect` maps the host's `NotFound` to it.
@@ -133,7 +173,7 @@ publish, change production hosts, or commit unless asked.
 
 - `pnpm install` after the catalog change, then `vp run --no-cache ready`. The
   package's tests run the real SDK against the provider, over a stub host and
-  a stand-in ssh.
+  a stand-in ssh that serves a stand-in agent.
 - Each recipe's downloads against their pins: run `recipes/ubuntu/setup.sh` in
   a throwaway `linux/amd64` `ubuntu:24.04` container. It needs no keys: the
   host installs the operator's after a setup.
