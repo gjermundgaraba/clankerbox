@@ -309,6 +309,41 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a raw exec whose argument, user or environment value holds a NUL byte is InvalidInput, and reaches no host",
+    () =>
+      Effect.gen(function* () {
+        const { url, hosts, store } = yield* running();
+
+        expect((yield* createRaw(url, "dev")).status).toBe(200);
+
+        yield* eventually(
+          store.machines,
+          ([machine]) => machine?.state === "made.settled"
+        );
+
+        const calls = [...hosts[0]!.fake.calls];
+
+        const answers = yield* Effect.forEach(
+          [
+            { id: "dev", argv: ["echo", "a\0b"] },
+            { id: "dev", argv: ["true"], user: "ad\0min" },
+            { id: "dev", argv: ["true"], env: { TOKEN: "sekret-value\0" } },
+          ],
+          (body) => post(url, "execMachine", body)
+        );
+
+        for (const answer of answers) {
+          expect(answer.status).toBe(400);
+          expect(answer.body).toContain('"_tag":"InvalidInput"');
+          expect(answer.body).toContain("NUL");
+          expect(answer.body).not.toContain("sekret-value");
+        }
+
+        expect(hosts[0]!.fake.calls).toStrictEqual(calls);
+      })
+  );
+
+  it.effect(
     "a request of another release, or with no version, is Invalid and runs nothing",
     () =>
       Effect.gen(function* () {

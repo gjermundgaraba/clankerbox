@@ -16,7 +16,7 @@ import {
   Unavailable,
   version,
 } from "../src/index.ts";
-import type { MachineSpec } from "../src/index.ts";
+import type { ExecRequest, MachineSpec } from "../src/index.ts";
 import { elapsing, ticking } from "./clock.ts";
 import {
   build,
@@ -682,6 +682,35 @@ describe("client", () => {
         expect(error.message).toContain("createMachine dev");
         expect(stub.calls).toStrictEqual([]);
       })
+    );
+
+    it.effect(
+      "a command whose argument, user or environment value holds a NUL byte is Invalid, and sends nothing",
+      () =>
+        Effect.gen(function* () {
+          const stub = server();
+
+          const errors = yield* withClient(stub, (client) =>
+            Effect.forEach(
+              new Array<ExecRequest>(
+                { id: "dev", argv: ["echo", "a\0b"] },
+                { id: "dev", argv: ["\0"] },
+                { id: "dev", argv: ["true"], user: "ad\0min" },
+                { id: "dev", argv: ["true"], env: { TOKEN: "sekret-value\0" } }
+              ),
+              (request) => Effect.flip(client.execMachine(request))
+            )
+          );
+
+          for (const error of errors) {
+            expect(error._tag).toBe("Invalid");
+            expect(error.message).toContain("NUL");
+            expect(error.message).not.toContain("sekret-value");
+            expect(error).toMatchObject({ action: "execMachine" });
+          }
+
+          expect(stub.calls).toStrictEqual([]);
+        })
     );
 
     it.effect(

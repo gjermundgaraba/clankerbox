@@ -493,19 +493,28 @@ export const PauseRequest = Schema.Struct({
 
 export type PauseRequest = typeof PauseRequest.Type;
 
+const ArgumentText = Schema.String.check(
+  Schema.makeFilter(
+    (text: string) =>
+      !text.includes("\0") ||
+      "holds no NUL byte, which no program's argument or environment can carry"
+  )
+);
+
 /**
  * A command run in a running machine as `user`, root when it is left out, with `env` set for it,
  * `stdin` written whole, and ended with exit code 124 after `timeoutSeconds`. Nothing logs or
  * stores `env` or `stdin`: they can carry secrets. The command runs as long as the request does.
+ * No argument, `user` or value of `env` holds a NUL byte.
  */
 export const ExecRequest = Schema.Struct({
   id: Name,
-  argv: Schema.NonEmptyArray(Schema.String),
-  user: Schema.optionalKey(Schema.NonEmptyString),
+  argv: Schema.NonEmptyArray(ArgumentText),
+  user: Schema.optionalKey(ArgumentText.check(Schema.isNonEmpty())),
   env: Schema.optionalKey(
     Schema.Record(
       Schema.String.check(Schema.isPattern(/^[A-Za-z_][A-Za-z0-9_]*$/u)),
-      Schema.String
+      ArgumentText
     )
   ),
   stdin: Schema.optionalKey(Schema.String),
