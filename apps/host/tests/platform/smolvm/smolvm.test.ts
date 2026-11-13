@@ -2126,6 +2126,41 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
+    "a machine named as a seed build begins, made before smolvm's names were refused, survives a host's start and another machine's failed boot, as does a VM named for a PID Linux never gives",
+    () =>
+      Effect.gen(function* () {
+        const model = smolvmModel();
+
+        const kept = sized({
+          ...machine,
+          name: "image-seed-x",
+          instance: "12345678abcdefabcdefabcdefabcdef",
+        });
+
+        const beyond = "image-seed-0123456789abcdef-4194304";
+
+        model.vms.set(kept.handle, { state: "running", forwards: [] });
+        model.vms.set(beyond, { state: "running", forwards: [] });
+
+        const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
+
+        yield* runtime.startup;
+
+        model.faults.reply = ({ args }) =>
+          args[1] === "start"
+            ? { exitCode: 1, stderr: "Error: image seed failed\n" }
+            : undefined;
+
+        yield* Effect.exit(runtime.make(machine, fromImage, { _tag: "none" }));
+
+        expect([
+          model.vms.get(kept.handle)?.state,
+          model.vms.get(beyond)?.state,
+        ]).toStrictEqual(["running", "running"]);
+      })
+  );
+
+  it.effect(
     "a host that starts resumes a machine a killed pause left half-paused, so no step meets its frozen guest, and leaves a paused one paused",
     () =>
       Effect.gen(function* () {
