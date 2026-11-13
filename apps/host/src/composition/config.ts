@@ -6,16 +6,15 @@ import {
   isImageReference,
   Port,
 } from "@gjermundgaraba/clankerbox-sdk";
-import type { Kind } from "@gjermundgaraba/clankerbox-sdk";
 import { Address } from "@gjermundgaraba/clankerbox-sdk/node";
-import { Effect, FileSystem, Path, Schema } from "effect";
+import { Effect, FileSystem, Option, Path, Schema } from "effect";
 
 import { defaultMachinePorts, reservedPorts } from "../machine-ports.ts";
 import { BuildsSettings } from "../platform/s3.ts";
-import { SmolvmSettings } from "../platform/smolvm/smolvm.ts";
 import { TailnetSettings } from "../platform/tailscale.ts";
-import { TartSettings } from "../platform/tart/tart.ts";
 import type { HostSettings } from "../settings.ts";
+import { isRuntimeKey, runtimes, settingsOf } from "./runtimes.ts";
+import type { ChosenRuntime, RuntimeKey } from "./runtimes.ts";
 
 const MachinePorts = Schema.Struct({ first: Port, last: Port }).check(
   Schema.makeFilter(({ first, last }) => {
@@ -53,28 +52,66 @@ const common = {
   builds: Schema.optionalKey(BuildsSettings),
 };
 
-const HostConfigFile = Schema.Union([
-  Schema.Struct({
-    ...common,
-    kind: Schema.Literal("linux"),
-    linux: SmolvmSettings,
-  }),
-  Schema.Struct({ ...common, kind: Schema.Literal("mac"), mac: TartSettings }),
-]);
+const HostConfigFile = Schema.Struct({
+  ...common,
+  runtime: Schema.Record(Schema.String, Schema.Unknown),
+});
 
 type HostConfigFile = typeof HostConfigFile.Type;
 
-true satisfies [Kind] extends [HostConfigFile["kind"]] ? true : false;
+export interface HostConfig
+  extends HostSettings, Pick<HostConfigFile, "tailnet" | "builds"> {
+  readonly runtime: ChosenRuntime;
+}
 
-type Resolved<C> = C extends unknown
-  ? Omit<C, Exclude<keyof HostSettings, "kind">> & Omit<HostSettings, "kind">
-  : never;
-
-export type HostConfig = Resolved<HostConfigFile>;
+const strictly = { onExcessProperty: "error", errors: "all" } as const;
 
 const decodeConfig = Schema.decodeUnknownEffect(
   Schema.fromJsonString(HostConfigFile)
 );
+
+const SaysKind = Schema.fromJsonString(Schema.Struct({ kind: Schema.Unknown }));
+
+const names = Object.keys(runtimes).join(", ");
+
+const kindMoved = `; "kind" and its block are now "runtime", an object naming one runtime, one of ${names}, with that block's settings: { "runtime": { "<name>": { ... } } }`;
+
+const chosen = <K extends RuntimeKey>(
+  name: K,
+  settings: unknown
+): Effect.Effect<ChosenRuntime<K>, Invalid> =>
+  Schema.decodeUnknownEffect(settingsOf(name))(settings, strictly).pipe(
+    Effect.map((decoded) => ({ name, settings: decoded })),
+    Effect.mapError(
+      (error) =>
+        new Invalid({ message: `runtime.${name}: ${describeIssues(error)}` })
+    )
+  );
+
+const chosenRuntime = (
+  runtime: HostConfigFile["runtime"]
+): Effect.Effect<ChosenRuntime, Invalid> => {
+  const named = Object.entries(runtime);
+  const [first] = named;
+
+  if (first === undefined || named.length > 1) {
+    return Effect.fail(
+      new Invalid({
+        message: `runtime: names exactly one runtime, one of ${names}, and this names ${named.length}`,
+      })
+    );
+  }
+
+  const [name, settings] = first;
+
+  return isRuntimeKey(name)
+    ? chosen(name, settings)
+    : Effect.fail(
+        new Invalid({
+          message: `runtime: ${name} is no runtime this host drives, which are ${names}`,
+        })
+      );
+};
 
 const resolveConfig = (
   decoded: HostConfigFile,
@@ -93,6 +130,7 @@ const resolveConfig = (
 
     return {
       ...decoded,
+      runtime: yield* chosenRuntime(decoded.runtime),
       stateDir: path.resolve(directory, decoded.stateDir),
       bases: new Map(Object.entries(decoded.bases)),
       machinePorts,
@@ -117,14 +155,11 @@ export const loadConfig = (
       )
     );
 
-    const decoded = yield* decodeConfig(text, {
-      onExcessProperty: "error",
-      errors: "all",
-    }).pipe(
+    const decoded = yield* decodeConfig(text, strictly).pipe(
       Effect.mapError(
         (error) =>
           new Invalid({
-            message: `host config ${resolved}: ${describeIssues(error)}`,
+            message: `host config ${resolved}: ${describeIssues(error)}${Option.isSome(Schema.decodeOption(SaysKind)(text)) ? kindMoved : ""}`,
             file: resolved,
           })
       )

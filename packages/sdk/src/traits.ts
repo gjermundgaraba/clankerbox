@@ -13,7 +13,7 @@ export const RuntimeName = Schema.String.check(
 
 export type RuntimeName = typeof RuntimeName.Type;
 
-const Size = Schema.Int.check(Schema.isGreaterThan(0));
+export const Size = Schema.Int.check(Schema.isGreaterThan(0));
 
 export const Sizes = Schema.Struct({
   cpu: Size,
@@ -29,15 +29,19 @@ const Growth = Schema.Literals(["grow", "any", "none"]);
  * What every machine of a runtime does where runtimes differ, declared once in the runtime's own
  * folder on its host, and stamped on each row the control plane makes there.
  *
- * - `images`: `references` also creates from an image reference, beside the host's named bases.
+ * - `images`: `named` creates only from the host's named bases; `references` also from an image
+ *   reference.
  * - `checkpoint`: what a checkpoint keeps, `ram` (RAM and disks) or `disk`, and so its `kind`.
- * - `captureFrom`: the state a template build's copy is captured from.
+ * - `captureFrom`: the one state, `running` or `stopped`, a machine is captured or forked in; one in
+ *   any other state fails the capture or the fork, and a template build stops its builder before
+ *   its copy where it is `stopped`.
  * - `pause`: `saves` keeps the machine's RAM; `stops` stops it.
- * - `copies`: a fork's or restore's sizes against its source's: they only `grow`, are `any`, or
- *   are the source's own, `same`.
- * - `resize`: what a running and a stopped machine take of a resize of vCPUs and RAM: they only
- *   `grow`, `any`, or `none`, which refuses the state.
- * - `sizes`: `free`, or the `classes` a machine's sizes must each equal one of.
+ * - `copies`: a fork's or restore's vCPUs and RAM against its source's: `grow`, the source's or
+ *   larger; `any`; or `same`, the source's sizes alone, its disk's included.
+ * - `resize`: what a running and what a stopped machine take of a resize of vCPUs and RAM: `grow`,
+ *   only larger ones; `any`; or `none`, which refuses a machine in that state.
+ * - `sizes`: `free`, any sizes, or `classes`, named sizes a machine's vCPUs, RAM and disk must
+ *   together equal one of.
  * - `stopsOnItsOwn`: the runtime stops machines no request asked it to, which a client reads as a
  *   machine that may show `starting` unasked.
  */

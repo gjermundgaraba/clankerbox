@@ -2,21 +2,15 @@ import { Schema } from "effect";
 
 import { Desired, HostError } from "./errors.ts";
 import { CheckpointName, HostId, Name } from "./ids.ts";
-
-/** What a host's machines are: `linux` guests on smolvm, or `mac` guests on Tart. */
-export const Kind = Schema.Literals(["linux", "mac"]);
-
-export type Kind = typeof Kind.Type;
+import { RuntimeName, RuntimeTraits, Size } from "./traits.ts";
 
 const CheckpointKind = Schema.Literals(["ram", "disk"]);
 
 /**
- * The user a machine is logged in as, on either kind: the user a setup, run as root, leaves in the
+ * The user a machine is logged in as, on every runtime: the user a setup, run as root, leaves in the
  * guest, for whom the host installs the operator's keys. Tart's bases ship it; never root.
  */
 export const loginUser = "admin";
-
-const Size = Schema.Int.check(Schema.isGreaterThan(0));
 
 export const maxLabels = 16;
 
@@ -166,13 +160,13 @@ export const templateRef = (
  * what the last request asked for, `phase` what the control plane is doing about it, and `error`
  * why the last step failed, until the next request. A request takes the row out of rest in the
  * write that records it, so a resting `phase` read after a request has seen it. `template` is the
- * build a create cloned. `ssh` is only on a running machine whose runtime gives it an endpoint, and
+ * build a create cloned. `traits` are its runtime's, as they were when it was made. `ssh` is only on a running machine whose runtime gives it an endpoint, and
  * `hostKey`, `<type> <base64>`, once preparation has recorded it. `tailnet` is on a running machine
  * of a host that joins its machines to a tailnet, once the host has checked it.
  */
 export const Machine = Schema.Struct({
   id: Name,
-  kind: Kind,
+  traits: RuntimeTraits,
   createdAt: Schema.DateTimeUtcFromString,
   base: Schema.String,
   template: Schema.optionalKey(BuildId),
@@ -220,8 +214,8 @@ export const stateLabel = ({ state, desired, phase }: Machine): string => {
 };
 
 /**
- * `kind` follows its host's: `ram` (RAM and disks) on linux, captured from a running machine, and
- * `disk` on mac, from a stopped one. A client waits on `phase`: a checkpoint is usable only `ready`,
+ * `kind` is its machine's runtime's `checkpoint` trait: `ram` holds RAM and disks, and `disk` the
+ * disks alone. A client waits on `phase`: a checkpoint is usable only `ready`,
  * and never changes after. A capture that failed stays `failed` to say why, holding no copy. One
  * with `expiresAt` is deleted by the control plane once that time has passed.
  */
@@ -242,15 +236,10 @@ export const Checkpoint = Schema.Struct({
 
 export type Checkpoint = typeof Checkpoint.Type;
 
-export const checkpointKinds = {
-  linux: "ram",
-  mac: "disk",
-} as const satisfies Record<Kind, Checkpoint["kind"]>;
-
 const BuildPhase = Schema.Literals(["building", "ready", "failed"]);
 
 /**
- * A build's copy on one host. A host of the build's kind that copies builds fetches each ready
+ * A build's copy on one host. A host of the build's runtime that copies builds fetches each ready
  * build: the copy is `fetching` until it holds it, then `ready` for a create, or `failed` with its
  * error, which the next recheck fetches again. It is `outdated`, and takes no create, while its host
  * runs another runtime pin or names another image for the base than the build was made under, as
@@ -329,13 +318,14 @@ export const builtFrom = (
 
 /**
  * An operator's view of a host: `up` with what it reported, `draining` when placement passes it
- * over, or `unreachable` with why. `runtimeVersion` is the version of smolvm on linux, and of Tart
- * on mac.
+ * over, or `unreachable` with why. `runtime` names what it drives, whose `traits` it answers, and
+ * `runtimeVersion` is that runtime's own version.
  */
 export const Host = Schema.Struct({
   id: HostId,
   state: Schema.Literals(["up", "draining", "unreachable"]),
-  kind: Schema.optionalKey(Kind),
+  runtime: Schema.optionalKey(RuntimeName),
+  traits: Schema.optionalKey(RuntimeTraits),
   version: Schema.optionalKey(Schema.String),
   runtimeVersion: Schema.optionalKey(Schema.String),
   bases: Schema.Array(Schema.String),
@@ -344,9 +334,14 @@ export const Host = Schema.Struct({
 
 export type Host = typeof Host.Type;
 
+/** A resource a host counts, named by its runtime, such as `cpu`, `ramMib` or `runningVms`. */
+export const ResourceName = Schema.String.check(
+  Schema.isPattern(/^[a-z][A-Za-z0-9]{0,31}$/u)
+);
+
 const usageFields = {
   host: HostId,
-  resource: Schema.Literals(["cpu", "ramMib", "runningVms"]),
+  resource: ResourceName,
   limit: Schema.optionalKey(Schema.Int),
 };
 
@@ -355,8 +350,8 @@ const usageFields = {
  * needn't match the host's own machines. When a machine the sum counts couldn't be read, the
  * sum would be a guess, so the row names those machines instead.
  *
- * `cpu` and `ramMib` are what the host's running machines were given, and `runningVms`, on mac,
- * Apple's two VMs per Mac.
+ * `cpu` and `ramMib` are what the host's running machines were given; a runtime may count more,
+ * such as `runningVms`, Apple's two VMs per Mac.
  * `limit` is there only where the host refuses an action that would pass it.
  */
 export const Usage = Schema.Union([
@@ -421,13 +416,16 @@ export const Sizing = Schema.Struct({
 
 export type Sizing = typeof Sizing.Type;
 
-const fromTemplate = { template: TemplateRef, ...Sizing.fields };
+const placed = { host: Schema.optionalKey(HostId) };
+
+const fromTemplate = { template: TemplateRef, ...Sizing.fields, ...placed };
 
 const fromBase = {
   base: Schema.String,
   cpu: Size,
   ramMib: Size,
   diskGib: Size,
+  ...placed,
 };
 
 /** A template's build, at its sizes or the larger ones given, with no setup run. */
@@ -549,16 +547,13 @@ export const ResizeRequest = Schema.Struct({
 export type ResizeRequest = typeof ResizeRequest.Type;
 
 /**
- * A build of `template` from `base` at its sizes, with `setup`. Each build gives them all, and a
- * setup without a timeout takes the host's.
+ * A build of `template` from `base` at its sizes, with `setup`, on `host` if one is named. Each
+ * build gives them all, and a setup without a timeout takes the host's.
  */
 export const BuildRequest = Schema.Struct({
   template: Name,
   setup: Setup,
-  base: Schema.String,
-  cpu: Size,
-  ramMib: Size,
-  diskGib: Size,
+  ...fromBase,
 });
 
 export type BuildRequest = typeof BuildRequest.Type;

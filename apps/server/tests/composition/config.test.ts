@@ -12,12 +12,12 @@ import { loadConfig } from "../../src/composition/config.ts";
 import { defaultFailedRowsLast, defaultRecheck } from "../../src/settings.ts";
 
 const config = {
-  listen: { address: "100.95.240.37", port: 8585 },
+  listen: { address: "100.64.0.10", port: 8585 },
   stateDir: "state",
   authorizedKeys: "id.pub",
   hosts: [
-    { id: "linux", url: "http://100.95.240.37:8484" },
-    { id: "mac", url: "http://100.122.69.11:8484", draining: true },
+    { id: "linux", url: "http://100.64.0.10:8484" },
+    { id: "mac", url: "http://100.64.0.20:8484", draining: true },
   ],
 };
 
@@ -40,15 +40,15 @@ layer(NodeServices.layer)((it) => {
         const { file, loaded } = yield* load(config);
 
         expect(yield* loaded).toStrictEqual({
-          listen: { address: "100.95.240.37", port: 8585 },
+          listen: { address: "100.64.0.10", port: 8585 },
           stateDir: path.join(file, "..", "state"),
           hosts: [
             {
               id: "linux",
-              url: "http://100.95.240.37:8484",
+              url: "http://100.64.0.10:8484",
               draining: false,
             },
-            { id: "mac", url: "http://100.122.69.11:8484", draining: true },
+            { id: "mac", url: "http://100.64.0.20:8484", draining: true },
           ],
           recheck: defaultRecheck,
           failedRowsLast: defaultFailedRowsLast,

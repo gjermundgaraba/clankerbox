@@ -11,7 +11,7 @@ import { Runtime, stateIn, sizedBy } from "../runtime.ts";
 import type { HostSettings } from "../settings.ts";
 import { Tailnet } from "../tailnet.ts";
 
-type Served = Pick<HostSettings, "id" | "kind" | "bases">;
+type Served = Pick<HostSettings, "id" | "bases">;
 
 const app = (config: Served) =>
   Action.implement(
@@ -27,7 +27,6 @@ const app = (config: Served) =>
         readHost: () =>
           Effect.succeed({
             id: config.id,
-            kind: config.kind,
             traits: runtime.traits,
             version,
             runtimeVersion: runtime.version,

@@ -12,7 +12,6 @@ import { gzipSync } from "node:zlib";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import type { Kind } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { Context, Effect, Layer, Schema } from "effect";
 import { expect } from "vite-plus/test";
@@ -25,6 +24,7 @@ import {
   templates,
 } from "../src/platform/smolvm/smolvm.ts";
 import { Runtime } from "../src/runtime.ts";
+import type { FakeRuntimeName } from "./fake-runtime.ts";
 import { fakeRuntime } from "./fake-runtime.ts";
 import { scripted } from "./scripted.ts";
 import { memoryBuildStore } from "./support.ts";
@@ -48,9 +48,9 @@ const encoder = new TextEncoder();
 
 const decoder = new TextDecoder();
 
-const runtimeIn = (dir: string, kind: Kind) =>
+const runtimeIn = (dir: string, faked: FakeRuntimeName) =>
   Effect.map(
-    Layer.build(fakeRuntime({ dir, kind }).layer),
+    Layer.build(fakeRuntime({ dir, as: faked }).layer),
     Context.get(Runtime)
   );
 
@@ -95,7 +95,7 @@ const tree = (root: string) =>
   readdirSync(root, { recursive: true, encoding: "utf8" }).toSorted();
 
 const published = (
-  kind: Kind,
+  faked: FakeRuntimeName,
   contents: ReadonlyMap<string, string | Uint8Array> = new Map<
     string,
     string | Uint8Array
@@ -117,12 +117,12 @@ const published = (
 
     yield* publish(
       memory.store,
-      yield* runtimeIn(from, kind),
+      yield* runtimeIn(from, faked),
       checkpointRef("built")
     );
 
     const to = path.join(root, "to");
-    const runtime = yield* runtimeIn(to, kind);
+    const runtime = yield* runtimeIn(to, faked);
 
     const manifest = () =>
       Schema.decodeSync(Written)(
@@ -173,96 +173,101 @@ const overlap = "each path once, and none within another file";
 const storeObject = `objects/${"0".repeat(64)}`;
 
 const refusedManifests: ReadonlyArray<
-  readonly [string, Kind, (file: ManifestFile) => ManifestFile, string]
+  readonly [
+    string,
+    FakeRuntimeName,
+    (file: ManifestFile) => ManifestFile,
+    string,
+  ]
 > = [
-  ["path is empty", "linux", (file) => ({ ...file, path: "" }), outside],
+  ["path is empty", "smolvm", (file) => ({ ...file, path: "" }), outside],
   [
     "path is absolute",
-    "linux",
+    "smolvm",
     (file) => ({ ...file, path: "/tmp/escaped" }),
     outside,
   ],
   [
     "path climbs out of staging",
-    "linux",
+    "smolvm",
     (file) => ({ ...file, path: "../../../escaped" }),
     outside,
   ],
   [
     "path climbs out through a directory",
-    "linux",
+    "smolvm",
     (file) => ({ ...file, path: "memory/../../../../escaped" }),
     outside,
   ],
   [
     "path is another file's too",
-    "linux",
+    "smolvm",
     (file) => ({ ...file, path: "memory/one" }),
     overlap,
   ],
   [
     "file's path is the directory of a later file",
-    "linux",
+    "smolvm",
     (file) => ({ ...file, path: "memory" }),
     overlap,
   ],
   [
     "file's path is within a later file",
-    "linux",
+    "smolvm",
     (file) => ({ ...file, path: "memory/one/inner" }),
     overlap,
   ],
   [
     "key isn't a runtime's name and a SHA-256",
-    "linux",
+    "smolvm",
     (file) => ({ ...file, key: "fake/../../escaped" }),
     "a runtime's name, / and a SHA-256 in hex",
   ],
   [
     "key isn't the object its objects/ path names",
-    "linux",
+    "smolvm",
     (file) => ({ ...file, path: storeObject }),
     "a key of the SHA-256 its objects/ path names",
   ],
   [
     "file in pieces lies under objects/",
-    "mac",
+    "tart",
     (file) => ({ ...file, path: storeObject }),
     "a path outside objects/, which holds keyed files",
   ],
   [
     "file has both a key and pieces",
-    "linux",
+    "smolvm",
     (file) => ({ ...file, pieces: [null] }),
     "Expected no excess property",
   ],
   [
     "piece isn't a SHA-256",
-    "mac",
+    "tart",
     (file) => ({ ...file, pieces: ["../escaped"] }),
     "a SHA-256 in hex",
   ],
   [
     "pieces don't cover its size",
-    "mac",
+    "tart",
     (file) => ({ ...file, pieces: [null, null] }),
     "one piece for each 16777216 bytes of its size",
   ],
   [
     "size is negative",
-    "mac",
+    "tart",
     (file) => ({ ...file, size: -1, pieces: [] }),
     "Expected a value greater than or equal to 0",
   ],
 ];
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
-  for (const [what, kind, change, reason] of refusedManifests) {
+  for (const [what, faked, change, reason] of refusedManifests) {
     it.effect(
       `a fetch refuses a manifest whose ${what}, and writes nothing`,
       () =>
         Effect.gen(function* () {
-          const { root, rewrite, fetched } = yield* published(kind);
+          const { root, rewrite, fetched } = yield* published(faked);
           const before = tree(root);
 
           rewrite(change);
@@ -283,7 +288,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a fetch refuses an object that isn't the size its manifest says, and installs nothing",
     () =>
       Effect.gen(function* () {
-        const { memory, disk, fetched, leftBehind } = yield* published("linux");
+        const { memory, disk, fetched, leftBehind } =
+          yield* published("smolvm");
 
         memory.objects.set(`objects/${disk().key}`, encoder.encode("the dis"));
 
@@ -301,7 +307,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a fetch refuses a piece that doesn't hash to its name, and installs nothing",
     () =>
       Effect.gen(function* () {
-        const { memory, disk, fetched, leftBehind } = yield* published("mac");
+        const { memory, disk, fetched, leftBehind } = yield* published("tart");
 
         memory.objects.set(
           `objects/pieces/${disk().pieces?.[0]}`,
@@ -322,7 +328,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a fetch refuses a piece that isn't the length its place in the file says, and installs nothing",
     () =>
       Effect.gen(function* () {
-        const { memory, disk, fetched, leftBehind } = yield* published("mac");
+        const { memory, disk, fetched, leftBehind } = yield* published("tart");
 
         memory.objects.set(
           `objects/pieces/${disk().pieces?.[0]}`,
@@ -348,7 +354,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         disk.set(encoder.encode("tail"), pieceBytes);
 
         const { to, fetched } = yield* published(
-          "mac",
+          "tart",
           new Map<string, string | Uint8Array>([
             ["disk.raw", disk],
             ["empty", ""],

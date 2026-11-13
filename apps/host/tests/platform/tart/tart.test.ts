@@ -623,7 +623,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(failure(error)).toStrictEqual([
           "Missing",
-          "machine dev is missing from the mac runtime; delete it",
+          "machine dev is missing from the tart runtime; delete it",
         ]);
         expect(calls(mac)).toStrictEqual([]);
         expect([
@@ -1045,7 +1045,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             "WrongState",
             "a Tart fork copies a stopped machine's disk, and src is paused: stop it first",
           ],
-          ["Missing", "machine src is missing from the mac runtime; delete it"],
+          [
+            "Missing",
+            "machine src is missing from the tart runtime; delete it",
+          ],
         ]);
         expect(calls(mac)).toStrictEqual([]);
         expect(
@@ -1917,7 +1920,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ],
           [
             "Missing",
-            "machine gone is missing from the mac runtime; delete it",
+            "machine gone is missing from the tart runtime; delete it",
           ],
         ]);
         expect(calls(mac)).toStrictEqual([]);

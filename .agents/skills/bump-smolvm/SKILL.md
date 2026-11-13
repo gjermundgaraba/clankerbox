@@ -21,8 +21,8 @@ separately, and don't deploy, change production hosts, or commit unless asked.
   `requirements.test.ts` fails until README states it. `pin` (`smolvm
   <version> <platform>-<arch>`) names the release the host's smolvm reports,
   and is recorded on every `ram` checkpoint and every paused machine. The
-  tested release appears in README (the install snippet, the `linux.prefix`
-  example), Notation below and the permalinks: `git grep -n '<old version>'`
+  tested release appears in README (the install snippet, the
+  `runtime.smolvm.prefix` example), Notation below and the permalinks: `git grep -n '<old version>'`
   finds every place. README pins the `ubuntu` base by digest.
 - **Target:** the latest stable published `smol-machines/smolvm` release (its
   release metadata, such as `gh release view --repo smol-machines/smolvm`),
@@ -545,7 +545,7 @@ as it is.
   (`release_free_guest_memory`). `machine resume` takes no `--branchable`,
   and resumes branchable only on x86_64 Linux (`resume_vm`,
   src/embedded/control.rs). Ours: every start passes `--branchable`, and
-  README's linux hosts are amd64, so a resumed machine stays branchable; a
+  README's smolvm hosts are amd64, so a resumed machine stays branchable; a
   capture or fork of a stopped machine is `WrongState` before anything native;
   no bound on capture.
 - Capture is atomic (temp file, fsync, publish without clobbering,
@@ -657,7 +657,7 @@ as it is.
   src/portable_checkpoint.rs). `create --from` a stored checkpoint with
   `--restore-cache-entries 0` only reads the checkpoint's directory
   (`materialize_with_base`, crates/smolvm-checkpoint/src/store.rs). Ours: a
-  linux host parks a base of each template build's copy it keeps, built or
+  smolvm host parks a base of each template build's copy it keeps, built or
   fetched, `base_<boot ID>_<copy>`, when the copy's `smolvm_version` is the
   host's: created from the copy, its forwards removed with `machine update
   --remove-port`, started `--branchable` and frozen by a child,

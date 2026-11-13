@@ -2,14 +2,17 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { image } from "@gjermundgaraba/clankerbox-host/testing";
-import type { TestHost } from "@gjermundgaraba/clankerbox-host/testing";
+import { image, runtimeTraits } from "@gjermundgaraba/clankerbox-host/testing";
+import type {
+  TestHost,
+  FakeRuntimeName,
+} from "@gjermundgaraba/clankerbox-host/testing";
 import {
   Conflict,
   Internal,
   isBuildCopy,
 } from "@gjermundgaraba/clankerbox-sdk";
-import type { BuildRequest, Kind } from "@gjermundgaraba/clankerbox-sdk";
+import type { BuildRequest } from "@gjermundgaraba/clankerbox-sdk";
 import {
   exists,
   readBytes,
@@ -49,7 +52,7 @@ const web = (fields?: Partial<BuildRequest>): BuildRequest => ({
 
 const exits3 = { script: "#!/bin/sh\nexit 3\n" };
 
-const onKind = (kind: Kind) => ({ hosts: [{ id: kind, kind }] });
+const on = (as: FakeRuntimeName) => ({ hosts: [{ id: as, as }] });
 
 const noMachines = (served: Pick<Started, "store">) =>
   eventually(machineNames(served), (names) => names.length === 0);
@@ -210,12 +213,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             copies,
           ])
         ).toStrictEqual([
-          ["web@1", "ubuntu", 2, [{ host: "linux", phase: "ready" }]],
+          ["web@1", "ubuntu", 2, [{ host: "smolvm", phase: "ready" }]],
           [
             "web@2",
             "docker.io/library/debian:12",
             1,
-            [{ host: "linux", phase: "ready" }],
+            [{ host: "smolvm", phase: "ready" }],
           ],
         ]);
         expect(made).toMatchObject({
@@ -375,11 +378,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(built).toMatchObject({
           id: "web@1",
           phase: "ready",
-          host: "linux",
+          host: "smolvm",
           image,
         });
         expect(built.pin).toBeDefined();
-        expect(copy).toMatchObject({ build: "web@1", kind: "linux" });
+        expect(copy).toMatchObject({
+          build: "web@1",
+          traits: runtimeTraits.smolvm,
+        });
         expect(isBuildCopy(copy?.name ?? "")).toBe(true);
         expect(copy?.machine).toMatch(/^building-[0-9a-f]{16}$/u);
         expect(opsOf(host).slice(2)).toStrictEqual([
@@ -560,17 +566,19 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     })
   );
 
-  it.effect("a mac build stops its builder before the capture", () =>
-    Effect.gen(function* () {
-      const { client, host } = yield* withClient(onKind("mac"));
+  it.effect(
+    "a build on a runtime that captures from stopped stops its builder before the capture",
+    () =>
+      Effect.gen(function* () {
+        const { client, host } = yield* withClient(on("tart"));
 
-      yield* client.buildTemplate(web());
+        yield* client.buildTemplate(web());
 
-      const ops = opsOf(host);
+        const ops = opsOf(host);
 
-      expect(ops.indexOf("stop")).toBeGreaterThan(-1);
-      expect(ops.indexOf("stop")).toBeLessThan(ops.indexOf("capture"));
-    })
+        expect(ops.indexOf("stop")).toBeGreaterThan(-1);
+        expect(ops.indexOf("stop")).toBeLessThan(ops.indexOf("capture"));
+      })
   );
 
   it.effect(

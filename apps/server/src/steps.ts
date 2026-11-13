@@ -99,7 +99,7 @@ const hooked = (found: MachineRow, timeoutSeconds: number) =>
  * builder did. The keys go to a builder, so its build holds them, and to a clone of a build, which adds
  * any it lacks. A builder on a host that `joins` joins the tailnet for its setup. A stop, a pause and
  * every remove ask the host to run the guest's hook first, for at most `hookTimeoutSeconds`, but a
- * builder's: a mac build stops its builder before the copy, so a stop hook's effects would land in
+ * builder's: a build may stop its builder before the copy, so a stop hook's effects would land in
  * every clone, and a builder's delete has no user work to finish.
  */
 export const machineStep = (

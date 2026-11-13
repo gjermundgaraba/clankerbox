@@ -176,6 +176,25 @@ export const migrations: readonly string[] = [
   ALTER TABLE templates DROP COLUMN ram_mib;
   ALTER TABLE templates DROP COLUMN disk_gib;
   ALTER TABLE templates DROP COLUMN setup_timeout_seconds`,
+  `ALTER TABLE machines ADD COLUMN traits TEXT NOT NULL DEFAULT '';
+  ALTER TABLE checkpoints ADD COLUMN traits TEXT NOT NULL DEFAULT '';
+  CREATE TEMP TABLE kind_traits (kind TEXT PRIMARY KEY, traits TEXT NOT NULL) STRICT;
+  INSERT INTO kind_traits VALUES
+    ('linux', json_object('runtime', 'smolvm', 'images', 'references', 'checkpoint', 'ram',
+      'captureFrom', 'running', 'pause', 'saves', 'copies', 'grow',
+      'resize', json_object('running', 'grow', 'stopped', 'any'),
+      'sizes', json_object('_tag', 'free'), 'stopsOnItsOwn', json('false'))),
+    ('mac', json_object('runtime', 'tart', 'images', 'named', 'checkpoint', 'disk',
+      'captureFrom', 'stopped', 'pause', 'saves', 'copies', 'any',
+      'resize', json_object('running', 'none', 'stopped', 'any'),
+      'sizes', json_object('_tag', 'free'), 'stopsOnItsOwn', json('false')));
+  UPDATE machines
+    SET traits = (SELECT traits FROM kind_traits WHERE kind_traits.kind = machines.kind);
+  UPDATE checkpoints
+    SET traits = (SELECT traits FROM kind_traits WHERE kind_traits.kind = checkpoints.kind);
+  DROP TABLE kind_traits;
+  ALTER TABLE machines DROP COLUMN kind;
+  ALTER TABLE checkpoints DROP COLUMN kind`,
 ];
 
 const isSqliteError = (

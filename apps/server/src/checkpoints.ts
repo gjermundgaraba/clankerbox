@@ -1,6 +1,5 @@
 import type { Report } from "@clankerbox/host-contract";
 import {
-  checkpointKinds,
   copyPrefixes,
   Internal,
   labelledWith,
@@ -94,7 +93,7 @@ const shown = (record: CheckpointRow): Checkpoint => ({
   id: record.name,
   createdAt: record.createdAt,
   machine: record.machine,
-  kind: checkpointKinds[record.kind],
+  kind: record.traits.checkpoint,
   base: record.base,
   cpu: record.cpu,
   ramMib: record.ramMib,
@@ -215,7 +214,7 @@ export const make = (settings: {
           createdAt: yield* DateTime.now,
           machine: source,
           host: machine.host,
-          kind: machine.kind,
+          traits: machine.traits,
           pin: machine.pin,
           port: machine.port,
           base: machine.base,

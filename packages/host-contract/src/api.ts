@@ -5,7 +5,6 @@ import {
   HostError,
   Internal,
   Invalid,
-  Kind,
   RuntimeTraits,
   Machine,
   Missing,
@@ -190,13 +189,12 @@ export const Report = Schema.Struct({
 export type Report = typeof Report.Type;
 
 /**
- * What the control plane needs to know of a host. `images` is the image each of `bases` names
- * there, `boot` is new each time its process starts, and `builds` tells a host that copies template
+ * What the control plane needs to know of a host. `traits` are its runtime's, which the control
+ * plane stamps on each row it makes there, `images` is the image each of `bases` names there, `boot` is new each time its process starts, and `builds` tells a host that copies template
  * builds through the build store.
  */
 export const HostInfo = Schema.Struct({
   id: Schema.String,
-  kind: Kind,
   traits: RuntimeTraits,
   version: Schema.String,
   runtimeVersion: Schema.String,

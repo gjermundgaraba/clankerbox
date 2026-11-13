@@ -14,12 +14,11 @@ const image = "registry.example/ubuntu@sha256:00";
 const macImage = "registry.example/macos@sha256:00";
 
 const config = {
-  id: "linux",
-  kind: "linux",
-  listen: { address: "100.95.240.37", port: 8484 },
+  id: "smolvm",
+  listen: { address: "100.64.0.10", port: 8484 },
   stateDir: "state",
   bases: { ubuntu: image },
-  linux: { prefix: "/opt/smolvm" },
+  runtime: { smolvm: { prefix: "/opt/smolvm" } },
 };
 
 const load = (contents: Schema.Json) =>
@@ -40,13 +39,12 @@ layer(NodeServices.layer)((it) => {
         const host = yield* loaded;
 
         expect(host).toStrictEqual({
-          id: "linux",
-          kind: "linux",
-          listen: { address: "100.95.240.37", port: 8484 },
+          id: "smolvm",
+          listen: { address: "100.64.0.10", port: 8484 },
           stateDir: path.join(file, "..", "state"),
           bases: new Map([["ubuntu", image]]),
           machinePorts: { first: 10_000, last: 19_999 },
-          linux: { prefix: "/opt/smolvm" },
+          runtime: { name: "smolvm", settings: { prefix: "/opt/smolvm" } },
         });
       })
   );
@@ -55,52 +53,92 @@ layer(NodeServices.layer)((it) => {
     Effect.gen(function* () {
       const { loaded } = yield* load({
         ...config,
-        linux: { ...config.linux, ramBudgetMib: 1_000_000 },
+        runtime: { smolvm: { prefix: "/opt/smolvm", ramBudgetMib: 1_000_000 } },
       });
 
       expect(yield* loaded).toMatchObject({
-        linux: { ramBudgetMib: 1_000_000 },
+        runtime: { settings: { ramBudgetMib: 1_000_000 } },
       });
     })
   );
 
   const mac = {
-    id: "mac",
-    kind: "mac",
-    listen: { address: "100.122.69.11", port: 8484 },
+    id: "tart",
+    listen: { address: "100.64.0.20", port: 8484 },
     stateDir: "state",
     bases: { macos: macImage },
-    mac: { binary: "/opt/tart/2.41.1/tart.app/Contents/MacOS/tart" },
+    runtime: {
+      tart: { binary: "/opt/tart/2.41.1/tart.app/Contents/MacOS/tart" },
+    },
   };
 
-  it.effect("a mac host config names its tart binary", () =>
+  it.effect("a tart host config names its tart binary", () =>
     Effect.gen(function* () {
       const { file, loaded } = yield* load(mac);
 
       expect(yield* loaded).toStrictEqual({
-        id: "mac",
-        kind: "mac",
-        listen: { address: "100.122.69.11", port: 8484 },
+        id: "tart",
+        listen: { address: "100.64.0.20", port: 8484 },
         stateDir: path.join(file, "..", "state"),
         bases: new Map([["macos", macImage]]),
         machinePorts: { first: 10_000, last: 19_999 },
-        mac: { binary: "/opt/tart/2.41.1/tart.app/Contents/MacOS/tart" },
+        runtime: {
+          name: "tart",
+          settings: { binary: "/opt/tart/2.41.1/tart.app/Contents/MacOS/tart" },
+        },
       });
     })
   );
 
-  it.effect("a mac host config takes only its own settings", () =>
-    Effect.gen(function* () {
-      for (const contents of [
-        { ...mac, linux: config.linux },
-        { ...mac, mac: { ...mac.mac, ramBudgetMib: 4096 } },
-        { ...mac, mac: {} },
-      ]) {
-        const { loaded } = yield* load(contents);
+  it.effect(
+    "a host config names exactly one runtime the host drives, with that runtime's settings alone",
+    () =>
+      Effect.gen(function* () {
+        for (const runtime of [
+          {},
+          { ...mac.runtime, ...config.runtime },
+          { tart: { ...mac.runtime.tart, ramBudgetMib: 4096 } },
+          { tart: {} },
+          { smolvm: mac.runtime.tart },
+          { linux: config.runtime.smolvm },
+        ]) {
+          const { loaded } = yield* load({ ...mac, runtime });
+          const error = yield* Effect.flip(loaded);
 
-        expect((yield* Effect.flip(loaded))._tag).toBe("Invalid");
-      }
-    })
+          expect(error._tag, JSON.stringify(runtime)).toBe("Invalid");
+          expect(error.message).toContain("runtime");
+        }
+      })
+  );
+
+  it.effect(
+    "a host config that still names its kind is Invalid, and says what replaced it",
+    () =>
+      Effect.gen(function* () {
+        for (const [kind, block] of [
+          ["linux", { prefix: "/opt/smolvm" }],
+          ["mac", { binary: "/opt/tart/2.41.1/tart.app/Contents/MacOS/tart" }],
+        ] as const) {
+          const { id, listen, stateDir, bases } = config;
+
+          const { file, loaded } = yield* load({
+            id,
+            listen,
+            stateDir,
+            bases,
+            kind,
+            [kind]: block,
+          });
+
+          const error = yield* Effect.flip(loaded);
+
+          expect(error).toMatchObject({ _tag: "Invalid", file });
+          expect(error.message).toContain(
+            '"kind" and its block are now "runtime"'
+          );
+          expect(error.message).toContain("smolvm, tart");
+        }
+      })
   );
 
   const clientSecret = "tskey-client-k1-that-never-prints";
@@ -354,13 +392,13 @@ layer(NodeServices.layer)((it) => {
       })
   );
 
-  it.effect("an unknown key, another kind or a bad host ID is Invalid", () =>
+  it.effect("an unknown key, a kind or a bad host ID is Invalid", () =>
     Effect.gen(function* () {
       for (const contents of [
         { ...config, labels: [] },
         { ...config, kind: "mac" },
-        { ...config, id: "Linux" },
-        { ...config, linux: { ...config.linux, ramBudgetMib: 0 } },
+        { ...config, id: "Smolvm" },
+        { ...config, runtime: { smolvm: { prefix: "/opt", ramBudgetMib: 0 } } },
       ]) {
         const { loaded } = yield* load(contents);
 

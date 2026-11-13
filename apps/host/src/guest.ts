@@ -5,7 +5,7 @@ import {
   ScriptFailed,
   timedOutExitCode,
 } from "@gjermundgaraba/clankerbox-sdk";
-import type { Executed, Kind, Setup } from "@gjermundgaraba/clankerbox-sdk";
+import type { Executed, Setup } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Option, Redacted, Schema, Stream } from "effect";
 
 import { timeoutFail } from "./runtime.ts";
@@ -173,7 +173,7 @@ const addingMissingKeys = [
 
 const sshdDropIn = "$root/etc/ssh/sshd_config.d/10-clankerbox.conf";
 
-const linuxBase = [
+const debianBase = [
   "if ! command -v apt-get >/dev/null 2>&1; then",
   `  echo "clankerbox prepares a linux base with apt-get, and this image has none: build on a Debian or Ubuntu image"`,
   "  exit 1",
@@ -201,7 +201,7 @@ const linuxBase = [
   `echo 'PermitRootLogin no' >"${sshdDropIn}"`,
 ];
 
-const macBase = [
+const macosBase = [
   "networksetup -listallnetworkservices | while IFS= read -r service; do",
   `  case "$service" in "An asterisk"*) continue ;; esac`,
   '  networksetup -setdnsservers "${service#\\*}" 1.1.1.1 9.9.9.9',
@@ -221,14 +221,16 @@ const macBase = [
   "fi",
 ];
 
-const baseScript = (kind: Kind) =>
+const baseScripts = { debian: debianBase, macos: macosBase } as const;
+
+const baseScript = (guest: Runtime["guest"]) =>
   [
     "set -eu",
     "login=$1",
     "joins=$2",
     "root=${CLANKERBOX_ROOT-}",
     brewedPath,
-    ...(kind === "linux" ? linuxBase : macBase),
+    ...baseScripts[guest],
     "",
   ].join("\n");
 
@@ -241,7 +243,6 @@ const baseTimeout = Duration.minutes(10);
 export const prepareBase = (
   runtime: Runtime,
   machine: Native,
-  kind: Kind,
   joins: boolean
 ): Effect.Effect<void, RuntimeError | ScriptFailed> =>
   Effect.asVoid(
@@ -253,7 +254,7 @@ export const prepareBase = (
         argv: [
           "/bin/sh",
           "-c",
-          baseScript(kind),
+          baseScript(runtime.guest),
           "clankerbox-base",
           loginUser,
           joins ? "joins" : "",

@@ -6,7 +6,7 @@ import {
   Template,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { DateTime } from "effect";
-import { Effect, Path, Schema } from "effect";
+import { Effect, Option, Path, Schema } from "effect";
 import { Argument, Command } from "effect/cli";
 
 import {
@@ -19,6 +19,7 @@ import {
   table,
   withClient,
 } from "./command.ts";
+import { hostArgument } from "./machines/spec.ts";
 import { readTemplateFile } from "./template-file.ts";
 import { age, formatSeconds } from "./units.ts";
 
@@ -99,6 +100,7 @@ export const buildTemplate = Command.make(
         "A template file, such as web.yaml, which builds the template web: its base, cpu, ram and disk, its setup, a script or a recipe directory holding setup.sh, against the file's directory, and an optional setupTimeout. The server runs the setup once, on a machine it copies and then deletes, and never keeps it."
       )
     ),
+    ...hostArgument,
   },
   (flags) =>
     printResource(flags, {
@@ -106,8 +108,13 @@ export const buildTemplate = Command.make(
         Effect.gen(function* () {
           const path = yield* Path.Path;
 
+          const request = yield* readTemplateFile(path.resolve(flags.file));
+
           return yield* client.buildTemplate(
-            yield* readTemplateFile(path.resolve(flags.file))
+            Option.match(flags.host, {
+              onNone: () => request,
+              onSome: (host) => ({ ...request, host }),
+            })
           );
         }),
       encode: encodeBuild,

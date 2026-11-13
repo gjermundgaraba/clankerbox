@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
+import { runtimeTraits } from "@gjermundgaraba/clankerbox-host/testing";
 import {
   Client,
   Conflict,
@@ -69,9 +70,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(hosts).toStrictEqual([
           {
-            id: "linux",
+            id: "smolvm",
             state: "up",
-            kind: "linux",
+            runtime: "smolvm",
+            traits: runtimeTraits.smolvm,
             version,
             runtimeVersion: "fake",
             bases: ["ubuntu"],
@@ -102,7 +104,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const client = yield* clientOf(served.url);
         const [up, draining, down] = yield* client.hosts;
 
-        expect(up).toMatchObject({ id: "one", state: "up", kind: "linux" });
+        expect(up).toMatchObject({
+          id: "one",
+          state: "up",
+          runtime: "smolvm",
+          traits: runtimeTraits.smolvm,
+        });
         expect(draining).toMatchObject({ id: "two", state: "draining" });
         expect(down).toMatchObject({
           id: "three",
@@ -191,17 +198,17 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(before).toStrictEqual({
           usage: [
-            { host: "linux", resource: "cpu", used: 0 },
-            { host: "linux", resource: "ramMib", limit: 4096, used: 0 },
+            { host: "smolvm", resource: "cpu", used: 0 },
+            { host: "smolvm", resource: "ramMib", limit: 4096, used: 0 },
           ],
           unreachable: [],
         });
         expect(after.usage).toStrictEqual([
-          { host: "linux", resource: "cpu", used: 1 },
-          { host: "linux", resource: "ramMib", limit: 4096, used: 1024 },
+          { host: "smolvm", resource: "cpu", used: 1 },
+          { host: "smolvm", resource: "ramMib", limit: 4096, used: 1024 },
         ]);
-        expect(unread).toStrictEqual({ usage: [], unreachable: ["linux"] });
-        expect(hosts.map(({ id }) => id)).toStrictEqual(["linux"]);
+        expect(unread).toStrictEqual({ usage: [], unreachable: ["smolvm"] });
+        expect(hosts.map(({ id }) => id)).toStrictEqual(["smolvm"]);
         expect(placed.id).toBe("other");
       })
   );

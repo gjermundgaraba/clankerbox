@@ -101,7 +101,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: [...creating, NotBuilt] as const,
       description:
-        "Create a machine on a host with room, and prepare it: from a template's current build, or the build it pins, cloned at the build's sizes or larger ones; or from a base, or on linux an image reference. A create runs no setup: a template's build runs one. NotBuilt answers a template with no ready build. A create that fails deletes the VM, again at each recheck while that delete fails, and keeps the row, failed, to say why. A template's clone is prepared as part of its create, so one whose preparation fails goes the same way; a base's preparation that fails keeps the machine.",
+        "Create a machine on a host with room, and prepare it: from a template's current build, or the build it pins, cloned at the build's sizes or larger ones; or from a base, or an image reference where the host's runtime takes one, its traits' `images`. With `host`, only that host is tried, as if it were the only one, and NotOffered answers a host the control plane doesn't know. A create runs no setup: a template's build runs one. NotBuilt answers a template with no ready build, or none a host that could take its clone holds a current copy of, saying why it passed over each host, and to build the template again, on `host` when given, where a host lacks a copy or holds an outdated one. A create that fails deletes the VM, again at each recheck while that delete fails, and keeps the row, failed, to say why. A template's clone is prepared as part of its create, so one whose preparation fails goes the same way; a base's preparation that fails keeps the machine.",
       input: CreateRequest,
       success: Machine,
     }),
@@ -109,7 +109,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: reading,
       description:
-        "Ask for a machine to run: start it, or resume it when it is paused, and prepare it again, also when it runs already. A paused linux machine resumes only under the smolvm build that paused it, and a paused mac machine only while the Mac's session is unlocked, keeping its saved state when it can't.",
+        "Ask for a machine to run: start it, or resume it when it is paused, and prepare it again, also when it runs already. A paused machine resumes only under the runtime pin it booted under; a start that can't resume it fails, saying why, and leaves it paused with its saved state.",
       input: ById,
       success: Machine,
     }),
@@ -117,7 +117,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: reading,
       description:
-        "Ask for a machine to stay stopped: a power-off that keeps its disk and ends its processes. A start under way is cut short; a machine still being made is made first, and its create answers Superseded. A paused linux machine is resumed to end its processes, so it needs room as a start does and the runtime build that paused it; a paused mac machine's saved state is discarded.",
+        "Ask for a machine to stay stopped: a power-off that keeps its disk and ends its processes. A start under way is cut short; a machine still being made is made first, and its create answers Superseded. A paused machine is either resumed to end its processes, where its runtime's stop boots it, and then needs room as a start does and the runtime pin it booted under, or has its saved state discarded.",
       input: ById,
       success: Machine,
     }),
@@ -133,7 +133,7 @@ export const Http = ActionHttp.make(
         Internal,
       ] as const,
       description:
-        "Ask for a machine to stay paused: the runtime saves its RAM, processes and disks and stops its VM, and a start resumes it. A machine that is stopped stays stopped, and one whose VM the runtime can't save, booted under another smolvm build or by an older mac host, is stopped instead. With `capture`, a checkpoint of that name is captured first, as captureCheckpoint would, and the pause begins once the capture has ended, however it ended; a capture of a machine that isn't running is refused before anything is recorded.",
+        "Ask for a machine to stay paused: the runtime saves its RAM, processes and disks and stops its VM, and a start resumes it. A machine that is stopped stays stopped, and one whose VM the runtime can't save, booted under another runtime pin or in a way its runtime can't suspend, is stopped instead; where its traits' `pause` is `stops`, every pause stops it. With `capture`, a checkpoint of that name is captured first, as captureCheckpoint would, so the checkpoint ends `ready` only where the traits' `captureFrom` is `running`, and the pause begins once the capture has ended, however it ended; a capture of a machine that isn't running is refused before anything is recorded.",
       input: PauseRequest,
       success: Machine,
     }),
@@ -141,7 +141,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: [Invalid, NotFound, NotMade, Internal] as const,
       description:
-        "Give a machine other vCPUs, RAM or disk. A stopped machine takes any vCPUs and RAM; a running linux machine only grows, live, needing room for its RAM as a start does; a running mac machine and a paused one are refused: stop it first. A disk only grows, and its guest grows its filesystem into it, at once on a running linux machine and at the next boot otherwise. It waits for a step under way, and the next step waits for it; a resize that fails part way keeps what the runtime gave.",
+        "Give a machine other vCPUs, RAM or disk. Its traits' `resize` says what a running and what a stopped machine take of vCPUs and RAM: `any`; `grow`, only larger ones, live on a running machine, needing room for its RAM as a start does; or `none`, which refuses a machine in that state, so stop a running one or start a stopped one first where the other state takes a resize. A paused machine is refused. A disk only grows, and its guest grows its filesystem into it, at once on a machine resized while it runs and at the next boot otherwise. It waits for a step under way, and the next step waits for it; a resize that fails part way keeps what the runtime gave.",
       input: ResizeRequest,
       success: Machine,
     }),
@@ -156,7 +156,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: making,
       description:
-        "Copy a machine to a new name, with its sizes or the ones given. A linux machine is copied only when its VM booted under the smolvm build its host runs, and its copy holds the source's RAM, so its vCPUs and RAM only grow, live once it runs; a mac copy takes any. A disk only grows. A copy that fails deletes the new VM and keeps its row, failed, to say why.",
+        "Copy a machine to a new name, with its sizes or the ones given. A machine is copied only in the state its traits' `captureFrom` names, as a capture is, and only when its VM booted under the runtime pin its host runs. Its copy's vCPUs and RAM follow its traits' `copies`: `grow` takes the source's or larger ones, grown live once the copy runs; `any` takes any; `same` takes only the source's sizes, its disk's included. A disk otherwise only grows. A copy that fails deletes the new VM and keeps its row, failed, to say why.",
       input: Schema.Struct({ ...ForkRequest.fields, ...Sizing.fields }),
       success: Machine,
     }),
@@ -164,7 +164,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: making,
       description:
-        "Create a machine from a checkpoint, with its sizes or the ones given. A linux checkpoint holds RAM, so a restore's vCPUs and RAM only grow, live once it runs; a mac restore takes any. A disk only grows. A restore that fails deletes the new VM and keeps its row, failed, to say why.",
+        "Create a machine from a checkpoint, with its sizes or the ones given. A checkpoint is restored only under the runtime pin it was captured under. A restore's vCPUs and RAM follow its runtime's traits' `copies`, as a fork's do. A disk otherwise only grows. A restore that fails deletes the new VM and keeps its row, failed, to say why.",
       input: Schema.Struct({ ...RestoreRequest.fields, ...Sizing.fields }),
       success: Machine,
     }),
@@ -203,7 +203,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: [Invalid, NotFound, Conflict, NotMade, Internal] as const,
       description:
-        "Capture a checkpoint of a machine. Its kind follows the machine's: ram on linux, which captures only a running machine whose VM booted under the smolvm build its host runs, and disk on mac, which captures only a stopped one. One given `expiresAt` is deleted once that time has passed.",
+        "Capture a checkpoint of a machine. Its kind is the machine's traits' `checkpoint`, `ram` or `disk`. A machine is captured only in the state its traits' `captureFrom` names, `running` or `stopped`, and only when its VM booted under the runtime pin its host runs; otherwise the checkpoint ends `failed`, its `error` saying why. One given `expiresAt` is deleted once that time has passed.",
       input: CaptureRequest,
       success: Checkpoint,
     }),
@@ -217,7 +217,7 @@ export const Http = ActionHttp.make(
     Action.make("buildTemplate", {
       ...write,
       error: [Invalid, Conflict, NotOffered, Unavailable, Internal] as const,
-      description: `Build a template: a machine made from its base, its setup run, then copied and deleted. Each build gives the base and the sizes, which the template then shows, and a setup without a timeout takes the host's. The template's current build moves to this one only once its setup has run, and it keeps its last ${keptBuilds} ready builds. Conflict refuses a build of a template whose build still runs.`,
+      description: `Build a template: a machine made from its base, its setup run, then copied and deleted. Each build gives the base and the sizes, which the template then shows, and a setup without a timeout takes the host's. With \`host\`, only that host is tried, as if it were the only one, and NotOffered answers a host the control plane doesn't know. The template's current build moves to this one only once its setup has run, and it keeps its last ${keptBuilds} ready builds. Conflict refuses a build of a template whose build still runs.`,
       input: BuildRequest,
       success: Build,
     }),

@@ -498,7 +498,7 @@ export const make = (
           }
 
           if (recorded === "missing") {
-            return Effect.fail(missing("linux", machine));
+            return Effect.fail(missing(traits.runtime, machine));
           }
 
           const refusal =
@@ -1171,7 +1171,7 @@ export const make = (
         ),
       },
       traits,
-      growsLive: traits.resize.running !== "none",
+      guest: "debian",
       startup: Effect.gen(function* () {
         yield* removeAll(paths.forks);
 
@@ -1367,7 +1367,7 @@ export const make = (
           }
 
           if (recorded === "missing") {
-            return yield* missing("linux", machine);
+            return yield* missing(traits.runtime, machine);
           }
 
           if (resumable.has(recorded)) {
@@ -1421,7 +1421,7 @@ export const make = (
           }
 
           if (recorded === "missing") {
-            return yield* missing("linux", machine);
+            return yield* missing(traits.runtime, machine);
           }
 
           if (recorded === "pausing") {
@@ -1497,9 +1497,8 @@ export const make = (
   });
 
 export const layer = (
-  config: Pick<HostSettings, "stateDir" | "listen"> & {
-    readonly linux: typeof SmolvmSettings.Type;
-  }
+  settings: typeof SmolvmSettings.Type,
+  config: Pick<HostSettings, "stateDir" | "listen">
 ): Layer.Layer<
   Runtime,
   HostError | CannotStart,
@@ -1517,10 +1516,10 @@ export const layer = (
 
       return yield* make(
         {
-          prefix: config.linux.prefix,
+          prefix: settings.prefix,
           publishAddress: config.listen.address,
           ramBudgetMib: ramBudget(
-            config.linux.ramBudgetMib,
+            settings.ramBudgetMib,
             Math.floor(totalmem() / mib)
           ),
           stateDir: config.stateDir,

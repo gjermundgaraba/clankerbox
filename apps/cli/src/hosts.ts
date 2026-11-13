@@ -10,11 +10,11 @@ import { Command } from "effect/cli";
 import { clientFlags, listCommand, table, withClient } from "./command.ts";
 
 export const hostRows = (hosts: readonly Host[]) => [
-  ["ID", "STATE", "KIND", "VERSION", "RUNTIME_VERSION", "BASES", "PROBLEM"],
+  ["ID", "STATE", "RUNTIME", "VERSION", "RUNTIME_VERSION", "BASES", "PROBLEM"],
   ...hosts.map((host) => [
     host.id,
     host.state,
-    host.kind ?? "-",
+    host.runtime ?? "-",
     host.version ?? "-",
     host.runtimeVersion ?? "-",
     host.bases.join(",") || "-",
@@ -22,11 +22,10 @@ export const hostRows = (hosts: readonly Host[]) => [
   ]),
 ];
 
-const resourceNames = {
-  cpu: "cpu",
-  ramMib: "ram",
-  runningVms: "running-vms",
-} satisfies Record<Usage["resource"], string>;
+const resourceNames = new Map([
+  ["ramMib", "ram"],
+  ["runningVms", "running-vms"],
+]);
 
 const roughGib = (mib: number): string =>
   `${Math.round((mib * 10) / mibPerGib) / 10}G`;
@@ -38,7 +37,7 @@ export const usageRows = (usage: readonly Usage[]) => [
 
     return [
       row.host,
-      resourceNames[row.resource],
+      resourceNames.get(row.resource) ?? row.resource,
       "used" in row ? amount(row.used) : "?",
       row.limit === undefined ? "-" : amount(row.limit),
     ];
@@ -67,7 +66,7 @@ const encodeCapacity = Schema.encodeSync(CapacityReport);
 export const hosts = listCommand({
   name: "hosts",
   description:
-    "List every host, for an operator: whether it answers, with its kind, versions and bases.",
+    "List every host, for an operator: whether it answers, with its runtime, versions and bases. With --json, each host that answers carries its runtime's traits.",
   key: "hosts",
   read: (client) => client.hosts,
   encode: encodeHost,

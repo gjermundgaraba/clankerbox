@@ -19,7 +19,7 @@ import {
 import path from "node:path";
 
 import { Internal, WrongState } from "@gjermundgaraba/clankerbox-sdk";
-import type { Kind, Sizing, Unsizable } from "@gjermundgaraba/clankerbox-sdk";
+import type { Sizing, Unsizable } from "@gjermundgaraba/clankerbox-sdk";
 import { Deferred, Effect, Layer, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
@@ -60,9 +60,13 @@ export type Operation =
   | "deleteCheckpoint"
   | "install";
 
+export const fakedTraits = { smolvm, tart } as const;
+
+export type FakeRuntimeName = keyof typeof fakedTraits;
+
 export interface FakeOptions {
   readonly dir: string;
-  readonly kind?: Kind | undefined;
+  readonly as?: FakeRuntimeName | undefined;
   readonly ramBudgetMib?: number | undefined;
   readonly pin?: string | undefined;
   readonly relayed?: boolean | undefined;
@@ -359,7 +363,8 @@ export const fakeRuntime = (options: FakeOptions) => {
     readonly until: Deferred.Deferred<undefined>;
   }> = [];
 
-  const kind = options.kind ?? "linux";
+  const runtime = options.as ?? "smolvm";
+  const traits = fakedTraits[runtime];
 
   const record = (entry: string) => {
     calls.push(entry);
@@ -483,15 +488,15 @@ export const fakeRuntime = (options: FakeOptions) => {
   const copyable = (machine: MachineRef) => {
     const state = machines.get(machine.name)?.state ?? "missing";
 
-    if (state === (kind === "mac" ? "stopped" : "running")) {
+    if (state === traits.captureFrom) {
       return Effect.void;
     }
 
     return Effect.fail(
       state === "missing"
-        ? missing(kind, machine)
+        ? missing(traits.runtime, machine)
         : new WrongState({
-            message: `${machine.name} is ${state}: ${kind === "mac" ? "stop" : "start"} it first`,
+            message: `${machine.name} is ${state}: ${traits.captureFrom === "stopped" ? "stop" : "start"} it first`,
             machine: machine.name,
             state,
           })
@@ -530,7 +535,7 @@ export const fakeRuntime = (options: FakeOptions) => {
 
       return Runtime.of({
         version: "fake",
-        pin: options.pin ?? (kind === "linux" ? "fake 1" : undefined),
+        pin: options.pin ?? (runtime === "smolvm" ? "fake 1" : undefined),
         reach:
           options.relayed === true
             ? {
@@ -551,7 +556,7 @@ export const fakeRuntime = (options: FakeOptions) => {
                   : checkRamBudget(options.ramBudgetMib, activation, states, 0)
               )
             ),
-          stopBoots: kind === "linux",
+          stopBoots: runtime === "smolvm",
         },
         files: {
           checkpointFiles: (checkpoint) =>
@@ -563,7 +568,7 @@ export const fakeRuntime = (options: FakeOptions) => {
                 found.map(async (file) => ({
                   path: path.relative(root, file),
                   file,
-                  ...(kind === "linux" ? { key: await keyOf(file) } : {}),
+                  ...(runtime === "smolvm" ? { key: await keyOf(file) } : {}),
                 }))
               );
             }),
@@ -596,8 +601,8 @@ export const fakeRuntime = (options: FakeOptions) => {
               })
             ),
         },
-        traits: kind === "linux" ? smolvm : tart,
-        growsLive: kind === "linux",
+        traits,
+        guest: runtime === "smolvm" ? "debian" : "macos",
         sizable: (machine, from, to, live) => {
           sized.push([machine.name, sizesOf(from), sizesOf(to), live]);
 
@@ -630,7 +635,7 @@ export const fakeRuntime = (options: FakeOptions) => {
               );
               furnish(root, bin);
 
-              if (options.kind === "mac") {
+              if (runtime === "tart") {
                 await mkdir(path.join(root, "etc"), { recursive: true });
                 await writeFile(path.join(root, "etc", "passwd"), macLogin);
               }
@@ -647,7 +652,7 @@ export const fakeRuntime = (options: FakeOptions) => {
               const found = machines.get(machine.name);
 
               if (found === undefined) {
-                return Effect.fail(missing(kind, machine));
+                return Effect.fail(missing(traits.runtime, machine));
               }
 
               found.state = "running";
@@ -678,7 +683,7 @@ export const fakeRuntime = (options: FakeOptions) => {
               const found = machines.get(machine.name);
 
               if (found === undefined) {
-                return Effect.fail(missing(kind, machine));
+                return Effect.fail(missing(traits.runtime, machine));
               }
 
               if (found.state === "stopped") {

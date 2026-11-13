@@ -38,7 +38,7 @@ import {
 import type { Scope } from "effect";
 
 import { applied } from "./chart.ts";
-import { cloned, copied, refusedBySource } from "./copies.ts";
+import { cloned, copied, refusedBySource, sizedBy } from "./copies.ts";
 import type { Spec } from "./copies.ts";
 import { driver, untilRest } from "./driver.ts";
 import type { Heard } from "./driver.ts";
@@ -240,7 +240,7 @@ export const make = (
         ? undefined
         : {
             host: candidate.host,
-            kind: info.kind,
+            traits: info.traits,
             pin: info.pin,
             source: candidate.source,
           };
@@ -481,7 +481,7 @@ export const make = (
           name,
           instance: newId(),
           createdAt: yield* DateTime.now,
-          kind: info.kind,
+          traits: info.traits,
           base: spec.base,
           cpu: spec.cpu,
           ramMib: spec.ramMib,
@@ -532,24 +532,21 @@ export const make = (
 
     const fromBase = (request: BaseCreate) =>
       Effect.gen(function* () {
-        const { id: name, labels } = request;
+        const { id: name, labels, host, ...spec } = request;
 
         const [first, ...rest] = yield* Effect.fromResult(
-          placing(yield* hosts.reachAll, request.base)
+          placing(yield* hosts.reachAll, spec.base, { sizes: spec, host })
         );
 
-        return yield* born(
-          name,
-          { spec: request, labels },
-          onBase(first),
-          first,
-          { setup: undefined, untried: rest.map(onBase) }
-        );
+        return yield* born(name, { spec, labels }, onBase(first), first, {
+          setup: undefined,
+          untried: rest.map(onBase),
+        });
       });
 
     const fromTemplate = (request: TemplateCreate) =>
       Effect.gen(function* () {
-        const { id: name, template: ref, labels, ...sizing } = request;
+        const { id: name, template: ref, labels, host, ...sizing } = request;
         const pinned = templateRef(ref);
         const { template } = pinned;
 
@@ -568,7 +565,10 @@ export const make = (
         );
 
         const [first, ...rest] = yield* Effect.fromResult(
-          holding(yield* hosts.reachAll, copies, template, made)
+          holding(yield* hosts.reachAll, copies, template, made, {
+            sizes: sizedBy(made, sizing),
+            host,
+          })
         );
 
         const onCopy = ([{ id }, held]: (typeof rest)[number]): Candidate => ({
@@ -624,7 +624,7 @@ export const make = (
 
         return yield* copy(
           name,
-          { spec: yield* copied(name, from, sizing, from.kind), labels },
+          { spec: yield* copied(name, from, sizing, from.traits), labels },
           info,
           { host: from.host, source: { kind: "machine", name: id } }
         );
@@ -653,7 +653,7 @@ export const make = (
 
         return yield* copy(
           name,
-          { spec: yield* copied(name, record, sizing, info.kind), labels },
+          { spec: yield* copied(name, record, sizing, info.traits), labels },
           info,
           {
             host: record.host,

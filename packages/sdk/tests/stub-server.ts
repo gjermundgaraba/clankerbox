@@ -44,7 +44,6 @@ import type {
   Executed,
   ExecRequest,
   Host,
-  Kind,
   Labels,
   Machine,
   Phase,
@@ -72,7 +71,7 @@ export type Refusals = {
 
 export interface StubServerOptions {
   readonly bases?: readonly string[];
-  readonly kind?: Kind;
+  readonly traits?: RuntimeTraits;
   readonly runtimeVersion?: string;
   readonly hosts?: readonly Host[];
   readonly capacity?: CapacityReport;
@@ -88,21 +87,21 @@ export interface StubServerOptions {
   ) => Effect.Effect<Executed, Declared<"execMachine">>;
 }
 
-const traitsOf = (kind: Kind): RuntimeTraits => ({
-  runtime: RuntimeName.make(`stub-${kind}`),
-  images: kind === "linux" ? "references" : "named",
-  checkpoint: kind === "linux" ? "ram" : "disk",
-  captureFrom: kind === "linux" ? "running" : "stopped",
+export const stubTraits: RuntimeTraits = {
+  runtime: RuntimeName.make("stub"),
+  images: "references",
+  checkpoint: "ram",
+  captureFrom: "running",
   pause: "saves",
-  copies: kind === "linux" ? "grow" : "any",
-  resize: { running: kind === "linux" ? "grow" : "none", stopped: "any" },
+  copies: "grow",
+  resize: { running: "grow", stopped: "any" },
   sizes: { _tag: "free" },
   stopsOnItsOwn: false,
-});
+};
 
 export const machine = (id: string, fields?: Partial<Machine>): Machine => ({
   id,
-  kind: "linux",
+  traits: stubTraits,
   createdAt: DateTime.makeUnsafe("2026-10-01T00:00:00Z"),
   base: "ubuntu",
   cpu: 1,
@@ -222,9 +221,9 @@ const noTemplate = (id: string) =>
  * name, cleared at once by a delete, and no machine to any other request.
  */
 export const stubServer = (options: StubServerOptions = {}) => {
-  const kind = options.kind ?? "linux";
+  const traits = options.traits ?? stubTraits;
   const bases = options.bases ?? ["ubuntu"];
-  const offering = { bases, traits: traitsOf(kind) };
+  const offering = { bases, traits };
   const machines = new Map<string, Machine>();
   const checkpoints = new Map<string, Checkpoint>();
   const templates = new Map<string, Template>();
@@ -509,7 +508,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
         return yield* add(
           labelled(
             machine(request.id, {
-              kind,
+              traits,
               base: ready.base,
               ...sized(ready, request),
               template: ready.id,
@@ -528,7 +527,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
       return yield* add(
         labelled(
           machine(request.id, {
-            kind,
+            traits,
             base: request.base,
             cpu: request.cpu,
             ramMib: request.ramMib,
@@ -551,7 +550,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
       add(
         labelled(
           machine(name, {
-            kind,
+            traits,
             base: found.base,
             ...sized(found, sizes),
             state: "unknown",
@@ -661,7 +660,8 @@ export const stubServer = (options: StubServerOptions = {}) => {
   const host: Host = {
     id: "stub",
     state: "up",
-    kind,
+    runtime: traits.runtime,
+    traits,
     version,
     runtimeVersion: options.runtimeVersion ?? "0.0.0-test",
     bases,
@@ -731,7 +731,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
           add(
             labelled(
               machine(name, {
-                kind: found.kind,
+                traits: found.traits,
                 base: found.base,
                 ...sized(found, sizes),
                 state: "unknown",

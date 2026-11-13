@@ -10,12 +10,12 @@ import type {
   Step,
 } from "@clankerbox/host-contract";
 import {
-  checkpointKinds,
   Conflict,
   formatGib,
   formatMib,
   Internal,
   PinMismatch,
+  resizable,
   timedOutExitCode,
   Unsizable,
   WrongState,
@@ -24,6 +24,7 @@ import type {
   Executed,
   HostError,
   Missing,
+  RuntimeTraits,
   Sizing,
   TailnetStatus,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -193,7 +194,19 @@ const ended = (
 
 type Make = Extract<Step, { readonly _tag: "make" }>;
 
-type Settings = Pick<HostSettings, "id" | "kind" | "bases">;
+const resizedStates = ({ resize }: RuntimeTraits): string => {
+  const taking = (["stopped", "running"] as const).filter(
+    (state) => resize[state] !== "none"
+  );
+
+  if (taking.length === 0) {
+    return "no machine";
+  }
+
+  return `${taking.length === 1 ? "only " : ""}a ${taking.join(" or ")} machine${resize.stopped === "none" ? "" : ": stop it first"}`;
+};
+
+type Settings = Pick<HostSettings, "id" | "bases">;
 
 export const make = (
   config: Settings
@@ -204,7 +217,26 @@ export const make = (
 > =>
   Effect.gen(function* () {
     const runtime = yield* Runtime;
+    const { traits } = runtime;
     const tailnet = yield* Effect.serviceOption(Tailnet);
+
+    const pauseOrStop = (machine: MachineRef, pin: string | undefined) => {
+      if (traits.pause === "stops") {
+        return runtime.stop(machine);
+      }
+
+      if (pin === runtime.pin) {
+        return runtime.pause(machine);
+      }
+
+      return Effect.andThen(
+        Effect.logWarning(
+          `pause ${machine.name}: its VM booted under ${pin ?? "an older host"}, and this host runs ${runtime.pin ?? "no pin"}, so it stops it instead`
+        ),
+        runtime.stop(machine)
+      );
+    };
+
     const builds = yield* Effect.serviceOption(BuildStore);
 
     const files = Context.make(
@@ -260,7 +292,7 @@ export const make = (
               })
               .pipe(
                 inTime(
-                  `${action} ${machine.name}: the ${config.kind} runtime's admission check`
+                  `${action} ${machine.name}: the ${traits.runtime} runtime's admission check`
                 )
               );
           }
@@ -324,13 +356,13 @@ export const make = (
         const seen = stateIn(
           yield* runtime
             .observe([machine])
-            .pipe(inTime(`the ${config.kind} runtime`)),
+            .pipe(inTime(`the ${traits.runtime} runtime`)),
           machine
         );
 
         if (seen === "unknown") {
           return yield* new Internal({
-            message: `the ${config.kind} runtime couldn't read machine ${machine.name}, so it isn't ${what}: try again`,
+            message: `the ${traits.runtime} runtime couldn't read machine ${machine.name}, so it isn't ${what}: try again`,
           });
         }
 
@@ -364,22 +396,23 @@ export const make = (
         const seen = yield* stateNow(machine, "resized");
 
         if (seen === "missing") {
-          return yield* missing(config.kind, machine);
+          return yield* missing(traits.runtime, machine);
         }
 
         const live = seen === "running";
+        const decided = resizable(traits, seen, machine, to);
 
-        if (seen === "paused" || (live && !runtime.growsLive)) {
+        if (decided === "refuses") {
           return yield* new WrongState({
-            message: `machine ${name} is ${seen}, and the ${config.kind} runtime resizes ${runtime.growsLive ? "a stopped or running machine" : "only a stopped machine"}: stop it first`,
+            message: `machine ${name} is ${seen}, and the ${traits.runtime} runtime resizes ${resizedStates(traits)}`,
             machine: name,
             state: seen,
           });
         }
 
-        if (live && (to.cpu < machine.cpu || to.ramMib < machine.ramMib)) {
+        if (decided === "shrinks") {
           return yield* new Unsizable({
-            message: `a running machine's vCPUs and RAM only grow, and ${name} has ${machine.cpu} vCPUs and ${formatMib(machine.ramMib)}: stop it to shrink them`,
+            message: `a ${seen} machine's vCPUs and RAM only grow, and ${name} has ${machine.cpu} vCPUs and ${formatMib(machine.ramMib)}${live && traits.resize.stopped === "any" ? ": stop it to shrink them" : ""}`,
           });
         }
 
@@ -397,7 +430,7 @@ export const make = (
         const known = given ? to : machine;
 
         const sizes = yield* runtime.sizes(machine).pipe(
-          inTime(`the ${config.kind} runtime's read of ${name}'s sizes`),
+          inTime(`the ${traits.runtime} runtime's read of ${name}'s sizes`),
           Effect.map((read) => sizedBy(known, read)),
           Effect.catch((error) =>
             Effect.as(
@@ -578,7 +611,7 @@ export const make = (
               ref,
               sourceSizes(source),
               machine,
-              checkpointKinds[config.kind] === "ram"
+              traits.checkpoint === "ram"
             );
 
         yield* Effect.scoped(
@@ -589,7 +622,7 @@ export const make = (
         );
 
         if (source._tag === "base" && source.setup !== undefined) {
-          yield* prepareBase(runtime, ref, config.kind, Option.isSome(tailnet));
+          yield* prepareBase(runtime, ref, Option.isSome(tailnet));
           yield* onTailnet(
             ref,
             join,
@@ -637,7 +670,7 @@ export const make = (
             const seen = yield* stateNow(machine, "started");
 
             if (seen === "missing") {
-              return yield* missing(config.kind, machine);
+              return yield* missing(traits.runtime, machine);
             }
 
             if (seen === "paused") {
@@ -697,14 +730,7 @@ export const make = (
               hook,
               stateNow(machine, "given its pause hook")
             ),
-            pin === runtime.pin
-              ? runtime.pause(machine)
-              : Effect.andThen(
-                  Effect.logWarning(
-                    `pause ${machine.name}: its VM booted under ${pin ?? "an older host"}, and this host runs ${runtime.pin ?? "no pin"}, so it stops it instead`
-                  ),
-                  runtime.stop(machine)
-                )
+            pauseOrStop(machine, pin)
           );
         }
 
@@ -956,7 +982,7 @@ export const make = (
           const seen = yield* stateNow(machine, "given the command");
 
           if (seen === "missing") {
-            return yield* missing(config.kind, machine);
+            return yield* missing(traits.runtime, machine);
           }
 
           if (seen !== "running") {
@@ -981,13 +1007,13 @@ export const make = (
         machines.length === 0
           ? Effect.succeed(new Map())
           : surviving(
-              `the ${config.kind} runtime's read`,
+              `the ${traits.runtime} runtime's read`,
               runtime.observe(machines)
-            ).pipe(inTime(`the ${config.kind} runtime`)),
+            ).pipe(inTime(`the ${traits.runtime} runtime`)),
       capacity: (machines) =>
         runtime
           .capacity(heldBy(machines))
-          .pipe(inTime(`the ${config.kind} runtime`)),
+          .pipe(inTime(`the ${traits.runtime} runtime`)),
       exec: Effect.fn("Operations.exec")(exec),
     } satisfies Interface;
   });

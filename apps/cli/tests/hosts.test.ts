@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
+import { RuntimeName } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import type { StubServer } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import { Effect } from "effect";
@@ -28,12 +29,17 @@ layer(NodeServices.layer)((it) => {
             {
               id: "linux",
               state: "up",
-              kind: "linux",
+              runtime: RuntimeName.make("smolvm"),
               version: "1.2.3",
               runtimeVersion: "0.5.0",
               bases: ["ubuntu", "ubuntu-dev"],
             },
-            { id: "mac", state: "draining", kind: "mac", bases: ["macos"] },
+            {
+              id: "mac",
+              state: "draining",
+              runtime: RuntimeName.make("tart"),
+              bases: ["macos"],
+            },
             {
               id: "spare",
               state: "unreachable",
@@ -61,19 +67,19 @@ layer(NodeServices.layer)((it) => {
           [
             "ID",
             "STATE",
-            "KIND",
+            "RUNTIME",
             "VERSION",
             "RUNTIME_VERSION",
             "BASES",
             "PROBLEM",
           ],
-          ["linux", "up", "linux", "1.2.3", "0.5.0", "ubuntu,ubuntu-dev", "-"],
-          ["mac", "draining", "mac", "-", "-", "macos", "-"],
+          ["linux", "up", "smolvm", "1.2.3", "0.5.0", "ubuntu,ubuntu-dev", "-"],
+          ["mac", "draining", "tart", "-", "-", "macos", "-"],
           ["spare", "unreachable", "-", "-", "-", "-", "connect refused"],
         ]);
         expect(JSON.parse(json.stdout)).toMatchObject({
           hosts: [
-            { id: "linux", state: "up", kind: "linux" },
+            { id: "linux", state: "up", runtime: "smolvm" },
             { id: "mac", state: "draining" },
             { id: "spare", state: "unreachable", problem: "connect refused" },
           ],

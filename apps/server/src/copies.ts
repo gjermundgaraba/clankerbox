@@ -1,5 +1,5 @@
 import {
-  checkpointKinds,
+  copySizable,
   formatGib,
   formatMib,
   NotBuilt,
@@ -8,8 +8,8 @@ import {
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   Internal,
-  Kind,
   NotFound,
+  RuntimeTraits,
   Sizing,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Option } from "effect";
@@ -25,40 +25,55 @@ export interface Spec {
   readonly diskGib: number;
 }
 
-const sizedBy = (from: Spec, sizing: Sizing | undefined): Spec => ({
+export const sizedBy = (from: Spec, sizing: Sizing | undefined): Spec => ({
   base: from.base,
   cpu: sizing?.cpu ?? from.cpu,
   ramMib: sizing?.ramMib ?? from.ramMib,
   diskGib: sizing?.diskGib ?? from.diskGib,
 });
 
-/** The spec of a copy of `from`. A disk only grows, and a copy that holds its RAM keeps what it held. */
+const copyRefusal = (
+  name: string,
+  from: Spec,
+  spec: Spec,
+  traits: RuntimeTraits
+): string => {
+  const held = `the source's ${from.cpu} vCPUs and ${formatMib(from.ramMib)}`;
+  const shrunkDisk = `machine ${name}'s disk of ${formatGib(spec.diskGib)} is below its source's ${formatGib(from.diskGib)}, and a disk only grows`;
+
+  switch (traits.copies) {
+    case "same": {
+      return `a ${traits.runtime} copy takes its source's own sizes, so machine ${name} keeps ${held} and its ${formatGib(from.diskGib)} disk`;
+    }
+
+    case "grow": {
+      return spec.diskGib < from.diskGib
+        ? shrunkDisk
+        : `a ${traits.runtime} copy holds its source's RAM, so machine ${name}'s vCPUs and RAM only grow from ${held}`;
+    }
+
+    case "any": {
+      return shrunkDisk;
+    }
+  }
+};
+
 export const copied = (
   name: string,
   from: Spec,
   sizing: Sizing | undefined,
-  kind: Kind
-): Effect.Effect<Spec, Unsizable> =>
-  Effect.gen(function* () {
-    const spec = sizedBy(from, sizing);
+  traits: RuntimeTraits
+): Effect.Effect<Spec, Unsizable> => {
+  const spec = sizedBy(from, sizing);
 
-    if (spec.diskGib < from.diskGib) {
-      return yield* new Unsizable({
-        message: `machine ${name}'s disk of ${formatGib(spec.diskGib)} is below its source's ${formatGib(from.diskGib)}, and a disk only grows`,
-      });
-    }
+  if (copySizable(traits, from, spec)) {
+    return Effect.succeed(spec);
+  }
 
-    if (
-      checkpointKinds[kind] === "ram" &&
-      (spec.cpu < from.cpu || spec.ramMib < from.ramMib)
-    ) {
-      return yield* new Unsizable({
-        message: `a ${kind} copy holds its source's RAM, so machine ${name}'s vCPUs and RAM only grow from the source's ${from.cpu} vCPUs and ${formatMib(from.ramMib)}`,
-      });
-    }
-
-    return spec;
-  });
+  return Effect.fail(
+    new Unsizable({ message: copyRefusal(name, from, spec, traits) })
+  );
+};
 
 export const cloned = (
   name: string,
@@ -108,7 +123,7 @@ export const refusedBySource = (
           });
     }
 
-    return yield* copied(found.name, from.value, found, found.kind).pipe(
+    return yield* copied(found.name, from.value, found, found.traits).pipe(
       Effect.match({
         onFailure: (refusal) => refusal,
         onSuccess: () => undefined,

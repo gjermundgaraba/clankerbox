@@ -36,7 +36,7 @@ export interface Outcome {
 }
 
 /** Where a failed create goes next, past a host that hadn't the capacity. */
-export type Move = Pick<Facts, "host" | "kind" | "pin" | "source">;
+export type Move = Pick<Facts, "host" | "traits" | "pin" | "source">;
 
 export interface Read extends Begins {
   readonly seen: MachineState;

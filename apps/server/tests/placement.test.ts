@@ -7,11 +7,11 @@ import { Effect, Option, Result } from "effect";
 
 import type { Reached } from "../src/hosts.ts";
 import { holding, placing } from "../src/placement.ts";
+import type { Ask } from "../src/placement.ts";
 import { clientOf, request, restartedHost, running } from "./support.ts";
 
 const info = (id: string, bases: readonly string[]): HostInfo => ({
   id,
-  kind: "linux",
   traits: runtimeTraits.smolvm,
   version: "0",
   runtimeVersion: "fake",
@@ -29,6 +29,41 @@ const up = (id: string, bases: readonly string[] = ["ubuntu"]): Reached => ({
   problem: undefined,
 });
 
+const small = { cpu: 1, ramMib: 1024, diskGib: 10 };
+
+const classed = (
+  id: string,
+  first: typeof small,
+  ...rest: Array<typeof small>
+): Reached => {
+  const reached = up(id);
+
+  const named = (sizes: typeof small, index: number) => ({
+    name: `c${index}`,
+    ...sizes,
+  });
+
+  return {
+    ...reached,
+    info:
+      reached.info === undefined
+        ? undefined
+        : {
+            ...reached.info,
+            traits: {
+              ...reached.info.traits,
+              sizes: {
+                _tag: "classes",
+                classes: [
+                  named(first, 0),
+                  ...rest.map((sizes, index) => named(sizes, index + 1)),
+                ],
+              },
+            },
+          },
+  };
+};
+
 const draining = (id: string): Reached => {
   const reached = up(id);
 
@@ -43,11 +78,16 @@ const silent = (id: string): Reached => ({
 
 const ids = (hosts: readonly HostInfo[]) => hosts.map(({ id }) => id);
 
-const placed = (reached: readonly Reached[], base = "ubuntu") =>
-  ids(Result.getOrThrow(placing(reached, base)));
+const asked = { sizes: small, host: undefined };
 
-const refusal = (reached: readonly Reached[], base: string) =>
-  Result.getOrThrow(Result.flip(placing(reached, base)));
+const placed = (
+  reached: readonly Reached[],
+  base = "ubuntu",
+  ask: Ask = asked
+) => ids(Result.getOrThrow(placing(reached, base, ask)));
+
+const refusal = (reached: readonly Reached[], base: string, ask: Ask = asked) =>
+  Result.getOrThrow(Result.flip(placing(reached, base, ask)));
 
 const hostOf = (
   served: {
@@ -82,19 +122,77 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       () =>
         Effect.sync(() => {
           expect(placed([draining("a"), up("b")])).toStrictEqual(["b"]);
-          expect(refusal([draining("a")], "ubuntu")).toMatchObject({
+
+          for (const drained of [
+            draining("a"),
+            { ...silent("a"), member: draining("a").member },
+          ]) {
+            expect(refusal([drained], "ubuntu")).toMatchObject({
+              _tag: "NotOffered",
+              message: "no host offers base ubuntu: a is draining",
+            });
+          }
+        })
+    );
+
+    it.effect(
+      "skips a host whose size classes hold none exactly of the sizes asked, and says so when no other takes them",
+      () =>
+        Effect.sync(() => {
+          const larger = { ...small, cpu: 2 };
+
+          expect(
+            placed([classed("a", larger), classed("b", larger, small), up("c")])
+          ).toStrictEqual(["b", "c"]);
+          expect(refusal([classed("a", larger)], "ubuntu")).toMatchObject({
             _tag: "NotOffered",
-            message: "no host offers base ubuntu: a is draining",
+            message:
+              "no host offers base ubuntu: a has no size class of 1 vCPUs, 1G of RAM and 10G of disk",
           });
         })
     );
 
-    it.effect("a linux host takes an image reference no base names", () =>
+    it.effect("an ask that names a host is placed on that host alone", () =>
       Effect.sync(() => {
         expect(
-          placed([up("a"), up("b")], "registry.example/team/orb:latest")
-        ).toStrictEqual(["a", "b"]);
+          placed([up("a"), up("b"), up("c")], "ubuntu", { ...asked, host: "b" })
+        ).toStrictEqual(["b"]);
       })
+    );
+
+    it.effect(
+      "an ask that names a host draining, unreachable or unknown answers as that base would were the host the only one",
+      () =>
+        Effect.sync(() => {
+          const others = [up("a"), up("c")];
+
+          for (const named of [draining("b"), silent("b")]) {
+            expect(
+              refusal([...others, named], "ubuntu", { ...asked, host: "b" })
+            ).toStrictEqual(refusal([named], "ubuntu"));
+          }
+
+          expect(refusal([draining("b")], "ubuntu")._tag).toBe("NotOffered");
+          expect(refusal([silent("b")], "ubuntu")._tag).toBe("Unavailable");
+          expect(
+            refusal(others, "ubuntu", { ...asked, host: "nope" })
+          ).toMatchObject({
+            _tag: "NotOffered",
+            base: "ubuntu",
+            message:
+              "no host offers base ubuntu: the control plane knows no host nope",
+          });
+        })
+    );
+
+    it.effect(
+      "a host whose runtime takes image references takes one no base names",
+      () =>
+        Effect.sync(() => {
+          expect(
+            placed([up("a"), up("b")], "registry.example/team/orb:latest")
+          ).toStrictEqual(["a", "b"]);
+        })
     );
 
     it.effect(
@@ -130,13 +228,45 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       ["b", "copy-b"],
     ]);
 
-    const holders = (reached: readonly Reached[]) =>
-      holding(reached, copies, "web", {
-        id: "web@1",
-        base: "ubuntu",
-        pin: undefined,
-        image: "image/ubuntu",
-      });
+    const holders = (reached: readonly Reached[], ask: Ask = asked) =>
+      holding(
+        reached,
+        copies,
+        "web",
+        {
+          id: "web@1",
+          base: "ubuntu",
+          pin: undefined,
+          image: "image/ubuntu",
+          ...small,
+        },
+        ask
+      );
+
+    it.effect(
+      "passes over a holder whose size classes hold none of the sizes asked, and keeps only the host an ask names",
+      () =>
+        Effect.sync(() => {
+          const larger = { ...small, ramMib: 2048 };
+
+          const pick = (reached: readonly Reached[], ask: Ask = asked) =>
+            Result.map(holders(reached, ask), (taken) =>
+              taken.map(([{ id }]) => id)
+            );
+
+          expect(pick([classed("b", larger), up("d")])).toStrictEqual(
+            Result.succeed(["d"])
+          );
+          expect(
+            pick([up("b"), up("d")], { ...asked, host: "d" })
+          ).toStrictEqual(Result.succeed(["d"]));
+          expect(
+            Result.getOrThrow(
+              Result.flip(holders([up("b")], { ...asked, host: "nope" }))
+            )
+          ).toMatchObject({ _tag: "NotOffered", base: "ubuntu" });
+        })
+    );
 
     it.effect(
       "offers the hosts holding a copy of the build in config order, each with its copy",
@@ -170,9 +300,75 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             readOnly: true,
           });
           expect(noReply.message).toContain("b failed: connection refused");
-          expect(passed).toMatchObject({ _tag: "NotBuilt", template: "web" });
-          expect(passed.message).toContain("b is draining");
-          expect(passed.message).toContain("clankerbox template build web");
+          expect(passed).toMatchObject({
+            _tag: "NotBuilt",
+            template: "web",
+            message:
+              "no host can take a clone of build web@1: a holds no copy of web@1; b is draining; run clankerbox template build on web's template file to build it again",
+          });
+        })
+    );
+
+    it.effect(
+      "a silent host that holds no copy is passed over as one that holds none, not as one that might have taken the clone",
+      () =>
+        Effect.sync(() => {
+          expect(
+            Result.getOrThrow(
+              Result.flip(holders([silent("a"), draining("b")]))
+            )
+          ).toMatchObject({
+            _tag: "NotBuilt",
+            message:
+              "no host can take a clone of build web@1: a holds no copy of web@1; b is draining; run clankerbox template build on web's template file to build it again",
+          });
+        })
+    );
+
+    it.effect(
+      "an ask that names a host answers as that host alone would, and advises a build there only where one cures it",
+      () =>
+        Effect.sync(() => {
+          const others = [up("b"), up("d")];
+
+          const named = (host: Reached) =>
+            Result.getOrThrow(
+              Result.flip(
+                holders([...others, host], { ...asked, host: host.member.id })
+              )
+            );
+
+          for (const lacking of [up("a"), silent("a")]) {
+            expect(named(lacking)).toMatchObject({
+              _tag: "NotBuilt",
+              template: "web",
+              message:
+                "no host can take a clone of build web@1: a holds no copy of web@1; run clankerbox template build on web's template file with --host a to build it there",
+            });
+          }
+
+          expect(
+            Result.getOrThrow(
+              Result.flip(
+                holders([up("a"), draining("b")], { ...asked, host: "b" })
+              )
+            )
+          ).toMatchObject({
+            _tag: "NotBuilt",
+            template: "web",
+            message: "no host can take a clone of build web@1: b is draining",
+          });
+          expect(
+            Result.getOrThrow(
+              Result.flip(
+                holders([up("a"), silent("b")], { ...asked, host: "b" })
+              )
+            )
+          ).toMatchObject({
+            _tag: "Unavailable",
+            message:
+              "no host answered that can take a clone of build web@1: b failed: connection refused",
+          });
         })
     );
   });
@@ -186,6 +382,71 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       expect(yield* hostOf(served, "dev")).toStrictEqual(Option.some("a"));
     })
+  );
+
+  it.effect(
+    "a create, a create from a template and a build that name a host land on that host",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* running({
+          hosts: [{ id: "a" }, { id: "b" }, { id: "c" }],
+        });
+
+        const client = yield* clientOf(served.url);
+        const { id: _unused, ...spec } = request("unused");
+
+        yield* client.create("dev", { ...spec, host: "b" });
+
+        const built = yield* client.buildTemplate({
+          ...spec,
+          template: "web",
+          setup,
+          host: "c",
+        });
+
+        yield* client.create("clone", { template: "web", host: "c" });
+
+        expect(yield* hostOf(served, "dev")).toStrictEqual(Option.some("b"));
+        expect(built.host).toBe("c");
+        expect(yield* hostOf(served, "clone")).toStrictEqual(Option.some("c"));
+      })
+  );
+
+  it.effect(
+    "a create from a template that names a host without a copy says so, and the build it advises lets the same create land there",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* running({ hosts: [{ id: "a" }, { id: "b" }] });
+        const client = yield* clientOf(served.url);
+        const { id: _unused, ...spec } = request("unused");
+        const file = { ...spec, template: "web", setup };
+
+        yield* client.buildTemplate({ ...file, host: "a" });
+
+        const refused = yield* Effect.flip(
+          client.create("clone", { template: "web", host: "b" })
+        );
+
+        expect(refused).toMatchObject({
+          _tag: "NotBuilt",
+          template: "web",
+          message:
+            "no host can take a clone of build web@1: b holds no copy of web@1; run clankerbox template build on web's template file with --host b to build it there",
+        });
+
+        yield* client.buildTemplate({ ...file, host: "b" });
+
+        const clone = yield* client.create("clone", {
+          template: "web",
+          host: "b",
+        });
+
+        expect([clone.template, clone.phase]).toStrictEqual([
+          "web@2",
+          "settled",
+        ]);
+        expect(yield* hostOf(served, "clone")).toStrictEqual(Option.some("b"));
+      })
   );
 
   it.effect("a host set draining takes no new machine", () =>
@@ -294,11 +555,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a create moved to the next host takes that host's kind, and is made there",
+    "a create moved to the next host takes that host's traits, and is made there",
     () =>
       Effect.gen(function* () {
         const served = yield* running({
-          hosts: [{ id: "a" }, { id: "b", kind: "mac" }],
+          hosts: [{ id: "a" }, { id: "b", as: "tart" }],
         });
 
         const client = yield* clientOf(served.url);
@@ -310,7 +571,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const found = Option.getOrThrow(yield* served.store.findMachine("dev"));
 
-        expect(machine.kind).toBe("mac");
+        expect(machine.traits).toStrictEqual(runtimeTraits.tart);
         expect(found.pin).toBeUndefined();
         expect(second?.fake.calls).toContain("create dev");
       })

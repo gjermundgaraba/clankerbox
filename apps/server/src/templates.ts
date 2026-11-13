@@ -2,12 +2,13 @@ import type { HostInfo } from "@clankerbox/host-contract";
 import {
   buildId,
   builtFrom,
-  checkpointKinds,
   Conflict,
+  fetchable,
   Internal,
   keptBuilds,
   NotFound,
   offers,
+  stopsBeforeCapture,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   Build,
@@ -90,12 +91,13 @@ const unfetched = (
   records: readonly CheckpointRow[],
   reached: readonly Reached[]
 ): readonly BuildCopy[] => {
-  const kind = records[0]?.kind;
+  const traits = records[0]?.traits;
 
   return reached.flatMap(({ info }) => {
     const why =
       info === undefined ||
-      info.kind !== kind ||
+      traits === undefined ||
+      !fetchable(traits, info.traits) ||
       !offers(info, made.base) ||
       records.some(({ host }) => host === info.id)
         ? undefined
@@ -225,9 +227,9 @@ const holds = ({ state }: CheckpointRow) =>
   state !== "failed" && !state.startsWith("deleting");
 
 /**
- * The fetches due: of each ready build that was published, to each host of its kind that copies
- * builds, offers its base, runs its pin, names its image and holds no copy of it, each with the
- * copies that failed there, to clear first.
+ * The fetches due: of each ready build that was published, to each host its copy is fetchable to
+ * that copies builds, offers its base, runs its pin, names its image and holds no copy of it, each
+ * with the copies that failed there, to clear first.
  */
 export const fetchesDue = (
   templates: readonly TemplateRow[],
@@ -249,7 +251,7 @@ export const fetchesDue = (
 
             return info !== undefined &&
               info.builds &&
-              info.kind === source.kind &&
+              fetchable(source.traits, info.traits) &&
               offers(info, made.base) &&
               outdated(info, made) === undefined &&
               !here.some(holds)
@@ -387,7 +389,7 @@ export const make = (settings: {
 
           const made = yield* atRest;
 
-          if (checkpointKinds[made.kind] === "disk") {
+          if (stopsBeforeCapture(made.traits)) {
             yield* machines.stop(builder);
             yield* atRest;
           }
@@ -424,7 +426,14 @@ export const make = (settings: {
 
     const build = (request: BuildRequest) =>
       Effect.gen(function* () {
-        const { template: name, base, cpu, ramMib, diskGib } = request;
+        const {
+          template: name,
+          base,
+          cpu,
+          ramMib,
+          diskGib,
+          host: on,
+        } = request;
 
         const asked = {
           base,
@@ -435,7 +444,10 @@ export const make = (settings: {
         };
 
         const [host] = yield* Effect.fromResult(
-          placing(yield* hosts.reachAll, base)
+          placing(yield* hosts.reachAll, base, {
+            sizes: { cpu, ramMib, diskGib },
+            host: on,
+          })
         );
 
         const row = yield* store.advanceTemplate(

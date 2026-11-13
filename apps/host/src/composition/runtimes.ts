@@ -1,11 +1,11 @@
 import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
-import type { FileSystem, Layer } from "effect";
+import type { FileSystem, Layer, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 
 import * as Smolvm from "../platform/smolvm/smolvm.ts";
 import * as Tart from "../platform/tart/tart.ts";
 import type { CannotStart, Runtime } from "../runtime.ts";
-import type { HostConfig } from "./config.ts";
+import type { HostSettings } from "../settings.ts";
 
 type RuntimeLayer = Layer.Layer<
   Runtime,
@@ -13,17 +13,38 @@ type RuntimeLayer = Layer.Layer<
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
 >;
 
-type Registry = {
-  readonly [K in HostConfig["kind"]]: (
-    config: Extract<HostConfig, { readonly kind: K }>
-  ) => RuntimeLayer;
+export const runtimes = {
+  smolvm: { settings: Smolvm.SmolvmSettings, layer: Smolvm.layer },
+  tart: { settings: Tart.TartSettings, layer: Tart.layer },
 };
 
-const runtimes: Registry = {
-  linux: Smolvm.layer,
-  mac: Tart.layer,
-};
+export type RuntimeKey = keyof typeof runtimes;
 
-export const runtimeLayer = <K extends HostConfig["kind"]>(
-  config: Extract<HostConfig, { readonly kind: K }> & { readonly kind: K }
-): RuntimeLayer => runtimes[config.kind](config);
+type SettingsOf<K extends RuntimeKey> =
+  (typeof runtimes)[K]["settings"]["Type"];
+
+interface Registration<T> {
+  readonly settings: Schema.Decoder<T>;
+  readonly layer: (settings: T, host: HostSettings) => RuntimeLayer;
+}
+
+type Registry = { readonly [K in RuntimeKey]: Registration<SettingsOf<K>> };
+
+const registry: Registry = runtimes;
+
+export interface ChosenRuntime<K extends RuntimeKey = RuntimeKey> {
+  readonly name: K;
+  readonly settings: SettingsOf<K>;
+}
+
+export const isRuntimeKey = (name: string): name is RuntimeKey =>
+  Object.hasOwn(runtimes, name);
+
+export const settingsOf = <K extends RuntimeKey>(
+  name: K
+): Schema.Decoder<SettingsOf<K>> => registry[name].settings;
+
+export const runtimeLayer = <K extends RuntimeKey>(
+  { name, settings }: ChosenRuntime<K>,
+  host: HostSettings
+): RuntimeLayer => registry[name].layer(settings, host);

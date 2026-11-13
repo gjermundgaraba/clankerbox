@@ -109,8 +109,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const answer = yield* post(url, "readHost", {});
 
         expect(decodeHost(answer.body)).toStrictEqual({
-          id: "linux",
-          kind: "linux",
+          id: "smolvm",
           traits: runtimeTraits.smolvm,
           version,
           runtimeVersion: "fake",

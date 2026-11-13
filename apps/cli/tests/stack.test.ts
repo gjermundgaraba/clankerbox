@@ -286,21 +286,23 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const shortText = yield* run(["capacity"]);
 
         expect(listed.code).toBe(0);
-        expect(listed.stdout).toMatch(/^alpha\s+up\s+linux\s/mu);
-        expect(listed.stdout).toMatch(/^beta\s+up\s+linux\s/mu);
+        expect(listed.stdout).toMatch(/^alpha\s+up\s+smolvm\s/mu);
+        expect(listed.stdout).toMatch(/^beta\s+up\s+smolvm\s/mu);
         expect(listed.stdout).toContain("ubuntu");
         expect(JSON.parse(json.stdout)).toMatchObject({
           hosts: [
             {
               id: "alpha",
               state: "up",
-              kind: "linux",
+              runtime: "smolvm",
+              traits: { runtime: "smolvm", checkpoint: "ram" },
               bases: ["ubuntu"],
             },
             {
               id: "beta",
               state: "up",
-              kind: "linux",
+              runtime: "smolvm",
+              traits: { runtime: "smolvm", checkpoint: "ram" },
               bases: ["ubuntu"],
             },
           ],
@@ -321,6 +323,49 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           (yield* decodeJson(CapacityJson, short.stdout)).unreachable
         ).toStrictEqual(["beta"]);
         expect(shortText.stderr).toContain("host beta didn't answer");
+      })
+  );
+
+  it.effect(
+    "a create with --host lands on that host alone, reads its runtime's traits, and --host of a host the control plane doesn't know answers NotOffered",
+    () =>
+      Effect.gen(function* () {
+        const { run } = yield* setUp(twoHosts);
+
+        const pin = yield* run(["create", "pin", ...sizes, "--host", "beta"]);
+
+        const lost = yield* run([
+          "create",
+          "lost",
+          ...sizes,
+          "--host",
+          "nope",
+          "--json",
+        ]);
+
+        const json = yield* run(["get", "pin", "--json"]);
+        const table = yield* run(["get", "pin"]);
+        const capacity = yield* run(["capacity", "--json"]);
+
+        expect(pin).toMatchObject({ code: 0, stdout: "pin" });
+        expect(lost.code).toBe(1);
+        expect(decodeFailure(lost.stdout).error).toMatchObject({
+          tag: "NotOffered",
+          retryable: false,
+        });
+        expect(JSON.parse(json.stdout)).toMatchObject({
+          traits: { runtime: "smolvm", checkpoint: "ram" },
+        });
+        expect(JSON.parse(json.stdout)).not.toHaveProperty("kind");
+        expect(table.stdout).toMatch(/^RUNTIME\s+smolvm$/mu);
+        expect(
+          (yield* decodeJson(CapacityJson, capacity.stdout)).usage.filter(
+            ({ resource }) => resource === "ramMib"
+          )
+        ).toStrictEqual([
+          { host: "alpha", resource: "ramMib", used: 0 },
+          { host: "beta", resource: "ramMib", used: 1024 },
+        ]);
       })
   );
 
@@ -743,7 +788,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(
           (yield* decodeJson(CapacityJson, capacity.stdout)).usage
         ).toContainEqual({
-          host: "linux",
+          host: "smolvm",
           resource: "ramMib",
           used: 2048,
           limit: 2048,

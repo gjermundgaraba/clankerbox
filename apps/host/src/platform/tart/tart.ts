@@ -609,7 +609,7 @@ export const make = (
 
         return Effect.fail(
           observed === "missing"
-            ? missing("mac", machine)
+            ? missing(traits.runtime, machine)
             : new WrongState({
                 message: `a Tart ${what} copies a stopped machine's disk, and ${machine.name} is ${observed}: stop it first`,
                 machine: machine.name,
@@ -640,7 +640,7 @@ export const make = (
         }
 
         if (observed === "missing") {
-          return yield* missing("mac", machine);
+          return yield* missing(traits.runtime, machine);
         }
 
         if (observed !== "running") {
@@ -750,7 +750,7 @@ export const make = (
         ),
       },
       traits,
-      growsLive: traits.resize.running !== "none",
+      guest: "macos",
       startup: Effect.andThen(
         files(
           `couldn't create ${jobs}`,
@@ -791,7 +791,7 @@ export const make = (
           const observed = yield* state(vmOf(machine));
 
           if (observed === "missing") {
-            return yield* missing("mac", machine);
+            return yield* missing(traits.runtime, machine);
           }
 
           if (observed === "stopped") {
@@ -909,9 +909,8 @@ export const make = (
   });
 
 export const layer = (
-  config: Pick<HostSettings, "id" | "stateDir" | "listen"> & {
-    readonly mac: typeof TartSettings.Type;
-  }
+  settings: typeof TartSettings.Type,
+  config: Pick<HostSettings, "id" | "stateDir" | "listen">
 ): Layer.Layer<
   Runtime,
   HostError | CannotStart,
@@ -920,7 +919,7 @@ export const layer = (
   Layer.effect(
     Runtime,
     make({
-      binary: config.mac.binary,
+      binary: settings.binary,
       publishAddress: config.listen.address,
       hostId: config.id,
       stateDir: config.stateDir,

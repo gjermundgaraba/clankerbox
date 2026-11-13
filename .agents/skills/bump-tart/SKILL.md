@@ -22,7 +22,7 @@ operator's Tart, or commit unless asked.
   `major.minor.patch` at or above it, and startup refuses the rest.
   `requirements.test.ts` fails until README states it. Why the floor is where
   it is lives in this skill, below, and in the commit that moved it. The tested
-  release also appears in README (install table, the `tart.binary` example)
+  release also appears in README (install table, the `runtime.tart.binary` setting)
   and the tests (`apps/host/tests/platform/tart/tart.test.ts`, whose fake
   `tart` answers as the tested release; `config.test.ts`):
   `git grep -n '2\.41'`.

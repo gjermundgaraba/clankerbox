@@ -1,3 +1,4 @@
+import { runtimeTraits } from "@gjermundgaraba/clankerbox-host/testing";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Brand, DateTime } from "effect";
 
@@ -15,7 +16,7 @@ export const facts = (fields?: Partial<Facts>): Facts => ({
   name: "dev",
   instance: "1",
   createdAt: DateTime.makeUnsafe(0),
-  kind: "linux",
+  traits: runtimeTraits.smolvm,
   base: "ubuntu",
   cpu: 1,
   ramMib: 1024,
@@ -63,7 +64,7 @@ export const checkpointFacts = (
   createdAt: DateTime.makeUnsafe(0),
   machine: "dev",
   host: "linux",
-  kind: "linux",
+  traits: runtimeTraits.smolvm,
   pin: "pin",
   port: 2222,
   base: "ubuntu",

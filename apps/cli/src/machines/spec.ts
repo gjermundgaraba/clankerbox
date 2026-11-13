@@ -39,6 +39,15 @@ export const flagSizes = (flags: SizeFlags) =>
     };
   });
 
+export const hostArgument = {
+  host: Flag.String("host").pipe(
+    Flag.withDescription(
+      "The host to place it on, as clankerbox hosts lists them: only that host is tried."
+    ),
+    Flag.optional
+  ),
+};
+
 export const specArguments = {
   template: Flag.String("template").pipe(
     Flag.withMetavar("NAME[@BUILD]"),
@@ -54,6 +63,7 @@ export const specArguments = {
     Flag.optional
   ),
   ...sizeArguments,
+  ...hostArgument,
 };
 
 export type SpecFlags = Command.Command.Config.Infer<typeof specArguments>;
@@ -64,6 +74,7 @@ const specNames = new Map<PropertyKey, string>([
   ["cpu", "--cpu"],
   ["ramMib", "--ram"],
   ["diskGib", "--disk"],
+  ["host", "--host"],
 ]);
 
 const defined = (fields: Readonly<Record<string, unknown>>) =>
@@ -81,6 +92,7 @@ const refused = (command: string) => (error: Schema.SchemaError) =>
 export const flagsSpec = (command: string, flags: SpecFlags) =>
   Effect.gen(function* () {
     const sizes = yield* flagSizes(flags);
+    const host = Option.getOrUndefined(flags.host);
 
     if (Option.isSome(flags.template)) {
       if (Option.isSome(flags.base)) {
@@ -90,7 +102,7 @@ export const flagsSpec = (command: string, flags: SpecFlags) =>
       }
 
       return yield* decodeTemplateSpec(
-        defined({ template: flags.template.value, ...sizes }),
+        defined({ template: flags.template.value, ...sizes, host }),
         strictly
       ).pipe(Effect.mapError(refused(command)));
     }
@@ -102,7 +114,7 @@ export const flagsSpec = (command: string, flags: SpecFlags) =>
     }
 
     return yield* decodeBaseSpec(
-      defined({ base: flags.base.value, ...sizes }),
+      defined({ base: flags.base.value, ...sizes, host }),
       strictly
     ).pipe(Effect.mapError(refused(command)));
   });

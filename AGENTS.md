@@ -79,7 +79,7 @@ the whole CLI span domains on purpose.
   makes a builder, runs its setup, copies it and deletes it, then ends the build
   in its template's row, keeping the last 2 ready builds; a create from a
   template is `Machines`'s. A host with a build store publishes the copy before
-  the build ends ready, and a recheck has every other host of the kind fetch each
+  the build ends ready, and a recheck has every other host of the runtime fetch each
   ready build it lacks, as a checkpoint row of the build on that host.
 - `steps.ts`: what a host is sent for an operation, built afresh from the rows at
   each delivery.
@@ -115,7 +115,8 @@ or `composition/`.
   `BuildStore` port, objects by key and a manifest per build, written last.
 - `reach.ts`: the `Reaches` service. It picks a make's port, and opens, closes
   and on adopt reopens the relays of a `relayed` runtime.
-- Ports: `Runtime` (`runtime.ts`), with its `reach` (`published` or `relayed`)
+- Ports: `Runtime` (`runtime.ts`), with its `traits`, its `guest` (`debian` or
+  `macos`, which picks the base `guest.ts` prepares), its `reach` (`published` or `relayed`)
   and the facets `admission` and `files`, each present or absent as a whole,
   `PortProbe` (`machine-ports.ts`), `Relays` (`reach.ts`), `Tailnet`
   (`tailnet.ts`), which mints a machine's tailnet key, provided only on a host
@@ -125,13 +126,12 @@ or `composition/`.
 Adapters live in `platform/`: `bind-probe.ts` (`PortProbe`), `relay.ts`
 (`Relays`, a TCP listener that carries each connection through a runtime's
 dial), `tailscale.ts` (`Tailnet`, over Tailscale's API), `s3.ts` (`BuildStore`,
-over S3, path-style and signed), the runtimes `smolvm/` (`linux`) and `tart/`
-(`mac`), each with its `RuntimeTraits` in its `traits.ts`, and what they share,
-`process.ts`. A domain file never imports `platform/` or `composition/`.
+over S3, path-style and signed), the runtimes `smolvm/` and `tart/`, each with
+its `RuntimeTraits` in its `traits.ts`, and what they share, `process.ts`. A domain file never imports `platform/` or `composition/`.
 
 `composition/` assembles the host: `config.ts` reads the config file,
-`runtimes.ts` is the registry of runtimes, one entry each, whose kind picks the
-runtime Layer, `routes.ts` serves the host contract, and `host.ts` builds the
+`runtimes.ts` is the registry of runtimes, one entry each under the name a host
+config's `runtime` gives it, with its settings and its Layer, `routes.ts` serves the host contract, and `host.ts` builds the
 host over a runtime Layer and a server Layer it is given, with the config's
 tailnet and build store, if any.
 
@@ -166,8 +166,8 @@ delete, over the client), `job.ts` (the job, from the environment Amp gives),
 
 Only at an entry: each app's `main.ts` (the CLI's: Node's services, HTTP client
 and TCP dial, and the path that runs it; the server's: the config's server Layer
-and Node's HTTP client, given to `serverLayer`; the host's: the config kind's
-runtime and Node's HTTP server, given to `hostLayer`), the SDK's `node.ts` (the
+and Node's HTTP client, given to `serverLayer`; the host's: the config's
+runtime, from the registry, and Node's HTTP server, given to `hostLayer`), the SDK's `node.ts` (the
 client over Node's HTTP), the provider's `index.ts` (the client over its
 server URL, given to `provider`), and the Amp orb provider's `main.ts` (Node's
 services and HTTP client, given to its command). Tests pass their own: the host's `./testing`

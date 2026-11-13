@@ -20,7 +20,7 @@ const run = (file: string) =>
     return yield* Layer.launch(
       hostLayer(
         config,
-        runtimeLayer(config),
+        runtimeLayer(config.runtime, config),
         NodeHttpServer.layer(createServer, {
           host: config.listen.address,
           port: config.listen.port,
@@ -34,7 +34,7 @@ const host = Command.make(
   {
     config: Flag.String("config").pipe(
       Flag.withDescription(
-        "The host config file: its ID, kind, address, state dir and bases."
+        "The host config file: its ID, runtime, address, state dir and bases."
       )
     ),
   },

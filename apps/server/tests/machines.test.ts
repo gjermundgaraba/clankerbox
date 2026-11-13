@@ -5,6 +5,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
+import { runtimeTraits } from "@gjermundgaraba/clankerbox-host/testing";
 import { Capacity, Internal, Unsizable } from "@gjermundgaraba/clankerbox-sdk";
 import type { Machine, Setup } from "@gjermundgaraba/clankerbox-sdk";
 import {
@@ -194,7 +195,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(made).toMatchObject({
           id: "dev",
-          kind: "linux",
+          traits: runtimeTraits.smolvm,
           base: "ubuntu",
           state: "running",
           desired: "running",
@@ -217,15 +218,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
-  for (const kind of ["linux", "mac"] as const) {
+  for (const as of ["smolvm", "tart"] as const) {
     it.effect(
-      `a ${kind} machine runs its guest's hook before each stop, pause and delete, and a template's builder runs none`,
+      `a ${as} machine runs its guest's hook before each stop, pause and delete, and a template's builder runs none`,
       () =>
         Effect.gen(function* () {
           const dir = yield* scratch;
 
           const { client } = yield* servedWithBuildOf(installsLeaveHooks(dir), {
-            hosts: [{ id: kind, kind }],
+            hosts: [{ id: as, as }],
           });
 
           const afterBuild = yield* hooksRun(dir);
@@ -316,12 +317,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect("a mac host's machine is mac", () =>
     Effect.gen(function* () {
       const { client } = yield* served({
-        hosts: [{ id: "mac", kind: "mac" }],
+        hosts: [{ id: "tart", as: "tart" }],
       });
 
       const made = yield* client.create("dev", request("dev"));
 
-      expect(made).toMatchObject({ id: "dev", kind: "mac" });
+      expect(made).toMatchObject({ id: "dev", traits: runtimeTraits.tart });
     })
   );
 
@@ -741,7 +742,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { client, rows } = yield* served({
-          hosts: [{ id: "mac", kind: "mac" }],
+          hosts: [{ id: "tart", as: "tart" }],
         });
 
         const error = yield* Effect.flip(
@@ -1165,7 +1166,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect([error._tag, error.message]).toStrictEqual([
           "Missing",
-          "machine dev is missing from the linux runtime; delete it",
+          "machine dev is missing from the smolvm runtime; delete it",
         ]);
         expect(at(got)).toStrictEqual(["missing", "running", "lost"]);
         expect(fake.calls).toStrictEqual(["delete dev"]);
@@ -2138,8 +2139,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* Fiber.join(creating);
 
         expect((yield* client.capacity).usage).toStrictEqual([
-          { host: "linux", resource: "cpu", used: 0 },
-          { host: "linux", resource: "ramMib", limit: 4096, used: 0 },
+          { host: "smolvm", resource: "cpu", used: 0 },
+          { host: "smolvm", resource: "ramMib", limit: 4096, used: 0 },
         ]);
       })
   );
@@ -2400,12 +2401,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* release;
 
         expect(idle.usage).toStrictEqual([
-          { host: "linux", resource: "cpu", used: 1 },
-          { host: "linux", resource: "ramMib", limit: 4096, used: 1024 },
+          { host: "smolvm", resource: "cpu", used: 1 },
+          { host: "smolvm", resource: "ramMib", limit: 4096, used: 1024 },
         ]);
         expect(booting.usage).toStrictEqual([
-          { host: "linux", resource: "cpu", used: 2 },
-          { host: "linux", resource: "ramMib", limit: 4096, used: 3072 },
+          { host: "smolvm", resource: "cpu", used: 2 },
+          { host: "smolvm", resource: "ramMib", limit: 4096, used: 3072 },
         ]);
         expect(full._tag).toBe("Capacity");
         expect(full.message).toContain(
@@ -2427,7 +2428,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       expect(yield* client.capacity).toStrictEqual({
         usage: [],
-        unreachable: ["linux"],
+        unreachable: ["smolvm"],
       });
     })
   );
@@ -3075,7 +3076,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const linux = yield* served();
 
         const mac = yield* served({
-          hosts: [{ id: "mac", kind: "mac" }],
+          hosts: [{ id: "tart", as: "tart" }],
         });
 
         yield* linux.client.create("dev", request("dev", { cpu: 2 }));
@@ -3106,11 +3107,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         ).toStrictEqual([
           [
             "Unsizable",
-            "a linux copy holds its source's RAM, so machine copy's vCPUs and RAM only grow from the source's 2 vCPUs and 1G",
+            "a smolvm copy holds its source's RAM, so machine copy's vCPUs and RAM only grow from the source's 2 vCPUs and 1G",
           ],
           [
             "Unsizable",
-            "a linux copy holds its source's RAM, so machine copy's vCPUs and RAM only grow from the source's 2 vCPUs and 1G",
+            "a smolvm copy holds its source's RAM, so machine copy's vCPUs and RAM only grow from the source's 2 vCPUs and 1G",
           ],
           [
             "Unsizable",
@@ -3153,7 +3154,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect([refused._tag, refused.message]).toStrictEqual([
           "Unsizable",
-          "a linux copy holds its source's RAM, so machine copy's vCPUs and RAM only grow from the source's 1 vCPUs and 2G",
+          "a smolvm copy holds its source's RAM, so machine copy's vCPUs and RAM only grow from the source's 1 vCPUs and 2G",
         ]);
         expect(refusal(yield* machine("copy"))).toStrictEqual([
           "failed",
@@ -3168,7 +3169,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { asking, client, fake } = yield* served({
-          hosts: [{ id: "mac", kind: "mac" }],
+          hosts: [{ id: "tart", as: "tart" }],
         });
 
         yield* client.create("dev", request("dev", { cpu: 4, ramMib: 8192 }));
@@ -3193,7 +3194,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect("a mac fork takes smaller vCPUs and RAM than its source's", () =>
     Effect.gen(function* () {
       const { client } = yield* served({
-        hosts: [{ id: "mac", kind: "mac" }],
+        hosts: [{ id: "tart", as: "tart" }],
       });
 
       yield* client.create("dev", request("dev", { cpu: 4, ramMib: 8192 }));
@@ -3330,8 +3331,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a create from a template takes the build's sizes or larger ones, on linux and mac, and refuses smaller ones Unsizable",
     () =>
       Effect.gen(function* () {
-        for (const kind of ["linux", "mac"] as const) {
-          const { client } = yield* built({ hosts: [{ id: kind, kind }] });
+        for (const as of ["smolvm", "tart"] as const) {
+          const { client } = yield* built({ hosts: [{ id: as, as }] });
 
           const larger = yield* client.create("larger", {
             template: "web",

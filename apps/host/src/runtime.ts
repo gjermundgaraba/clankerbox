@@ -8,8 +8,8 @@ import { Missing, readTimeout } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   Capacity,
   Internal,
-  Kind,
   Reading,
+  RuntimeName,
   RuntimeTraits,
   Sizing,
   Unsizable,
@@ -110,11 +110,11 @@ export interface Execution {
 }
 
 export const missing = (
-  kind: Kind,
+  runtime: RuntimeName,
   machine: Pick<MachineRef, "name">
 ): Missing =>
   new Missing({
-    message: `machine ${machine.name} is missing from the ${kind} runtime; delete it`,
+    message: `machine ${machine.name} is missing from the ${runtime} runtime; delete it`,
     machine: machine.name,
   });
 
@@ -163,12 +163,12 @@ export interface CheckpointFiles {
 
 export interface Interface {
   readonly traits: RuntimeTraits;
+  readonly guest: "debian" | "macos";
   readonly version: string;
   readonly pin: string | undefined;
   readonly reach: Reach;
   readonly admission: Admission | undefined;
   readonly files: CheckpointFiles | undefined;
-  readonly growsLive: boolean;
   readonly sizable: (
     machine: Pick<MachineRef, "name">,
     from: Sizes,

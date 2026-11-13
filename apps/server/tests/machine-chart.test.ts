@@ -5,6 +5,7 @@ import { runInNewContext } from "node:vm";
 import { MachineState } from "@clankerbox/host-contract";
 import type { Report } from "@clankerbox/host-contract";
 import { describe, expect, it } from "@effect/vitest";
+import { runtimeTraits } from "@gjermundgaraba/clankerbox-host/testing";
 import { Desired, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { setup, transition, types } from "xstate";
 import type { SnapshotFrom } from "xstate";
@@ -1320,7 +1321,7 @@ describe("the chart", () => {
 
     const move = {
       host: "other",
-      kind: "mac",
+      traits: runtimeTraits.tart,
       pin: "other pin",
       source: { kind: "checkpoint", name: "built" },
     } as const;

@@ -134,7 +134,8 @@ export class NotOffered extends Schema.TaggedError<
 
 /**
  * `template` has no ready build to clone: no build of it has succeeded, or none is kept of the one
- * pinned, or no host that answers holds it. A build of the template makes one.
+ * pinned, or no host that could take its clone holds a current copy of it. A build of the template
+ * on such a host makes one.
  */
 export class NotBuilt extends Schema.TaggedError<
   NotBuilt,

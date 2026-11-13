@@ -1,9 +1,12 @@
 import { execFileSync } from "node:child_process";
+import { copyFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { SQLOutputValue } from "node:sqlite";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
+import { runtimeTraits } from "@gjermundgaraba/clankerbox-host/testing";
 import { Conflict, Internal, NotFound } from "@gjermundgaraba/clankerbox-sdk";
 import {
   mkdir,
@@ -143,11 +146,79 @@ const stateDirAt = (version: number, fill: (db: DatabaseSync) => void) =>
 const stateDirAtVersion1 = (fill: (db: DatabaseSync) => void) =>
   stateDirAt(1, fill);
 
+const trunkStore = Effect.gen(function* () {
+  const stateDir = yield* stateIn;
+
+  yield* mkdir(stateDir);
+  copyFileSync(
+    new URL("fixtures/store-d5f7dac.db", import.meta.url),
+    path.join(stateDir, databaseFile)
+  );
+
+  return stateDir;
+});
+
+type SqlRow = Readonly<Record<string, SQLOutputValue>>;
+
+const reading = <A>(stateDir: string, read: (db: DatabaseSync) => A): A => {
+  const db = new DatabaseSync(path.join(stateDir, databaseFile), {
+    readOnly: true,
+  });
+
+  try {
+    return read(db);
+  } finally {
+    db.close();
+  }
+};
+
+const tableRows = (db: DatabaseSync, table: string): SqlRow[] =>
+  db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all();
+
+const rowsOf = (stateDir: string) =>
+  reading(stateDir, (db) => ({
+    user_version: db.prepare("PRAGMA user_version").get()?.["user_version"],
+    machines: tableRows(db, "machines"),
+    checkpoints: tableRows(db, "checkpoints"),
+    rest: Object.fromEntries(
+      ["hosts", "templates", "builds", "build_numbers", "sequence"].map(
+        (table) => [table, tableRows(db, table)]
+      )
+    ),
+  }));
+
+const dumped = (stateDir: string) =>
+  reading(stateDir, (db) => ({
+    pragmas: [
+      db.prepare("PRAGMA user_version").get(),
+      db.prepare("PRAGMA application_id").get(),
+    ],
+    schema: db
+      .prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY name")
+      .all(),
+    rows: db
+      .prepare(
+        "SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name"
+      )
+      .all()
+      .map(({ name }) => tableRows(db, String(name))),
+  }));
+
+const traitsOf = (rows: readonly SqlRow[]) =>
+  rows.map((row) =>
+    row["kind"] === "mac" ? runtimeTraits.tart : runtimeTraits.smolvm
+  );
+
+const without =
+  (column: string) =>
+  (row: SqlRow): SqlRow =>
+    Object.fromEntries(Object.entries(row).filter(([key]) => key !== column));
+
 const row = (name: string, fields?: Partial<MachineRow>): MachineRow => ({
   name,
   instance: "0123456789abcdef0123456789abcdef",
   createdAt: DateTime.makeUnsafe("2026-10-04T12:00:00Z"),
-  kind: "linux",
+  traits: runtimeTraits.smolvm,
   base: "ubuntu",
   cpu: 1,
   ramMib: 1024,
@@ -179,7 +250,7 @@ const checkpoint = (
   createdAt: DateTime.makeUnsafe("2026-10-04T13:00:00Z"),
   machine: "dev",
   host: "linux",
-  kind: "linux",
+  traits: runtimeTraits.smolvm,
   pin: "smolvm 0.0.0-test linux-x64",
   port: 10_000,
   base: "ubuntu",
@@ -334,7 +405,7 @@ layer(NodeServices.layer)((it) => {
 
         const rows = [
           row("dev", {
-            kind: "mac",
+            traits: runtimeTraits.tart,
             port: 10_000,
             hostKey: "ssh-ed25519 AAAA",
             ephemeral: true,
@@ -456,6 +527,71 @@ layer(NodeServices.layer)((it) => {
         );
 
         expect(reader).toContain("database is locked");
+      })
+  );
+
+  it.effect(
+    "a store that trunk's control plane wrote opens with each row's traits stamped from its kind, its other columns as they were, and opens again unchanged",
+    () =>
+      Effect.gen(function* () {
+        const stateDir = yield* trunkStore;
+        const before = rowsOf(stateDir);
+
+        const read = yield* withStore(stateDir, (store) =>
+          Effect.all([store.machines, store.checkpoints])
+        );
+
+        const after = rowsOf(stateDir);
+        const once = dumped(stateDir);
+
+        yield* withStore(stateDir, (store) => store.machines);
+
+        expect(before.user_version).toBe(6);
+        expect(before.machines.map(({ name }) => name)).toStrictEqual([
+          "keep",
+          "big",
+          "mbox",
+        ]);
+        expect(before.checkpoints.map(({ kind }) => kind)).toStrictEqual([
+          "linux",
+          "linux",
+          "mac",
+        ]);
+        expect(read[0].map(({ traits }) => traits)).toStrictEqual(
+          traitsOf(before.machines)
+        );
+        expect(read[1].map(({ traits }) => traits)).toStrictEqual(
+          traitsOf(before.checkpoints)
+        );
+        expect(after.user_version).toBe(migrations.length);
+        expect(after.machines.map(without("traits"))).toStrictEqual(
+          before.machines.map(without("kind"))
+        );
+        expect(after.checkpoints.map(without("traits"))).toStrictEqual(
+          before.checkpoints.map(without("kind"))
+        );
+        expect(after.rest).toStrictEqual(before.rest);
+        expect(dumped(stateDir)).toStrictEqual(once);
+      })
+  );
+
+  it.effect(
+    "a trunk store holding a kind no runtime has is refused, and left as it was",
+    () =>
+      Effect.gen(function* () {
+        const stateDir = yield* trunkStore;
+        const file = path.join(stateDir, databaseFile);
+        const db = new DatabaseSync(file);
+
+        db.exec("UPDATE machines SET kind = 'beos' WHERE name = 'keep'");
+        db.close();
+
+        const before = dumped(stateDir);
+        const error = yield* opening(stateDir);
+
+        expect(error).toBeInstanceOf(Internal);
+        expect(error.message).toContain("NOT NULL");
+        expect(dumped(stateDir)).toStrictEqual(before);
       })
   );
 
@@ -657,7 +793,7 @@ layer(NodeServices.layer)((it) => {
         });
 
         const dev = row("dev", {
-          kind: "mac",
+          traits: runtimeTraits.tart,
           cpu: 2,
           ramMib: 2048,
           diskGib: 20,
@@ -1049,7 +1185,7 @@ layer(NodeServices.layer)((it) => {
       const fields = {
         instance: "abcd",
         createdAt: DateTime.makeUnsafe("2026-10-04T12:01:00Z"),
-        kind: "mac",
+        traits: runtimeTraits.tart,
         base: "macos",
         cpu: 8,
         ramMib: 2048,
@@ -1595,7 +1731,9 @@ layer(NodeServices.layer)((it) => {
             state,
             ...(state === "failed" ? { error, failedAt } : {}),
             ...(state.startsWith("discarding") ? { error } : {}),
-            ...(state === "ready" ? { pin: undefined, kind: "mac" } : {}),
+            ...(state === "ready"
+              ? { pin: undefined, traits: runtimeTraits.tart }
+              : {}),
             ...(state === "capturing.due" ? { build: "web@1" } : {}),
           })
         );
@@ -1825,8 +1963,8 @@ layer(NodeServices.layer)((it) => {
     "a state dir that 0.37 wrote gives each build its template's base, sizes and setup timeout",
     () =>
       Effect.gen(function* () {
-        const stateDir = yield* stateDirAt(migrations.length - 1, (db) => {
-          for (const migration of migrations.slice(0, -1)) {
+        const stateDir = yield* stateDirAt(5, (db) => {
+          for (const migration of migrations.slice(0, 5)) {
             db.exec(migration);
           }
 

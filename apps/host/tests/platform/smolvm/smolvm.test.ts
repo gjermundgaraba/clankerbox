@@ -135,7 +135,7 @@ const prepared = (expanded: readonly string[] = templates) =>
 
     const settings: Settings = {
       prefix,
-      publishAddress: "100.95.240.37",
+      publishAddress: "100.64.0.10",
       ramBudgetMib: 4096,
       stateDir,
       arch: "x64",
@@ -326,7 +326,7 @@ layer(NodeServices.layer)((it) => {
               SMOLVM_VM_USE_SCOPE: "1",
               SMOLVM_OOM_VICTIM_ORDER: "0",
               SMOLVM_USAGE: "0",
-              SMOLVM_PUBLISH_ADDR: "100.95.240.37",
+              SMOLVM_PUBLISH_ADDR: "100.64.0.10",
               SMOLVM_EGRESS_FLOOR: "strict",
               NO_COLOR: "1",
             },
@@ -888,7 +888,7 @@ layer(NodeServices.layer)((it) => {
           ],
           [
             "Missing",
-            "machine dev is missing from the linux runtime; delete it",
+            "machine dev is missing from the smolvm runtime; delete it",
           ],
         ]);
         expect(
@@ -938,7 +938,7 @@ layer(NodeServices.layer)((it) => {
           ],
           [
             "Missing",
-            "machine dev is missing from the linux runtime; delete it",
+            "machine dev is missing from the smolvm runtime; delete it",
           ],
         ]);
         expect(
@@ -1792,7 +1792,7 @@ layer(NodeServices.layer)((it) => {
           ],
           [
             "Missing",
-            "machine dev is missing from the linux runtime; delete it",
+            "machine dev is missing from the smolvm runtime; delete it",
           ],
           [
             "WrongState",

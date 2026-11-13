@@ -3,11 +3,18 @@ set -eu
 . "$(dirname "$0")/common.sh"
 run=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/verify-clankerbox.XXXXXX")" && pwd)
 evidence=$run/evidence
-kind=${1:-linux}
+runtime=${1:-smolvm}
 budget=${2:-}
 count=${3:-1}
+case $runtime in
+  smolvm | tart) ;;
+  *)
+    echo "usage: launch.sh [smolvm|tart] [ram-budget-mib] [hosts]" >&2
+    exit 2
+    ;;
+esac
 mkdir "$evidence" "$run/hosts"
-echo "$kind" >"$run/kind"
+echo "$runtime" >"$run/runtime"
 echo "$budget" >"$run/budget"
 
 fail() {
@@ -24,7 +31,7 @@ vp run @gjermundgaraba/clankerbox#build >"$evidence/build.log" 2>&1 || fail "the
 number=0
 while [ "$number" -lt "$count" ]; do
   number=$((number + 1))
-  start_host "$kind-$number"
+  start_host "$runtime-$number"
 done
 
 start_server

@@ -283,7 +283,7 @@ const based = Effect.gen(function* () {
 const running = Effect.map(based, ({ runtime }) => runtime);
 
 const preparedForSetup = Effect.tap(running, (runtime) =>
-  prepareBase(runtime, machine, "linux", false)
+  prepareBase(runtime, machine, false)
 );
 
 const numbered = (count: number) =>
@@ -425,7 +425,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { runtime, fake } = yield* based;
         const root = fake.root(machine.name) ?? "";
 
-        yield* prepareBase(runtime, machine, "linux", false);
+        yield* prepareBase(runtime, machine, false);
 
         const once = yield* Effect.all([
           readFile(path.join(root, "etc/passwd")),
@@ -433,7 +433,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           readFile(path.join(root, "etc/ssh/sshd_config.d/10-clankerbox.conf")),
         ]);
 
-        yield* prepareBase(runtime, machine, "linux", false);
+        yield* prepareBase(runtime, machine, false);
 
         expect(
           yield* Effect.all([
@@ -460,9 +460,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* remove(path.join(bin, "apt-get"));
 
-        const error = yield* Effect.flip(
-          prepareBase(runtime, machine, "linux", false)
-        );
+        const error = yield* Effect.flip(prepareBase(runtime, machine, false));
 
         expect(error).toMatchObject({
           _tag: "ScriptFailed",
@@ -479,7 +477,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { runtime, fake } = yield* based;
         const root = fake.root(machine.name) ?? "";
 
-        yield* prepareBase(runtime, machine, "linux", false);
+        yield* prepareBase(runtime, machine, false);
         yield* runSetup(
           runtime,
           machine,
@@ -507,11 +505,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
-        const fake = fakeRuntime({ dir, kind: "mac" });
+        const fake = fakeRuntime({ dir, as: "tart" });
         const runtime = Context.get(yield* Layer.build(fake.layer), Runtime);
 
         yield* runtime.create(machine, image);
-        yield* prepareBase(runtime, machine, "mac", false);
+        yield* prepareBase(runtime, machine, false);
 
         const made = yield* calls(fake.root(machine.name) ?? "");
 

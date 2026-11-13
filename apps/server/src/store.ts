@@ -3,9 +3,9 @@ import {
   Build,
   Desired,
   HostError,
-  Kind,
   Labels,
   NotFound,
+  RuntimeTraits,
   Sizing,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
@@ -97,7 +97,7 @@ const made = {
   name: Schema.String,
   instance: Schema.String,
   createdAt: Schema.DateTimeUtcFromString,
-  kind: Kind,
+  traits: Schema.fromJsonString(RuntimeTraits),
   base: Schema.String,
   cpu: Schema.Int,
   ramMib: Schema.Int,

@@ -66,7 +66,7 @@ const clientFiles = (run: string, url: string) =>
     );
 
     const base =
-      readFileSync(path.join(run, "kind"), "utf8").trim() === "mac"
+      readFileSync(path.join(run, "runtime"), "utf8").trim() === "tart"
         ? "macos"
         : "ubuntu";
 

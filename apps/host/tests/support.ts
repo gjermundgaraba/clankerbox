@@ -6,7 +6,6 @@ import path from "node:path";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
-import type { Kind } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { Context, Duration, Effect, Exit, Layer, Logger, Scope } from "effect";
 import { HttpClient, HttpServer } from "effect/http";
@@ -18,9 +17,7 @@ import type { PortRange } from "../src/machine-ports.ts";
 import { Operations } from "../src/operations.ts";
 import type { Interface as OperationsInterface } from "../src/operations.ts";
 import type { BuildsSettings } from "../src/platform/s3.ts";
-import { traits as smolvm } from "../src/platform/smolvm/traits.ts";
 import type { TailnetSettings } from "../src/platform/tailscale.ts";
-import { traits as tart } from "../src/platform/tart/traits.ts";
 import type {
   Admission,
   Interface as RuntimeInterface,
@@ -28,11 +25,19 @@ import type {
 import type { HostSettings } from "../src/settings.ts";
 import type { Tailnet } from "../src/tailnet.ts";
 import { fakeRuntime } from "./fake-runtime.ts";
-import type { FakeOptions, FakeRuntime } from "./fake-runtime.ts";
+import type {
+  FakeOptions,
+  FakeRuntime,
+  FakeRuntimeName,
+} from "./fake-runtime.ts";
 
-export { hostKeySetup, writeTailscaleStubs } from "./fake-runtime.ts";
+export {
+  fakedTraits as runtimeTraits,
+  hostKeySetup,
+  writeTailscaleStubs,
+} from "./fake-runtime.ts";
 
-export const runtimeTraits = { smolvm, tart } as const;
+export type { FakeRuntimeName } from "./fake-runtime.ts";
 
 export const image = "registry.example/ubuntu@sha256:00";
 
@@ -43,11 +48,9 @@ export const quiet = Duration.hours(1);
 export const hostConfig = (
   stateDir: string,
   machinePorts = sharedPorts,
-  kind: Kind = "linux",
-  id: string = kind
+  id = "smolvm"
 ): HostSettings => ({
   id,
-  kind,
   listen: { address: "127.0.0.1", port: 0 },
   bases: new Map([["ubuntu", image]]),
   stateDir,
@@ -88,10 +91,10 @@ export const startHost = (
     readonly fake?: FakeRuntime;
     readonly id?: string;
     readonly port?: number;
-    readonly kind?: Kind;
+    readonly as?: FakeRuntimeName;
     readonly bases?: ReadonlyMap<string, string>;
     readonly logger?: Logger.Logger<unknown, unknown>;
-    readonly runtime?: Omit<FakeOptions, "dir" | "kind">;
+    readonly runtime?: Omit<FakeOptions, "dir" | "as">;
     readonly ports?: PortRange;
     readonly tailnet?: Layer.Layer<Tailnet>;
     readonly tailnetSettings?: TailnetSettings;
@@ -103,7 +106,7 @@ export const startHost = (
   Effect.gen(function* () {
     const fake =
       options?.fake ??
-      fakeRuntime({ dir, kind: options?.kind, ...options?.runtime });
+      fakeRuntime({ dir, as: options?.as, ...options?.runtime });
 
     const stateDir = path.join(dir, "state");
     const scope = yield* Scope.make();
@@ -113,7 +116,7 @@ export const startHost = (
     const context = yield* Layer.buildWithScope(
       hostLayer(
         {
-          ...hostConfig(stateDir, options?.ports, options?.kind, options?.id),
+          ...hostConfig(stateDir, options?.ports, options?.id ?? options?.as),
           ...(options?.bases === undefined ? {} : { bases: options.bases }),
           tailnet: options?.tailnetSettings,
           builds: options?.buildsSettings,
@@ -133,7 +136,7 @@ export const startHost = (
     );
 
     const host: TestHost = {
-      id: options?.id ?? options?.kind ?? "linux",
+      id: options?.id ?? options?.as ?? "smolvm",
       dir,
       fake,
       stateDir,

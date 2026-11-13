@@ -24,7 +24,7 @@ Linux or macOS, with `vp install` done.
 
 ```sh
 S=.agents/skills/verify-clankerbox/scripts
-RUN=$($S/launch.sh)                  # or: $S/launch.sh mac, $S/launch.sh linux 2048 2
+RUN=$($S/launch.sh)                  # or: $S/launch.sh tart, $S/launch.sh smolvm 2048 2
 $S/cb.sh "$RUN" create dev --base ubuntu --cpu 1 --ram 1G --disk 10G
 $S/cb.sh "$RUN" get dev --json
 $S/cleanup.sh "$RUN"
@@ -32,17 +32,19 @@ $S/cleanup.sh "$RUN"
 
 ## Launch
 
-`launch.sh [linux|mac] [ram-budget-mib] [hosts]` records the tree of the sources
+`launch.sh [smolvm|tart] [ram-budget-mib] [hosts]` records the tree of the sources
 it builds, builds the CLI, makes a fresh run directory under `$TMPDIR`,
 starts the hosts and the control plane in the background and waits until they
 serve. It prints the control plane's URL on stderr and the run directory on
 stdout. A build or start that fails prints its log and the evidence directory.
 Each launch is a new run: runs never share a directory, port or evidence.
 
-Hosts are named `<kind>-<n>`: `linux-1`, `linux-2`. The budget applies to each.
+Each host fakes the runtime named, `smolvm` by default, with that runtime's
+traits. Hosts are named `<runtime>-<n>`: `smolvm-1`, `smolvm-2`. The budget
+applies to each.
 
-While it serves, the run directory holds `server.ready` and `server.url` (the
-control plane's URL), `server.pid`, `hosts/<id>.url` and `hosts/<id>.pid`, `home`
+While it serves, the run directory holds `runtime` (the runtime its hosts fake),
+`server.ready` and `server.url` (the control plane's URL), `server.pid`, `hosts/<id>.url` and `hosts/<id>.pid`, `home`
 (the path of the scratch HOME), `recipes/`, `server-state` and `evidence/`.
 `evidence/` holds:
 
@@ -60,10 +62,10 @@ It holds the test operator key and is kept across restarts: append a key, then
 `fault.sh <run> kill-server` and `start-server`, to rotate them. The HOME's
 config names no keys.
 
-IDs are bare names. The base is `ubuntu` on linux and `macos` on mac. The recheck
+IDs are bare names. The base is `ubuntu` on smolvm and `macos` on tart. The recheck
 runs every 2 seconds. The optional budget is the RAM, in MiB, that a host refuses
 to pass. The run has two recipes, each a directory with a `setup.sh`, and
-beside each a template file naming it with the kind's base and 1 vCPU, 1G of
+beside each a template file naming it with the runtime's base and 1 vCPU, 1G of
 RAM and a 10G disk: `$S/cb.sh "$RUN" template build "$RUN/recipes/web.yaml"`
 builds the template `web`, and a copy beside it under another name builds
 another. A create runs no setup. `$RUN/recipes/web` writes `$RUN/recipe-ran`.
@@ -135,6 +137,20 @@ Run them with `hold-capture <id>`, then `checkpoint capture <machine> <name>
 --no-wait`, then `kill-host <id>`. For the second, ask `checkpoint delete <name>
 --no-wait` before `start-host <id>`.
 
+## Upgrade
+
+`upgrade.sh <run> <worktree>` moves a run to the build of another tree, as an
+operator upgrades a control plane and its hosts. It stops the run's control
+plane and hosts with `cleanup.sh`, rewrites a run's `kind` file (`linux` or
+`mac`, as launches before runtimes wrote) to its `runtime` (`smolvm` or `tart`),
+as an operator rewrites a host config's `kind`, records the worktree's sources,
+builds it, and starts its hosts under the same IDs and ports and its control
+plane on the same port and state. Run it from the worktree it names, so that
+tree's `cb.sh` drives the run: launch from a trunk worktree, drive it, then
+`$S/upgrade.sh "$RUN" "$PWD"` here. The hosts restart as `start-host` does, with
+no machines, so each machine reads `missing` while its row keeps what the old
+build stored.
+
 ## Evidence
 
 A proof is the transcript of your commands, plus:
@@ -169,6 +185,6 @@ The fake stands in for the VM, so this proves none of:
 - what a restarted host keeps: `start-host` starts a new fake with no machines,
   so each of its machines reads `missing`, where a real runtime keeps its VMs.
 
-Proving those takes a `linux` host with KVM and the pinned smolvm
+Proving those takes a Linux host with KVM and the pinned smolvm
 (`bump-smolvm`), or a Mac with Tart (`bump-tart`), running
 `clankerbox-host --config` behind `clankerbox-server --config`.

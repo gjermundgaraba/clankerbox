@@ -3,7 +3,10 @@ import path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { startHost } from "@gjermundgaraba/clankerbox-host/testing";
-import type { TestHost } from "@gjermundgaraba/clankerbox-host/testing";
+import type {
+  TestHost,
+  FakeRuntimeName,
+} from "@gjermundgaraba/clankerbox-host/testing";
 import {
   Capacity,
   Conflict,
@@ -11,7 +14,7 @@ import {
   NotMade,
   PinMismatch,
 } from "@gjermundgaraba/clankerbox-sdk";
-import type { Client, Kind } from "@gjermundgaraba/clankerbox-sdk";
+import type { Client } from "@gjermundgaraba/clankerbox-sdk";
 import { read } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { DateTime, Duration, Effect, Fiber, Option } from "effect";
 import { expect } from "vite-plus/test";
@@ -44,8 +47,8 @@ const keyed = {
 
 const nearby = Duration.millis(300);
 
-const onKind = (kind: Kind | undefined) => ({
-  hosts: [kind === undefined ? { id: "linux" } : { id: kind, kind }],
+const on = (as: FakeRuntimeName | undefined) => ({
+  hosts: [as === undefined ? { id: "smolvm" } : { id: as, as }],
 });
 
 const withSource = (options?: Parameters<typeof running>[0]) =>
@@ -484,7 +487,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
   it.effect("a mac capture of a stopped machine is disk, with no pin", () =>
     Effect.gen(function* () {
-      const { client, store } = yield* withSource(onKind("mac"));
+      const { client, store } = yield* withSource(on("tart"));
 
       yield* client.stopMachine({ id: "dev" });
 
@@ -622,13 +625,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const refused = yield* Effect.forEach(
-          ["linux", "mac"] as const,
-          (kind) =>
+          ["smolvm", "tart"] as const,
+          (as) =>
             Effect.gen(function* () {
-              const served = yield* withSource(onKind(kind));
+              const served = yield* withSource(on(as));
               const { client, host } = served;
 
-              if (kind === "linux") {
+              if (as === "smolvm") {
                 yield* client.stopMachine({ id: "dev" });
               }
 
@@ -656,7 +659,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
 
         expect(refused).toStrictEqual(
-          ["linux", "mac"].map(() => ({
+          ["smolvm", "tart"].map(() => ({
             tag: "WrongState",
             state: "failed",
             failed: true,

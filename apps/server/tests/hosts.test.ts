@@ -44,15 +44,15 @@ layer(NodeServices.layer, { excludeTestServices: true })(
           yield* Effect.sleep(Duration.millis(200));
           yield* restartedHost(host);
           yield* eventually(Effect.succeed(lines), (seen) =>
-            seen.includes("host linux answers again")
+            seen.includes("host smolvm answers again")
           );
           yield* Effect.sleep(Duration.millis(100));
 
           expect(
             lines.filter((line) => line.startsWith("host "))
           ).toStrictEqual([
-            expect.stringContaining("host linux: "),
-            "host linux answers again",
+            expect.stringContaining("host smolvm: "),
+            "host smolvm answers again",
           ]);
         })
     );

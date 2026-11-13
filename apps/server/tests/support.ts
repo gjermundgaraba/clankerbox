@@ -8,12 +8,14 @@ import {
   startHost,
   writeTailscaleStubs,
 } from "@gjermundgaraba/clankerbox-host/testing";
-import type { TestHost } from "@gjermundgaraba/clankerbox-host/testing";
+import type {
+  FakeRuntimeName,
+  TestHost,
+} from "@gjermundgaraba/clankerbox-host/testing";
 import { Client } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   CreateRequest,
   Internal,
-  Kind,
   Machine,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
@@ -173,7 +175,7 @@ const started = (
     return served;
   });
 
-const planePorts = { linux: 21_100, mac: 21_200 } as const;
+const planePorts = 21_100;
 
 let nextRange = 0;
 
@@ -181,15 +183,15 @@ const portRange = () => {
   nextRange += 1;
 
   return {
-    first: planePorts.linux + nextRange * 20,
-    last: planePorts.linux + nextRange * 20 + 19,
+    first: planePorts + nextRange * 20,
+    last: planePorts + nextRange * 20 + 19,
   };
 };
 
 export const plane = (options?: {
   readonly hosts?: ReadonlyArray<{
     readonly id: string;
-    readonly kind?: Kind;
+    readonly as?: FakeRuntimeName;
     /** This host's own, over `runtime`. */
     readonly options?: Parameters<typeof startHost>[1];
   }>;
@@ -205,9 +207,9 @@ export const plane = (options?: {
 }) =>
   Effect.gen(function* () {
     const dir = yield* scratch;
-    const members = options?.hosts ?? [{ id: "linux" }];
+    const members = options?.hosts ?? [{ id: "smolvm" }];
 
-    const hosts = yield* Effect.forEach(members, ({ id, kind, options: own }) =>
+    const hosts = yield* Effect.forEach(members, ({ id, as, options: own }) =>
       Effect.suspend(() => {
         if (options?.tailscaled === true) {
           writeTailscaleStubs(path.join(dir, id, "bin"));
@@ -215,7 +217,7 @@ export const plane = (options?: {
 
         return startHost(path.join(dir, id), {
           id,
-          ...(kind === undefined ? {} : { kind }),
+          ...(as === undefined ? {} : { as }),
           ports: portRange(),
           ...options?.runtime,
           ...own,

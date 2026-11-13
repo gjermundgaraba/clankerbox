@@ -19,7 +19,7 @@ import {
   Unsizable,
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
-import type { Kind, Setup, Sizing } from "@gjermundgaraba/clankerbox-sdk";
+import type { Setup, Sizing } from "@gjermundgaraba/clankerbox-sdk";
 import {
   chmod,
   exists,
@@ -57,6 +57,7 @@ import {
   fakeRuntime,
   writeTailscaleStubs,
 } from "./fake-runtime.ts";
+import type { FakeRuntimeName } from "./fake-runtime.ts";
 import {
   accepts,
   holding,
@@ -72,14 +73,14 @@ const relayPorts = 21_600;
 
 const allFree: Probe = { free: () => Effect.succeed(true) };
 
-const freePorts: ReadonlyMap<Kind, string> = new Map([
-  ["linux", "ubuntu"],
-  ["mac", "macos"],
+const freePorts: ReadonlyMap<FakeRuntimeName, string> = new Map([
+  ["smolvm", "ubuntu"],
+  ["tart", "macos"],
 ]);
 
 interface RunnerOptions {
   readonly builds?: Layer.Layer<BuildStore>;
-  readonly kind?: Kind;
+  readonly as?: FakeRuntimeName;
   readonly pin?: string;
   readonly ramBudgetMib?: number;
   readonly ports?: number;
@@ -93,11 +94,11 @@ interface RunnerOptions {
 const runner = (options?: RunnerOptions) =>
   Effect.gen(function* () {
     const dir = yield* scratch;
-    const kind = options?.kind ?? "linux";
+    const faked = options?.as ?? "smolvm";
 
     const fake = fakeRuntime({
       dir,
-      kind,
+      as: faked,
       ramBudgetMib: options?.ramBudgetMib,
       pin: options?.pin,
       relayed: options?.relayed,
@@ -111,9 +112,8 @@ const runner = (options?: RunnerOptions) =>
 
     const operations = yield* Layer.build(
       Operations.layer({
-        id: kind,
-        kind,
-        bases: new Map([[freePorts.get(kind) ?? "ubuntu", image]]),
+        id: faked,
+        bases: new Map([[freePorts.get(faked) ?? "ubuntu", image]]),
       }).pipe(
         Layer.provide(
           Reach.layer({ first, last: first + (options?.ports ?? 10) - 1 })
@@ -1429,7 +1429,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a runtime whose stop doesn't resume stops a paused VM under any pin, and admits nothing",
     () =>
       Effect.gen(function* () {
-        const host = yield* runner({ kind: "mac" });
+        const host = yield* runner({ as: "tart" });
 
         yield* finished(
           host,
@@ -1811,7 +1811,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const host = yield* runner();
-        const mac = yield* runner({ kind: "mac" });
+        const mac = yield* runner({ as: "tart" });
         const dev = ref("dev");
 
         const parked = ref("paused", { port: firstPort + 1 });
@@ -1862,11 +1862,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ],
           [
             "WrongState",
-            "machine dev is running, and the mac runtime resizes only a stopped machine: stop it first",
+            "machine dev is running, and the tart runtime resizes only a stopped machine: stop it first",
           ],
           [
             "WrongState",
-            "machine paused is paused, and the linux runtime resizes a stopped or running machine: stop it first",
+            "machine paused is paused, and the smolvm runtime resizes a stopped or running machine: stop it first",
           ],
         ]);
         expect(gone.error?._tag).toBe("Missing");
@@ -2853,7 +2853,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(report.status, report.error?.message).toBe("done");
         expect(yield* tailnetSteps(host)).toStrictEqual(["setup"]);
         expect(logged.join("\n")).toContain(
-          "make building-1: its step asks for a tailnet join, and host linux has no tailnet setting"
+          "make building-1: its step asks for a tailnet join, and host smolvm has no tailnet setting"
         );
       }).pipe(Effect.provide(Logger.layer([capturing(logged)])));
     }
@@ -3105,7 +3105,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a fork or a restore whose port is held fails with the listen error before the runtime is called, a fork the runtime would refuse for its running source included",
     () =>
       Effect.gen(function* () {
-        const host = yield* runner({ relayed: true, kind: "mac" });
+        const host = yield* runner({ relayed: true, as: "tart" });
 
         yield* finished(host, makes("src"));
 
@@ -3158,7 +3158,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a fork the runtime refuses for its source's state, and a fork or a restore refused for the pin, leave their relays open until the remove that follows",
     () =>
       Effect.gen(function* () {
-        const host = yield* runner({ relayed: true, kind: "mac" });
+        const host = yield* runner({ relayed: true, as: "tart" });
         const src = ref("src", { port: relayPorts });
 
         yield* finished(host, makes("src"));
