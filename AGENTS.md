@@ -276,9 +276,11 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
   before its host forgets it. A step acts on its row's handle, or on what the
   runtime finds of the row's instance, never on a VM by its name alone, and a
   remove or a delete of a checkpoint that finds nothing is done, while one whose
-  search fails fails. A runtime's stop, and Tart's pause, mask
+  search fails fails. A runtime's stop, and smolvm's and Tart's pause, mask
   interruption from the command that halts a running VM until it has, so a step
   cut short reports `cancelled` only once the VM is where that command takes it.
+  A smolvm host that starts resumes a machine a killed pause left `pausing`, so
+  no step runs a hook in a frozen guest.
 - **A sweep deletes only what its store retired.** A runtime with the `owned`
   facet lists what carries the host's mark at its provider, and nothing else. A
   store retires an instance on a host in the write that ends its row's hold on

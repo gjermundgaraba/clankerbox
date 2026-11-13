@@ -2116,6 +2116,124 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
+    "a host that starts resumes a machine a killed pause left half-paused, so no step meets its frozen guest, and leaves a paused one paused",
+    () =>
+      Effect.gen(function* () {
+        const model = smolvmModel();
+        const paused = nativeName({ name: "web", instance: machine.instance });
+
+        model.vms.set(machine.handle, { state: "pausing", forwards: [] });
+        model.vms.set(paused, { state: "paused", forwards: [] });
+
+        const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
+
+        yield* runtime.startup;
+
+        expect([
+          model.vms.get(machine.handle)?.state,
+          model.vms.get(paused)?.state,
+        ]).toStrictEqual(["running", "paused"]);
+      })
+  );
+
+  it.effect(
+    "a host's start that can't remove one seed build or resume one machine still removes and resumes the rest",
+    () =>
+      Effect.gen(function* () {
+        const model = smolvmModel();
+        const stuck = `image-seed-0123456789abcdef-${process.pid}`;
+        const left = `image-seed-fedcba9876543210-${process.pid}`;
+        const frozen = "frozen-01234567";
+
+        model.orphanVmm(stuck);
+        model.orphanVmm(left);
+        model.vms.set(frozen, { state: "pausing", forwards: [] });
+        model.vms.set(machine.handle, { state: "pausing", forwards: [] });
+        model.faults.reply = ({ args }) =>
+          (args[1] === "delete" && args.includes(stuck)) ||
+          (args[1] === "resume" && args.includes(frozen))
+            ? locked
+            : undefined;
+
+        const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
+
+        yield* runtime.startup;
+
+        expect({
+          left: model.vms.has(left),
+          resumed: model.vms.get(machine.handle)?.state,
+        }).toStrictEqual({ left: false, resumed: "running" });
+      })
+  );
+
+  it.effect(
+    "a pause cut short ends only once smolvm has paused the machine, so it never leaves it half-paused",
+    () =>
+      Effect.gen(function* () {
+        const model = smolvmModel();
+        const gate = yield* Deferred.make<undefined>();
+        const vm = { state: "running", forwards: [] };
+
+        model.vms.set(machine.handle, vm);
+        model.faults.reply = ({ args }) => {
+          if (args[1] !== "pause") {
+            return undefined;
+          }
+
+          vm.state = "pausing";
+
+          return {
+            until: Effect.andThen(
+              Deferred.await(gate),
+              Effect.sync(() => {
+                vm.state = "paused";
+              })
+            ),
+          };
+        };
+
+        const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
+        const pausing = yield* Effect.forkChild(runtime.pause(machine));
+
+        yield* waitFor(
+          Effect.sync(() => vm.state),
+          (state) => state === "pausing"
+        );
+
+        const cut = yield* Effect.forkChild(Fiber.interrupt(pausing));
+
+        yield* TestClock.withLive(Effect.sleep(Duration.millis(50)));
+
+        const cutBeforePaused = cut.pollUnsafe() !== undefined;
+
+        yield* Deferred.succeed(gate, undefined);
+        yield* Fiber.join(cut);
+
+        expect({ cutBeforePaused, state: vm.state }).toStrictEqual({
+          cutBeforePaused: false,
+          state: "paused",
+        });
+      })
+  );
+
+  it.effect(
+    "a machine smolvm lists in a state this host doesn't know refuses no admission",
+    () =>
+      Effect.gen(function* () {
+        const model = smolvmModel();
+        const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
+
+        model.vms.set("other", { state: "migrating", forwards: [] });
+
+        yield* admitOn(runtime)({
+          action: "createMachine",
+          machine,
+          machines: [{ _tag: "booting", machine }],
+        });
+      })
+  );
+
+  it.effect(
     "a smolvm host counts a running image seed build's RAM as held",
     () =>
       Effect.gen(function* () {

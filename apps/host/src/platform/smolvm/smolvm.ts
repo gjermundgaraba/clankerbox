@@ -259,7 +259,9 @@ const decodeStatus = Schema.decodeUnknownEffect(
 );
 
 const decodeList = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(Schema.Array(Schema.Struct({ name: Schema.String })))
+  Schema.fromJsonString(
+    Schema.Array(Schema.Struct({ name: Schema.String, state: Schema.String }))
+  )
 );
 
 // https://github.com/smol-machines/smolvm/blob/v1.34.1/src/cli/vm_common.rs#L2785
@@ -354,6 +356,14 @@ export const stateOf = (state: RecordState): MachineState => {
 
   return alive.has(state) ? "running" : "stopped";
 };
+
+const leftBehind = (
+  what: string,
+  work: Effect.Effect<void, Internal>
+): Effect.Effect<void> =>
+  work.pipe(
+    Effect.catch((error) => Effect.logWarning(`${what}: ${error.message}`))
+  );
 
 const given = (flag: string, size: number | undefined) =>
   size === undefined ? [] : [flag, String(size)];
@@ -615,14 +625,6 @@ export const make = (
         )
     );
 
-    const seedBuilds = Effect.map(listed, (vms) =>
-      vms.flatMap(({ name }) => {
-        const pid = seedCaller(name);
-
-        return pid === undefined ? [] : [{ name, pid }];
-      })
-    );
-
     const callEnded = (pid: number) =>
       Effect.map(
         Effect.orElseSucceed(
@@ -632,22 +634,24 @@ export const make = (
         (exists) => !exists
       );
 
-    const removeSeedBuilds = (left: (pid: number) => Effect.Effect<boolean>) =>
-      Effect.gen(function* () {
-        for (const { name, pid } of yield* seedBuilds) {
-          if (yield* left(pid)) {
-            yield* Effect.logWarning(
-              `removing ${name}, an image seed build that a smolvm call cut short left behind`
-            );
-            yield* removeNative(name);
-          }
-        }
-      }).pipe(
-        Effect.catch((error) =>
-          Effect.logWarning(
-            `remove the image seed builds smolvm left behind: ${error.message}`
-          )
-        )
+    const removeSeedBuilds = (
+      vms: ReadonlyArray<{ readonly name: string }>,
+      left: (pid: number) => Effect.Effect<boolean>
+    ) =>
+      Effect.forEach(
+        vms,
+        ({ name }) =>
+          Effect.gen(function* () {
+            const pid = seedCaller(name);
+
+            if (pid !== undefined && (yield* left(pid))) {
+              yield* Effect.logWarning(
+                `removing ${name}, an image seed build that a smolvm call cut short left behind`
+              );
+              yield* leftBehind(`remove ${name}`, removeNative(name));
+            }
+          }),
+        { discard: true }
       );
 
     const boot = (native: string) =>
@@ -656,7 +660,14 @@ export const make = (
         `machine start ${native}`
       ).pipe(
         Effect.onExit((exit) =>
-          Exit.isSuccess(exit) ? Effect.void : removeSeedBuilds(callEnded)
+          Exit.isSuccess(exit)
+            ? Effect.void
+            : leftBehind(
+                "remove the image seed builds smolvm left behind",
+                Effect.flatMap(listed, (vms) =>
+                  removeSeedBuilds(vms, callEnded)
+                )
+              )
         )
       );
 
@@ -1395,7 +1406,23 @@ export const make = (
           }
         }
 
-        yield* removeSeedBuilds(() => Effect.succeed(true));
+        yield* leftBehind(
+          "settle what smolvm calls cut short left behind",
+          Effect.gen(function* () {
+            const vms = yield* listed;
+
+            yield* removeSeedBuilds(vms, () => Effect.succeed(true));
+
+            for (const { name, state: recorded } of vms) {
+              if (recorded === "pausing") {
+                yield* Effect.logWarning(
+                  `resuming ${name}, which a pause cut short left half-paused`
+                );
+                yield* leftBehind(`resume ${name}`, resume(name));
+              }
+            }
+          })
+        );
         yield* Effect.forkIn(settle, layerScope);
       }),
       find: Effect.fn("Smolvm.find")((what, ref) => {
@@ -1548,9 +1575,11 @@ export const make = (
             });
           }
 
-          yield* call(
-            ["machine", "pause", "--name", native],
-            `machine pause ${native}`
+          yield* Effect.uninterruptible(
+            call(
+              ["machine", "pause", "--name", native],
+              `machine pause ${native}`
+            )
           );
         })
       ),
