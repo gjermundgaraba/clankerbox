@@ -13,7 +13,7 @@ import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import { Console, Duration, Effect, FileSystem, Layer, Logger } from "effect";
 import { HttpServer } from "effect/http";
 
-import { serverLayer } from "../src/composition/server.ts";
+import { serverLayer, stopsAtOnce } from "../src/composition/server.ts";
 import {
   defaultFailedRowsLast,
   defaultHookTimeoutSeconds,
@@ -144,6 +144,7 @@ const serve = Effect.gen(function* () {
           NodeHttpServer.layer(createServer, {
             host: settings.listen.address,
             port: settings.listen.port,
+            ...stopsAtOnce,
           })
         )
       ),

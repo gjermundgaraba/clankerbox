@@ -26,7 +26,7 @@ import { HttpServer } from "effect/http";
 
 import { applied } from "../src/chart.ts";
 import * as Checkpoints from "../src/checkpoints.ts";
-import { serverLayer } from "../src/composition/server.ts";
+import { serverLayer, stopsAtOnce } from "../src/composition/server.ts";
 import {
   machineChart,
   phaseOf as phaseOfLeaf,
@@ -166,7 +166,7 @@ const started = (
         NodeHttpServer.layer(createServer, {
           host: "127.0.0.1",
           port,
-          disablePreemptiveShutdown: true,
+          ...stopsAtOnce,
         })
       ).pipe(
         Layer.provideMerge(Logger.layer(logger === undefined ? [] : [logger])),

@@ -172,7 +172,7 @@ One process runs from one JSON config file:
 clankerbox-server --config /etc/clankerbox/server.json
 ```
 
-The control plane exits 130 on SIGINT or SIGTERM and 1 when it fails. Its log holds what an operator acts on: a host that stops answering and answers again, a step a host refuses, a request that answers `Internal` or fails, a loop, recheck or build that fails, and an expiry. Each line of a machine's or checkpoint's own work names it, and the step it follows. An answered request, a refusal included, logs at debug, which `--log-level debug` shows.
+The control plane exits 130 on SIGINT or SIGTERM and 1 when it fails. It stops at once: a write it began commits whole, and a request still open, an `exec` or a held read, is cut as a crash would cut it, so a mutation whose reply it cut answers `Unavailable` saying it may have run, and a read `Unavailable`, which a wait reads on through until it is back. A client reads a reverse proxy's 502, 503 or 504 in front of the control plane the same way. Its log holds what an operator acts on: a host that stops answering and answers again, a step a host refuses, a request that answers `Internal` or fails, a loop, recheck or build that fails, and an expiry. Each line of a machine's or checkpoint's own work names it, and the step it follows. An answered request, a refusal included, logs at debug, which `--log-level debug` shows.
 
 ### Upgrading from 0.40
 

@@ -54,10 +54,11 @@ import type {
 
 /**
  * What one read of a resource sees: a phase, fields to write on its row, `gone` once it is deleted,
- * or `down` when the read gets no reply. A script's last `down` or `waiting` repeats, so an outage
- * of the control plane or of a host can outlast the wait.
+ * `down` when the read gets no reply, or `cut` when the control plane's stop cuts it, which
+ * answers a 503 with no body. A script's last `down` or `waiting` repeats, so an outage of the
+ * control plane or of a host can outlast the wait.
  */
-export type Step<Row, Stage> = Stage | Partial<Row> | "gone" | "down";
+export type Step<Row, Stage> = Stage | Partial<Row> | "gone" | "down" | "cut";
 
 export type MachineStep = Step<Machine, Phase>;
 
@@ -162,6 +163,8 @@ export const template = (
   };
 };
 
+const nodeAnswerToARequestItsStopCut = 503;
+
 const labelled = <A extends Machine | Checkpoint>(
   made: A,
   labels?: Labels
@@ -236,7 +239,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
   const calls: string[] = [];
   const versions: Array<string | null> = [];
   const holds: Array<number | undefined> = [];
-  let replyDropped = false;
+  let replyLost: "down" | "cut" | undefined;
 
   for (const held of options.machines ?? []) {
     machines.set(held.id, held);
@@ -320,8 +323,8 @@ export const stubServer = (options: StubServerOptions = {}) => {
         return restingMachine(found);
       }
 
-      if (step === "down") {
-        replyDropped = true;
+      if (step === "down" || step === "cut") {
+        replyLost = step;
 
         return Effect.succeed(found);
       }
@@ -370,8 +373,8 @@ export const stubServer = (options: StubServerOptions = {}) => {
         return restingCheckpoint(found);
       }
 
-      if (step === "down") {
-        replyDropped = true;
+      if (step === "down" || step === "cut") {
+        replyLost = step;
 
         return Effect.succeed(found);
       }
@@ -412,8 +415,8 @@ export const stubServer = (options: StubServerOptions = {}) => {
       return { ...found, phase: "ready" };
     }
 
-    if (step === "down") {
-      replyDropped = true;
+    if (step === "down" || step === "cut") {
+      replyLost = step;
 
       return found;
     }
@@ -851,9 +854,15 @@ export const stubServer = (options: StubServerOptions = {}) => {
 
       const response = await web.handler(request, context);
 
-      if (replyDropped) {
-        replyDropped = false;
+      const lost = replyLost;
 
+      replyLost = undefined;
+
+      if (lost === "cut") {
+        return new Response(null, { status: nodeAnswerToARequestItsStopCut });
+      }
+
+      if (lost === "down") {
         throw new TypeError("fetch failed", {
           cause: new Error("connect ECONNREFUSED"),
         });
@@ -881,10 +890,16 @@ export class Silent {
   }
 }
 
+/** A reverse proxy in front of a control plane that doesn't answer it, as nginx answers. */
+export interface Gateway {
+  readonly gateway: number;
+}
+
 export type Endpoint =
   | StubServer
   | "down"
   | Silent
+  | Gateway
   | { readonly slow: StubServer }
   | { readonly lost: StubServer };
 
@@ -922,6 +937,13 @@ const fetching = (
       endpoint.arrive();
 
       return await unanswered(endpoint, init?.signal);
+    }
+
+    if ("gateway" in endpoint) {
+      return new Response(`<html><body>${endpoint.gateway}</body></html>`, {
+        status: endpoint.gateway,
+        headers: { "content-type": "text/html" },
+      });
     }
 
     if ("slow" in endpoint) {

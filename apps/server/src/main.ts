@@ -10,7 +10,7 @@ import { Effect, Layer } from "effect";
 import { Command, Flag } from "effect/cli";
 
 import { loadConfig } from "./composition/config.ts";
-import { serverLayer } from "./composition/server.ts";
+import { serverLayer, stopsAtOnce } from "./composition/server.ts";
 
 const run = (file: string) =>
   Effect.gen(function* () {
@@ -22,6 +22,7 @@ const run = (file: string) =>
         NodeHttpServer.layer(createServer, {
           host: config.listen.address,
           port: config.listen.port,
+          ...stopsAtOnce,
         })
       )
     );

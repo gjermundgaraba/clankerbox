@@ -827,6 +827,59 @@ describe("client", () => {
     );
 
     it.effect(
+      "a read the control plane's stop cuts is Unavailable and retryable",
+      () =>
+        Effect.gen(function* () {
+          const stub = server({ machines: [machine("dev")] });
+
+          stub.script("dev", ["cut"]);
+
+          const error = yield* withClient(stub, (client) =>
+            Effect.flip(client.getMachine({ id: "dev" }))
+          );
+
+          expect(error._tag).toBe("Unavailable");
+          expect(error.message).toContain(url);
+          expect(retryable(error)).toBe(true);
+        })
+    );
+
+    it.effect(
+      "a proxy's 502, 503 or 504 is a control plane that didn't answer: a read is retryable, a mutation may have run",
+      () =>
+        Effect.gen(function* () {
+          for (const gateway of [502, 503, 504] as const) {
+            const read = yield* withClient({ gateway }, (client) =>
+              Effect.flip(client.getMachine({ id: "dev" }))
+            );
+
+            const made = yield* withClient({ gateway }, (client) =>
+              Effect.flip(client.create("dev", spec))
+            );
+
+            expect(read._tag, `${gateway}`).toBe("Unavailable");
+            expect(retryable(read), `${gateway}`).toBe(true);
+            expect(made, `${gateway}`).toMatchObject({
+              _tag: "Unavailable",
+              readOnly: false,
+              made: "dev",
+            });
+            expect(made.message).toContain("may have run");
+          }
+        })
+    );
+
+    it.effect("a proxy's other answer is Internal", () =>
+      Effect.gen(function* () {
+        const error = yield* withClient({ gateway: 500 }, (client) =>
+          Effect.flip(client.getMachine({ id: "dev" }))
+        );
+
+        expect(error._tag).toBe("Internal");
+      })
+    );
+
+    it.effect(
       "an origin nothing serves is the same as a server that's down",
       () =>
         Effect.gen(function* () {
@@ -1705,6 +1758,26 @@ describe("client", () => {
 
         expect(made.phase).toBe("settled");
       })
+    );
+
+    it.effect(
+      "a wait reads on through the reads a stop of the control plane cuts",
+      () =>
+        Effect.gen(function* () {
+          const stub = server({ machines: [stoppedDev] });
+
+          stub.script("dev", ["cut", "down", "settled"]);
+
+          const started = yield* ticking(
+            withClient(
+              stub,
+              (client) => client.startMachine({ id: "dev" }),
+              everyMinute
+            )
+          );
+
+          expect(started).toMatchObject({ state: "running", phase: "settled" });
+        })
     );
 
     it.effect(

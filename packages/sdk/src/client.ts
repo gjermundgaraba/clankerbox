@@ -262,31 +262,45 @@ const unexpected = (
     message: `the control plane answered ${context.what} unexpectedly: ${error.message}`,
   });
 
+const cutByStopOrProxy: ReadonlySet<number> = new Set([502, 503, 504]);
+
 const isUndeclared = (error: unknown): error is Undeclared =>
   HttpClientError.isHttpClientError(error) ||
   Schema.isSchemaError(error) ||
   Schema.is(Action.BuiltIn)(error);
+
+const fromHttp = (
+  failure: HttpClientError.HttpClientError,
+  context: CallContext
+): Unavailable | Internal => {
+  const status = failure.response?.status;
+
+  if (status !== undefined && cutByStopOrProxy.has(status)) {
+    return unanswered(context, `HTTP ${status}`);
+  }
+
+  return Match.value(failure.reason).pipe(
+    Match.tag("TransportError", () =>
+      unanswered(context, causeDetail(failure))
+    ),
+    Match.when(
+      {
+        _tag: "DecodeError",
+        cause: (cause: unknown) =>
+          cause !== undefined && !(cause instanceof SyntaxError),
+      },
+      () => unanswered(context, causeDetail(failure))
+    ),
+    Match.orElse(() => unexpected(context, failure))
+  );
+};
 
 const fromUndeclared = (
   error: Undeclared,
   context: CallContext
 ): Invalid | Unavailable | Internal =>
   Match.valueTags(error, {
-    HttpClientError: (failure) =>
-      Match.value(failure.reason).pipe(
-        Match.tag("TransportError", () =>
-          unanswered(context, causeDetail(failure))
-        ),
-        Match.when(
-          {
-            _tag: "DecodeError",
-            cause: (cause: unknown) =>
-              cause !== undefined && !(cause instanceof SyntaxError),
-          },
-          () => unanswered(context, causeDetail(failure))
-        ),
-        Match.orElse(() => unexpected(context, failure))
-      ),
+    HttpClientError: (failure) => fromHttp(failure, context),
     InvalidInput: ({ message }) =>
       new Invalid({
         message: `${context.what}: the request doesn't match the action's input: ${message}`,

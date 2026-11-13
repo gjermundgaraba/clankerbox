@@ -32,6 +32,13 @@ export type ServerLayer = Layer.Layer<
 const internalStatus = 500;
 
 /**
+ * How the control plane's Node server stops: at once, cutting the requests still open. A write is
+ * one SQLite transaction, which a stop never splits, and a request it cuts is one a crash would
+ * cut: the client reads to see what a mutation did, and a wait reads on through the outage.
+ */
+export const stopsAtOnce = { disablePreemptiveShutdown: true } as const;
+
+/**
  * The journal holds what an operator acts on: a request that answers `Internal` or fails as no
  * declared error does. An answer, a refusal included, is the client's, and logs at debug.
  */
