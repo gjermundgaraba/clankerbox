@@ -327,6 +327,25 @@ const seedBuilder = /^image-seed-[0-9a-f]{16}-(?<pid>[1-9]\d{0,6})$/u;
 
 const pidLimit = 2 ** 22;
 
+// smolvm deletes a VM whose name begins so once it is 30 minutes old, at its next seed build or init bake:
+// https://github.com/smol-machines/smolvm/blob/v1.34.1/src/image_seed.rs#L1263-L1277
+// https://github.com/smol-machines/smolvm/blob/v1.34.1/src/cli/machine.rs#L1017-L1038
+const builderPrefixes = [
+  { prefix: "image-seed-", builder: "the builder of its image seeds" },
+  { prefix: "init-bake-", builder: "the builder of its init layers" },
+] as const;
+
+const takenForBuilder = (machine: Identity): Internal | undefined => {
+  const native = nativeName(machine);
+  const taken = builderPrefixes.find(({ prefix }) => native.startsWith(prefix));
+
+  return taken === undefined
+    ? undefined
+    : new Internal({
+        message: `a smolvm host makes no machine named ${machine.name}: smolvm takes a VM whose name begins ${taken.prefix} for ${taken.builder}, and deletes it once it is 30 minutes old`,
+      });
+};
+
 const seedCaller = (name: string): number | undefined => {
   const pid = Number(seedBuilder.exec(name)?.groups?.["pid"]);
 
@@ -1472,23 +1491,28 @@ export const make = (
 
         return handle;
       }),
-      make: Effect.fn("Smolvm.make")((machine, origin, bind) =>
-        Effect.as(
-          Match.valueTags(origin, {
-            image: ({ image }) => created(machine, image, bind),
-            checkpoint: ({ checkpoint }) => restored(checkpoint, machine, bind),
-            machine: (source) => forked(source.machine, machine, bind),
-          }),
-          {
-            handle: nativeName(machine),
-            sizes: {
-              cpu: machine.cpu,
-              ramMib: machine.ramMib,
-              diskGib: machine.diskGib,
-            },
-          }
-        )
-      ),
+      make: Effect.fn("Smolvm.make")(function* (machine, origin, bind) {
+        const taken = takenForBuilder(machine);
+
+        if (taken !== undefined) {
+          return yield* taken;
+        }
+
+        yield* Match.valueTags(origin, {
+          image: ({ image }) => created(machine, image, bind),
+          checkpoint: ({ checkpoint }) => restored(checkpoint, machine, bind),
+          machine: (source) => forked(source.machine, machine, bind),
+        });
+
+        return {
+          handle: nativeName(machine),
+          sizes: {
+            cpu: machine.cpu,
+            ramMib: machine.ramMib,
+            diskGib: machine.diskGib,
+          },
+        };
+      }),
       deleteCheckpoint: Effect.fn("Smolvm.deleteCheckpoint")((checkpoint) => {
         const base = baseOf(checkpoint.handle);
 

@@ -2126,6 +2126,40 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
+    "a machine whose VM smolvm would take for a builder of its own and delete is refused, and nothing is made",
+    () =>
+      Effect.gen(function* () {
+        const model = smolvmModel();
+        const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
+        const before = model.spawner.calls.length;
+
+        const refused = yield* Effect.forEach(
+          ["image-seed", "image-seed-x", "init-bake-x"],
+          (name) =>
+            Effect.flip(
+              runtime.make(sized({ ...machine, name }), fromImage, {
+                _tag: "none",
+              })
+            )
+        );
+
+        expect(refused.map(({ message }) => message)).toStrictEqual([
+          "a smolvm host makes no machine named image-seed: smolvm takes a VM whose name begins image-seed- for the builder of its image seeds, and deletes it once it is 30 minutes old",
+          "a smolvm host makes no machine named image-seed-x: smolvm takes a VM whose name begins image-seed- for the builder of its image seeds, and deletes it once it is 30 minutes old",
+          "a smolvm host makes no machine named init-bake-x: smolvm takes a VM whose name begins init-bake- for the builder of its init layers, and deletes it once it is 30 minutes old",
+        ]);
+        expect(model.spawner.calls.slice(before)).toStrictEqual([]);
+        expect(
+          yield* Effect.exit(
+            runtime.make(sized({ ...machine, name: "image" }), fromImage, {
+              _tag: "none",
+            })
+          )
+        ).toMatchObject({ _tag: "Success" });
+      })
+  );
+
+  it.effect(
     "a machine named as a seed build begins, made before smolvm's names were refused, survives a host's start and another machine's failed boot, as does a VM named for a PID Linux never gives",
     () =>
       Effect.gen(function* () {

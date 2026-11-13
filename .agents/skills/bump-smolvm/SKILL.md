@@ -156,6 +156,13 @@ as it is.
   stricter (`scope_name`, src/systemd_scope.rs). Ours: the contract's `Name`
   rule and `packages/sdk/tests/ids.test.ts`; `nativeName` and `scopeName` in
   `smolvm.ts`.
+- smolvm deletes a VM whose name begins `image-seed-` or `init-bake-` once it
+  is 30 minutes old, at its next seed build or init bake (`reap_stale_builders`,
+  src/image_seed.rs; `gc_stale_bake_machines`, src/cli/machine.rs), and names a
+  seed build `image-seed-<16 hex of its key>-<pid>` (`build_seed`). Ours:
+  `builderPrefixes`, which a make refuses, and `seedBuilder` in `smolvm.ts`. A
+  base's `base_` begins no machine's native name, as the `Name` rule allows no
+  `_`.
 - A machine's sockets live under `<data root>/.cache/smolvm/vms/<16 hex>/`, so
   the control socket's path depends only on the data root (`vm_data_dir`,
   src/agent/manager.rs; `control_socket_path`, src/agent/fork.rs), and no

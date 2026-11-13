@@ -249,7 +249,7 @@ clankerbox hosts                           # for an operator: each host, its sta
 clankerbox capacity                        # for an operator: each host's resources and limits
 ```
 
-- A name is unique across every host, per resource type. A checkpoint's name doesn't begin `built-` or `fetched-`, which the control plane gives template builds' copies.
+- A name is unique across every host, per resource type. A checkpoint's name doesn't begin `built-` or `fetched-`, which the control plane gives template builds' copies. A smolvm host makes no machine named `image-seed` or `init-bake`, or beginning `image-seed-` or `init-bake-`: smolvm takes such a VM for a builder of its own and deletes it once it is 30 minutes old, so the create fails, saying so.
 - `create` makes a machine from a template's build (see Templates), or from `--base` with `--cpu`, `--ram` and `--disk`. A create runs no setup: a template's build runs one. `--host ID` places it on that host alone, as `hosts` lists it, as if it were the only one. A host the control plane doesn't know answers `NotOffered`. One draining refuses a create from a base `NotOffered` and one from a template `NotBuilt`, as does a host without a current copy of the template's build, whose refusal says to build the template there with `--host`. One that doesn't answer gives `Unavailable` when it could have taken the create, so not when it is draining or holds no copy of the build.
 - A command waits until the machine rests. `--no-wait` answers once the request is recorded, and `--timeout 10m` bounds the wait; either way the request stays saved and acts. A wait goes on through a short restart of the control plane.
 - Sizes and durations carry their unit: `--ram 8G`, `--disk 60G`, `--setup-timeout 15m`.
