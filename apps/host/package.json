@@ -18,6 +18,7 @@
   "exports": {
     "./testing": "./tests/support.ts",
     "./testing/boat": "./tests/fake-boat.ts",
+    "./testing/rented": "./tests/rented.ts",
     "./testing/smol-cloud": "./tests/fake-smol-cloud.ts",
     "./testing/port-slot": "./tests/port-slot.ts"
   },

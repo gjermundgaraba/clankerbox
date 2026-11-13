@@ -229,7 +229,8 @@ client over Node's HTTP), the provider's `index.ts` (the client over its
 server URL, given to `provider`), and the Amp orb provider's `main.ts` (Node's
 services and HTTP client, given to its command). Tests pass their own: the host's `./testing`
 export builds a host over a fake runtime, its `./testing/smol-cloud` and
-`./testing/boat` serve a provider's fake API and give its traits, the server's `./testing` a control
+`./testing/boat` serve a provider's fake API and give its traits, its `./testing/rented` a host
+over a rented runtime's adapter and that fake API, the server's `./testing` a control
 plane over such hosts with real HTTP between them, and the SDK's
 `./testing/stub-server` serves a stub control plane over an in-memory transport,
 beside `./testing/clock`, `./testing/files` and `./testing/keys`, and
