@@ -187,6 +187,7 @@ export const furnish = (root: string, stubs: string): void => {
 
   mkdirSync(path.join(root, "usr", "local"), { recursive: true });
   mkdirSync(path.join(root, "dev", "shm"), { recursive: true });
+  mkdirSync(path.join(root, "var", "tmp"), { recursive: true });
   mkdirSync(bin, { recursive: true });
   symlinkSync(stubs, path.join(root, "usr", "local", "bin"));
   symlinkSync(bin, path.join(root, "bin"));

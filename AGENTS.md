@@ -302,9 +302,13 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
   restart, as the steps they guard do. The build store is one lease too,
   `builds/`: a publish shares it, and the delete that unpublishes owns it, so its
   sweep of unreferenced objects never meets a publish that skipped one.
-- **Setup scripts stay in memory, on both sides.** They may carry secrets, and
-  are never stored or logged. A make that hasn't reached its host when the
-  control plane ends can't be sent again, and is undone.
+- **Setup scripts stay in memory, on both sides, but for a macOS guest's
+  disk.** They may carry secrets, and are never stored or logged. A make that
+  hasn't reached its host when the control plane ends can't be sent again, and
+  is undone. The guest holds a script in a file its `#!` line can name while it
+  runs, and the host removes it however the setup ends: on Linux in `/dev/shm`,
+  in memory, and on macOS in `/var/tmp`, on disk, as macOS has no memory-backed
+  directory but one root mounts.
 - **A failed create keeps its row.** A make that fails, whatever the step, goes
   `undoing`, deletes the VM, again at each recheck while that fails, and rests
   `undone` with its error for `failedRowsLast`. A delete clears it at once and a

@@ -7,7 +7,15 @@ import {
   timedOutExitCode,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Executed, Setup } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, Option, Redacted, Schema, Stream } from "effect";
+import {
+  Duration,
+  Effect,
+  Exit,
+  Option,
+  Redacted,
+  Schema,
+  Stream,
+} from "effect";
 import { Hex } from "effect/encoding";
 
 import { timeoutFail } from "./runtime.ts";
@@ -396,19 +404,47 @@ const setupHeld = [
   "esac",
 ].join("\n");
 
+const heldDir = [
+  // /dev/shm is a tmpfs, which lives in memory:
+  // https://www.kernel.org/doc/html/latest/filesystems/tmpfs.html
+  "kernel=$(uname -s)",
+  `if [ "$kernel" = Linux ]; then held="$root/dev/shm"; else held="$root/var/tmp"; fi`,
+];
+
 const setupRunner = [
   "set -eu",
   "login=$1",
   "shift",
   "root=${CLANKERBOX_ROOT-}",
   ...addingMissingKeys,
-  // /dev/shm is a tmpfs, which lives in memory:
-  // https://www.kernel.org/doc/html/latest/filesystems/tmpfs.html
-  "kernel=$(uname -s)",
-  `if [ "$kernel" = Linux ]; then held="$root/dev/shm"; else held=/var/tmp; fi`,
+  ...heldDir,
   `sudo -n -u "$login" -H /bin/sh -c '${setupHeld}' clankerbox-setup "$held" "$kernel"`,
   ...addingMissingKeys,
 ].join("\n");
+
+const unholdScript = [
+  "set -eu",
+  "root=${CLANKERBOX_ROOT-}",
+  ...heldDir,
+  `rm -f "$held"/clankerbox-setup.*`,
+].join("\n");
+
+const unholdTimeout = Duration.seconds(10);
+
+const unhold = (runtime: Runtime, machine: Target) =>
+  runInGuest(
+    runtime,
+    "setup",
+    machine,
+    { argv: ["/bin/sh", "-c", unholdScript, "clankerbox-unhold"] },
+    unholdTimeout
+  ).pipe(
+    Effect.catch((error) =>
+      Effect.logWarning(
+        `couldn't remove ${machine.name}'s setup script after its setup ended early: ${error.message}`
+      )
+    )
+  );
 
 const keysRunner = [
   "set -eu",
@@ -433,24 +469,27 @@ export const runSetup = (
     setup.timeoutSeconds ?? defaultSetupTimeoutSeconds
   );
 
-  return Effect.asVoid(
-    runInGuest(
-      runtime,
-      "setup",
-      machine,
-      {
-        argv: [
-          "/bin/sh",
-          "-c",
-          setupRunner,
-          "clankerbox-setup",
-          loginUser,
-          ...keyLines(authorizedKeys),
-        ],
-        stdin: setup.script,
-      },
-      timeout
-    )
+  return runInGuest(
+    runtime,
+    "setup",
+    machine,
+    {
+      argv: [
+        "/bin/sh",
+        "-c",
+        setupRunner,
+        "clankerbox-setup",
+        loginUser,
+        ...keyLines(authorizedKeys),
+      ],
+      stdin: setup.script,
+    },
+    timeout
+  ).pipe(
+    Effect.onExit((exit) =>
+      Exit.isSuccess(exit) ? Effect.void : unhold(runtime, machine)
+    ),
+    Effect.asVoid
   );
 };
 

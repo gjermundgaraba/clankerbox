@@ -3,7 +3,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { outputLimit } from "@gjermundgaraba/clankerbox-sdk";
+import { Internal, outputLimit } from "@gjermundgaraba/clankerbox-sdk";
 import {
   chmod,
   mkdir,
@@ -23,7 +23,9 @@ import {
   Duration,
   Effect,
   Exit,
+  Fiber,
   Layer,
+  Logger,
   Redacted,
   Schedule,
 } from "effect";
@@ -523,6 +525,98 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
+  for (const kernel of ["Linux", "Darwin"]) {
+    it.effect(
+      `on a ${kernel} guest a setup cut short, or past its timeout, leaves no copy of its script`,
+      () =>
+        Effect.gen(function* () {
+          const { runtime, fake, machine, bin } = yield* preparedForSetup;
+          const root = fake.root(machine.name) ?? "";
+          const heldAt = path.join(root, "held-at");
+
+          yield* write(path.join(bin, "uname"), `#!/bin/sh\necho ${kernel}\n`);
+          yield* chmod(path.join(bin, "uname"), 0o755);
+
+          const shebang =
+            kernel === "Linux" ? "#!/bin/sh -e" : "#!/bin/sh -e -u";
+
+          const script = `${shebang}\necho "$0" >"$CLANKERBOX_ROOT/held-at"\nsleep 30\n`;
+
+          const cut = yield* Effect.forkChild(
+            runSetup(
+              runtime,
+              machine,
+              { script, timeoutSeconds: 60 },
+              undefined
+            )
+          );
+
+          const cutAt = (yield* waitFor(heldAt, "\n")).trim();
+
+          expect(cutAt.startsWith(root)).toBe(true);
+
+          yield* Fiber.interrupt(cut);
+
+          const cutLeft = yield* isMissing(cutAt);
+
+          yield* remove(heldAt).pipe(Effect.ignore);
+
+          const late = yield* Effect.flip(
+            runSetup(runtime, machine, { script, timeoutSeconds: 1 }, undefined)
+          );
+
+          const lateAt = (yield* readFile(heldAt)).trim();
+
+          expect(cutLeft).toBe(true);
+          expect(late.message).toContain("ran past its 1s timeout");
+          expect(yield* isMissing(lateAt)).toBe(true);
+        })
+    );
+  }
+
+  it.effect(
+    "a setup past its timeout whose script can't then be removed answers its timeout and logs the removal's failure",
+    () => {
+      const logged: unknown[] = [];
+
+      return Effect.gen(function* () {
+        const { runtime, fake, machine } = yield* preparedForSetup;
+        const root = fake.root(machine.name) ?? "";
+        const heldAt = path.join(root, "held-at");
+
+        const late = yield* Effect.forkChild(
+          Effect.flip(
+            runSetup(
+              runtime,
+              machine,
+              {
+                script: `#!/bin/sh\necho "$0" >"$CLANKERBOX_ROOT/held-at"\nsleep 30\n`,
+                timeoutSeconds: 1,
+              },
+              undefined
+            )
+          )
+        );
+
+        yield* waitFor(heldAt, "\n");
+        fake.failNext("exec", new Internal({ message: "the guest went away" }));
+
+        const error = yield* Fiber.join(late);
+
+        expect(error.message).toContain("ran past its 1s timeout");
+        expect(logged.flat()).toContainEqual(
+          expect.stringContaining(
+            "couldn't remove dev's setup script after its setup ended early: the guest went away"
+          )
+        );
+      }).pipe(
+        Effect.provide(
+          Logger.layer([Logger.make(({ message }) => logged.push(message))])
+        )
+      );
+    }
+  );
+
   it.effect(
     "on a macOS guest a setup's #! line gives its interpreter each word after it, as that kernel does",
     () =>
@@ -557,10 +651,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
 
         expect([first, second, third]).toStrictEqual(["-e", "-u", "*"]);
-        expect(path.dirname(script ?? "")).toBe("/var/tmp");
+        expect(path.dirname(script ?? "")).toBe(path.join(root, "var", "tmp"));
         expect(
           path.dirname((yield* readFile(path.join(root, "ran"))).trim())
-        ).toBe("/var/tmp");
+        ).toBe(path.join(root, "var", "tmp"));
       })
   );
 
