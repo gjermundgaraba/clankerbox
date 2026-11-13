@@ -3286,6 +3286,135 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a fork or capture of a running machine on a host that copies only a stopped one is WrongState before a row is written, and so is one of a stopped machine where a copy takes a running one",
+    () =>
+      Effect.gen(function* () {
+        const mac = yield* served({ hosts: [{ id: "tart", as: "tart" }] });
+        const linux = yield* served();
+
+        yield* mac.client.create("dev", request("dev"));
+        yield* linux.client.create("dev", request("dev"));
+        yield* linux.client.stopMachine({ id: "dev" });
+        mac.fake.calls.length = 0;
+        linux.fake.calls.length = 0;
+
+        const refused = [
+          yield* Effect.flip(
+            mac.client.forkMachine({ machine: "dev", name: "copy" })
+          ),
+          yield* Effect.flip(
+            mac.client.captureCheckpoint({ machine: "dev", name: "snap" })
+          ),
+          yield* Effect.flip(
+            linux.client.forkMachine({ machine: "dev", name: "copy" })
+          ),
+          yield* Effect.flip(
+            linux.client.captureCheckpoint({ machine: "dev", name: "snap" })
+          ),
+        ];
+
+        expect(
+          refused.map((error) => [
+            error._tag,
+            error.message,
+            "made" in error ? error.made : undefined,
+          ])
+        ).toStrictEqual([
+          [
+            "WrongState",
+            "machine dev is running, and its host copies a machine only stopped: stop it, then fork it",
+            undefined,
+          ],
+          [
+            "WrongState",
+            "machine dev is running, and its host copies a machine only stopped: stop it, then capture it",
+            undefined,
+          ],
+          [
+            "WrongState",
+            "machine dev is stopped, and its host copies a machine only running: start it, then fork it",
+            undefined,
+          ],
+          [
+            "WrongState",
+            "machine dev is stopped, and its host copies a machine only running: start it, then capture it",
+            undefined,
+          ],
+        ]);
+        expect(
+          [yield* mac.rows, yield* linux.rows].map((rows) =>
+            rows.map(({ name }) => name)
+          )
+        ).toStrictEqual([["dev"], ["dev"]]);
+        expect([
+          (yield* mac.store.checkpoints).length,
+          (yield* linux.store.checkpoints).length,
+        ]).toStrictEqual([0, 0]);
+        expect(
+          [...mac.fake.calls, ...linux.fake.calls].filter(
+            (call) => call.startsWith("fork") || call.startsWith("capture")
+          )
+        ).toStrictEqual([]);
+      })
+  );
+
+  it.effect(
+    "a fork of a machine still moving toward the state its host copies is recorded, though its host reads it in the other, and copies it once it gets there",
+    () =>
+      Effect.gen(function* () {
+        const mac = yield* served({ hosts: [{ id: "tart", as: "tart" }] });
+
+        yield* mac.client.create("dev", request("dev"));
+
+        const stopping = mac.fake.holdNext("stop");
+
+        yield* mac.asking.stopMachine({ id: "dev" });
+        yield* stopping.entered;
+
+        const fork = yield* Effect.forkChild(
+          mac.client.forkMachine({ machine: "dev", name: "copy" })
+        );
+
+        yield* eventually(mac.store.findMachine("copy"), Option.isSome);
+        yield* stopping.release;
+
+        expect((yield* Fiber.join(fork)).id).toBe("copy");
+        expect(mac.fake.calls).toContain("fork copy");
+      })
+  );
+
+  it.effect(
+    "a fork of a machine whose host can't be read is Unavailable and records nothing, and a capture of it is recorded for its host to decide",
+    () =>
+      Effect.gen(function* () {
+        const plane = yield* served();
+
+        yield* plane.client.create("dev", request("dev"));
+        yield* plane.host.dispose;
+
+        const refused = yield* Effect.flip(
+          plane.client.forkMachine({ machine: "dev", name: "copy" })
+        );
+
+        const capturing = yield* plane.asking.captureCheckpoint({
+          machine: "dev",
+          name: "snap",
+        });
+
+        expect(refused).toMatchObject({
+          _tag: "Unavailable",
+          readOnly: true,
+          action: "forkMachine",
+        });
+        expect(refused).not.toHaveProperty("made");
+        expect((yield* plane.rows).map(({ name }) => name)).toStrictEqual([
+          "dev",
+        ]);
+        expect(capturing).toMatchObject({ id: "snap", phase: "capturing" });
+      })
+  );
+
+  it.effect(
     "a fork whose source grows past the copy while it waits is refused by the rule its request passed, and its copy is deleted",
     () =>
       Effect.gen(function* () {

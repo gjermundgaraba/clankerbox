@@ -1,3 +1,4 @@
+import type { MachineState } from "@clankerbox/host-contract";
 import {
   copySizable,
   fitted,
@@ -5,8 +6,10 @@ import {
   formatMib,
   givenSizes,
   NotBuilt,
+  PinMismatch,
   templateRef,
   Unsizable,
+  WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   Internal,
@@ -16,6 +19,8 @@ import type {
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Option } from "effect";
 
+import type { CheckpointRow } from "./checkpoint-chart.ts";
+import { phaseOf } from "./machine-chart.ts";
 import type { MachineRow } from "./machine-chart.ts";
 import { notFound } from "./store.ts";
 import type { Interface as Store } from "./store.ts";
@@ -79,6 +84,58 @@ export const copied = (
   return Effect.fail(
     new Unsizable({ message: copyRefusal(name, from, spec, traits) })
   );
+};
+
+/**
+ * Why a fork or capture of a machine at rest, its VM read `seen`, is refused by a host whose
+ * runtime copies a machine only in `captureFrom`, before a row is written; none where the VM's
+ * state isn't known or the machine is still moving, as the host then decides.
+ */
+export const uncopiable = (
+  source: MachineRow,
+  seen: MachineState,
+  { captureFrom }: RuntimeTraits,
+  action: "fork" | "capture"
+): WrongState | undefined => {
+  const settled = phaseOf(source.state) === "settled";
+  const known = seen === "running" || seen === "stopped" || seen === "paused";
+
+  return settled && known && seen !== captureFrom
+    ? new WrongState({
+        message: `machine ${source.name} is ${seen}, and its host copies a machine only ${captureFrom}: ${captureFrom === "stopped" ? "stop" : "start"} it, then ${action} it`,
+        machine: source.name,
+        state: seen,
+      })
+    : undefined;
+};
+
+/**
+ * Why a host running runtime pin `pin` refuses to copy a machine whose VM booted under another, or
+ * to restore a checkpoint saved under another, as its host would, before a row is written.
+ */
+export const unpinned = (
+  source:
+    | { readonly machine: MachineRow }
+    | { readonly checkpoint: CheckpointRow },
+  pin: string | undefined
+): PinMismatch | undefined => {
+  if ("machine" in source) {
+    const { name, pin: booted } = source.machine;
+
+    return booted === pin
+      ? undefined
+      : new PinMismatch({
+          message: `machine ${name}'s VM booted under ${booted ?? "an older host"}, and this host runs ${pin ?? "no pin"}, so a copy of its RAM would restore under the wrong one: stop it and start it again first`,
+        });
+  }
+
+  const { name, pin: saved } = source.checkpoint;
+
+  return saved === pin
+    ? undefined
+    : new PinMismatch({
+        message: `checkpoint ${name} holds RAM state saved under ${saved ?? "no pin"}, and this host runs ${pin ?? "no pin"}; it restores only under the same one`,
+      });
 };
 
 export const cloned = (

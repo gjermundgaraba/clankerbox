@@ -168,10 +168,14 @@ the machine at the first recheck after it lands, logging `sweep: deleting machin
 want of room until it is off, which a create reads as `Capacity`.
 `fault.sh <run> drop-answer <id> make|delete` has the host's fake do its next
 make or delete and lose the answer, so the host finds or retries it.
+`fault.sh <run> repin <id> <pin>` has a fake runtime's host run another
+runtime pin from then on, keeping its machines, as an operator's runtime upgrade
+leaves a VM booted under the old one; the fake's pin is `fake 1` on `smolvm`,
+and none on `tart` and `fixed`.
 `fault.sh <run> setup-go` lets the `slow` recipe's setup finish. Each is written
 to the transcript.
 
-`hold-capture`, `drift`, `land-late`, `quota` and `drop-answer` ask the host itself: `fault.sh` writes
+`hold-capture`, `drift`, `land-late`, `quota`, `drop-answer` and `repin` ask the host itself: `fault.sh` writes
 the fault to `hosts/<id>.fault`, sends the host `USR2`, and waits up to 10
 seconds for its answer, `hosts/<id>.fault.ok` or `hosts/<id>.fault.refused`. The
 host logs the answer as a `fault:` line in `host-<id>.log`, with its time, and
@@ -179,7 +183,7 @@ host logs the answer as a `fault:` line in `host-<id>.log`, with its time, and
 1: `smolvm` and `tart`, whose fakes keep their machines running, refuse
 `drift`, as does `smol-cloud`, which isn't told a machine's instance by its
 name, and any host with no running machine of that name; one whose fake marks nothing refuses `land-late`, since nothing would
-sweep what landed; and `boat` refuses `hold-capture`. A host started with `CLANKERBOX_FAKE_FAIL_FIND` set to
+sweep what landed; and `boat` refuses `hold-capture`, and `smol-cloud` and `boat` refuse `repin`. A host started with `CLANKERBOX_FAKE_FAIL_FIND` set to
 names, comma-separated, as by `start-host` or `upgrade.sh`, fails each search
 for a machine or a checkpoint of those names, as smolvm does when its database
 is locked.

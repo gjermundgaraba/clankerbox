@@ -38,7 +38,14 @@ import {
 import type { Scope } from "effect";
 
 import { applied } from "./chart.ts";
-import { cloned, copied, refusedBySource, sizedBy } from "./copies.ts";
+import {
+  cloned,
+  copied,
+  refusedBySource,
+  sizedBy,
+  uncopiable,
+  unpinned,
+} from "./copies.ts";
 import type { Spec } from "./copies.ts";
 import { driver, untilRest } from "./driver.ts";
 import type { Heard } from "./driver.ts";
@@ -626,13 +633,20 @@ export const make = (
         }
 
         const info = yield* answering(hosts, from.host);
+        const spec = yield* copied(name, from, sizing, info.traits);
 
-        return yield* copy(
-          name,
-          { spec: yield* copied(name, from, sizing, info.traits), labels },
-          info,
-          { host: from.host, source: { kind: "machine", name: id } }
-        );
+        const refusal =
+          uncopiable(from, yield* stateOf(hosts, from), info.traits, "fork") ??
+          unpinned({ machine: from }, info.pin);
+
+        if (refusal !== undefined) {
+          return yield* refusal;
+        }
+
+        return yield* copy(name, { spec, labels }, info, {
+          host: from.host,
+          source: { kind: "machine", name: id },
+        });
       });
 
     const restore = ({
@@ -655,6 +669,11 @@ export const make = (
         const record = present.value;
 
         const info = yield* answering(hosts, record.host);
+        const refusal = unpinned({ checkpoint: record }, info.pin);
+
+        if (refusal !== undefined) {
+          return yield* refusal;
+        }
 
         return yield* copy(
           name,

@@ -148,6 +148,10 @@ runServe(
                   because: `host ${id} fakes ${runtime}, whose machines never stop on their own`,
                 },
             sweeps: owned !== undefined,
+            repin: (pin) =>
+              Effect.sync(() => {
+                host.fake.repin(pin);
+              }),
           }),
         };
       })

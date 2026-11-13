@@ -34,6 +34,7 @@ import type { Scope } from "effect";
 import { applied } from "./chart.ts";
 import { activityOf, checkpointChart, phaseOf } from "./checkpoint-chart.ts";
 import type { CheckpointEvent, CheckpointRow } from "./checkpoint-chart.ts";
+import { uncopiable, unpinned } from "./copies.ts";
 import { apart, driver, untilRest } from "./driver.ts";
 import type { Heard } from "./driver.ts";
 import { answering, Hosts } from "./hosts.ts";
@@ -350,6 +351,33 @@ export const make = (settings: {
         Effect.asVoid
       );
 
+    const asked = (request: CaptureRequest) =>
+      Effect.gen(function* () {
+        const present = yield* store.findMachine(request.machine);
+
+        if (Option.isSome(present) && stageOf(present.value.state) === "made") {
+          const found = present.value;
+
+          const [seen, info] = yield* Effect.all(
+            [stateOf(hosts, found), Effect.option(hosts.read(found.host))],
+            { concurrency: "unbounded" }
+          );
+
+          const refusal = Option.match(info, {
+            onNone: () => undefined,
+            onSome: ({ traits, pin }) =>
+              uncopiable(found, seen, traits, "capture") ??
+              unpinned({ machine: found }, pin),
+          });
+
+          if (refusal !== undefined) {
+            return yield* refusal;
+          }
+        }
+
+        return yield* capturing(request);
+      });
+
     const pausing = ({ id, capture }: PauseRequest) =>
       Effect.gen(function* () {
         if (capture === undefined) {
@@ -368,7 +396,8 @@ export const make = (settings: {
           return yield* unmade(found);
         }
 
-        const { traits } = yield* answering(hosts, found.host);
+        const { traits, pin } = yield* answering(hosts, found.host);
+        const unpinnedRefusal = unpinned({ machine: found }, pin);
 
         switch (pauseCapture(traits)) {
           case "never": {
@@ -380,6 +409,10 @@ export const make = (settings: {
           }
 
           case "after": {
+            if (unpinnedRefusal !== undefined) {
+              return yield* unpinnedRefusal;
+            }
+
             const record = yield* recorded({ machine: id, ...capture });
             const paused = yield* machines.pause(id);
 
@@ -408,6 +441,10 @@ export const make = (settings: {
             machine: id,
             state: seen,
           });
+        }
+
+        if (unpinnedRefusal !== undefined) {
+          return yield* unpinnedRefusal;
         }
 
         yield* capturing({ machine: id, ...capture });
@@ -452,9 +489,7 @@ export const make = (settings: {
         )
       ),
       get: Effect.fn("Checkpoints.get")((id) => Effect.map(row(id), shown)),
-      capture: Effect.fn("Checkpoints.capture")((request) =>
-        capturing(request)
-      ),
+      capture: Effect.fn("Checkpoints.capture")(asked),
       pause: Effect.fn("Checkpoints.pause")(pausing),
       delete: Effect.fn("Checkpoints.delete")((id) =>
         Effect.andThen(row(id), remove(id))

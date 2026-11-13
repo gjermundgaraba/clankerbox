@@ -263,10 +263,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a fork of a source the runtime doesn't copy is refused, and leaves no VM",
+    "a fork of a source the runtime doesn't copy is refused before its host is asked, and leaves no VM and no row",
     () =>
       Effect.gen(function* () {
-        const { client, host } = yield* withSource();
+        const { client, host, store } = yield* withSource();
 
         yield* client.stopMachine({ id: "dev" });
 
@@ -276,10 +276,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect([error._tag, error.message]).toStrictEqual([
           "WrongState",
-          "dev is stopped: start it first",
+          "machine dev is stopped, and its host copies a machine only running: start it, then fork it",
         ]);
         expect(host.fake.machines.has("copy")).toBe(false);
-        expect(callsTo(host, "fork")).toStrictEqual(["fork copy"]);
+        expect(callsTo(host, "fork")).toStrictEqual([]);
+        expect(Option.isNone(yield* store.findMachine("copy"))).toBe(true);
       })
   );
 
@@ -460,13 +461,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a capture of a stopped machine on a ram runtime is WrongState, leaves nothing on its host, and leaves a failed row a list shows as a get does",
+    "a capture of a stopped machine on a ram runtime is WrongState before anything is recorded, and leaves nothing on its host",
     () =>
       Effect.gen(function* () {
         const served = yield* withSource();
         const { client, host } = served;
 
         yield* client.stopMachine({ id: "dev" });
+        host.fake.calls.length = 0;
 
         const error = yield* Effect.flip(
           client.captureCheckpoint({ machine: "dev", name: "cold" })
@@ -474,17 +476,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect([error._tag, error.message]).toStrictEqual([
           "WrongState",
-          "dev is stopped: start it first",
+          "machine dev is stopped, and its host copies a machine only running: start it, then capture it",
         ]);
-        expect((yield* rested(served, "cold")).state).toBe("failed");
-        expect(yield* client.getCheckpoint({ id: "cold" })).toMatchObject({
-          phase: "failed",
-          error: { _tag: "WrongState" },
-        });
-        expect(yield* client.listCheckpoints()).toMatchObject([
-          { id: "cold", phase: "failed", error: { _tag: "WrongState" } },
-        ]);
-        expect(host.fake.calls).not.toContain("deleteCheckpoint cold");
+        expect(yield* client.listCheckpoints()).toStrictEqual([]);
+        expect(callsTo(host, "capture")).toStrictEqual([]);
       })
   );
 
@@ -650,12 +645,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
                 client.captureCheckpoint({ machine: "dev", name: "snap" })
               );
 
-              const row = yield* rested(served, "snap");
-
               return {
                 tag: error._tag,
-                state: row.state,
-                failed: row.failedAt !== undefined,
+                rows: (yield* captured(served.store)).length,
                 calls: [...host.fake.calls],
                 freed: Option.isSome(
                   yield* Effect.timeoutOption(
@@ -670,9 +662,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(refused).toStrictEqual(
           ["smolvm", "tart"].map(() => ({
             tag: "WrongState",
-            state: "failed",
-            failed: true,
-            calls: ["capture snap"],
+            rows: 0,
+            calls: [],
             freed: true,
           }))
         );
@@ -1417,43 +1408,47 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
         expect(callsTo(host, "restore")).toStrictEqual([]);
         expect(host.fake.machines.has("copy")).toBe(false);
+        expect(yield* machineNames({ store })).toStrictEqual(["dev"]);
       })
   );
 
   it.effect(
-    "a machine whose VM booted under another runtime build is captured or forked only after a stop and a start",
+    "a machine whose VM booted under another runtime pin than its host's now is refused a capture, a fork and a pause with a capture before anything is recorded, and copied after a stop and a start",
     () =>
       Effect.gen(function* () {
         const { client, host, store } = yield* withSource();
 
-        yield* patched(store, "dev", { pin: "fake 0" });
+        host.fake.repin("fake 2");
 
         const refused = [
+          yield* Effect.flip(
+            client.forkMachine({ machine: "dev", name: "copy" })
+          ),
           yield* Effect.flip(
             client.captureCheckpoint({ machine: "dev", name: "hot" })
           ),
           yield* Effect.flip(
-            client.forkMachine({ machine: "dev", name: "copy" })
+            client.pauseMachine({ id: "dev", capture: { name: "hot" } })
           ),
         ];
 
         expect(
           refused.map(({ _tag, message }) => [_tag, message])
         ).toStrictEqual(
-          Array.from({ length: 2 }, () => [
+          Array.from({ length: 3 }, () => [
             "PinMismatch",
-            "machine dev's VM booted under fake 0, and this host runs fake 1, so a copy of its RAM would restore under the wrong one: stop it and start it again first",
+            "machine dev's VM booted under fake 1, and this host runs fake 2, so a copy of its RAM would restore under the wrong one: stop it and start it again first",
           ])
         );
-        expect(callsTo(host, "capture")).toStrictEqual([]);
-        expect(callsTo(host, "fork")).toStrictEqual([]);
-        expect(callsTo(host, "deleteCheckpoint")).toStrictEqual([]);
-        expect(yield* store.findCheckpoint("hot")).toMatchObject({
-          value: { state: "failed" },
-        });
+        expect(refused.map((error) => "made" in error)).toStrictEqual([
+          false,
+          false,
+          false,
+        ]);
+        expect(yield* machineNames({ store })).toStrictEqual(["dev"]);
+        expect(yield* captured(store)).toStrictEqual([]);
+        expect(host.fake.calls).toStrictEqual([]);
 
-        yield* client.deleteMachine({ id: "copy" });
-        yield* client.deleteCheckpoint({ id: "hot" });
         yield* client.stopMachine({ id: "dev" });
         yield* client.startMachine({ id: "dev" });
 
@@ -1461,6 +1456,44 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* client.forkMachine({ machine: "dev", name: "copy" });
 
         expect(yield* checkpointIds(client)).toStrictEqual(["hot"]);
+        expect(yield* machineNames({ store })).toStrictEqual(["dev", "copy"]);
+      })
+  );
+
+  it.effect(
+    "a machine whose row holds no pin, as one an older host booted, is refused a capture, a fork and a pause with a capture before anything is recorded",
+    () =>
+      Effect.gen(function* () {
+        const { client, host, store } = yield* withSource();
+
+        yield* patched(store, "dev", { pin: undefined });
+
+        const refused = [
+          yield* Effect.flip(
+            client.forkMachine({ machine: "dev", name: "copy" })
+          ),
+          yield* Effect.flip(
+            client.captureCheckpoint({ machine: "dev", name: "hot" })
+          ),
+          yield* Effect.flip(
+            client.pauseMachine({ id: "dev", capture: { name: "hot" } })
+          ),
+        ];
+
+        expect(refused).toStrictEqual(
+          (["forkMachine", "captureCheckpoint", "pauseMachine"] as const).map(
+            (action) =>
+              new PinMismatch({
+                message:
+                  "machine dev's VM booted under an older host, and this host runs fake 1, so a copy of its RAM would restore under the wrong one: stop it and start it again first",
+                action,
+                id: "dev",
+              })
+          )
+        );
+        expect(yield* machineNames({ store })).toStrictEqual(["dev"]);
+        expect(yield* captured(store)).toStrictEqual([]);
+        expect(host.fake.calls).toStrictEqual([]);
       })
   );
 

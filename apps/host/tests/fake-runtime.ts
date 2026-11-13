@@ -533,6 +533,7 @@ export const fakeRuntime = (options: FakeOptions) => {
   const landsLate: Duration.Duration[] = [];
   const dropped = new Set<Dropped>();
   let quotaOn = false;
+  let pin = options.pin ?? preset.pin;
   let clock: Clock.Clock | undefined;
 
   const now = () =>
@@ -893,7 +894,9 @@ export const fakeRuntime = (options: FakeOptions) => {
 
       return Runtime.of({
         version: "fake",
-        pin: options.pin ?? preset.pin,
+        get pin() {
+          return pin;
+        },
         prepares: preset.prepares,
         reach:
           options.relayed === true
@@ -1427,6 +1430,9 @@ export const fakeRuntime = (options: FakeOptions) => {
     },
     refuseNextSizes: (error: Unsizable) => {
       sizableRefusals.push(error);
+    },
+    repin: (next: string | undefined) => {
+      pin = next;
     },
     failFind: (name: string, error: RuntimeError) => {
       findFailures.set(name, error);

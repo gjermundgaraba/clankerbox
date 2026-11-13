@@ -11,6 +11,7 @@ import {
   NotFound,
   NotMade,
   NotOffered,
+  PinMismatch,
   Unavailable,
   Unsizable,
   WrongState,
@@ -129,11 +130,12 @@ export const Http = ActionHttp.make(
         NotMade,
         Conflict,
         WrongState,
+        PinMismatch,
         Unavailable,
         Internal,
       ] as const,
       description:
-        "Ask for a machine to stay paused: the runtime saves its RAM, processes and disks and stops its VM, and a start resumes it. A machine that is stopped stays stopped, and one whose VM the runtime can't save, booted under another runtime pin or in a way its runtime can't suspend, is stopped instead; where its traits' `pause` is `stops`, every pause stops it. With `capture`, a checkpoint of that name is captured too, as captureCheckpoint would, in the state its host's traits' `captureFrom` names, as the host answers now, and a host that can't be read is Unavailable, recording nothing. Where that is `running`, the running machine is captured first and the pause begins once the capture has ended, however it ended, and a machine that isn't running is refused before anything is recorded. Where it is `stopped` and the traits' `pause` is `stops`, the pause comes first and the capture takes the stopped machine it leaves. Where it is `stopped` and the `pause` is `saves`, a pause leaves no machine a capture takes, so the request is refused with WrongState before anything is recorded.",
+        "Ask for a machine to stay paused: the runtime saves its RAM, processes and disks and stops its VM, and a start resumes it. A machine that is stopped stays stopped, and one whose VM the runtime can't save, booted under another runtime pin or in a way its runtime can't suspend, is stopped instead; where its traits' `pause` is `stops`, every pause stops it. With `capture`, a checkpoint of that name is captured too, as captureCheckpoint would, in the state its host's traits' `captureFrom` names, as the host answers now, and a host that can't be read is Unavailable, recording nothing. Where that is `running`, the running machine is captured first and the pause begins once the capture has ended, however it ended, and a machine that isn't running is refused before anything is recorded. Where it is `stopped` and the traits' `pause` is `stops`, the pause comes first and the capture takes the stopped machine it leaves. Where it is `stopped` and the `pause` is `saves`, a pause leaves no machine a capture takes, so the request is refused with WrongState before anything is recorded. A capture of a machine whose VM booted under another runtime pin than its host runs now is refused with PinMismatch before anything is recorded.",
       input: PauseRequest,
       success: Machine,
     }),
@@ -154,17 +156,17 @@ export const Http = ActionHttp.make(
     }),
     Action.make("forkMachine", {
       ...write,
-      error: making,
+      error: [...making, WrongState, PinMismatch] as const,
       description:
-        "Copy a machine to a new name, with its sizes or the ones given. A machine is copied only in the state its traits' `captureFrom` names, as a capture is, and only when its VM booted under the runtime pin its host runs. Its copy's vCPUs and RAM follow its traits' `copies`: `grow` takes the source's or larger ones, grown live once the copy runs; `any` takes any; `same` takes only the source's sizes, its disk's included. A disk otherwise only grows. A copy that fails deletes the new VM and keeps its row, failed, to say why.",
+        "Copy a machine to a new name, with its sizes or the ones given. A machine is copied only in the state its traits' `captureFrom` names, as a capture is, and only when its VM booted under the runtime pin its host runs. A machine at rest that its host reads in another state is refused with WrongState, and one whose VM booted under another pin with PinMismatch, before anything is recorded. A fork takes its host's traits and its source's sizes as the host answers now, so one whose host can't be read is Unavailable, recording nothing; one still moving is recorded, and its host decides. Its copy's vCPUs and RAM follow its traits' `copies`: `grow` takes the source's or larger ones, grown live once the copy runs; `any` takes any; `same` takes only the source's sizes, its disk's included. A disk otherwise only grows. A copy that fails deletes the new VM and keeps its row, failed, to say why.",
       input: Schema.Struct({ ...ForkRequest.fields, ...Sizing.fields }),
       success: Machine,
     }),
     Action.make("restoreMachine", {
       ...write,
-      error: making,
+      error: [...making, PinMismatch] as const,
       description:
-        "Create a machine from a checkpoint, with its sizes or the ones given. A checkpoint is restored only under the runtime pin it was captured under. A restore's vCPUs and RAM follow its runtime's traits' `copies`, as a fork's do. A disk otherwise only grows. A restore that fails deletes the new VM and keeps its row, failed, to say why.",
+        "Create a machine from a checkpoint, with its sizes or the ones given. A checkpoint is restored only under the runtime pin it was captured under, and one captured under another is refused with PinMismatch before anything is recorded. A restore's vCPUs and RAM follow its runtime's traits' `copies`, as a fork's do. A disk otherwise only grows. A restore that fails deletes the new VM and keeps its row, failed, to say why.",
       input: Schema.Struct({ ...RestoreRequest.fields, ...Sizing.fields }),
       success: Machine,
     }),
@@ -201,9 +203,17 @@ export const Http = ActionHttp.make(
     }),
     Action.make("captureCheckpoint", {
       ...write,
-      error: [Invalid, NotFound, Conflict, NotMade, Internal] as const,
+      error: [
+        Invalid,
+        NotFound,
+        Conflict,
+        NotMade,
+        WrongState,
+        PinMismatch,
+        Internal,
+      ] as const,
       description:
-        "Capture a checkpoint of a machine. Its kind is the machine's traits' `checkpoint`, `ram` or `disk`. A machine is captured only in the state its traits' `captureFrom` names, `running` or `stopped`, and only when its VM booted under the runtime pin its host runs; otherwise the checkpoint ends `failed`, its `error` saying why. One given `expiresAt` is deleted once that time has passed.",
+        "Capture a checkpoint of a machine. Its kind is the machine's traits' `checkpoint`, `ram` or `disk`. A machine is captured only in the state its traits' `captureFrom` names, `running` or `stopped`, and only when its VM booted under the runtime pin its host runs. A machine at rest that its host reads in another state is refused with WrongState, and one whose VM booted under another runtime pin than its host runs with PinMismatch, before anything is recorded; one its host can't read, or that is still moving, is recorded, and a capture its host then refuses ends `failed`, its `error` saying why. One given `expiresAt` is deleted once that time has passed.",
       input: CaptureRequest,
       success: Checkpoint,
     }),

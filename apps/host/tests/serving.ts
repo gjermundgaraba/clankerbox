@@ -49,6 +49,7 @@ export const Fault = Schema.TaggedUnion({
   "land-late": {},
   quota: { on: Schema.Boolean },
   "drop-answer": { call: Schema.Literals(["make", "delete"]) },
+  repin: { pin: Schema.String },
 });
 
 export type Fault = typeof Fault.Type;
@@ -90,6 +91,7 @@ export interface Faulted {
       }
     | { readonly _tag: "never"; readonly because: string };
   readonly sweeps: boolean;
+  readonly repin?: (pin: string) => Effect.Effect<void>;
 }
 
 export const taking =
@@ -140,6 +142,13 @@ export const taking =
           took: true,
           said: `${faulted.name} drops its answer to the next ${call}`,
         }),
+      repin: ({ pin }) =>
+        faulted.repin === undefined
+          ? Effect.succeed(refused(`${faulted.name} runs no runtime pin`))
+          : Effect.as(faulted.repin(pin), {
+              took: true,
+              said: `${faulted.name} now runs runtime pin ${pin}, keeping its machines`,
+            }),
     });
 
 const doorbell = Stream.callback<undefined>((queue) => {
