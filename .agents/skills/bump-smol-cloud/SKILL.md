@@ -21,19 +21,42 @@ opportunities separately, and don't commit unless asked.
 
 ```sh
 source <path to the .envrc holding SMOL_MACHINES_API_KEY and TAILSCALE_AUTHKEY>
-CLANKERBOX_LIVE_LEDGER=/tmp/ledger CLANKERBOX_LIVE_ANSWERS=/tmp/answers vp run test:live
+vp run test:live
 ```
 
 It spends money: it makes at most 3 machines at once, those from an image with
 a provider expiry, and 3 checkpoints, and deletes them. Every machine it makes
-is named `cbx-0live-*`: its own as `cbx-0live-<run>-*`, and its host's under
-the host ID `0live-<run>`, which it mints for the run. A host ID starts with a
-letter, so no real host's ID equals that one or starts it, and no real host's
-machine carries the mark. It clears only `cbx-0live-*` when it starts, so every
-real host of the account keeps its machines. `answers` records what the
-provider said for each item still open. Afterwards, list what the account holds
-under `cbx-0live-` and each ID in `ledger`: every machine and checkpoint
-must be gone. Check `answers` and `ledger` for the key before you keep them.
+is named `cbx-0live-<run>-*`: its own, and its host's under the host ID
+`0live-<run>`, which it mints for the run. A host ID starts with a letter, so
+no real host's ID equals that one or starts it, and no real host's machine
+carries the mark. The ID of every checkpoint it mints, and of every machine,
+which finds that machine's checkpoints once it is gone, such as a pause's,
+goes to its run's ledger, `smol-cloud-0live-<run>.ledger` in
+`~/.local/state/clankerbox-live` (`$XDG_STATE_HOME`, or
+`CLANKERBOX_LIVE_LEDGERS`, moves it), a folder of mode 0700 and a file of mode
+0600 that the suite refuses once open to others; the ledger starts with the
+host and PID of the run. Each suite starts and ends with a sweep
+(`tests/live/sweep.ts`'s `selected`), which records what it selects before it
+deletes anything, and deletes only: machines named with this run's mark, and
+checkpoints in this run's ledger or of one of its machines, and the same of a
+run provably over, one whose ledger names this host and a PID no process
+holds, or one `CLANKERBOX_LIVE_OVER=0live-…,…` names. It reads which runs
+are over once, before it lists (`sweepRead`), and retires the ledgers of
+those runs alone once nothing of them is left (`retiredOver`), so a run that
+ends while it lists keeps its ledger for the next sweep. A run's first sweep
+begins its ledger, before it makes anything. A ledger ID never
+selects a machine. What other live runs hold it only lists. Each sweep deletes,
+lists again and deletes again, at most 5 times, as smol cloud refuses a
+source's delete while its branch lives. `CLANKERBOX_LIVE_LIST_ONLY=1` lists
+and deletes nothing; run the last suite alone with it to see what a sweep would
+take. A restore drops `ttlSeconds`, so nothing but a sweep bounds one a killed
+run left; each machine the raw suite makes stops itself after 15 minutes idle
+(`autoStopSeconds: 900`). The last suite sweeps, asserts that nothing of its
+run is left, lists what other live runs hold, and removes its ledger. It
+records each listing and what the provider said for each item still open in
+`answers`, `smol-cloud-0live-<run>.answers` beside the ledger unless
+`CLANKERBOX_LIVE_ANSWERS` names another file. Check `answers` for the key
+before you keep it.
 
 ## Facts the adapter pins
 
@@ -44,8 +67,25 @@ Each is an assertion of the live suite, in the case named.
 - `autoStopSeconds: 0` with a published port answers 422 on a plan whose
   `GET /v1/account` says `plan.allowAlwaysOn` false; the adapter sends 86400
   then.
-- `GET /v1/account` gives `effectiveMaxConcurrentMachines` and
-  `effectiveMaxCpus`, and `GET /v1/capacity` what runs.
+- `GET /v1/account` gives `effectiveMaxMachines`,
+  `effectiveMaxConcurrentMachines`, and one machine's most,
+  `effectiveMaxCpus`, `effectiveMaxMemoryMb` and `effectiveMaxDiskGb`;
+  `GET /v1/capacity` gives `machines`, `startedMachines` and
+  `startedMemoryMb`. The account has no limit on vCPUs in all: five 1-vCPU
+  machines ran at once on an account whose `effectiveMaxCpus` is 4.
+- A create or resize past one machine's most answers 422 `unprocessable`,
+  `machine size exceeds what an account without a card can run, …`, which the
+  adapter answers `Unsizable`. A start, or an exec that starts a machine, past
+  `effectiveMaxConcurrentMachines` answers 422 `unprocessable`, `concurrency
+  limit reached: …`, which is `Capacity`. The second is in the fake, not the
+  live suite, as provoking it takes five running machines.
+- An exec request's body is at most 1 MiB (1048576 bytes) as sent: past it the
+  provider answers 413 `payload_too_large`, `Failed to buffer the request
+  body: length limit exceeded`. The adapter sizes stdin by its JSON encoding
+  (`smol-cloud.ts`'s `bodyLength`) and stages what doesn't fit.
+- Each request is bounded by `answerWithin` in `platform/process.ts`: 30
+  seconds for a read, a minute for a create, restore or delete, 5 minutes for
+  what the provider answers once the machine settles.
 - A create answers 201 `stopped`; a start answers `started`.
 - `POST /exec/stream` refuses an empty argument with 400, answers a missing
   user with an error, takes string `stdin`, and sends each output line as a
@@ -62,7 +102,8 @@ Each is an assertion of the live suite, in the case named.
   resume has the machine running again, that checkpoint's delete answers 204:
   a start's prune by `keep` depends on it.
 - A restore answers `stopped`, carries its source's ports and resources, no
-  labels and no expiry, and takes the `network` and `autoStopSeconds` it is sent.
+  labels and no expiry (`ttlSeconds` null), and takes the `network` and
+  `autoStopSeconds` it is sent.
 - A checkpoint a living restore was made from refuses its delete with 409.
 - A deleted machine's checkpoints stay, listed with its `machineId` and
   `machineDeleted: true`, until each is deleted.

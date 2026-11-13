@@ -7,6 +7,3 @@ export const liveHostId = (run: string) => `0live-${run}`;
 /** Whether `run` is a run mark the live suites mint, `0live-` and hex. */
 export const liveRun = (run: string | undefined): boolean =>
   run !== undefined && /^0live-[0-9a-f]+$/u.test(run);
-
-export const leftOver = (name: string | null | undefined): boolean =>
-  name?.startsWith(liveMark) === true;

@@ -1,9 +1,11 @@
-import { Effect, Option, Redacted, Schema, Stream } from "effect";
+import { Duration, Effect, Option, Redacted, Schema, Stream } from "effect";
 import { Sse } from "effect/encoding";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import type { HttpClientError, HttpMethod } from "effect/http";
 
-import { Handle } from "../../runtime.ts";
+import { Handle, timeoutFail } from "../../runtime.ts";
+import { answerWithin } from "../process.ts";
+import type { Asked } from "../process.ts";
 
 export const MachineRecord = Schema.Struct({
   id: Handle,
@@ -29,15 +31,28 @@ export type CheckpointRecord = typeof CheckpointRecord.Type;
 const Account = Schema.Struct({
   plan: Schema.Struct({ allowAlwaysOn: Schema.Boolean }),
   effectiveMaxConcurrentMachines: Schema.Int,
+  effectiveMaxMachines: Schema.Int,
   effectiveMaxCpus: Schema.Int,
+  effectiveMaxMemoryMb: Schema.Int,
+  effectiveMaxDiskGb: Schema.Int,
 });
 
 export type Account = typeof Account.Type;
 
 const InUse = Schema.Struct({
+  machines: Schema.Int,
   startedMachines: Schema.Int,
   startedMemoryMb: Schema.Int,
 });
+
+const Marks = Schema.Struct({
+  id: Schema.optionalKey(Schema.String),
+  name: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  machineId: Schema.optionalKey(Schema.String),
+});
+
+/** What a listed record carries that tells whose it is, read from any record that has it. */
+export type Marks = typeof Marks.Type;
 
 const Problem = Schema.Struct({
   code: Schema.optionalKey(Schema.String),
@@ -144,15 +159,34 @@ const frames = <E>(
 const unanswered = (call: string) => (error: HttpClientError.HttpClientError) =>
   new Unanswered({ message: `${call}: ${error.message}` });
 
+const within =
+  (asked: Asked, call: string) =>
+  <A, E>(answer: Effect.Effect<A, E>) =>
+    answer.pipe(
+      timeoutFail(
+        answerWithin[asked],
+        () =>
+          new Unanswered({
+            message: `${call}: no answer within ${Duration.format(answerWithin[asked])}`,
+          })
+      )
+    );
+
+const marksOf = (record: unknown): Marks =>
+  Option.getOrElse(Schema.decodeUnknownOption(Marks)(record), () => ({}));
+
 const open = { mode: "open" };
 
 /**
  * smol cloud's API, the routes the adapter uses. Requests are encoded exactly; answers are read
  * leniently, keeping only the fields the adapter reads, and `state` and `status` stay open strings.
+ * A list keeps each record it can read; one it can't is this host's business only if `ours` says
+ * so by its marks, which fails the list, and is skipped otherwise, logged the first time.
  */
 export const make = (url: string, key: Redacted.Redacted) =>
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient;
+    const skipped = new Set<string>();
 
     const send = (
       method: HttpMethod.HttpMethod,
@@ -206,6 +240,7 @@ export const make = (url: string, key: Redacted.Redacted) =>
       (
         method: HttpMethod.HttpMethod,
         route: string,
+        asked: Asked,
         body?: unknown
       ): Effect.Effect<S["Type"], ApiError> =>
         Effect.flatMap(send(method, route, body), (response) =>
@@ -217,21 +252,66 @@ export const make = (url: string, key: Redacted.Redacted) =>
                 })
             )
           )
-        );
+        ).pipe(within(asked, `${method} ${route}`));
 
-    const done = (method: HttpMethod.HttpMethod, route: string) =>
-      Effect.asVoid(send(method, route));
+    const done = (method: HttpMethod.HttpMethod, route: string, asked: Asked) =>
+      Effect.asVoid(send(method, route)).pipe(
+        within(asked, `${method} ${route}`)
+      );
+
+    const listed =
+      <S extends Schema.Top & { readonly DecodingServices: never }>(
+        schema: S,
+        what: string,
+        route: string
+      ) =>
+      (ours: (marks: Marks) => boolean) =>
+        Effect.flatMap(
+          json(Schema.Array(Schema.Unknown))("GET", route, "read"),
+          (records) =>
+            Effect.forEach(records, (record) => {
+              const read = Schema.decodeUnknownOption(schema)(record);
+
+              if (Option.isSome(read)) {
+                return Effect.succeed([read.value]);
+              }
+
+              const marks = marksOf(record);
+
+              if (ours(marks)) {
+                return Effect.fail(
+                  new Unanswered({
+                    message: `GET ${route} answered ${what} ${marks.name ?? marks.id ?? "with no id"} of this host's, which couldn't be read`,
+                  })
+                );
+              }
+
+              const seen = marks.id ?? JSON.stringify(record);
+
+              return skipped.has(seen)
+                ? Effect.succeed([])
+                : Effect.as(
+                    Effect.andThen(
+                      Effect.sync(() => skipped.add(seen)),
+                      Effect.logWarning(
+                        `smol cloud listed ${what} ${marks.name ?? marks.id ?? "with no id"} that this host can't read and isn't its own, so it skips it`
+                      )
+                    ),
+                    []
+                  );
+            }).pipe(Effect.map((kept) => kept.flat()))
+        );
 
     const machine = json(MachineRecord);
     const checkpoint = json(CheckpointRecord);
 
     return {
-      account: json(Account)("GET", "/v1/account"),
-      inUse: json(InUse)("GET", "/v1/capacity"),
-      machines: json(Schema.Array(MachineRecord))("GET", "/v1/machines"),
-      machine: (id: Handle) => machine("GET", `/v1/machines/${id}`),
+      account: json(Account)("GET", "/v1/account", "read"),
+      inUse: json(InUse)("GET", "/v1/capacity", "read"),
+      machines: listed(MachineRecord, "a machine", "/v1/machines"),
+      machine: (id: Handle) => machine("GET", `/v1/machines/${id}`, "read"),
       create: (creation: Creation) =>
-        machine("POST", "/v1/machines", {
+        machine("POST", "/v1/machines", "change", {
           name: creation.name,
           source: { type: "image", reference: creation.image },
           resources: creation.sizes,
@@ -244,32 +324,40 @@ export const make = (url: string, key: Redacted.Redacted) =>
             : { ttlSeconds: creation.ttlSeconds }),
         }),
       restore: (from: Handle, name: string, autoStopSeconds: number) =>
-        machine("POST", `/v1/checkpoints/${from}/restore`, {
+        machine("POST", `/v1/checkpoints/${from}/restore`, "change", {
           name,
           network: open,
           autoStopSeconds,
         }),
       branch: (from: Handle, name: string) =>
-        machine("POST", `/v1/machines/${from}/branches`, { name }),
+        machine("POST", `/v1/machines/${from}/branches`, "settle", { name }),
       act: (id: Handle, verb: Verb) =>
-        done("POST", `/v1/machines/${id}/${verb}`),
+        done("POST", `/v1/machines/${id}/${verb}`, "settle"),
       resize: (id: Handle, sizes: Sizes) =>
-        Effect.asVoid(send("POST", `/v1/machines/${id}/resize`, sizes)),
-      deleteMachine: (id: Handle) => done("DELETE", `/v1/machines/${id}`),
-      checkpoints: json(Schema.Array(CheckpointRecord))(
-        "GET",
-        "/v1/checkpoints"
-      ),
-      checkpoint: (id: Handle) => checkpoint("GET", `/v1/checkpoints/${id}`),
+        Effect.asVoid(send("POST", `/v1/machines/${id}/resize`, sizes)).pipe(
+          within("settle", `POST /v1/machines/${id}/resize`)
+        ),
+      deleteMachine: (id: Handle) =>
+        done("DELETE", `/v1/machines/${id}`, "change"),
+      checkpoints: listed(CheckpointRecord, "a checkpoint", "/v1/checkpoints"),
+      checkpoint: (id: Handle) =>
+        checkpoint("GET", `/v1/checkpoints/${id}`, "read"),
       capture: (id: Handle) =>
-        checkpoint("POST", `/v1/machines/${id}/checkpoints?wait=true`),
-      deleteCheckpoint: (id: Handle) => done("DELETE", `/v1/checkpoints/${id}`),
+        checkpoint(
+          "POST",
+          `/v1/machines/${id}/checkpoints?wait=true`,
+          "settle"
+        ),
+      deleteCheckpoint: (id: Handle) =>
+        done("DELETE", `/v1/checkpoints/${id}`, "change"),
       exec: (
         id: Handle,
         body: ExecBody
       ): Effect.Effect<Stream.Stream<Frame, Unanswered>, ApiError> =>
         Effect.map(
-          send("POST", `/v1/machines/${id}/exec/stream`, body),
+          send("POST", `/v1/machines/${id}/exec/stream`, body).pipe(
+            within("settle", `POST /v1/machines/${id}/exec/stream`)
+          ),
           (response) =>
             Stream.mapError(
               frames(response.stream),

@@ -666,66 +666,207 @@ describe("the smol cloud runtime on its host", () => {
   );
 });
 
-const scripted = (creates: { busy: number }, state: string) =>
-  HttpClient.make((request, url) =>
-    Effect.sync(() => {
-      const route = `${request.method} ${url.pathname}`;
+const ownedBy = (runtime: Interface) =>
+  runtime.owned === undefined
+    ? Effect.die("the smol cloud runtime lists the machines it owns")
+    : runtime.owned.machines;
 
-      const reply = (status: number, body: unknown, retryAfter?: string) =>
-        HttpClientResponse.fromWeb(
-          request,
-          Response.json(body, {
-            status,
-            headers:
-              retryAfter === undefined ? {} : { "retry-after": retryAfter },
-          })
-        );
+const onCloud = Effect.gen(function* () {
+  const { dir, fake, settings } = yield* provider;
 
-      const record = {
-        id: "mach-1",
-        name: `cbx-${hostId}-${machineOf("dev").instance}`,
-        state,
-        resources: { cpus: 1, memoryMb: 1024 },
-        createdAt: "2026-11-13T00:00:00Z",
-      };
-
-      if (route === "GET /v1/account") {
-        return reply(200, {
-          plan: { allowAlwaysOn: false },
-          effectiveMaxConcurrentMachines: 4,
-          effectiveMaxCpus: 4,
-        });
-      }
-
-      if (route === "POST /v1/machines") {
-        if (creates.busy > 0) {
-          creates.busy -= 1;
-
-          return reply(
-            503,
-            { code: "insufficient_capacity", detail: "", retryable: true },
-            "86400"
-          );
-        }
-
-        return reply(201, record);
-      }
-
-      if (route === "GET /v1/machines") {
-        return reply(200, []);
-      }
-
-      return reply(200, record);
-    })
+  const context = yield* Layer.build(
+    SmolCloud.layer(
+      settings,
+      hostConfig(path.join(dir, "state"), undefined, hostId)
+    ).pipe(
+      Layer.provide(NodeHttpClient.layerNodeHttp),
+      Layer.provide(NodeServices.layer)
+    )
   );
 
-const scriptedMake = (busy: number, state = "starting") =>
+  return { fake, runtime: Context.get(context, Runtime) };
+}).pipe(provided, Effect.orDie);
+
+describe("the smol cloud runtime over an account without a card", () => {
+  it.live(
+    "refuses a machine past the account's per-machine sizes as unsizable, made or resized",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { runtime } = yield* onCloud;
+          const big = { ...machineOf("big"), cpu: 5 };
+
+          expect(
+            yield* Effect.flip(runtime.sizable(big, sizes, big, false))
+          ).toMatchObject({ _tag: "Unsizable" });
+          expect(
+            yield* Effect.flip(
+              runtime.make(big, { _tag: "image", image }, { _tag: "none" })
+            )
+          ).toMatchObject({ _tag: "Unsizable" });
+
+          const dev = yield* made(runtime, "dev");
+
+          expect(
+            yield* Effect.flip(
+              runtime.resize(
+                { ...dev, ...sizes },
+                { cpu: 1, ramMib: 17 * 1024, diskGib: 10 },
+                true
+              )
+            )
+          ).toMatchObject({ _tag: "Unsizable" });
+        })
+      )
+  );
+
+  it.live(
+    "reads its capacity as running machines and machines kept against the account's limits, and CPUs and RAM in use",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { runtime } = yield* onCloud;
+
+          yield* made(runtime, "dev");
+
+          expect(yield* runtime.capacity([])).toStrictEqual([
+            { resource: "runningMachines", used: 1, limit: 4 },
+            { resource: "machines", used: 1, limit: 20 },
+            { resource: "cpu", used: 1 },
+            { resource: "ramMib", used: 1024 },
+          ]);
+        })
+      )
+  );
+
+  it.live(
+    "skips a machine record it can't read unless its name carries this host's mark, and logs it once",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { fake, runtime } = yield* onCloud;
+          const lines: string[] = [];
+          const dev = yield* made(runtime, "dev");
+
+          yield* fake.malformedMachine("someone-elses");
+
+          const listed = yield* Effect.andThen(
+            ownedBy(runtime),
+            ownedBy(runtime)
+          ).pipe(Effect.provide(Logger.layer([capturing(lines)])));
+
+          expect(listed.map(({ handle }) => handle)).toStrictEqual([
+            dev.handle,
+          ]);
+          expect(
+            lines.filter((line) =>
+              line.includes("can't read and isn't its own")
+            )
+          ).toHaveLength(1);
+
+          yield* fake.malformedMachine(`cbx-${hostId}-${"ab".repeat(16)}`);
+
+          expect((yield* Effect.flip(ownedBy(runtime))).message).toContain(
+            `cbx-${hostId}-${"ab".repeat(16)}`
+          );
+        })
+      )
+  );
+
+  it.live(
+    "keeps each exec's request body within the provider's MiB, counted as JSON encodes it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { runtime } = yield* onCloud;
+          const dev = yield* made(runtime, "dev");
+
+          for (const stdin of [
+            "\u0001".repeat(200 * 1024),
+            '"'.repeat(600 * 1024),
+          ]) {
+            expect(
+              yield* answered(runtime, dev, ["wc", "-c"], stdin)
+            ).toStrictEqual([`${Buffer.byteLength(stdin)}\n`, 0]);
+          }
+        })
+      )
+  );
+});
+
+const scripted = (creates: { busy: number }, state: string, stalls?: string) =>
+  HttpClient.make((request, url) =>
+    `${request.method} ${url.pathname}` === stalls
+      ? Effect.never
+      : Effect.sync(() => {
+          const route = `${request.method} ${url.pathname}`;
+
+          const reply = (status: number, body: unknown, retryAfter?: string) =>
+            HttpClientResponse.fromWeb(
+              request,
+              Response.json(body, {
+                status,
+                headers:
+                  retryAfter === undefined ? {} : { "retry-after": retryAfter },
+              })
+            );
+
+          const record = {
+            id: "mach-1",
+            name: `cbx-${hostId}-${machineOf("dev").instance}`,
+            state,
+            resources: { cpus: 1, memoryMb: 1024 },
+            createdAt: "2026-11-13T00:00:00Z",
+          };
+
+          if (route === "GET /v1/account") {
+            return reply(200, {
+              plan: { allowAlwaysOn: false },
+              effectiveMaxMachines: 20,
+              effectiveMaxConcurrentMachines: 4,
+              effectiveMaxCpus: 4,
+              effectiveMaxMemoryMb: 16_384,
+              effectiveMaxDiskGb: 200,
+            });
+          }
+
+          if (route === "POST /v1/machines") {
+            if (creates.busy > 0) {
+              creates.busy -= 1;
+
+              return reply(
+                503,
+                { code: "insufficient_capacity", detail: "", retryable: true },
+                "86400"
+              );
+            }
+
+            return reply(201, record);
+          }
+
+          if (route === "GET /v1/machines") {
+            return reply(200, []);
+          }
+
+          if (route === "GET /v1/capacity") {
+            return reply(200, {
+              machines: 0,
+              startedMachines: 0,
+              startedMemoryMb: 0,
+            });
+          }
+
+          return reply(200, record);
+        })
+  );
+
+const scriptedRuntime = (client: HttpClient.HttpClient) =>
   Effect.gen(function* () {
     const api = yield* Api.make("https://smol.test", Redacted.make(key)).pipe(
-      Effect.provideService(HttpClient.HttpClient, scripted({ busy }, state))
+      Effect.provideService(HttpClient.HttpClient, client)
     );
 
-    const runtime = yield* SmolCloud.make(
+    return yield* SmolCloud.make(
       { apiKeyFile: "/unused" },
       hostConfig("/unused", undefined, hostId),
       api,
@@ -733,6 +874,11 @@ const scriptedMake = (busy: number, state = "starting") =>
         throw new Error("no tunnel in a scripted provider");
       }
     );
+  });
+
+const scriptedMake = (busy: number, state = "starting") =>
+  Effect.gen(function* () {
+    const runtime = yield* scriptedRuntime(scripted({ busy }, state));
 
     return yield* Effect.forkChild(
       runtime.make(machineOf("dev"), { _tag: "image", image }, { _tag: "none" })
@@ -740,6 +886,29 @@ const scriptedMake = (busy: number, state = "starting") =>
   });
 
 describe("a smol cloud step's deadline", () => {
+  it.effect(
+    "ends a read of the account the provider never answers, failed Internal",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* scriptedRuntime(
+          scripted({ busy: 0 }, "started", "GET /v1/account")
+        );
+
+        const reading = yield* Effect.forkChild(runtime.capacity([]));
+
+        yield* TestClock.adjust("10 minutes");
+
+        const ended = reading.pollUnsafe();
+
+        expect(ended, "ended within 10 minutes").toBeDefined();
+        expect(
+          ended !== undefined &&
+            Exit.isFailure(ended) &&
+            Cause.squash(ended.cause)
+        ).toMatchObject({ _tag: "Internal" });
+      })
+  );
+
   it.effect(
     "waits at most 30 seconds when the provider asks to retry a day later",
     () =>

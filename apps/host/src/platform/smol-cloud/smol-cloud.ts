@@ -63,7 +63,7 @@ export const longestHostId = 26;
 
 const idleStopSeconds = 86_400;
 
-const stdinLimit = 512 * 1024;
+const bodyLimit = 1024 * 1024;
 
 const unstageTimeout = Duration.seconds(30);
 
@@ -157,8 +157,12 @@ const isConflict = (error: ApiError): error is Refused =>
 
 const quota = /limit|quota|concurrent|maximum|exceed/iu;
 
+const oversized = (error: Refused) =>
+  error.status === 422 && error.detail.startsWith("machine size exceeds");
+
 const refusedRoom = (error: ApiError) =>
   error._tag === "Refused" &&
+  !oversized(error) &&
   (error.status === 402 ||
     error.code === "insufficient_capacity" ||
     (error.status === 422 && quota.test(error.detail)));
@@ -217,28 +221,46 @@ const sizesOf = (record: MachineRecord, asked: Sizes): Sizes => ({
 
 const encoder = new TextEncoder();
 
-const decoder = new TextDecoder();
+const asciiLengths = Array.from(
+  { length: 0x80 },
+  (_, code) => JSON.stringify(String.fromCodePoint(code)).length - 2
+);
 
-const continuesCharacter = (byte: number | undefined) =>
-  byte !== undefined && (byte & 0xc0) === 0x80;
+const characterLength = (character: string): number => {
+  const code = character.codePointAt(0) ?? 0;
 
-const wholeCharacterChunks = (bytes: Uint8Array): readonly string[] => {
-  const chunks: string[] = [];
-  let at = 0;
-
-  while (at < bytes.length) {
-    let end = Math.min(at + stdinLimit, bytes.length);
-
-    while (continuesCharacter(bytes[end])) {
-      end -= 1;
-    }
-
-    chunks.push(decoder.decode(bytes.subarray(at, end)));
-    at = end;
+  if (code < 0x80) {
+    return asciiLengths[code] ?? 6;
   }
 
-  return chunks;
+  return code >= 0xd8_00 && code <= 0xdf_ff
+    ? 6
+    : encoder.encode(character).length;
 };
+
+const pieces = (text: string, room: number): readonly string[] => {
+  const chunks: string[] = [];
+  let chunk = "";
+  let used = 0;
+
+  for (const character of text) {
+    const length = characterLength(character);
+
+    if (used + length > room && chunk !== "") {
+      chunks.push(chunk);
+      chunk = "";
+      used = 0;
+    }
+
+    chunk += character;
+    used += length;
+  }
+
+  return chunk === "" ? chunks : [...chunks, chunk];
+};
+
+const bodyLength = (body: Api.ExecBody) =>
+  encoder.encode(JSON.stringify(body)).length;
 
 const stagedStdin = () =>
   `/dev/shm/clankerbox-stdin-${Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(8)))}`;
@@ -260,8 +282,31 @@ export const make = (
       return instancePattern.test(rest) ? rest : undefined;
     };
 
+    const markedMachine = (marks: Api.Marks) =>
+      instanceOf(marks.name) !== undefined;
+
+    const listed = api.machines(markedMachine);
+
+    const checkpointsOf = (handles: ReadonlySet<string>) =>
+      api.checkpoints(
+        ({ machineId }) => machineId !== undefined && handles.has(machineId)
+      );
+
     const record = (handle: Handle) =>
       api.machine(handle).pipe(Effect.catchIf(isGone, () => Effect.undefined));
+
+    const unsized = (machine: Pick<Identity, "name">, asked: Sizes) =>
+      Effect.flatMap(api.account, (account) =>
+        asked.cpu > account.effectiveMaxCpus ||
+        asked.ramMib > account.effectiveMaxMemoryMb ||
+        asked.diskGib > account.effectiveMaxDiskGb
+          ? Effect.fail(
+              new Unsizable({
+                message: `smol cloud gives a machine of this account at most ${account.effectiveMaxCpus} vCPUs, ${account.effectiveMaxMemoryMb} MiB of RAM and ${account.effectiveMaxDiskGb} GiB of disk, and ${machine.name} was asked ${asked.cpu} vCPUs, ${asked.ramMib} MiB and ${asked.diskGib} GiB`,
+              })
+            )
+          : Effect.void
+      );
 
     const autoStopSeconds = yield* Effect.cached(
       Effect.map(api.account, (account) =>
@@ -330,10 +375,7 @@ export const make = (
       bounded(`bringing ${machine.name} ${goal}`)(toward(machine, goal));
 
     const byName = (name: string) =>
-      Effect.map(
-        api.machines,
-        (all) => all.find((found) => found.name === name)?.id
-      );
+      Effect.map(listed, (all) => all.find((found) => found.name === name)?.id);
 
     const made = (machine: Identity & Sizes, origin: Origin) => {
       const name = nameOf(machine.instance);
@@ -414,7 +456,10 @@ export const make = (
 
     const unkept = (machine: Target, keep: ReadonlySet<Handle>) =>
       Effect.flatMap(
-        read(`the checkpoints of ${machine.name}`, api.checkpoints),
+        read(
+          `the checkpoints of ${machine.name}`,
+          checkpointsOf(new Set([machine.handle]))
+        ),
         (all) =>
           Effect.forEach(
             all.filter(
@@ -504,17 +549,16 @@ export const make = (
       machine: Target,
       file: string,
       user: string | undefined,
-      stdin: Uint8Array
-    ) =>
-      Effect.forEach(
-        wholeCharacterChunks(stdin),
-        (chunk) =>
+      stdin: string
+    ) => {
+      const command = ["sh", "-c", 'umask 077 && cat >>"$1"', "sh", file];
+      const room = bodyLimit - bodyLength({ command, user, stdin: "" });
+
+      return Effect.forEach(
+        pieces(stdin, room),
+        (piece) =>
           Effect.flatMap(
-            exitOf(machine, {
-              command: ["sh", "-c", 'umask 077 && cat >>"$1"', "sh", file],
-              user,
-              stdin: chunk,
-            }),
+            exitOf(machine, { command, user, stdin: piece }),
             (code) =>
               code === 0
                 ? Effect.void
@@ -526,6 +570,7 @@ export const make = (
           ),
         { discard: true }
       );
+    };
 
     const unstaged = (
       machine: Target,
@@ -538,16 +583,17 @@ export const make = (
       );
 
     const exec = (machine: Target, command: Command) => {
-      const stdin = encoder.encode(command.stdin ?? "");
+      const inline: Api.ExecBody = {
+        command: command.argv,
+        user: command.user,
+        stdin: command.stdin,
+      };
 
-      if (stdin.length <= stdinLimit) {
-        return streamed(machine, {
-          command: command.argv,
-          user: command.user,
-          stdin: command.stdin,
-        });
+      if (command.stdin === undefined || bodyLength(inline) <= bodyLimit) {
+        return streamed(machine, inline);
       }
 
+      const { stdin } = command;
       const file = stagedStdin();
 
       return Effect.gen(function* () {
@@ -570,7 +616,7 @@ export const make = (
 
     const capacity = Effect.gen(function* () {
       const [account, inUse, all] = yield* Effect.all(
-        [api.account, api.inUse, api.machines],
+        [api.account, api.inUse, listed],
         { concurrency: "unbounded" }
       );
 
@@ -584,7 +630,12 @@ export const make = (
           used: inUse.startedMachines,
           limit: account.effectiveMaxConcurrentMachines,
         },
-        { resource: "cpu", used: cpus, limit: account.effectiveMaxCpus },
+        {
+          resource: "machines",
+          used: inUse.machines,
+          limit: account.effectiveMaxMachines,
+        },
+        { resource: "cpu", used: cpus },
         { resource: "ramMib", used: inUse.startedMemoryMb },
       ];
 
@@ -592,12 +643,13 @@ export const make = (
     });
 
     const marked = Effect.gen(function* () {
-      const [machines, checkpoints] = yield* Effect.all(
-        [api.machines, api.checkpoints],
-        { concurrency: 2 }
+      const ours = (yield* listed).filter((found) => markedMachine(found));
+
+      const checkpoints = yield* checkpointsOf(
+        new Set(ours.map(({ id }) => id))
       );
 
-      return machines.flatMap((found) => {
+      return ours.flatMap((found) => {
         const instance = instanceOf(found.name);
 
         return instance === undefined
@@ -624,7 +676,7 @@ export const make = (
         );
       }
 
-      return Effect.map(api.machines, (all): Observed => {
+      return Effect.map(listed, (all): Observed => {
         const byHandle = new Map(all.map((found) => [found.id, found]));
 
         return new Map(
@@ -653,7 +705,11 @@ export const make = (
         machines: read("the machines this host made", marked),
         checkpoints: Effect.succeed([]),
       },
-      sizable: () => Effect.void,
+      sizable: (machine, _from, to) =>
+        Effect.catchTags(unsized(machine, to), {
+          Refused: () => Effect.void,
+          Unanswered: () => Effect.void,
+        }),
       startup: Effect.void,
       find: (what, ref) =>
         what === "machine"
@@ -668,7 +724,12 @@ export const make = (
         Effect.gen(function* () {
           const handle = yield* Effect.mapError(
             created(machine, origin),
-            failure(`make ${machine.name}`)
+            (error): Capacity | Internal | Unsizable =>
+              error._tag === "Refused" && oversized(error)
+                ? new Unsizable({
+                    message: `make ${machine.name}: ${error.detail}`,
+                  })
+                : failure(`make ${machine.name}`)(error)
           );
 
           yield* toward(targetOf(machine, handle), "running");

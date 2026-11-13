@@ -67,6 +67,7 @@ export interface FakeSmolCloud {
   readonly url: string;
   readonly faults: FakeFaults;
   readonly holdCapture: Effect.Effect<void>;
+  readonly malformedMachine: (name: string) => Effect.Effect<void>;
   readonly calls: readonly string[];
   readonly machines: ReadonlyMap<string, FakeMachine>;
   readonly checkpoints: ReadonlyMap<string, FakeCheckpoint>;
@@ -74,11 +75,13 @@ export interface FakeSmolCloud {
 
 const concurrentLimit = 4;
 
-const cpuLimit = 4;
+const machineLimit = 20;
+
+const perMachine = { cpus: 4, memoryMb: 16_384, diskGb: 200 };
 
 const nameLimit = 63;
 
-const stdinCap = 1024 * 1024;
+const bodyLimit = 1024 * 1024;
 
 const guestShm = "/dev/shm/";
 
@@ -219,6 +222,7 @@ export const fakeSmolCloud = (
     const dropping = new Set<Dropping>();
     const landsLate: Duration.Duration[] = [];
     let quotaOn = false;
+    const malformed: object[] = [];
     let holdingCapture = false;
 
     const record = (call: string) => {
@@ -237,17 +241,28 @@ export const fakeSmolCloud = (
     const started = () =>
       [...machines.values()].filter(({ state }) => state === "started");
 
-    const roomFor = (cpus: number) =>
-      !quotaOn &&
-      started().length < concurrentLimit &&
-      started().reduce((sum, machine) => sum + machine.cpus, 0) + cpus <=
-        cpuLimit;
+    const roomFor = () => !quotaOn && started().length < concurrentLimit;
 
     const noRoom = problem(
       422,
       "unprocessable",
-      `the account's concurrent machine limit of ${concurrentLimit} or its ${cpuLimit} CPU limit is reached`
+      `concurrency limit reached: an account without a card can run ${concurrentLimit} machines at once; add a card at https://smolmachines.com/console/usage to run up to your plan's limit`
     );
+
+    const oversized = (sizes: {
+      readonly cpus: number;
+      readonly memoryMb: number;
+      readonly diskGb: number;
+    }) =>
+      sizes.cpus > perMachine.cpus ||
+      sizes.memoryMb > perMachine.memoryMb ||
+      sizes.diskGb > perMachine.diskGb
+        ? problem(
+            422,
+            "unprocessable",
+            `machine size exceeds what an account without a card can run, up to ${perMachine.cpus} vCPU, ${perMachine.memoryMb / 1024} GB memory and ${perMachine.diskGb} GB disk per machine (requested ${sizes.cpus} vCPU, ${sizes.memoryMb / 1024} GB, ${sizes.diskGb} GB disk); add a card at https://smolmachines.com/console/usage to use your plan's full limit`
+          )
+        : undefined;
 
     const boot = async (machine: FakeMachine) => {
       await Promise.all(
@@ -343,8 +358,12 @@ export const fakeSmolCloud = (
         );
       }
 
-      if (quotaOn) {
-        return noRoom;
+      if (quotaOn || machines.size >= machineLimit) {
+        return problem(
+          422,
+          "unprocessable",
+          `machine limit reached: this account can keep ${machineLimit} machines`
+        );
       }
 
       const fields = {
@@ -355,6 +374,12 @@ export const fakeSmolCloud = (
         diskGb: body.resources.diskGb ?? 20,
         restoredFrom: undefined,
       };
+
+      const tooBig = oversized(fields);
+
+      if (tooBig !== undefined) {
+        return tooBig;
+      }
 
       const late = landsLate.shift();
 
@@ -381,7 +406,7 @@ export const fakeSmolCloud = (
           }
 
           if (machine.state === "stopped") {
-            if (!roomFor(machine.cpus)) {
+            if (!roomFor()) {
               return noRoom;
             }
 
@@ -453,6 +478,16 @@ export const fakeSmolCloud = (
 
       if (to.diskGb !== undefined && to.diskGb < machine.diskGb) {
         return problem(400, "bad_request", "disk can only grow");
+      }
+
+      const tooBig = oversized({
+        cpus: to.cpus ?? machine.cpus,
+        memoryMb: to.memoryMb ?? machine.memoryMb,
+        diskGb: to.diskGb ?? machine.diskGb,
+      });
+
+      if (tooBig !== undefined) {
+        return tooBig;
       }
 
       machine.cpus = to.cpus ?? machine.cpus;
@@ -634,8 +669,11 @@ export const fakeSmolCloud = (
         if (kind === "account" && method === "GET") {
           return answer(200, {
             plan: { allowAlwaysOn: false },
+            effectiveMaxMachines: machineLimit,
             effectiveMaxConcurrentMachines: concurrentLimit,
-            effectiveMaxCpus: cpuLimit,
+            effectiveMaxCpus: perMachine.cpus,
+            effectiveMaxMemoryMb: perMachine.memoryMb,
+            effectiveMaxDiskGb: perMachine.diskGb,
             runningMachines: started().length,
           });
         }
@@ -653,7 +691,10 @@ export const fakeSmolCloud = (
 
         if (kind === "machines" && id === undefined) {
           if (method === "GET") {
-            return answer(200, [...machines.values()].map(recordOf));
+            return answer(200, [
+              ...[...machines.values()].map(recordOf),
+              ...malformed,
+            ]);
           }
 
           const body = yield* decodeBody(Creation)(request);
@@ -725,7 +766,19 @@ export const fakeSmolCloud = (
           }
 
           if (sub === "exec" && verb === "stream") {
-            const body = yield* decodeBody(ExecRequest)(request);
+            const raw = yield* Effect.orElseSucceed(request.text, () => "");
+
+            if (Buffer.byteLength(raw) > bodyLimit) {
+              return problem(
+                413,
+                "payload_too_large",
+                "Failed to buffer the request body: length limit exceeded"
+              );
+            }
+
+            const body = Schema.decodeOption(
+              Schema.fromJsonString(ExecRequest)
+            )(raw);
 
             if (Option.isNone(body)) {
               return problem(400, "bad_request", "unreadable exec");
@@ -736,14 +789,6 @@ export const fakeSmolCloud = (
                 400,
                 "bad_request",
                 "command arguments cannot be empty"
-              );
-            }
-
-            if (Buffer.byteLength(body.value.stdin ?? "") > stdinCap) {
-              return problem(
-                413,
-                "payload_too_large",
-                `stdin is over ${stdinCap} bytes`
               );
             }
 
@@ -760,7 +805,7 @@ export const fakeSmolCloud = (
             }
 
             if (machine.state === "stopped") {
-              if (!roomFor(machine.cpus)) {
+              if (!roomFor()) {
                 return noRoom;
               }
 
@@ -904,6 +949,10 @@ export const fakeSmolCloud = (
       holdCapture: Effect.sync(() => {
         holdingCapture = true;
       }),
+      malformedMachine: (name: string) =>
+        Effect.sync(() => {
+          malformed.push({ id: idOf("mach"), name, state: null });
+        }),
       calls,
       machines,
       checkpoints,

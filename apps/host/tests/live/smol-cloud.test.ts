@@ -29,19 +29,24 @@ import { Runtime } from "../../src/runtime.ts";
 import type { Handle, Target } from "../../src/runtime.ts";
 import { Tailnet } from "../../src/tailnet.ts";
 import { hostConfig, loopbackServer } from "../support.ts";
-import { leftOver, liveHostId, liveMark } from "./marks.ts";
+import { liveHostId, liveMark } from "./marks.ts";
+import {
+  ledgerOf,
+  listOnly,
+  liveLedgers,
+  namedOver,
+  over,
+  privateFolder,
+  retired,
+  retiredOver,
+  sweepRead,
+  thisHost,
+} from "./sweep.ts";
+import type { Found } from "./sweep.ts";
 
 const live = process.env["CLANKERBOX_LIVE"] === "1";
 const key = process.env["SMOL_MACHINES_API_KEY"] ?? "";
 const api = "https://api.smolmachines.com";
-
-const ledger =
-  process.env["CLANKERBOX_LIVE_LEDGER"] ??
-  path.join(tmpdir(), "clankerbox-live-smol-cloud.ledger");
-
-const answers =
-  process.env["CLANKERBOX_LIVE_ANSWERS"] ??
-  path.join(tmpdir(), "clankerbox-live-smol-cloud.answers");
 
 const prefix = liveMark;
 
@@ -53,19 +58,33 @@ const run = Math.floor(Math.random() * 0xff_ff_ff)
 
 const hostId = liveHostId(run);
 
+const suite = "smol-cloud";
+
+const ledger = ledgerOf(liveLedgers, suite, hostId);
+
+const answers =
+  process.env["CLANKERBOX_LIVE_ANSWERS"] ??
+  path.join(liveLedgers, `${suite}-${hostId}.answers`);
+
 const minted: string[] = [];
 
-const noted = (what: string) => {
-  appendFileSync(ledger, `${new Date().toISOString()} ${what}\n`);
+const noted = (id: string) => {
+  ledger.source(id);
 };
 
-const mintedCheckpoint = (id: string, what: string) => {
+const mintedCheckpoint = (id: string) => {
   minted.push(id);
-  noted(`checkpoint ${id} ${what}`);
+  ledger.copy(id);
 };
 
 const answered = (item: string, answer: unknown) => {
-  appendFileSync(answers, `${item}: ${JSON.stringify(answer)}\n`);
+  if (process.env["CLANKERBOX_LIVE_ANSWERS"] === undefined) {
+    privateFolder(liveLedgers);
+  }
+
+  appendFileSync(answers, `${item}: ${JSON.stringify(answer)}\n`, {
+    mode: 0o600,
+  });
 };
 
 const Problem = Schema.Struct({
@@ -98,12 +117,18 @@ const Checkpoint = Schema.Struct({
 
 const Account = Schema.Struct({
   plan: Schema.Struct({ allowAlwaysOn: Schema.Boolean }),
+  effectiveMaxMachines: Schema.Finite,
   effectiveMaxConcurrentMachines: Schema.Finite,
   effectiveMaxCpus: Schema.Finite,
+  effectiveMaxMemoryMb: Schema.Finite,
+  effectiveMaxDiskGb: Schema.Finite,
   runningMachines: Schema.Finite,
 });
 
-const Capacity = Schema.Struct({ startedMachines: Schema.Finite });
+const Capacity = Schema.Struct({
+  machines: Schema.Finite,
+  startedMachines: Schema.Finite,
+});
 
 const ExecResult = Schema.Struct({
   exitCode: Schema.Finite,
@@ -256,28 +281,79 @@ const bannerOf = (id: string) =>
     )
   );
 
-const leftovers = Effect.gen(function* () {
-  const ours = (yield* machines).filter(({ name }) => leftOver(name));
+const runOf = (name: string | null | undefined) =>
+  /^cbx-(?<run>0live-[^-]*)-/u.exec(name ?? "")?.groups?.["run"];
 
-  const checkpoints = yield* Effect.forEach(ours, ({ id }) =>
-    checkpointsOf(id)
-  );
+type Listed = typeof MachineInfo.Type;
 
-  return { machines: ours, checkpoints: checkpoints.flat() };
-});
+type Kept = typeof Checkpoint.Type;
+
+const leftovers = sweepRead(
+  ledger.ledgers,
+  Effect.gen(function* () {
+    const found = yield* machines;
+
+    const checkpoints = decoded(Schema.Array(Checkpoint))(
+      yield* call("GET", "/v1/checkpoints")
+    );
+
+    return { machines: found, copies: checkpoints };
+  }),
+  {
+    run: hostId,
+    over: (each) => over(each, thisHost),
+    named: namedOver,
+    runOf: ({ name }) => runOf(name),
+    idOf: ({ id }) => id,
+    keyOf: ({ id }) => id,
+    sourceOf: ({ machineId }) => machineId,
+  }
+);
+
+const described = ({ machines: listed, copies }: Found<Listed, Kept>) =>
+  [
+    ...listed.map(({ name }) => `machine ${name ?? "unnamed"}`),
+    ...(copies.length === 0 ? [] : [`${copies.length} checkpoints`]),
+  ].join(", ") || "nothing";
+
+const emptied = (found: Found<Listed, Kept>) =>
+  found.machines.length === 0 && found.copies.length === 0;
 
 const clearLeftovers = Effect.gen(function* () {
-  const left = yield* leftovers;
+  const before = yield* leftovers;
 
-  for (const found of left.machines) {
-    yield* call("DELETE", `/v1/machines/${found.id}`);
-    noted(`cleared machine ${found.name ?? ""} ${found.id}`);
+  answered("the sweep selects, to delete", described(before.swept));
+  answered("the sweep lists, of other live runs", described(before.listed));
+
+  if (listOnly) {
+    return before;
   }
 
-  for (const { id } of left.checkpoints) {
-    yield* call("DELETE", `/v1/checkpoints/${id}`);
-    noted(`cleared checkpoint ${id}`);
+  for (let pass = 0; pass < 5; pass += 1) {
+    const now = yield* leftovers;
+
+    if (emptied(now.swept)) {
+      break;
+    }
+
+    for (const found of now.swept.machines) {
+      yield* call("DELETE", `/v1/machines/${found.id}`);
+    }
+
+    for (const { id } of now.swept.copies) {
+      yield* call("DELETE", `/v1/checkpoints/${id}`);
+    }
+
+    yield* Effect.sleep(Duration.seconds(2));
   }
+
+  const after = yield* leftovers;
+
+  yield* Effect.sync(() => {
+    retiredOver(liveLedgers, suite, after);
+  });
+
+  return after;
 });
 
 const deleteMinted = Effect.forEach(
@@ -306,7 +382,12 @@ describe.runIf(live)("the smol cloud API, as the adapter relies on it", () => {
           "running machines allowed",
           account.effectiveMaxConcurrentMachines
         );
-        answered("CPUs allowed", account.effectiveMaxCpus);
+        answered("machines kept allowed", account.effectiveMaxMachines);
+        answered("a machine's most", {
+          cpus: account.effectiveMaxCpus,
+          memoryMb: account.effectiveMaxMemoryMb,
+          diskGb: account.effectiveMaxDiskGb,
+        });
 
         const capacity = yield* call("GET", "/v1/capacity");
 
@@ -322,17 +403,30 @@ describe.runIf(live)("the smol cloud API, as the adapter relies on it", () => {
           branchable: true,
           ports: [{ port: 22 }],
           network: { mode: "open" },
-          autoStopSeconds: 86_400,
+          autoStopSeconds: 900,
           ttlSeconds: 3600,
         };
 
         expectStatus(
           yield* call("POST", "/v1/machines", {
             ...body,
-            name: `${prefix}${"x".repeat(64 - prefix.length)}`,
+            name: `${prefix}${run}-${"x".repeat(63 - prefix.length - run.length)}`,
           }),
           400,
           "a create named with 64 characters"
+        );
+
+        const oversized = yield* call("POST", "/v1/machines", {
+          ...body,
+          resources: {
+            ...body.resources,
+            cpus: account.effectiveMaxCpus + 1,
+          },
+        });
+
+        expectStatus(oversized, 422, "a create past a machine's most CPUs");
+        expect(problemOf(oversized)).toMatch(
+          /^unprocessable: machine size exceeds /u
         );
 
         if (!account.plan.allowAlwaysOn) {
@@ -353,7 +447,7 @@ describe.runIf(live)("the smol cloud API, as the adapter relies on it", () => {
         const created = decoded(MachineInfo)(createdAnswer);
         const { id } = created;
 
-        noted(`machine ${name} ${id}`);
+        noted(id);
         expect(created.state).toBe("stopped");
         answered(
           "a create's record shows the diskGb it named",
@@ -394,6 +488,16 @@ describe.runIf(live)("the smol cloud API, as the adapter relies on it", () => {
 
         expectStatus(echoed, 200, "an exec with stdin");
         expect(decoded(ExecResult)(echoed).stdout).toBe("hello\n");
+
+        const overBody = yield* exec(id, {
+          command: ["wc", "-c"],
+          stdin: "x".repeat(1024 * 1024),
+        });
+
+        expectStatus(overBody, 413, "an exec whose body passes a MiB");
+        expect(problemOf(overBody)).toBe(
+          "payload_too_large: Failed to buffer the request body: length limit exceeded"
+        );
 
         const streamed = yield* call("POST", `/v1/machines/${id}/exec/stream`, {
           command: ["sh", "-c", "printf 'one\\ntwo\\n'; exit 7"],
@@ -456,7 +560,7 @@ describe.runIf(live)("the smol cloud API, as the adapter relies on it", () => {
         const captured = decoded(Checkpoint)(capturedAnswer);
         const capture = captured.id;
 
-        mintedCheckpoint(capture, `captured of ${id}`);
+        mintedCheckpoint(capture);
         answered("a capture with wait=true answers status", captured.status);
 
         yield* call("GET", `/v1/checkpoints/${capture}`).pipe(
@@ -480,7 +584,7 @@ describe.runIf(live)("the smol cloud API, as the adapter relies on it", () => {
           .filter((found) => found !== capture);
 
         for (const own of pausedWith) {
-          mintedCheckpoint(own, `made by the pause of ${id}`);
+          mintedCheckpoint(own);
         }
 
         expect(pausedWith).toHaveLength(1);
@@ -531,7 +635,7 @@ describe.runIf(live)("the smol cloud API, as the adapter relies on it", () => {
           {
             name: restoredName,
             network: { mode: "open" },
-            autoStopSeconds: 86_400,
+            autoStopSeconds: 900,
           }
         );
 
@@ -540,10 +644,10 @@ describe.runIf(live)("the smol cloud API, as the adapter relies on it", () => {
         const restored = decoded(MachineInfo)(restoredAnswer);
         const copy = restored.id;
 
-        noted(`machine ${restoredName} ${copy}`);
+        noted(copy);
         expect(restored.state).toBe("stopped");
         expect(restored.ports?.map(({ port }) => port)).toStrictEqual([22]);
-        expect(restored.autoStopSeconds).toBe(86_400);
+        expect(restored.autoStopSeconds).toBe(900);
         expect(restored.network?.mode).toBe("open");
         answered("a restore's labels, ttlSeconds and resources", {
           labels: restored.labels,
@@ -627,7 +731,7 @@ describe.runIf(live)("the smol cloud API, as the adapter relies on it", () => {
           );
         }
 
-        expect((yield* leftovers).machines).toHaveLength(0);
+        expect((yield* leftovers).swept.machines).toHaveLength(0);
       }).pipe(
         Effect.ensuring(Effect.andThen(clearLeftovers, deleteMinted)),
         Effect.provide(NodeHttpClient.layerNodeHttp)
@@ -685,7 +789,7 @@ const loggedOut = Effect.gen(function* () {
       }),
       ({ status }) =>
         Effect.sync(() => {
-          noted(`logged out ${name ?? ""} ${id}: ${status}`);
+          answered(`the tailnet logout of ${name ?? "a machine"}`, status);
         })
     )
   );
@@ -814,7 +918,7 @@ describe.runIf(live)("the smol cloud runtime on a host, live", () => {
             const report = yield* step(name, body);
             const handle = yield* handleOf(report);
 
-            noted(`machine ${name} ${handle}`);
+            noted(handle);
 
             return { report, handle };
           });
@@ -890,7 +994,7 @@ describe.runIf(live)("the smol cloud runtime on a host, live", () => {
 
         const snapHandle = yield* handleOf(snap);
 
-        mintedCheckpoint(snapHandle, "captured of dev");
+        mintedCheckpoint(snapHandle);
 
         const copy = yield* made("copy", {
           _tag: "make",
@@ -1013,5 +1117,29 @@ describe.runIf(live)("the smol cloud runtime on a host, live", () => {
         Effect.provide(NodeHttpClient.layerNodeHttp)
       ),
     Duration.toMillis(Duration.minutes(30))
+  );
+});
+
+describe.runIf(live)("the smol cloud account after the live runs", () => {
+  it.live(
+    "holds nothing of its run, and lists what other live runs hold",
+    () =>
+      Effect.gen(function* () {
+        const left = yield* clearLeftovers;
+
+        answered(
+          "the final listing of this run and any over",
+          described(left.swept)
+        );
+        answered(
+          "the final listing of other live runs",
+          described(left.listed)
+        );
+        expect(left.swept).toStrictEqual({ machines: [], copies: [] });
+        yield* Effect.sync(() => {
+          retired(liveLedgers, suite, hostId);
+        });
+      }).pipe(Effect.provide(NodeHttpClient.layerNodeHttp)),
+    Duration.toMillis(Duration.minutes(5))
   );
 });
