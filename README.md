@@ -188,6 +188,16 @@ A host config's `kind` and its block become `runtime`, an object naming the host
 
 State carries over: the control plane migrates its database on its first start, stamping each machine and checkpoint with its runtime's traits from its kind, and a database holding a kind it doesn't know is refused, unchanged. `clankerbox hosts` prints `RUNTIME` where it printed `KIND`, `hosts --json` gives each host that answers `runtime` and `traits` in place of `kind`, and `get --json` gives a machine `traits` in place of `kind`: `traits.runtime` is `smolvm` where `kind` was `linux`, and `tart` where it was `mac`. A checkpoint's `kind` stays `ram` or `disk`. In the SDK, `Kind` and `checkpointKinds` are gone: read `machine.traits`, and `traits.checkpoint` for what a capture keeps. `create` and `template build` take `--host`, and the API's `host`, to land on one host.
 
+What a client reads changes in a few places:
+
+- A machine's `traits` gain `stop`, `resumes` on smolvm and smol cloud and `discards` on Tart and boat, and the migration stamps it on every row.
+- A machine shows `ssh` only once its host has read it an SSH host key, so a machine created from a base on smolvm, which has no sshd, shows none, and `ssh` answers `WrongState` saying why. A machine on a host that can't be read shows its login while it is asked to run.
+- `checkpoint list` and `listCheckpoints` show every checkpoint in any phase, as `checkpoint get` does, and the table adds `ERROR`.
+- A create whose sizes no host that offers the base gives answers `Unsizable`, not `NotOffered`, and so does a template build. A refusal carries `made` only where something may have been made.
+- `pause --capture` on a host whose traits capture a stopped machine and stop it on a pause, as boat, pauses first and captures what the pause left, and on one that saves it, as a Mac, answers `WrongState`. A host that can't be read answers `Unavailable`.
+- A retired instance's day now runs from the first sweep that reached its host, and the migration retires every row that already rested undone or failed, so its host's next sweep deletes what such a make left.
+- The control plane logs an answered request at debug, not at info.
+
 ### Upgrading from 0.30
 
 Hosts and the control plane start fresh: 0.30's machines aren't carried over. Before you upgrade, delete each machine and checkpoint with the old release, then stop its host, and remove its `stateDir`. IDs no longer carry a host: `linux_dev` is `dev`, and `ssh dev.cbx` replaces `ssh linux_dev`. Client configs name `server` instead of `hosts`, and profiles lose `host`. `clankerbox host` is now `clankerbox-host`.
