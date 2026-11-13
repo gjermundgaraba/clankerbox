@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -27,12 +28,13 @@ import {
   Schedule,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { expect } from "vite-plus/test";
+import { describe, expect } from "vite-plus/test";
 
 import {
   addMissingKeys,
   beforeJoinScript,
   checkTailnet,
+  guestCommand,
   hostKeyIn,
   identify,
   lastLines,
@@ -51,6 +53,7 @@ import {
   unkey,
   unkeyScript,
 } from "../src/guest.ts";
+import type { Invocation } from "../src/guest.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
   fakeRuntime,
@@ -336,6 +339,61 @@ const packaged = (made: Effect.Success<typeof based>) =>
     return root;
   });
 
+const guestShells = [
+  { name: "dash", argv: ["dash"] },
+  { name: "bash in POSIX mode", argv: ["bash", "--posix"] },
+  { name: "zsh as sh", argv: ["zsh", "--emulate", "sh"] },
+  { name: "busybox ash", argv: ["busybox", "sh"] },
+].map((shell) => ({
+  ...shell,
+  installed:
+    spawnSync(shell.argv[0] ?? "", [...shell.argv.slice(1), "-c", "exit 0"])
+      .status === 0,
+}));
+
+const launched = (shell: readonly string[], invocation: Invocation) => {
+  const command = guestCommand(invocation);
+
+  return outputOf(
+    shell[0] ?? "",
+    [...shell.slice(1), ...command.argv.slice(1)],
+    { input: new TextEncoder().encode(command.stdin ?? "") }
+  );
+};
+
+const oddValues = [
+  "",
+  "-n",
+  "two\nlines\n",
+  "\n",
+  "  led\n  spaced  \n\ttabbed\t\n ",
+  "back\\slash\\",
+  String.raw`\0101 \c`,
+  " 'quoted' \"double\" $HOME `tick` é ✓ ",
+  "x=y",
+];
+
+const specialNames = [
+  "UID",
+  "EUID",
+  "PPID",
+  "GROUPS",
+  "SHELLOPTS",
+  "SHLVL",
+  "RANDOM",
+  "SECONDS",
+  "OPTIND",
+  "LINENO",
+  "IFS",
+  "ENV",
+  "ARGC",
+  "status",
+  "values",
+  "pairs",
+  "value",
+  "v1",
+];
+
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it("an output's tail is its last 20 lines, at most 4000 characters, with no blank end", () => {
     const lines = Array.from({ length: 30 }, (_, line) => `line ${line}`);
@@ -506,57 +564,73 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
-  it.effect("no guest call holds an empty argument", () =>
-    Effect.gen(function* () {
-      const { runtime, bin, machine } = yield* based;
-      const argvs: Array<readonly string[]> = [];
+  it.effect(
+    "every guest call runs the one launcher, so none shows in its arguments a value it was given",
+    () =>
+      Effect.gen(function* () {
+        const { runtime, bin, machine } = yield* based;
+        const argvs: Array<readonly string[]> = [];
+        const given = ["env-value-5be1", "argv-word-91c3", "linux-dev"];
+        const keyBody = operatorKey.split(" ")[1] ?? operatorKey;
 
-      const recording = Runtime.of({
-        ...runtime,
-        exec: (target, command) => {
-          argvs.push(command.argv);
+        const recording = Runtime.of({
+          ...runtime,
+          exec: (target, command) => {
+            argvs.push(command.argv);
 
-          return runtime.exec(target, command);
-        },
-      });
+            return runtime.exec(target, command);
+          },
+        });
 
-      yield* Effect.sync(() => {
-        writeTailscaleStubs(bin);
-      });
-      yield* prepareBase(recording, machine, true);
-      yield* prepareBase(recording, machine, false);
-      yield* runSetup(
-        recording,
-        machine,
-        { script: "#!/bin/sh\ntrue\n" },
-        `\n${operatorKey}\n\n`
-      );
-      yield* runSetup(
-        recording,
-        machine,
-        { script: "#!/bin/sh\ntrue\n" },
-        undefined
-      );
-      yield* addMissingKeys(recording, machine, `${operatorKey}\n\n`);
-      yield* identify(recording, machine);
-      yield* prepareGuest(recording, machine);
-      yield* rememberDns(recording, machine);
-      yield* checkTailnet(recording, machine, "linux-dev");
-      yield* checkTailnet(recording, machine, "linux-dev", {
-        key: Redacted.make("tskey-auth-k1"),
-        rejoin: false,
-      });
-      yield* checkTailnet(recording, machine, "linux-dev", {
-        key: Redacted.make("tskey-auth-k2"),
-        rejoin: true,
-      });
-      yield* scrubNode(recording, machine);
-      yield* unkey(recording, machine);
-      yield* leave(recording, machine, "stop", 10);
+        yield* Effect.sync(() => {
+          writeTailscaleStubs(bin);
+        });
+        yield* prepareBase(recording, machine, true);
+        yield* prepareBase(recording, machine, false);
+        yield* runSetup(
+          recording,
+          machine,
+          { script: "#!/bin/sh\ntrue\n" },
+          `\n${operatorKey}\n\n`
+        );
+        yield* runSetup(
+          recording,
+          machine,
+          { script: "#!/bin/sh\ntrue\n" },
+          undefined
+        );
+        yield* addMissingKeys(recording, machine, `${operatorKey}\n\n`);
+        yield* identify(recording, machine);
+        yield* prepareGuest(recording, machine);
+        yield* rememberDns(recording, machine);
+        yield* checkTailnet(recording, machine, "linux-dev");
+        yield* checkTailnet(recording, machine, "linux-dev", {
+          key: Redacted.make("tskey-auth-k1"),
+          rejoin: false,
+        });
+        yield* checkTailnet(recording, machine, "linux-dev", {
+          key: Redacted.make("tskey-auth-k2"),
+          rejoin: true,
+        });
+        yield* scrubNode(recording, machine);
+        yield* unkey(recording, machine);
+        yield* leave(recording, machine, "stop", 10);
+        yield* runCommand(recording, {
+          machine,
+          argv: ["/bin/echo", "argv-word-91c3", ""],
+          env: { TOKEN: "env-value-5be1" },
+        });
 
-      expect(argvs).toHaveLength(14);
-      expect(argvs.filter((argv) => argv.includes(""))).toStrictEqual([]);
-    })
+        const shown = argvs.flatMap((argv) =>
+          [...given, keyBody].filter((value) =>
+            argv.some((argument) => argument.includes(value))
+          )
+        );
+
+        expect(argvs).toHaveLength(15);
+        expect(shown).toStrictEqual([]);
+        expect(new Set(argvs.map((argv) => argv.join("\0"))).size).toBe(1);
+      })
   );
 
   it.effect(
@@ -591,6 +665,78 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           output: "root \n",
           truncated: false,
         });
+      })
+  );
+
+  it.effect(
+    "a command gets its arguments, env and stdin exactly as given, whatever they hold",
+    () =>
+      Effect.gen(function* () {
+        const { runtime, machine } = yield* based;
+
+        const odd = [
+          "",
+          "-n",
+          "two\nlines\n",
+          "back\\slash\\",
+          String.raw`\0101 \c`,
+          " 'quoted' \"double\" $HOME `tick` é ✓",
+        ];
+
+        const executed = yield* runCommand(runtime, {
+          machine,
+          argv: [
+            "/bin/sh",
+            "-c",
+            'printf "[%s]" "$@"; printf "<%s>" "$A" "$values" "$pairs" "$exports"; cat',
+            "zero",
+            ...odd,
+          ],
+          env: {
+            A: odd.join("|"),
+            values: "v",
+            pairs: "p",
+            exports: "e",
+          },
+          stdin: "first\n\nno newline at its end",
+        });
+
+        expect(executed.exitCode).toBe(0);
+        expect(executed.output).toBe(
+          `${odd.map((value) => `[${value}]`).join("")}<${odd.join("|")}><v><p><e>first\n\nno newline at its end`
+        );
+
+        const missing = yield* runCommand(runtime, {
+          machine,
+          argv: ["no-such-command-3e1f"],
+        });
+
+        expect(missing.exitCode).toBe(127);
+        expect(missing.output).toContain("no-such-command-3e1f");
+      })
+  );
+
+  it.effect(
+    "a command whose arguments or env hold a NUL, which no process takes, is refused Invalid and never runs",
+    () =>
+      Effect.gen(function* () {
+        const { runtime, fake, machine } = yield* based;
+        const before = [...fake.calls];
+
+        const inArgv = yield* Effect.flip(
+          runCommand(runtime, { machine, argv: ["/bin/echo", "a\0b"] })
+        );
+
+        const inEnv = yield* Effect.flip(
+          runCommand(runtime, {
+            machine,
+            argv: ["/bin/true"],
+            env: { TOKEN: "a\0b" },
+          })
+        );
+
+        expect([inArgv._tag, inEnv._tag]).toStrictEqual(["Invalid", "Invalid"]);
+        expect(fake.calls).toStrictEqual(before);
       })
   );
 
@@ -1666,5 +1812,124 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     });
     expect(tailnetIn("clankerbox-tailnet: {not json\n")).toBeUndefined();
     expect(tailnetIn("nothing\n")).toBeUndefined();
+  });
+});
+
+const manyLinesSeconds = 5;
+
+const shellCases = (shell: readonly string[]) => {
+  layer(NodeServices.layer, { excludeTestServices: true })((it) => {
+    it.effect(
+      `a command gets its arguments, env and the rest of stdin exactly as given, its own uid, and many arguments`,
+      () =>
+        Effect.gen(function* () {
+          const many = Array.from(
+            { length: 2345 },
+            (_, i) => oddValues[i % oddValues.length] ?? ""
+          );
+
+          const printed = yield* launched(shell, {
+            argv: ["printf", "[%s]", ...oddValues],
+            env: { A: "two\nlines\n" },
+          });
+
+          const env = yield* launched(shell, {
+            argv: ["env"],
+            env: Object.fromEntries(
+              specialNames.map((special) => [special, `v-${special}`])
+            ),
+          });
+
+          const uid = yield* launched(shell, {
+            argv: ["id", "-u"],
+            env: { UID: "4321", EUID: "4321" },
+          });
+
+          const stdin = yield* launched(shell, {
+            argv: ["cat"],
+            env: { A: "a" },
+            stdin: "first\n\nno newline at its end",
+          });
+
+          const printedMany = yield* launched(shell, {
+            argv: ["printf", "[%s]", ...many],
+          });
+
+          expect(printed.stdout).toBe(
+            oddValues.map((arg) => `[${arg}]`).join("")
+          );
+          expect(
+            env.stdout
+              .split("\n")
+              .filter((line) =>
+                specialNames.some((special) => line.startsWith(`${special}=`))
+              )
+              .toSorted()
+          ).toStrictEqual(
+            specialNames.map((special) => `${special}=v-${special}`).toSorted()
+          );
+          expect(uid.stdout.trim()).toBe(String(process.getuid?.()));
+          expect(stdin.stdout).toBe("first\n\nno newline at its end");
+          expect(printedMany.stdout).toBe(
+            many.map((arg) => `[${arg}]`).join("")
+          );
+        })
+    );
+
+    it.effect(
+      "a value of 60,000 lines reaches its command whole, in time linear in its lines",
+      () =>
+        Effect.gen(function* () {
+          const value = Array.from({ length: 60_000 }, () => "a").join("\n");
+
+          const [took, printed] = yield* Effect.timed(
+            launched(shell, { argv: ["printf", "[%s]", value] })
+          );
+
+          expect(printed.stdout).toBe(`[${value}]`);
+          expect(Duration.toSeconds(took)).toBeLessThan(manyLinesSeconds);
+        }),
+      120_000
+    );
+
+    it.effect(
+      `a command named as an option, an assignment or nothing answers 127 and runs nothing`,
+      () =>
+        Effect.gen(function* () {
+          const named = [
+            ["-l"],
+            ["-i", "echo", "ran"],
+            ["--", "echo", "ran"],
+            ["-", "echo", "ran"],
+            ["-"],
+            ["A=B", "echo", "ran"],
+            ["/opt/x=1/echo", "ran"],
+            [""],
+          ] as const;
+
+          const answered = yield* Effect.forEach(named, (argv) =>
+            Effect.map(
+              Effect.all([
+                launched(shell, { argv }),
+                launched(shell, { argv, env: { A: "a" } }),
+              ]),
+              (both) => both.map(({ code, stdout }) => ({ code, stdout }))
+            )
+          );
+
+          expect(answered.flat()).toStrictEqual(
+            named.flatMap(() => [
+              { code: 127, stdout: "" },
+              { code: 127, stdout: "" },
+            ])
+          );
+        })
+    );
+  });
+};
+
+describe.each(guestShells)("under $name", ({ argv, installed }) => {
+  describe.skipIf(!installed)("where it is installed", () => {
+    shellCases(argv);
   });
 });

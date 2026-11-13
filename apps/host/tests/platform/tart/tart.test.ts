@@ -25,6 +25,7 @@ import {
 import { TestClock } from "effect/testing";
 import { expect } from "vite-plus/test";
 
+import { runCommand } from "../../../src/guest.ts";
 import { PortProbe } from "../../../src/machine-ports.ts";
 import * as Operations from "../../../src/operations.ts";
 import * as Relay from "../../../src/platform/relay.ts";
@@ -1387,6 +1388,35 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           `tart delete ${vm}`,
         ]);
         expect(mac.jobs.has(vm)).toBe(true);
+      })
+  );
+
+  it.effect(
+    "a command's arguments and env reach no argument of a tart process, as root or as a user",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const machine = machineOn("dev");
+
+        for (const user of [{}, { user: "admin" }]) {
+          yield* runCommand(runtime, {
+            machine,
+            argv: ["/bin/echo", "argv-word-91c3"],
+            env: { TOKEN: "env-value-5be1" },
+            ...user,
+          });
+        }
+
+        const shown = mac.spawner.calls.filter((call) =>
+          call.args.some(
+            (argument) =>
+              argument.includes("argv-word-91c3") ||
+              argument.includes("env-value-5be1")
+          )
+        );
+
+        expect(shown).toStrictEqual([]);
+        expect(mac.spawner.calls.at(-1)?.stdin).toContain("env-value-5be1");
       })
   );
 

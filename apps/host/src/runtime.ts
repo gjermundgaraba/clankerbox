@@ -122,7 +122,11 @@ export interface Activation {
   readonly machines: readonly Held[];
 }
 
-/** A command in a guest. No argument of `argv` is empty, and `stdin` is text, on every runtime. */
+/**
+ * A command in a guest, as `guest.ts` alone makes one: `argv` is the same `/bin/sh` launcher on
+ * every call, and what it runs, with its environment, rides at the head of `stdin`, which is text.
+ * An adapter hands both on as they are, so no value a caller gave shows in a process's arguments.
+ */
 export interface Command {
   readonly argv: readonly string[];
   readonly user?: string | undefined;

@@ -27,6 +27,7 @@ import {
 import type {
   Executed,
   HostError,
+  Invalid,
   Missing,
   RuntimeTraits,
   Sizing,
@@ -105,7 +106,7 @@ export interface Interface {
   readonly sweep: (retired: Retired) => Effect.Effect<void, Internal>;
   readonly exec: (
     command: ExecCommand
-  ) => Effect.Effect<Executed, Missing | WrongState | Internal>;
+  ) => Effect.Effect<Executed, Invalid | Missing | WrongState | Internal>;
 }
 
 export class Operations extends Context.Service<Operations, Interface>()(

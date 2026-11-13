@@ -1,5 +1,6 @@
 import type { ExecCommand } from "@clankerbox/host-contract";
 import {
+  Invalid,
   loginUser,
   outputLimit,
   ScriptFailed,
@@ -52,26 +53,125 @@ const keptOutput = () => {
   };
 };
 
+export interface Invocation {
+  readonly argv: readonly [string, ...string[]];
+  readonly env?: Readonly<Record<string, string>> | undefined;
+  readonly user?: string | undefined;
+  readonly stdin?: string | undefined;
+}
+
+// dash's and bash's `read` take a pipe's input a byte at a time, so the command gets the rest:
+// https://git.kernel.org/pub/scm/utils/dash/dash.git/tree/src/miscbltin.c?h=v0.5.12#n151
+// https://git.savannah.gnu.org/cgit/bash.git/tree/builtins/read.def?h=bash-5.2#n604
+// `env` takes each word holding `=` before the command for a variable, and GNU's, busybox's and
+// uutils' take a lone `-` after `--` for `-i`:
+// https://pubs.opengroup.org/onlinepubs/9799919799/utilities/env.html
+// https://github.com/coreutils/coreutils/blob/v9.5/src/env.c#L833
+// A shell copies a string whole at each append and `"$@"` whole at each `set`, and bash 3.2 slows
+// with each variable it holds, so values wait in at most 1000 variables, named in strings of 100,
+// and a value's lines are joined 1000 at a time by `"$*"`, then its pieces at once.
+const launcher = [
+  "set -e",
+  "nl='",
+  "'",
+  `join_lines() { IFS=$nl; joined="$*"; unset IFS; }`,
+  "piece() {",
+  "  c=0 h= p=",
+  `  while [ "$c" -lt "$1" ]; do`,
+  "    c=$((c + 1))",
+  `    IFS= read -r "l$c"`,
+  `    p="$p \\"\\$l$c\\""`,
+  "    case $c in *00) h=$h$p p= ;; esac",
+  "  done",
+  `  eval "join_lines $h$p"`,
+  "}",
+  "read -r values pairs",
+  "set --",
+  "i=0",
+  "j=0",
+  "held=",
+  "part=",
+  `while [ "$i" -lt "$values" ]; do`,
+  "  i=$((i + 1))",
+  "  j=$((j + 1))",
+  "  IFS= read -r line",
+  "  lines=${line%% *}",
+  "  value=${line#* }",
+  "  left=$((lines - 1)) k=0 pieces='\"$value\"'",
+  `  while [ "$left" -gt 0 ]; do`,
+  "    k=$((k + 1))",
+  "    piece $((left > 1000 ? 1000 : left))",
+  `    eval "q$k=\\$joined"`,
+  `    pieces="$pieces \\"\\$q$k\\""`,
+  "    left=$((left - 1000))",
+  "  done",
+  `  [ "$k" -eq 0 ] || { eval "join_lines $pieces"; value=$joined; }`,
+  `  eval "v$j=\\$value"`,
+  `  part="$part \\"\\$v$j\\""`,
+  "  case $j in *00) held=$held$part part= ;; esac",
+  `  if [ "$j" -eq 1000 ] || [ "$i" -eq "$values" ]; then`,
+  `    eval "set -- \\"\\$@\\"$held$part"`,
+  "    j=0 held= part=",
+  "  fi",
+  "done",
+  `eval "first=\\\${$((pairs + 1))}"`,
+  `case $first in`,
+  `  *=*) printf '%s: not run, as env takes a word holding = for a variable\\n' "$first" >&2; exit 127 ;;`,
+  `  -) printf '%s: not run, as env takes a lone - for -i\\n' "$first" >&2; exit 127 ;;`,
+  "esac",
+  `exec env -- "$@"`,
+].join("\n");
+
+/**
+ * A guest command as the runtime runs it: one fixed `/bin/sh` launcher, with the command's env and
+ * arguments at the head of its stdin, so no process's arguments on the host carry them. Each value
+ * is its count of lines, then its lines; the launcher hands them to `env`, which sets the env and
+ * runs the command, whatever the guest's `/bin/sh` makes of its own special names.
+ */
+export const guestCommand = ({
+  argv,
+  env,
+  user,
+  stdin,
+}: Invocation): Command => {
+  const values = [
+    ...Object.entries(env ?? {}).map(([name, value]) => `${name}=${value}`),
+    ...argv,
+  ];
+
+  return {
+    argv: ["/bin/sh", "-c", launcher, "clankerbox"],
+    user,
+    stdin: [
+      `${values.length} ${values.length - argv.length}\n`,
+      ...values.map((value) => `${value.split("\n").length} ${value}\n`),
+      stdin ?? "",
+    ].join(""),
+  };
+};
+
 const drained = (
   runtime: Pick<Runtime, "exec">,
   machine: Target,
-  command: Command,
+  invocation: Invocation,
   output: ReturnType<typeof keptOutput>
 ): Effect.Effect<number, RuntimeError> =>
   Effect.map(
     Effect.scoped(
-      Effect.flatMap(runtime.exec(machine, command), (execution) =>
-        Effect.all(
-          [
-            Stream.runForEach(execution.output, (chunk) =>
-              Effect.sync(() => {
-                output.push(chunk);
-              })
-            ),
-            execution.exitCode,
-          ],
-          { concurrency: "unbounded" }
-        )
+      Effect.flatMap(
+        runtime.exec(machine, guestCommand(invocation)),
+        (execution) =>
+          Effect.all(
+            [
+              Stream.runForEach(execution.output, (chunk) =>
+                Effect.sync(() => {
+                  output.push(chunk);
+                })
+              ),
+              execution.exitCode,
+            ],
+            { concurrency: "unbounded" }
+          )
       )
     ),
     ([, exitCode]) => exitCode
@@ -81,13 +181,13 @@ const runInGuest = (
   runtime: Pick<Runtime, "exec">,
   script: "setup" | "preparation" | "tailnet",
   machine: Target,
-  command: Command,
+  invocation: Invocation,
   timeout: Duration.Duration
 ): Effect.Effect<string, RuntimeError | ScriptFailed> =>
   Effect.gen(function* () {
     const output = keptOutput();
 
-    const code = yield* drained(runtime, machine, command, output).pipe(
+    const code = yield* drained(runtime, machine, invocation, output).pipe(
       timeoutFail(
         timeout,
         () =>
@@ -110,34 +210,18 @@ const runInGuest = (
     return text;
   });
 
-export const runCommand = (
+type GuestCommand = Omit<ExecCommand, "machine"> & {
+  readonly machine: Target;
+};
+
+const ran = (
   runtime: Runtime,
-  {
-    machine,
-    argv,
-    user,
-    env,
-    stdin,
-    timeoutSeconds,
-  }: Omit<ExecCommand, "machine"> & { readonly machine: Target }
+  { machine, argv, user, env, stdin, timeoutSeconds }: GuestCommand
 ): Effect.Effect<Executed, RuntimeError> =>
   Effect.gen(function* () {
     const output = keptOutput();
 
-    const pairs = Object.entries(env ?? {}).map(
-      ([name, value]) => `${name}=${value}`
-    );
-
-    const drain = drained(
-      runtime,
-      machine,
-      {
-        argv: pairs.length === 0 ? argv : ["env", ...pairs, ...argv],
-        user,
-        stdin,
-      },
-      output
-    );
+    const drain = drained(runtime, machine, { argv, env, user, stdin }, output);
 
     const exitCode =
       timeoutSeconds === undefined
@@ -149,6 +233,22 @@ export const runCommand = (
 
     return { exitCode, output: output.text(), truncated: output.truncated() };
   });
+
+/** Runs a caller's command, refusing one that holds a NUL, which no process takes, as `Invalid`. */
+export const runCommand = (
+  runtime: Runtime,
+  command: GuestCommand
+): Effect.Effect<Executed, Invalid | RuntimeError> =>
+  [...command.argv, ...Object.values(command.env ?? {})].some((value) =>
+    value.includes("\0")
+  )
+    ? Effect.fail(
+        new Invalid({
+          message:
+            "a command's arguments and environment can't hold a NUL character, which no process takes",
+        })
+      )
+    : ran(runtime, command);
 
 const preparationTimeout = Duration.seconds(60);
 
@@ -811,7 +911,7 @@ export const leave = (
   leaving: Leaving,
   timeoutSeconds: number
 ): Effect.Effect<Executed, RuntimeError> =>
-  runCommand(runtime, {
+  ran(runtime, {
     machine,
     argv: [
       "/bin/sh",

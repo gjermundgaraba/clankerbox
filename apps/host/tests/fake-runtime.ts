@@ -1275,75 +1275,64 @@ export const fakeRuntime = (options: FakeOptions) => {
             })
           ),
         exec: (machine, command) =>
-          command.argv.includes("")
-            ? Effect.fail(
-                new Internal({
-                  message: `exec in ${machine.name} refuses an empty argument`,
-                })
-              )
-            : call(
-                "exec",
-                machine,
-                Effect.gen(function* () {
-                  const found = machineOf(machine);
+          call(
+            "exec",
+            machine,
+            Effect.gen(function* () {
+              const found = machineOf(machine);
 
-                  if (
-                    found?.state !== "running" &&
-                    found?.state !== "unknown"
-                  ) {
-                    return {
-                      output: Stream.make(
-                        new TextEncoder().encode(
-                          `exec: ${machine.name} isn't running\n`
-                        )
-                      ),
-                      exitCode: Effect.succeed(1),
-                    };
-                  }
-
-                  const { root } = found;
-                  const [file = "/bin/sh", ...args] = command.argv;
-
-                  const handle = yield* spawner
-                    .spawn(
-                      ChildProcess.make(file, args, {
-                        env: {
-                          CLANKERBOX_ROOT: root,
-                          CLANKERBOX_USER: command.user ?? "root",
-                          PATH: `${bin}:${process.env["PATH"] ?? ""}`,
-                        },
-                        extendEnv: true,
-                        killSignal: "SIGKILL",
-                        stdin:
-                          command.stdin === undefined
-                            ? "ignore"
-                            : Stream.make(
-                                new TextEncoder().encode(command.stdin)
-                              ),
-                      })
+              if (found?.state !== "running" && found?.state !== "unknown") {
+                return {
+                  output: Stream.make(
+                    new TextEncoder().encode(
+                      `exec: ${machine.name} isn't running\n`
                     )
-                    .pipe(
-                      Effect.mapError(
-                        (error) => new Internal({ message: error.message })
-                      )
-                    );
+                  ),
+                  exitCode: Effect.succeed(1),
+                };
+              }
 
-                  const running = commands.get(machine.name) ?? new Set();
+              const { root } = found;
+              const [file = "/bin/sh", ...args] = command.argv;
 
-                  commands.set(machine.name, running.add(handle));
-                  yield* Effect.addFinalizer(() =>
-                    Effect.sync(() => running.delete(handle))
-                  );
+              const handle = yield* spawner
+                .spawn(
+                  ChildProcess.make(file, args, {
+                    env: {
+                      CLANKERBOX_ROOT: root,
+                      CLANKERBOX_USER: command.user ?? "root",
+                      PATH: `${bin}:${process.env["PATH"] ?? ""}`,
+                    },
+                    extendEnv: true,
+                    killSignal: "SIGKILL",
+                    stdin:
+                      command.stdin === undefined
+                        ? "ignore"
+                        : Stream.make(new TextEncoder().encode(command.stdin)),
+                  })
+                )
+                .pipe(
+                  Effect.mapError(
+                    (error) => new Internal({ message: error.message })
+                  )
+                );
 
-                  return {
-                    output: Stream.mapError(
-                      handle.all,
-                      (error) => new Internal({ message: error.message })
-                    ),
-                    exitCode: Effect.orElseSucceed(handle.exitCode, () => 137),
-                  };
-                })
-              ),
+              const running = commands.get(machine.name) ?? new Set();
+
+              commands.set(machine.name, running.add(handle));
+              yield* Effect.addFinalizer(() =>
+                Effect.sync(() => running.delete(handle))
+              );
+
+              return {
+                output: Stream.mapError(
+                  handle.all,
+                  (error) => new Internal({ message: error.message })
+                ),
+                exitCode: Effect.orElseSucceed(handle.exitCode, () => 137),
+              };
+            })
+          ),
       });
     })
   );

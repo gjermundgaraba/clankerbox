@@ -28,6 +28,7 @@ import { TestClock } from "effect/testing";
 import { expect } from "vite-plus/test";
 
 import { fetch, publish } from "../../../src/builds.ts";
+import { runCommand } from "../../../src/guest.ts";
 import { PortProbe } from "../../../src/machine-ports.ts";
 import * as Operations from "../../../src/operations.ts";
 import * as Relay from "../../../src/platform/relay.ts";
@@ -1397,6 +1398,37 @@ layer(NodeServices.layer)((it) => {
       })
   );
 
+  it.effect(
+    "a command's arguments and env reach no argument of a smolvm process, as root or as a user",
+    () =>
+      Effect.gen(function* () {
+        const spawner = scripted(() => undefined);
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+        for (const user of [{}, { user: "user" }]) {
+          yield* runCommand(runtime, {
+            machine,
+            argv: ["/bin/echo", "argv-word-91c3"],
+            env: { TOKEN: "env-value-5be1" },
+            ...user,
+          });
+        }
+
+        const shown = spawner.calls.filter((call) =>
+          call.args.some(
+            (argument) =>
+              argument.includes("argv-word-91c3") ||
+              argument.includes("env-value-5be1")
+          )
+        );
+
+        const execs = spawner.calls.filter((call) => call.args[1] === "exec");
+
+        expect(shown).toStrictEqual([]);
+        expect(execs.at(-1)?.stdin).toContain("env-value-5be1");
+      })
+  );
+
   const execsAs = (sudo: boolean) =>
     Effect.gen(function* () {
       const spawner = scripted((call) =>
@@ -2077,7 +2109,7 @@ layer(NodeServices.layer)((it) => {
           `stop ${base}_freeze`,
           `delete ${base}_freeze`,
         ]);
-        expect(built[0]?.args.at(-1)).toBe("clankerbox-unkey");
+        expect(built[0]?.stdin).toContain("clankerbox-unkey");
         expect(basesIn(model)).toStrictEqual([base]);
       })
   );
@@ -2126,8 +2158,8 @@ layer(NodeServices.layer)((it) => {
         const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
 
         building(model);
-        model.faults.reply = ({ args }) =>
-          args.includes("clankerbox-unkey")
+        model.faults.reply = ({ stdin }) =>
+          stdin?.includes("clankerbox-unkey") === true
             ? { exitCode: 1, stderr: "rm: Read-only file system\n" }
             : undefined;
 
@@ -2302,8 +2334,8 @@ layer(NodeServices.layer)((it) => {
 
         building(model);
 
-        const unkeyed = yield* cutAt(({ args }) =>
-          args.includes("clankerbox-unkey")
+        const unkeyed = yield* cutAt(
+          ({ stdin }) => stdin?.includes("clankerbox-unkey") === true
         );
 
         const started = yield* cutAt(
