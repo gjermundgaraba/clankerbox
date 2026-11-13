@@ -36,7 +36,12 @@ import {
   runSetup,
 } from "../../src/guest.ts";
 import * as BoatApi from "../../src/platform/boat/api.ts";
-import { BoatSettings, image, make } from "../../src/platform/boat/boat.ts";
+import {
+  BoatSettings,
+  endpointOf,
+  image,
+  make,
+} from "../../src/platform/boat/boat.ts";
 import { types } from "../../src/platform/boat/traits.ts";
 import { Runtime } from "../../src/runtime.ts";
 import type { Interface, RuntimeError, Target } from "../../src/runtime.ts";
@@ -1225,6 +1230,42 @@ describe("a boat request's bound", () => {
         }).pipe(Effect.provide(NodeServices.layer))
       )
   );
+});
+
+describe("boat's ssh endpoint", () => {
+  it("reads a host and a port, an IPv6 host in brackets, and refuses one that names no port", () => {
+    const hostKey = "ssh-ed25519 AAAA";
+
+    const read = (sshEndpoint: string | null, machineIp: string | null) =>
+      endpointOf({ sshEndpoint, machineIp, hostKey });
+
+    expect(read("203.0.113.7:19033", null)).toStrictEqual({
+      host: "203.0.113.7",
+      port: 19_033,
+    });
+    expect(read("[2001:db8::1]:19033", null)).toStrictEqual({
+      host: "2001:db8::1",
+      port: 19_033,
+    });
+    expect(read(null, "2001:db8::2")).toStrictEqual({
+      host: "2001:db8::2",
+      port: 22,
+    });
+
+    for (const refused of [
+      "2001:db8::1",
+      "[2001:db8::1]",
+      "203.0.113.7",
+      "203.0.113.7:",
+      "203.0.113.7:ssh",
+      "203.0.113.7:70000",
+      ":22",
+    ]) {
+      expect(read(refused, "2001:db8::2"), refused).toBeUndefined();
+    }
+
+    expect(read(null, null)).toBeUndefined();
+  });
 });
 
 describe("the host's boat key", () => {

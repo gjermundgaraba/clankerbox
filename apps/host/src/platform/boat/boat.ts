@@ -200,12 +200,35 @@ const createdFrom = (origin: Exclude<Origin, { _tag: "machine" }>) => {
   return origin.image === image ? {} : { from: origin.image };
 };
 
-const pinOf = (answer: SshKey): Pin => {
-  const [host, port] = (answer.sshEndpoint ?? "").split(":");
+const bracketed = /^\[(?<host>[^\]]+)\]$/u;
 
-  return host === undefined || host === "" || port === undefined
-    ? { host: answer.machineIp ?? "", port: 22, hostKey: answer.hostKey }
-    : { host, port: Number(port), hostKey: answer.hostKey };
+/**
+ * Where `/sshkey` says the guest's sshd answers: its `sshEndpoint`, as `host:port` or `[v6]:port`,
+ * else its `machineIp` on port 22; `undefined` for an endpoint that names no host and port.
+ */
+export const endpointOf = (
+  answer: SshKey
+): { readonly host: string; readonly port: number } | undefined => {
+  const endpoint = answer.sshEndpoint ?? "";
+
+  if (endpoint === "") {
+    const ip = answer.machineIp ?? "";
+
+    return ip === "" ? undefined : { host: ip, port: 22 };
+  }
+
+  const at = endpoint.lastIndexOf(":");
+  const named = endpoint.slice(0, at);
+
+  const host =
+    bracketed.exec(named)?.groups?.["host"] ??
+    (named.includes(":") ? "" : named);
+
+  const port = Number(endpoint.slice(at + 1));
+
+  return host !== "" && Number.isInteger(port) && port > 0 && port < 65_536
+    ? { host, port }
+    : undefined;
 };
 
 const tcp =
@@ -290,9 +313,19 @@ export const make = (
 
     const pinned = (machine: Target) =>
       api.sshKey(machine.handle, channel.publicKey).pipe(
-        Effect.map(pinOf),
-        Effect.tap((pin) => Effect.sync(() => pins.set(machine.handle, pin))),
-        Effect.mapError(internal(`couldn't read ${machine.name}'s ssh key`))
+        Effect.mapError(internal(`couldn't read ${machine.name}'s ssh key`)),
+        Effect.flatMap((answer) => {
+          const endpoint = endpointOf(answer);
+
+          return endpoint === undefined
+            ? Effect.fail(
+                new Internal({
+                  message: `boat answered ${machine.name}'s ssh endpoint as ${answer.sshEndpoint ?? "none"} and its address as ${answer.machineIp ?? "none"}, which name no host and port`,
+                })
+              )
+            : Effect.succeed({ ...endpoint, hostKey: answer.hostKey });
+        }),
+        Effect.tap((pin) => Effect.sync(() => pins.set(machine.handle, pin)))
       );
 
     const lastPin = (machine: Target) =>

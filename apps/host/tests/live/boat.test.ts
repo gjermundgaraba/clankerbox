@@ -219,14 +219,6 @@ const sshKeyOf = (dir: string) =>
     return { file, publicKey: (yield* read(`${file}.pub`)).trim() };
   });
 
-const addressOf = (answer: SshKey) => {
-  const [host_, port] = (answer.sshEndpoint ?? "").split(":");
-
-  return host_ === undefined || host_ === "" || port === undefined
-    ? { host: answer.machineIp ?? "", port: "22" }
-    : { host: host_, port };
-};
-
 const backendOf = (report: TailnetReport | undefined) =>
   report?.state === "reported" ? report.backend : (report?.state ?? "none");
 
@@ -247,7 +239,15 @@ const sshAs = (
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const knownHosts = path.join(dir, "known_hosts");
-    const { host: address, port } = addressOf(answer);
+    const endpoint = Boat.endpointOf(answer);
+
+    if (endpoint === undefined) {
+      return yield* Effect.die(
+        "boat answered an ssh endpoint with no host and port"
+      );
+    }
+
+    const { host: address, port } = endpoint;
 
     yield* write(knownHosts, `live ${answer.hostKey}\n`);
 
@@ -270,7 +270,7 @@ const sshAs = (
         "-o",
         "HostKeyAlias=live",
         "-p",
-        port,
+        String(port),
         "-l",
         "user",
         address,
@@ -374,7 +374,7 @@ describe.runIf(live)("boat, against the real account", () => {
           `/sshkey answered machineIp ${family(once.machineIp)} and sshEndpoint ${once.sshEndpoint === undefined || once.sshEndpoint === null ? "none" : "set"}, and the same key and address when sent the key again`
         );
         expect(twice.hostKey).toBe(once.hostKey);
-        expect(addressOf(twice)).toStrictEqual(addressOf(once));
+        expect(Boat.endpointOf(twice)).toStrictEqual(Boat.endpointOf(once));
 
         const ssh = (answer: SshKey, command: string) =>
           sshAs(dir, identity.file, answer, command);
@@ -517,7 +517,7 @@ describe.runIf(live)("boat, against the real account", () => {
         const cold = yield* resumed(restored.id);
 
         yield* finding(
-          `a plain resume 11 minutes after a stop answered ${cold.answer}, spent ${cold.spent} start, ${cold.key.hostKey === restoredKey.hostKey ? "the same" : "a new"} host key and ${addressOf(cold.key).host === addressOf(restoredKey).host ? "the same" : "a new"} address`
+          `a plain resume 11 minutes after a stop answered ${cold.answer}, spent ${cold.spent} start, ${cold.key.hostKey === restoredKey.hostKey ? "the same" : "a new"} host key and ${Boat.endpointOf(cold.key)?.host === Boat.endpointOf(restoredKey)?.host ? "the same" : "a new"} address`
         );
       }).pipe(Effect.scoped, Effect.provide(services)),
     { timeout: 40 * 60 * 1000 }
