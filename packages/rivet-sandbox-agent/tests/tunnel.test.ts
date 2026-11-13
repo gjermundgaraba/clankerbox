@@ -1,17 +1,15 @@
-import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { text } from "node:stream/consumers";
-import { fileURLToPath } from "node:url";
 
 import { Internal, WrongState } from "@gjermundgaraba/clankerbox-sdk";
 import { machine } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { LocalTunnelError } from "../src/tunnel.ts";
+import { run, testLimit } from "./child.ts";
 import {
   cleanUp,
   cleanups,
@@ -143,34 +141,25 @@ describe("tunnel", () => {
     expect(requests(stub)).toStrictEqual([]);
   });
 
-  it("a tunnel left open doesn't keep its program running, and ends when the program does", async () => {
-    const dir = await mkdtemp(path.join(tmpdir(), "clankerbox-provider-"));
+  it(
+    "a tunnel left open doesn't keep its program running, and ends when the program does",
+    async () => {
+      const dir = await mkdtemp(path.join(tmpdir(), "clankerbox-provider-"));
 
-    cleanups.push(async () => {
-      await rm(dir, { recursive: true, force: true });
-    });
-    process.env["FAKE_SSH_DIR"] = dir;
+      cleanups.push(async () => {
+        await rm(dir, { recursive: true, force: true });
+      });
+      process.env["FAKE_SSH_DIR"] = dir;
 
-    const program = spawn(
-      process.execPath,
-      [
-        fileURLToPath(new URL("leave-tunnel.ts", import.meta.url)),
-        fakeSsh,
-        dir,
-      ],
-      { stdio: ["ignore", "pipe", "inherit"], timeout: 10_000 }
-    );
+      const { code, stdout } = await run("leave-tunnel.ts", [fakeSsh, dir]);
 
-    const [stdout] = await Promise.all([
-      text(program.stdout),
-      once(program, "exit"),
-    ]);
+      expect(code).toBe(0);
 
-    expect(program.exitCode).toBe(0);
+      const port = Number(stdout);
 
-    const port = Number(stdout);
-
-    expect(port).toBeGreaterThan(0);
-    await until("the tunnel to end", async () => !(await listening(port)));
-  });
+      expect(port).toBeGreaterThan(0);
+      await until("the tunnel to end", async () => !(await listening(port)));
+    },
+    testLimit
+  );
 });

@@ -1,8 +1,11 @@
 import { Effect, Scope } from "effect";
 
 import { forwarding, freePort, open } from "../src/tunnel.ts";
+import { endsWithParent } from "./support.ts";
 
 const [program = "", directory = ""] = process.argv.slice(2);
+
+endsWithParent();
 
 const port = await Effect.runPromise(
   Effect.gen(function* () {

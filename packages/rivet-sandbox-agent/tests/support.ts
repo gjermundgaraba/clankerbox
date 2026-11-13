@@ -1,5 +1,5 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { connect } from "node:net";
+import { connect, Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -153,6 +153,19 @@ export const listening = async (port: number) => {
   });
 
   return await reached.promise;
+};
+
+/**
+ * Ends this test program once the test that runs it lets go of its stdin, as its worker does when
+ * it ends, without keeping the program running otherwise.
+ */
+export const endsWithParent = () => {
+  process.stdin.once("end", () => process.exit(1));
+  process.stdin.resume();
+
+  if (process.stdin instanceof Socket) {
+    process.stdin.unref();
+  }
 };
 
 export const gone = (pid: number) => {
