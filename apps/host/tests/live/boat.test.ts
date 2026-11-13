@@ -26,8 +26,8 @@ import type { TailnetReport } from "../../src/guest.ts";
 import * as Api from "../../src/platform/boat/api.ts";
 import type {
   BoatType,
+  ListedSnapshot,
   Sandbox,
-  SavedSnapshot,
   SshKey,
 } from "../../src/platform/boat/api.ts";
 import * as Boat from "../../src/platform/boat/boat.ts";
@@ -137,7 +137,7 @@ const leftovers = (boat: Api.Api) =>
     }
   );
 
-const described = ({ machines, copies }: Found<Sandbox, SavedSnapshot>) =>
+const described = ({ machines, copies }: Found<Sandbox, ListedSnapshot>) =>
   [
     ...machines.map(
       ({ labels: marks }) =>
@@ -146,7 +146,7 @@ const described = ({ machines, copies }: Found<Sandbox, SavedSnapshot>) =>
     ...copies.map(({ name }) => `snapshot ${name}`),
   ].join(", ") || "nothing";
 
-const emptied = (found: Found<Sandbox, SavedSnapshot>) =>
+const emptied = (found: Found<Sandbox, ListedSnapshot>) =>
   found.machines.length === 0 && found.copies.length === 0;
 
 const swept = (boat: Api.Api) =>

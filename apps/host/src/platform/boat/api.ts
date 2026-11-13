@@ -75,6 +75,13 @@ const SavedSnapshot = Schema.Struct({
 
 export type SavedSnapshot = typeof SavedSnapshot.Type;
 
+const ListedSnapshot = Schema.Struct({
+  name: Schema.String,
+  sourceSandboxId: Schema.optionalKey(Schema.String),
+});
+
+export type ListedSnapshot = typeof ListedSnapshot.Type;
+
 const Created = Schema.Struct({ sandbox: Sandbox });
 
 const Listed = Schema.Struct({
@@ -197,7 +204,9 @@ const resumeOf = (id: string, type: BoatType | undefined) =>
  * boat's API, the routes the adapter uses. A call asks again after a refusal whose code says it
  * passes once waited out, and after a lost answer, but for a create, a fork, a resume onto another
  * type and a save, whose callers read what boat holds before they send one again. The saved-snapshot
- * list fails on a record it can't read only if `ours` claims its name.
+ * list reads of each snapshot only its name and the sandbox it was saved from, and fails on one it
+ * can't read only when `ours` claims its name: that snapshot may be held by a sandbox being
+ * deleted, and a delete that went on past it would leave it billed with nothing to find it again.
  */
 export const make = (settings: Settings) =>
   Effect.gen(function* () {
@@ -427,7 +436,7 @@ export const make = (settings: Settings) =>
             readRecords(snapshots, {
               call: "GET /saved-snapshots",
               what: "saved snapshot",
-              read: Schema.decodeUnknownOption(SavedSnapshot),
+              read: Schema.decodeUnknownOption(ListedSnapshot),
               ours: (record) => ours(nameOf(record)),
               label: nameOf,
             })

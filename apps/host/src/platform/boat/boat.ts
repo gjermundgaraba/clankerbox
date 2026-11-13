@@ -42,7 +42,7 @@ import { KeyedApiUrl } from "../../settings.ts";
 import type { HostSettings } from "../../settings.ts";
 import { triesAfterLoss, untilRest } from "../provider-http.ts";
 import * as Api from "./api.ts";
-import type { ApiError, Sandbox, SavedSnapshot, SshKey } from "./api.ts";
+import type { ApiError, ListedSnapshot, Sandbox, SshKey } from "./api.ts";
 import * as Ssh from "./ssh.ts";
 import type { Pin } from "./ssh.ts";
 import { traits as traitsOf, typeOf, types } from "./traits.ts";
@@ -70,7 +70,7 @@ const snapshotName = (checkpoint: Pick<Identity, "instance">): string =>
   `${snapshotPrefix}${checkpoint.instance}`;
 
 const heldBy = (
-  snapshots: readonly SavedSnapshot[],
+  snapshots: readonly ListedSnapshot[],
   sandbox: string
 ): Handle[] =>
   snapshots.flatMap(({ name, sourceSandboxId }) =>

@@ -77,6 +77,12 @@ export interface FakeSnapshot {
   status: "saving" | "ready";
 }
 
+interface Malformed {
+  readonly name: string;
+  readonly status: null;
+  readonly sourceSandboxId?: string | number;
+}
+
 interface Answer {
   readonly status: number;
   readonly body: object;
@@ -520,8 +526,7 @@ export const fakeBoat = (
     let cancellingNext = false;
     const gateways = new Set<BoatCall>();
 
-    const malformed: Array<{ readonly name: string; readonly status: null }> =
-      [];
+    const malformed: Malformed[] = [];
 
     const refusing = new Set<BoatCall>();
     const lateBy: number[] = [];
@@ -1473,9 +1478,13 @@ export const fakeBoat = (
         Effect.promise(async () => {
           await save(sandboxId, name);
         }),
-      malformedSnapshot: (name: string) =>
+      malformedSnapshot: (name: string, sourceSandboxId?: string | number) =>
         Effect.sync(() => {
-          malformed.push({ name, status: null });
+          malformed.push(
+            sourceSandboxId === undefined
+              ? { name, status: null }
+              : { name, status: null, sourceSandboxId }
+          );
         }),
       gatewayOnce: (call: BoatCall) =>
         Effect.sync(() => {
@@ -1549,7 +1558,11 @@ export interface FakeBoat {
   /** `vanish` at once, for an `onCall` hook. */
   readonly vanishNow: (id: string) => void;
   readonly fail: (id: string) => Effect.Effect<void>;
-  readonly malformedSnapshot: (name: string) => Effect.Effect<void>;
+  /** Lists a saved snapshot whose `status` boat answers null, saved from `sourceSandboxId`. */
+  readonly malformedSnapshot: (
+    name: string,
+    sourceSandboxId?: string | number
+  ) => Effect.Effect<void>;
   readonly saveAs: (sandboxId: string, name: string) => Effect.Effect<void>;
   readonly refuseOnce: (call: BoatCall) => Effect.Effect<void>;
   readonly calls: readonly string[];

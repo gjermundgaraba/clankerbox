@@ -759,21 +759,40 @@ describe("the boat runtime over fake boat", () => {
   );
 
   it.live(
-    "a saved snapshot it can't read fails a list only when its name carries the mark",
+    "reads of a saved snapshot only its name and source, and fails a list on one it can't read only when the mark claims it",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          const machine = yield* made(runtime, "dev");
+          const elsewhere = `cbx-${instanceOf("elsewhere")}`;
+          const broken = `cbx-${instanceOf("broken")}`;
+
+          yield* boat.malformedSnapshot(elsewhere, "bx_other");
+          yield* boat.malformedSnapshot("cbx-by-hand", 7);
+          expect(yield* ownedBy(runtime)).toHaveLength(1);
+
+          yield* boat.malformedSnapshot(broken, 7);
+
+          const failed = yield* Effect.flip(ownedBy(runtime));
+
+          expect(failed.message).toContain(broken);
+          expect(boat.sandboxes.has(machine.handle)).toBe(true);
+        })
+      ),
+    30_000
+  );
+
+  it.live(
+    "deletes its machine beside another host's marked snapshot whose status it can't read",
     () =>
       onBoat(({ boat, runtime }) =>
         Effect.gen(function* () {
           const machine = yield* made(runtime, "dev");
 
-          yield* boat.malformedSnapshot("cbx-by-hand");
-          expect(yield* ownedBy(runtime)).toHaveLength(1);
+          yield* boat.malformedSnapshot(`cbx-${instanceOf("elsewhere")}`);
+          yield* runtime.delete(machine, new Set());
 
-          yield* boat.malformedSnapshot(`cbx-${instanceOf("broken")}`);
-
-          const failed = yield* Effect.flip(ownedBy(runtime));
-
-          expect(failed.message).toContain(`cbx-${instanceOf("broken")}`);
-          expect(boat.sandboxes.has(machine.handle)).toBe(true);
+          expect(boat.sandboxes.has(machine.handle)).toBe(false);
         })
       ),
     30_000
