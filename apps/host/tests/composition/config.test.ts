@@ -21,13 +21,13 @@ const config = {
   runtime: { smolvm: { prefix: "/opt/smolvm" } },
 };
 
-const load = (contents: Schema.Json) =>
+const load = (contents: Schema.Json, platform = "linux") =>
   Effect.gen(function* () {
     const file = path.join(yield* scratch, "host.json");
 
     yield* write(file, JSON.stringify(contents));
 
-    return { file, loaded: loadConfig(file) };
+    return { file, loaded: loadConfig(file, platform) };
   });
 
 layer(NodeServices.layer)((it) => {
@@ -352,40 +352,95 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "machinePorts stays out of smolvm's fork ports and the Linux and macOS ephemeral ports",
+    "machinePorts stays out of its box's ephemeral ports on every host, and out of smolvm's fork ports on a smolvm host alone",
     () =>
       Effect.gen(function* () {
-        for (const [first, last] of [
-          [9000, 19_999],
-          [32_000, 32_767],
-        ] as const) {
-          const { loaded } = yield* load({
-            ...config,
-            machinePorts: { first, last },
-          });
+        const tart = { tart: { binary: "/opt/homebrew/bin/tart" } };
 
-          expect(yield* loaded, `${first}-${last}`).toMatchObject({
+        for (const [runtime, platform, first, last] of [
+          [config.runtime, "linux", 9000, 19_999],
+          [config.runtime, "linux", 32_000, 32_767],
+          [config.runtime, "linux", 61_000, 65_535],
+          [config.runtime, "darwin", 32_000, 49_151],
+          [tart, "darwin", 20_000, 31_999],
+        ] as const) {
+          const { loaded } = yield* load(
+            { ...config, runtime, machinePorts: { first, last } },
+            platform
+          );
+
+          expect(yield* loaded, `${platform} ${first}-${last}`).toMatchObject({
             machinePorts: { first, last },
           });
         }
 
-        for (const [first, last, reserved] of [
-          [19_999, 20_000, "20000-31999, smolvm's fork ports"],
-          [31_999, 32_000, "20000-31999, smolvm's fork ports"],
-          [32_767, 32_768, "32768-60999, Linux's ephemeral ports"],
-          [61_000, 61_000, "49152-65535, macOS's ephemeral ports"],
-          [65_535, 65_535, "49152-65535, macOS's ephemeral ports"],
-          [1, 65_535, "20000-31999, smolvm's fork ports"],
+        for (const [runtime, platform, first, last, reserved] of [
+          [
+            config.runtime,
+            "linux",
+            19_999,
+            20_000,
+            "20000-31999, smolvm's fork ports",
+          ],
+          [
+            config.runtime,
+            "linux",
+            31_999,
+            32_000,
+            "20000-31999, smolvm's fork ports",
+          ],
+          [
+            config.runtime,
+            "linux",
+            32_767,
+            32_768,
+            "32768-60999, Linux's ephemeral ports",
+          ],
+          [
+            config.runtime,
+            "linux",
+            60_999,
+            61_000,
+            "32768-60999, Linux's ephemeral ports",
+          ],
+          [
+            config.runtime,
+            "linux",
+            1,
+            65_535,
+            "20000-31999, smolvm's fork ports",
+          ],
+          [
+            tart,
+            "darwin",
+            49_151,
+            49_152,
+            "49152-65535, macOS's ephemeral ports",
+          ],
+          [
+            tart,
+            "darwin",
+            65_535,
+            65_535,
+            "49152-65535, macOS's ephemeral ports",
+          ],
+          [
+            tart,
+            "freebsd",
+            49_152,
+            49_152,
+            "49152-65535, IANA's dynamic ports",
+          ],
         ] as const) {
-          const { loaded } = yield* load({
-            ...config,
-            machinePorts: { first, last },
-          });
+          const { loaded } = yield* load(
+            { ...config, runtime, machinePorts: { first, last } },
+            platform
+          );
 
           const error = yield* Effect.flip(loaded);
 
-          expect(error._tag, `${first}-${last}`).toBe("Invalid");
-          expect(error.message, `${first}-${last}`).toContain(
+          expect(error._tag, `${platform} ${first}-${last}`).toBe("Invalid");
+          expect(error.message, `${platform} ${first}-${last}`).toContain(
             `must stay out of ${reserved}`
           );
         }
@@ -463,7 +518,7 @@ layer(NodeServices.layer)((it) => {
     Effect.gen(function* () {
       const missing = path.join(yield* scratch, "nope.json");
 
-      const error = yield* Effect.flip(loadConfig(missing)).pipe(
+      const error = yield* Effect.flip(loadConfig(missing, "linux")).pipe(
         Effect.provide(NodeServices.layer)
       );
 

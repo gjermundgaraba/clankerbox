@@ -15,7 +15,7 @@ import { runtimeLayer } from "./composition/runtimes.ts";
 
 const run = (file: string) =>
   Effect.gen(function* () {
-    const config = yield* loadConfig(file);
+    const config = yield* loadConfig(file, process.platform);
 
     return yield* Layer.launch(
       hostLayer(

@@ -533,9 +533,10 @@ as it is.
 - smolvm's own fork ports come from 20000–31999: `CLONE_PORT_FLOOR` (20000) up
   to `CLONE_PORT_CEILING` (32000), which is excluded (`alloc_free_host_port`,
   src/agent/fork.rs). The CLI allocates no other host port range. Ours:
-  `reservedPorts` (`machine-ports.ts`) holds that range beside the Linux and
-  macOS ephemeral ranges, and the host config refuses a `machinePorts` that
-  reaches into any of them (10000–19999 by default; `config.test.ts`).
+  the adapter's `reservedPorts` (`smolvm.ts`) holds that range, and a smolvm
+  host's config refuses a `machinePorts` that reaches into it or into its box's
+  ephemeral ports, which every host refuses (`ephemeralPorts`,
+  `machine-ports.ts`; 10000–19999 by default; `config.test.ts`).
 
 **Checkpoints, forks and identity**
 

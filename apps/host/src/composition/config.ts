@@ -9,28 +9,20 @@ import {
 import { Address } from "@gjermundgaraba/clankerbox-sdk/node";
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
 
-import { defaultMachinePorts, reservedPorts } from "../machine-ports.ts";
+import { defaultMachinePorts, ephemeralPorts } from "../machine-ports.ts";
 import { BuildsSettings } from "../platform/s3.ts";
 import { TailnetSettings } from "../platform/tailscale.ts";
 import type { HostSettings } from "../settings.ts";
-import { isRuntimeKey, runtimes, settingsOf } from "./runtimes.ts";
+import {
+  isRuntimeKey,
+  reservedPortsOf,
+  runtimes,
+  settingsOf,
+} from "./runtimes.ts";
 import type { ChosenRuntime, RuntimeKey } from "./runtimes.ts";
 
 const MachinePorts = Schema.Struct({ first: Port, last: Port }).check(
-  Schema.makeFilter(({ first, last }) => {
-    if (first > last) {
-      return "first at most last";
-    }
-
-    const reserved = reservedPorts.find(
-      (range) => first <= range.last && last >= range.first
-    );
-
-    return (
-      reserved === undefined ||
-      `must stay out of ${reserved.first}-${reserved.last}, ${reserved.owner}`
-    );
-  })
+  Schema.makeFilter(({ first, last }) => first <= last || "first at most last")
 );
 
 const common = {
@@ -115,12 +107,28 @@ const chosenRuntime = (
 
 const resolveConfig = (
   decoded: HostConfigFile,
-  directory: string
+  directory: string,
+  platform: string
 ): Effect.Effect<HostConfig, Invalid, Path.Path> =>
   Effect.gen(function* () {
     const path = yield* Path.Path;
+    const runtime = yield* chosenRuntime(decoded.runtime);
     const machinePorts = decoded.machinePorts ?? defaultMachinePorts;
     const { port } = decoded.listen;
+
+    const reserved = [
+      ...reservedPortsOf(runtime.name),
+      ephemeralPorts(platform),
+    ].find(
+      ({ first, last }) =>
+        machinePorts.first <= last && machinePorts.last >= first
+    );
+
+    if (reserved !== undefined) {
+      return yield* new Invalid({
+        message: `machinePorts: must stay out of ${reserved.first}-${reserved.last}, ${reserved.owner}`,
+      });
+    }
 
     if (port >= machinePorts.first && port <= machinePorts.last) {
       return yield* new Invalid({
@@ -130,15 +138,17 @@ const resolveConfig = (
 
     return {
       ...decoded,
-      runtime: yield* chosenRuntime(decoded.runtime),
+      runtime,
       stateDir: path.resolve(directory, decoded.stateDir),
       bases: new Map(Object.entries(decoded.bases)),
       machinePorts,
     };
   });
 
+/** Reads the host config `file` for a box whose OS is `platform`, as Node's `process.platform` names it. */
 export const loadConfig = (
-  file: string
+  file: string,
+  platform: string
 ): Effect.Effect<HostConfig, Invalid, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -165,7 +175,7 @@ export const loadConfig = (
       )
     );
 
-    return yield* resolveConfig(decoded, path.dirname(resolved)).pipe(
+    return yield* resolveConfig(decoded, path.dirname(resolved), platform).pipe(
       Effect.mapError(
         (error) =>
           new Invalid({
