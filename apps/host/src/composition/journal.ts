@@ -1,5 +1,9 @@
-import { Cause, Effect, Exit } from "effect";
-import { HttpMiddleware, HttpServerRequest } from "effect/http";
+import { Cause, Effect, Exit, Option } from "effect";
+import {
+  HttpMiddleware,
+  HttpServerError,
+  HttpServerRequest,
+} from "effect/http";
 import type { HttpServerResponse } from "effect/http";
 
 const internalStatus = 500;
@@ -12,8 +16,10 @@ const answer = (response: HttpServerResponse.HttpServerResponse) =>
 /**
  * What a host's journal holds of the requests it serves, in place of Effect's response logger, as
  * the control plane's: a request that answers `Internal`, with that answer, or fails as no declared
- * error does, with its cause, logs at error. Any other answer, a refusal included, is its caller's,
- * and logs at debug, which `--log-level debug` shows.
+ * error does, with its cause, logs at error. A request cut short, by its caller or by the host's
+ * stop, logs nothing: Effect answers it with a response it adds to the cause, which is stripped.
+ * Any other answer, a refusal included, is its caller's, and logs at debug, which
+ * `--log-level debug` shows.
  */
 export const journal = HttpMiddleware.make(
   <E, R>(
@@ -31,10 +37,12 @@ export const journal = HttpMiddleware.make(
         };
 
         if (Exit.isFailure(exit)) {
-          return Cause.hasInterruptsOnly(exit.cause)
+          const [, cause] = HttpServerError.causeResponseStripped(exit.cause);
+
+          return Option.isNone(cause) || Cause.hasInterruptsOnly(cause.value)
             ? Effect.void
             : Effect.annotateLogs(
-                Effect.logError("a request failed", exit.cause),
+                Effect.logError("a request failed", cause.value),
                 fields
               );
         }

@@ -85,11 +85,21 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a host told to stop ends an exec still running at once, rather than wait for it",
+    "a host told to stop ends an exec still running at once, rather than wait for it, and logs no error for it",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
-        const host = yield* started({ dir });
+        const errors: unknown[] = [];
+
+        const host = yield* started({
+          dir,
+          logger: Logger.make(({ message, logLevel }) => {
+            if (logLevel === "Error" || logLevel === "Fatal") {
+              errors.push(message);
+            }
+          }),
+        });
+
         const handle = Handle.make("held-dev");
 
         const machine = {
@@ -139,6 +149,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(Duration.toMillis(took)).toBeLessThan(1000);
         expect(yield* Fiber.join(exec)).not.toBe(200);
+        expect(errors).toStrictEqual([]);
       })
   );
 
