@@ -3,7 +3,7 @@ import { cpSync, rmSync } from "node:fs";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import type { BuildRequest } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, Fiber } from "effect";
+import { DateTime, Duration, Effect, Fiber } from "effect";
 import { expect } from "vite-plus/test";
 
 import {
@@ -13,6 +13,7 @@ import {
   firstHost,
   plane,
   request,
+  restartedHost,
   running,
 } from "./support.ts";
 import type { Started } from "./support.ts";
@@ -244,6 +245,41 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(created.phase).toBe("settled");
         expect(callsTo(served.host, "delete")).toStrictEqual(["delete old"]);
         expect(served.host.fake.machines.has("dev")).toBe(true);
+      })
+  );
+
+  it.effect(
+    "a retired instance outlives any time its host doesn't answer, and its day runs from the first sweep that reached the host",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* onFixed({ recheck: Duration.millis(100) });
+        const longAfter = DateTime.makeUnsafe("2100-01-01T00:00:00Z");
+
+        yield* served.client.create("old", request("old"));
+        yield* served.host.dispose;
+        yield* served.store.advance("machine", "old", () => ({
+          next: "removed",
+          finish: false,
+        }));
+        yield* Effect.sleep(Duration.seconds(1));
+        yield* served.store.forgetRetired(longAfter);
+
+        const whileDown = yield* served.store.retired("fixed");
+        const back = yield* restartedHost(served.host);
+
+        yield* Effect.addFinalizer(() => back.dispose);
+
+        const once = yield* eventually(
+          Effect.andThen(
+            served.store.forgetRetired(longAfter),
+            served.store.retired("fixed")
+          ),
+          ({ machines }) => machines.length === 0
+        );
+
+        expect(whileDown.machines).toHaveLength(1);
+        expect(once.machines).toStrictEqual([]);
+        expect(back.fake.calls).toContain("marked machines");
       })
   );
 

@@ -87,8 +87,8 @@ the whole CLI span domains on purpose.
 - `fleet.ts`: capacity, and what a recheck does beyond each loop: tells a
   restarted host its machines, again until it finds each, and stores the handle
   and endpoint it answers in each row; then sends each host that answers the
-  instances the store retired there, for its sweep; and ends old failures and
-  forgets old retired instances.
+  instances the store retired there, for its sweep, noting when a sweep first
+  reached it; and ends old failures and forgets retired instances a day after.
 - `machine-view.ts`: what a client reads of a machine, and `waiting`, which a
   read tells.
 - `operations.ts`: plain functions of a step on its host. `poll` sends it when
@@ -291,13 +291,14 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
   store retires an instance on a host in the write that ends its row's hold on
   it there: the row goes, moves to another host under a new instance, or rests
   undone or failed. The record outlives the row, and lasts a day of the control
-  plane's clock from that write; no row takes the instance again. Each recheck,
+  plane's clock from the first sweep that reached its host, while one no sweep
+  has reached stays; no row takes the instance again. Each recheck,
   after the adopts, sends each host the instances retired there, and the host
   deletes those it lists that no step it holds names, a machine alone, leaving
   every checkpoint it holds, and ignores a delete its provider refuses with
   `Conflict`. The sweep deletes nothing for want of a claim, so a wiped or
-  second store sweeps nothing of another store's, and a make that lands later
-  than a day is left at its provider. A checkpoint a provider holds through its
+  second store sweeps nothing of another store's, and a make that lands a day
+  after its host was first told is left at its provider. A checkpoint a provider holds through its
   machine has no mark: a `start` and a `remove` carry `keep`, every checkpoint
   handle the rows hold on the host, as a checkpoint row names its source by name
   alone, and the runtime deletes the machine's others, once a start runs it or

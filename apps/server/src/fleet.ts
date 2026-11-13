@@ -110,8 +110,8 @@ const adopted = (store: Store, hosts: Hosts, host: string, boot: string) =>
   });
 
 /**
- * How long a store names an instance it retired. A make that lands at its provider later than this
- * is left there.
+ * How long a store names an instance it retired, from the first sweep that reached its host. A make
+ * that lands at its provider later than this is left there.
  */
 export const retiredLast = Duration.days(1);
 
@@ -123,15 +123,23 @@ const swept = (store: Store, hosts: Hosts, host: string) =>
       return;
     }
 
-    yield* hosts
+    const reached = yield* hosts
       .call(host, (api) => api.sweepRetired(retired))
       .pipe(
+        Effect.as(true),
         Effect.catch(({ message }) =>
-          Effect.logWarning(
-            `host ${host} couldn't sweep what the store retired, so the next recheck tries again: ${message}`
+          Effect.as(
+            Effect.logWarning(
+              `host ${host} couldn't sweep what the store retired, so the next recheck tries again: ${message}`
+            ),
+            false
           )
         )
       );
+
+    if (reached) {
+      yield* store.told(host, retired, yield* DateTime.now);
+    }
   });
 
 export const recheckHosts = (

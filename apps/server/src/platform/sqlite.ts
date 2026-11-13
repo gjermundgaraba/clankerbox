@@ -242,6 +242,13 @@ export const migrations: readonly string[] = [
   UPDATE checkpoints SET traits = json_set(traits, '$.stop',
     CASE json_extract(traits, '$.runtime') WHEN 'smolvm' THEN 'resumes'
       WHEN 'smol-cloud' THEN 'resumes' ELSE 'discards' END)`,
+  `ALTER TABLE retired ADD COLUMN told_at TEXT;
+  INSERT INTO retired (host, resource, instance, retired_at)
+    SELECT host, 'machine', instance, undone_at FROM machines WHERE undone_at IS NOT NULL
+    ON CONFLICT DO NOTHING;
+  INSERT INTO retired (host, resource, instance, retired_at)
+    SELECT host, 'checkpoint', instance, failed_at FROM checkpoints WHERE failed_at IS NOT NULL
+    ON CONFLICT DO NOTHING`,
 ];
 
 const isSqliteError = (
@@ -623,8 +630,12 @@ export const open = (
       "SELECT resource, instance FROM retired WHERE host = ? ORDER BY retired_at, instance"
     );
 
+    const tellRetired = yield* prepare(
+      "UPDATE retired SET told_at = ? WHERE host = ? AND resource = ? AND instance = ? AND told_at IS NULL"
+    );
+
     const deleteRetired = yield* prepare(
-      "DELETE FROM retired WHERE retired_at < ?"
+      "DELETE FROM retired WHERE told_at < ?"
     );
 
     const selectBoot = yield* prepare("SELECT boot FROM hosts WHERE id = ?");
@@ -839,6 +850,20 @@ export const open = (
             );
 
           return { machines: of("machine"), checkpoints: of("checkpoint") };
+        })
+      ),
+      told: Effect.fn("Store.told")((host, { machines, checkpoints }, at) =>
+        transaction(db, `record what host ${host} was told it retired`, () => {
+          const when = DateTime.formatIso(at);
+
+          for (const [resource, instances] of [
+            ["machine", machines],
+            ["checkpoint", checkpoints],
+          ] as const) {
+            for (const instance of instances) {
+              tellRetired.run(when, host, resource, instance);
+            }
+          }
         })
       ),
       forgetRetired: Effect.fn("Store.forgetRetired")((before) =>

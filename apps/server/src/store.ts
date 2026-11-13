@@ -257,7 +257,16 @@ export interface Interface {
    * may delete what it names.
    */
   readonly retired: (host: string) => Effect.Effect<Retired, Internal>;
-  /** Forgets the instances retired before `before`, which a sweep then leaves at their provider. */
+  /** Records that a sweep of `host` that named `retired` reached it at `at`, for each not told before. */
+  readonly told: (
+    host: string,
+    retired: Retired,
+    at: DateTime.Utc
+  ) => Effect.Effect<void, Internal>;
+  /**
+   * Forgets the instances whose host a sweep first reached before `before`, which a sweep then
+   * leaves at their provider. One no sweep has reached is kept.
+   */
   readonly forgetRetired: (
     before: DateTime.Utc
   ) => Effect.Effect<void, Internal>;

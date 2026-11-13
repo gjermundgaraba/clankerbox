@@ -728,6 +728,70 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
+    "a store whose rows rested undone or failed before the retired table opens with their instances retired on their hosts, and no other",
+    () =>
+      Effect.gen(function* () {
+        const traits = JSON.stringify(presets.fixed.traits);
+        const error = JSON.stringify({ _tag: "Internal", message: "failed" });
+
+        const stateDir = yield* stateDirAt(8, (db) => {
+          for (const migration of migrations.slice(0, 8)) {
+            db.exec(migration);
+          }
+
+          const machineRow = db.prepare(
+            `INSERT INTO machines (name, instance, created_at, base, cpu, ram_mib, disk_gib, host,
+              desired, state, prepared, error, ephemeral, source, undone_at, traits)
+              VALUES (?, ?, '2026-11-13T12:00:00.000Z', 'ubuntu', 1, 1024, 10, 'fixed', 'running',
+                ?, 0, ?, 0, '{"kind":"base"}', ?, ?)`
+          );
+
+          const checkpointRow = db.prepare(
+            `INSERT INTO checkpoints (name, instance, created_at, machine, host, base, cpu,
+              ram_mib, disk_gib, state, error, failed_at, traits)
+              VALUES (?, ?, '2026-11-13T12:00:00.000Z', 'kept', 'fixed', 'ubuntu', 1, 1024, 10,
+                ?, ?, ?, ?)`
+          );
+
+          machineRow.run(
+            "gone",
+            instance(1),
+            "undone",
+            error,
+            "2026-11-13T12:01:00.000Z",
+            traits
+          );
+          machineRow.run(
+            "kept",
+            instance(2),
+            "made.settled",
+            null,
+            null,
+            traits
+          );
+          checkpointRow.run(
+            "lost",
+            instance(3),
+            "failed",
+            error,
+            "2026-11-13T12:02:00.000Z",
+            traits
+          );
+          checkpointRow.run("snap", instance(4), "ready", null, null, traits);
+        });
+
+        const retired = yield* withStore(stateDir, (store) =>
+          store.retired("fixed")
+        );
+
+        expect(retired).toStrictEqual({
+          machines: [instance(1)],
+          checkpoints: [instance(3)],
+        });
+      })
+  );
+
+  it.effect(
     "a P2 store whose upgrade fails after its machines moved is refused, and left as it was",
     () =>
       Effect.gen(function* () {
@@ -1883,7 +1947,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a write that ends a row's hold on its instance retires it on its host, past the row, until it is forgotten",
+    "a write that ends a row's hold on its instance retires it on its host, past the row, until it is forgotten once told",
     () =>
       Effect.gen(function* () {
         const stateDir = yield* stateIn;
@@ -1936,6 +2000,7 @@ layer(NodeServices.layer)((it) => {
 
             const kept = yield* store.retired("linux");
 
+            yield* store.told("linux", retired, at);
             yield* store.forgetRetired(
               DateTime.makeUnsafe("2100-01-01T00:00:00Z")
             );
@@ -1961,6 +2026,55 @@ layer(NodeServices.layer)((it) => {
         expect(read.elsewhere).toStrictEqual(none);
         expect(read.kept).toStrictEqual(read.retired);
         expect(read.forgotten).toStrictEqual(none);
+      })
+  );
+
+  it.effect(
+    "a retired instance is forgotten only once its host was first told of it before the time given, however long ago it was retired",
+    () =>
+      Effect.gen(function* () {
+        const stateDir = yield* stateIn;
+        const first = DateTime.makeUnsafe("2026-10-05T00:00:00Z");
+        const later = DateTime.makeUnsafe("2026-10-06T00:00:00Z");
+
+        const read = yield* withStore(stateDir, (store) =>
+          Effect.gen(function* () {
+            yield* Effect.forEach([1, 2], (n) =>
+              store.insertMachine(row(`m${n}`, { instance: instance(n) }))
+            );
+            yield* removing(store, "m1");
+
+            const once = yield* store.retired("linux");
+
+            yield* store.forgetRetired(
+              DateTime.makeUnsafe("2100-01-01T00:00:00Z")
+            );
+
+            const untold = yield* store.retired("linux");
+
+            yield* store.told("linux", once, first);
+            yield* removing(store, "m2");
+            yield* store.told("linux", yield* store.retired("linux"), later);
+            yield* store.forgetRetired(first);
+
+            const toldAtFirst = yield* store.retired("linux");
+
+            yield* store.forgetRetired(DateTime.addDuration(first, "1 milli"));
+
+            return {
+              untold,
+              toldAtFirst,
+              forgotten: yield* store.retired("linux"),
+            };
+          })
+        );
+
+        expect(read.untold.machines).toStrictEqual([instance(1)]);
+        expect(read.toldAtFirst.machines.toSorted()).toStrictEqual([
+          instance(1),
+          instance(2),
+        ]);
+        expect(read.forgotten.machines).toStrictEqual([instance(2)]);
       })
   );
 
