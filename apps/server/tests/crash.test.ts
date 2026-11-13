@@ -818,6 +818,92 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a checkpoint row an upgrade left with no handle, a build's copy or a capture, learns it at the next recheck, once, and a create or restore from it searches for it no more",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* running({ recheck: Duration.millis(50) });
+        const client = yield* clientOf(served.url);
+        const [host] = served.hosts;
+
+        yield* client.buildTemplate({
+          ...request("unused"),
+          template: "web",
+          setup: { script: "#!/bin/sh\n" },
+        });
+        yield* client.create("dev", request("dev"));
+        yield* client.captureCheckpoint({ machine: "dev", name: "snap" });
+        yield* client.captureCheckpoint({ machine: "dev", name: "broken" });
+
+        const handles = Effect.map(served.store.checkpoints, (rows) =>
+          rows.map(({ name, handle }) => [name, handle] as const)
+        );
+
+        const before = yield* handles;
+
+        host!.fake.failFind(
+          "broken",
+          new Internal({ message: "database is locked" })
+        );
+
+        for (const [name] of before) {
+          yield* served.store.advance("checkpoint", name, (row) => ({
+            next: { ...row, handle: undefined },
+            finish: false,
+          }));
+        }
+
+        host!.fake.searches.length = 0;
+
+        const learned = yield* eventually(handles, (rows) =>
+          rows.every(
+            ([name, handle]) => name === "broken" || handle !== undefined
+          )
+        );
+
+        yield* Effect.sleep(Duration.millis(300));
+
+        const unfound = yield* handles;
+
+        host!.fake.mendFind("broken");
+
+        yield* eventually(handles, (rows) =>
+          rows.every(([, handle]) => handle !== undefined)
+        );
+
+        const searched = [...host!.fake.searches].filter((search) =>
+          search.startsWith("checkpoint")
+        );
+
+        yield* client.create("fast", { template: "web" });
+        yield* client.restoreMachine({ checkpoint: "snap", name: "copy" });
+        yield* client.restoreMachine({ checkpoint: "broken", name: "other" });
+
+        expect(learned).toStrictEqual(
+          before.map(([name, handle]) => [
+            name,
+            name === "broken" ? undefined : handle,
+          ])
+        );
+        expect(
+          unfound.find(([name]) => name === "broken")?.[1]
+        ).toBeUndefined();
+        expect(
+          searched.filter((search) => search !== "checkpoint broken")
+        ).toStrictEqual(
+          before
+            .filter(([name]) => name !== "broken")
+            .map(([name]) => `checkpoint ${name}`)
+        );
+        expect(
+          host!.fake.searches.filter((search) =>
+            search.startsWith("checkpoint")
+          )
+        ).toStrictEqual(searched);
+      }),
+    30_000
+  );
+
+  it.effect(
     "a control plane that starts while a host is down comes up, and its machines wait for it",
     () =>
       Effect.gen(function* () {

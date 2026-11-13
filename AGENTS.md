@@ -88,7 +88,9 @@ the whole CLI span domains on purpose.
 - `copies.ts`: a copy's spec, and why its source refuses it.
 - `fleet.ts`: capacity, and what a recheck does beyond each loop: tells a
   restarted host its machines, again until it finds each, and stores the handle
-  and endpoint it answers in each row; then sends each host that answers the
+  and endpoint it answers in each row; asks each host for the handle of each
+  ready checkpoint row that has none, until it is found or its runtime keeps
+  nothing of its own for it; then sends each host that answers the
   instances the store retired there, for its sweep, noting when a sweep first
   reached it; and ends old failures and forgets retired instances a day after.
 - `machine-view.ts`: what a client reads of a machine, and `waiting`, which a

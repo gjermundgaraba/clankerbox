@@ -126,6 +126,40 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     })
   );
 
+  it.effect(
+    "a row with no handle of a checkpoint its host holds through its machine is asked about once, and keeps none",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* onFixed({ recheck: Duration.millis(50) });
+
+        yield* served.client.create("dev", request("dev"));
+        yield* served.client.stopMachine({ id: "dev" });
+        yield* served.client.captureCheckpoint({
+          machine: "dev",
+          name: "snap",
+        });
+        yield* served.store.advance("checkpoint", "snap", (row) => ({
+          next: { ...row, handle: undefined },
+          finish: false,
+        }));
+
+        served.host.fake.searches.length = 0;
+
+        yield* eventually(
+          Effect.sync(() => [...served.host.fake.searches]),
+          (searches) => searches.includes("checkpoint snap")
+        );
+        yield* Effect.sleep(Duration.millis(300));
+
+        expect(
+          served.host.fake.searches.filter(
+            (search) => search === "checkpoint snap"
+          )
+        ).toStrictEqual(["checkpoint snap"]);
+        expect(yield* handleOf(served, "snap")).toBeUndefined();
+      })
+  );
+
   it.effect("a build's copy outlives the delete of its builder", () =>
     Effect.gen(function* () {
       const served = yield* onFixed();

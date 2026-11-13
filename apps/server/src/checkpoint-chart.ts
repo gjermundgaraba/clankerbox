@@ -35,6 +35,7 @@ const events = {
   reported: types<Done | NotDone>(),
   lost: types<{ readonly error: HostError }>(),
   publish: types<object>(),
+  found: types<{ readonly instance: string; readonly handle: Handle }>(),
 };
 
 export type CheckpointEvent = InferEvents<typeof events>;
@@ -108,6 +109,12 @@ export const checkpoint = setup({
   id: "checkpoint",
   context: ({ input }) => input,
   initial: "capturing",
+  on: {
+    found: ({ context, event }) =>
+      event.instance === context.instance && context.handle === undefined
+        ? { context: { handle: event.handle } }
+        : undefined,
+  },
   states: {
     capturing: makingRegion("capture"),
     fetching: makingRegion("fetch"),
