@@ -48,6 +48,11 @@ const Growth = Schema.Literals(["grow", "any", "none"]);
  *   together equal one of.
  * - `stopsOnItsOwn`: the runtime stops machines no request asked it to, which a client reads as a
  *   machine that may show `starting` unasked.
+ *
+ * Each field and each value is the client contract's, so they change only with a new major.minor,
+ * which `versionCheck` refuses a client of another: a client decodes every trait it meets, and each
+ * rule below decides on every value. A runtime added in a patch release declares values its release
+ * knows; only its `runtime` name is new.
  */
 export const RuntimeTraits = Schema.Struct({
   runtime: RuntimeName,

@@ -12,7 +12,7 @@ import { Invalid } from "./errors.ts";
 /** Also the version of the clankerbox CLI released with it. */
 export const version: string = packageJson.version;
 
-/** major.minor: releases that share it speak the same API. */
+/** major.minor: releases that share it speak the same API, the runtime traits' values included. */
 export const release = (of: string): string =>
   of.split(".").slice(0, 2).join(".");
 
@@ -42,7 +42,10 @@ const refusal = (
 
 const encodeInvalid = Schema.encodeSync(Invalid);
 
-/** Refuses a caller of another release, for a server of either contract. */
+/**
+ * Refuses a caller of another release, for a server of either contract, before it reads anything,
+ * so a client never meets a trait value its release doesn't know.
+ */
 export const versionCheck = (server: string) =>
   HttpRouter.middleware((handle) =>
     Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
