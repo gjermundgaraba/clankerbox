@@ -4,6 +4,7 @@ import {
   copyFile,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rm,
   writeFile,
@@ -11,7 +12,13 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { presets } from "@gjermundgaraba/clankerbox-host/testing";
+import { traits as boat } from "@gjermundgaraba/clankerbox-host/testing/boat";
+import { traits as smolCloud } from "@gjermundgaraba/clankerbox-host/testing/smol-cloud";
+import { fitted, mibPerGib } from "@gjermundgaraba/clankerbox-sdk";
+import type { RuntimeTraits } from "@gjermundgaraba/clankerbox-sdk";
 import { Schema } from "effect";
+import { Yaml } from "effect/encoding";
 import { describe, expect, it, onTestFinished } from "vite-plus/test";
 
 import { agentPort, healthPath } from "../src/agent.ts";
@@ -149,6 +156,36 @@ const launched = async (name: Recipe, agentEnv?: string) => {
   };
 };
 
+const runtimesOf = new Map<string, readonly RuntimeTraits[]>([
+  ["agent.yaml", [presets.smolvm.traits, smolCloud]],
+  ["agent-boat.yaml", [boat]],
+  ["agent-mac.yaml", [presets.tart.traits]],
+]);
+
+const Gib = Schema.String.check(Schema.isPattern(/^\d+G$/u));
+
+const TemplateFile = Schema.Struct({
+  base: Schema.String,
+  cpu: Schema.Int,
+  ram: Gib,
+  disk: Gib,
+  setup: Schema.String,
+});
+
+const decodeTemplateFile = Schema.decodeUnknownSync(TemplateFile);
+
+const gib = (written: string) => Number(written.slice(0, -1));
+
+const sizesOf = async (file: string) => {
+  const { cpu, ram, disk } = decodeTemplateFile(
+    Yaml.parse(
+      await readFile(new URL(`../recipes/${file}`, import.meta.url), "utf-8")
+    )
+  );
+
+  return { cpu, ramMib: gib(ram) * mibPerGib, diskGib: gib(disk) };
+};
+
 describe("recipes", { timeout: testLimit }, () => {
   it("each recipe checks the agent's health where the provider's tunnel reaches it", async () => {
     for (const name of recipes) {
@@ -192,4 +229,21 @@ describe("recipes", { timeout: testLimit }, () => {
       });
     }
   );
+
+  it("each template file asks sizes every runtime it is for gives", async () => {
+    const listed = await readdir(new URL("../recipes", import.meta.url));
+    const files = listed.filter((file) => file.endsWith(".yaml")).toSorted();
+
+    expect(files).toStrictEqual([...runtimesOf.keys()].toSorted());
+
+    for (const file of files) {
+      const sizes = await sizesOf(file);
+
+      for (const traits of runtimesOf.get(file) ?? []) {
+        expect(fitted(traits, sizes), `${file} on ${traits.runtime}`).toBe(
+          true
+        );
+      }
+    }
+  });
 });
