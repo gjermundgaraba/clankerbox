@@ -61,7 +61,7 @@ runtimeContract({
   fixture: Effect.gen(function* () {
     const model = smolvmModel();
 
-    const runtime = yield* smolvm(yield* prepared(), 0).pipe(
+    const runtime = yield* smolvm(yield* prepared(), model.box()).pipe(
       Effect.provide(model.spawner.layer)
     );
 

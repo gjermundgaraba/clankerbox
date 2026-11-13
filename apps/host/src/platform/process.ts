@@ -1,5 +1,5 @@
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, Fiber, Stream } from "effect";
+import { Duration, Effect, Fiber, Predicate, Stream } from "effect";
 import type { FileSystem, PlatformError, Scope } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
@@ -159,3 +159,14 @@ export const cliIn = (env: Readonly<Record<string, string | undefined>>) =>
 
     return { run, exec, dial };
   });
+
+/** Whether the process `pid` has ended: signal 0 reaches every process that runs, whoever owns it. */
+export const processEnded = (pid: number): Effect.Effect<boolean> =>
+  Effect.match(
+    Effect.try({
+      try: () => process.kill(pid, 0),
+      catch: (error) =>
+        Predicate.hasProperty(error, "code") && error.code === "ESRCH",
+    }),
+    { onSuccess: () => false, onFailure: (gone) => gone }
+  );

@@ -44,7 +44,7 @@ import {
   stateOf,
   ramBudget,
 } from "../../../src/platform/smolvm/smolvm.ts";
-import type { Settings } from "../../../src/platform/smolvm/smolvm.ts";
+import type { Box, Settings } from "../../../src/platform/smolvm/smolvm.ts";
 import * as Reach from "../../../src/reach.ts";
 import { Runtime } from "../../../src/runtime.ts";
 import type {
@@ -128,12 +128,14 @@ const freezerStatus = [
 
 const listing = ["machine", "ls", "--json"];
 
+const callsEnded: Box = { uid: 0, ended: () => Effect.succeed(true) };
+
 const runtimeOf = (
   settings: Settings,
   spawner: ReturnType<typeof scripted>,
-  uid = 0
+  box = callsEnded
 ) =>
-  make(settings, uid).pipe(
+  make(settings, box).pipe(
     Effect.provide(Layer.merge(NodeServices.layer, spawner.layer))
   );
 
@@ -142,7 +144,7 @@ const startupError = (
   spawner: ReturnType<typeof scripted>,
   uid = 0
 ) =>
-  make(settings, uid).pipe(
+  make(settings, { ...callsEnded, uid }).pipe(
     Effect.flip,
     Effect.provide(Layer.merge(NodeServices.layer, spawner.layer))
   );
@@ -1517,7 +1519,7 @@ layer(NodeServices.layer)((it) => {
               ).pipe(Effect.provide(spawner.layer))
         );
 
-        const runtime = yield* make(settings, 0).pipe(
+        const runtime = yield* make(settings, callsEnded).pipe(
           Effect.provide(
             Layer.merge(
               NodeServices.layer,
@@ -2051,7 +2053,7 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const model = smolvmModel();
-        const left = `image-seed-0123456789abcdef-${process.pid}`;
+        const left = "image-seed-0123456789abcdef-4242";
 
         model.orphanVmm(left);
 
@@ -2070,9 +2072,17 @@ layer(NodeServices.layer)((it) => {
       Effect.gen(function* () {
         for (const ends of ["cut", "failed"] as const) {
           const model = smolvmModel();
-          const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
-          const left = "image-seed-0123456789abcdef-4194303";
-          const running = `image-seed-fedcba9876543210-${process.pid}`;
+
+          const runtime = yield* runtimeOf(
+            yield* prepared(),
+            model.spawner,
+            model.box()
+          );
+
+          const left = "image-seed-0123456789abcdef-4242";
+          const running = "image-seed-fedcba9876543210-4243";
+
+          model.running.add(4243);
 
           model.faults.reply = ({ args }) => {
             if (args[1] !== "start") {
@@ -2141,8 +2151,8 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const model = smolvmModel();
-        const stuck = `image-seed-0123456789abcdef-${process.pid}`;
-        const left = `image-seed-fedcba9876543210-${process.pid}`;
+        const stuck = "image-seed-0123456789abcdef-4242";
+        const left = "image-seed-fedcba9876543210-4242";
         const frozen = "frozen-01234567";
 
         model.orphanVmm(stuck);
@@ -2253,7 +2263,7 @@ layer(NodeServices.layer)((it) => {
 
         yield* admitted([]);
 
-        model.orphanVmm(`image-seed-0123456789abcdef-${process.pid}`);
+        model.orphanVmm("image-seed-0123456789abcdef-4242");
 
         const refused = yield* Effect.flip(admitted([]));
 

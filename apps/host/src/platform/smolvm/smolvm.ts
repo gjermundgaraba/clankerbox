@@ -48,7 +48,14 @@ import type {
 } from "../../runtime.ts";
 import type { HostSettings } from "../../settings.ts";
 import { allotted, checkRamBudget, inUse } from "../../usage.ts";
-import { cliIn, expect, failure, files, regularFiles } from "../process.ts";
+import {
+  cliIn,
+  expect,
+  failure,
+  files,
+  processEnded,
+  regularFiles,
+} from "../process.ts";
 import { aloneOnBox, boxLock } from "./one-per-box.ts";
 import { traits } from "./traits.ts";
 
@@ -78,6 +85,12 @@ export interface Settings {
   readonly stateDir: string;
   readonly arch: string;
   readonly bootId: string;
+}
+
+/** What the box a smolvm host runs on tells it beside its settings: its uid, and whether a process has ended. */
+export interface Box {
+  readonly uid: number | undefined;
+  readonly ended: (pid: number) => Effect.Effect<boolean>;
 }
 
 const bootIdFile = "/proc/sys/kernel/random/boot_id";
@@ -370,7 +383,7 @@ const given = (flag: string, size: number | undefined) =>
 
 export const make = (
   settings: Settings,
-  uid: number | undefined
+  { uid, ended }: Box
 ): Effect.Effect<
   Interface,
   HostError | CannotStart,
@@ -625,15 +638,6 @@ export const make = (
         )
     );
 
-    const callEnded = (pid: number) =>
-      Effect.map(
-        Effect.orElseSucceed(
-          fs.exists(path.join("/proc", String(pid))),
-          () => true
-        ),
-        (exists) => !exists
-      );
-
     const removeSeedBuilds = (
       vms: ReadonlyArray<{ readonly name: string }>,
       left: (pid: number) => Effect.Effect<boolean>
@@ -664,9 +668,7 @@ export const make = (
             ? Effect.void
             : leftBehind(
                 "remove the image seed builds smolvm left behind",
-                Effect.flatMap(listed, (vms) =>
-                  removeSeedBuilds(vms, callEnded)
-                )
+                Effect.flatMap(listed, (vms) => removeSeedBuilds(vms, ended))
               )
         )
       );
@@ -1672,7 +1674,7 @@ export const layer = (
           arch: process.arch,
           bootId: bootId.replaceAll("-", "").slice(0, 8),
         },
-        process.getuid?.()
+        { uid: process.getuid?.(), ended: processEnded }
       );
     })
   );

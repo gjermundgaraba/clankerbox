@@ -79,7 +79,7 @@ const smolvmIn = (stateDir: string) => {
       arch: "x64",
       bootId: "b00710ad",
     },
-    0
+    { uid: 0, ended: () => Effect.succeed(true) }
   ).pipe(Effect.provide(Layer.merge(NodeServices.layer, spawner.layer)));
 };
 

@@ -9,7 +9,7 @@ import {
 import { Effect, FileSystem, Schema } from "effect";
 
 import { minimumVersion, templates } from "../src/platform/smolvm/smolvm.ts";
-import type { Settings } from "../src/platform/smolvm/smolvm.ts";
+import type { Box, Settings } from "../src/platform/smolvm/smolvm.ts";
 import { scripted } from "./scripted.ts";
 import type { Call, Reply } from "./scripted.ts";
 
@@ -372,7 +372,14 @@ export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
 
   const vmmsLeft = () => [...unrecorded];
 
-  return { vms, spawner, faults, orphanVmm, vmmsLeft };
+  const running = new Set<number>();
+
+  const box = (uid: number | undefined = 0): Box => ({
+    uid,
+    ended: (pid) => Effect.sync(() => !running.has(pid)),
+  });
+
+  return { vms, spawner, faults, orphanVmm, vmmsLeft, running, box };
 };
 
 /** Settings for a smolvm runtime over a scratch prefix holding `expanded`, its state on a short path for its sockets. */
