@@ -514,6 +514,7 @@ export const fakeRuntime = (options: FakeOptions) => {
 
   const observeFailures: Array<RuntimeError | "hang" | "die"> = [];
   const findFailures = new Map<string, RuntimeError>();
+  const searches: string[] = [];
   const partialResizes: RuntimeError[] = [];
   const sizableRefusals: Unsizable[] = [];
   const sized: Array<readonly [string, Sizes, Sizes, boolean]> = [];
@@ -1027,6 +1028,8 @@ export const fakeRuntime = (options: FakeOptions) => {
         find: (what, ref) =>
           Effect.suspend(() => {
             land();
+            searches.push(`${what} ${ref.name}`);
+            options.onCall?.(`find ${what} ${ref.name}`);
             const failure = findFailures.get(ref.name);
 
             return failure === undefined
@@ -1409,6 +1412,7 @@ export const fakeRuntime = (options: FakeOptions) => {
       }
     },
     sized,
+    searches,
     removals,
     starts,
     stubs: () => stubs,

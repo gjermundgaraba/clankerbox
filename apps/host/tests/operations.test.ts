@@ -3806,6 +3806,98 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a find answers the handle of a checkpoint its runtime keeps as its own, none for one it holds through its machine, and names one whose search failed",
+    () =>
+      Effect.gen(function* () {
+        const owning = yield* runner();
+
+        yield* finished(owning, makes("dev"));
+
+        const taken = yield* finished(owning, capturingSnap);
+
+        owning.fake.failFind("broken", locked);
+
+        const kept = yield* owning.operations.find([
+          { name: "snap", instance: "snap-instance" },
+          { name: "broken", instance: "broken-instance" },
+        ]);
+
+        const throughMachine = yield* runner({ as: "fixed" });
+
+        yield* finished(throughMachine, makes("dev"));
+        yield* finished(
+          throughMachine,
+          { _tag: "stop", machine: ref("dev"), machines: [] },
+          2
+        );
+        yield* finished(throughMachine, {
+          _tag: "capture",
+          machine: ref("dev"),
+          checkpoint: checkpoint("snap"),
+        });
+
+        const held = yield* throughMachine.operations.find([
+          { name: "snap", instance: "snap-instance" },
+        ]);
+
+        expect(taken.outcome.handle).toBeDefined();
+        expect(kept).toStrictEqual({
+          found: [
+            {
+              name: "snap",
+              instance: "snap-instance",
+              handle: taken.outcome.handle,
+            },
+          ],
+          unresolved: ["broken"],
+        });
+        expect(held).toStrictEqual({
+          found: [{ name: "snap", instance: "snap-instance" }],
+          unresolved: [],
+        });
+        expect(
+          [owning, throughMachine].map(({ fake }) =>
+            fake.searches.filter((search) => search.startsWith("checkpoint"))
+          )
+        ).toStrictEqual([
+          ["checkpoint snap", "checkpoint broken"],
+          ["checkpoint snap"],
+        ]);
+      })
+  );
+
+  it.effect(
+    "a find that outlasts a read answers what it found by then, and leaves the rest unresolved",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner({
+          runtime: (fake) => ({
+            ...fake,
+            find: (what, searched) =>
+              searched.name.startsWith("slow")
+                ? Effect.andThen(Effect.never, fake.find(what, searched))
+                : fake.find(what, searched),
+          }),
+        });
+
+        yield* finished(host, makes("dev"));
+        yield* finished(host, capturingSnap);
+
+        const answer = yield* host.operations
+          .find([
+            { name: "snap", instance: "snap-instance" },
+            { name: "slow", instance: "slow-instance" },
+            { name: "slower", instance: "slower-instance" },
+          ])
+          .pipe(Effect.timeout(Duration.minutes(1)));
+
+        expect(answer.found.map(({ name }) => name)).toStrictEqual(["snap"]);
+        expect(answer.unresolved).toStrictEqual(["slow", "slower"]);
+      }),
+    30_000
+  );
+
+  it.effect(
     "an adopt leaves closed the relay of a machine removed while it searched for another",
     () =>
       Effect.gen(function* () {

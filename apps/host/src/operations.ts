@@ -1,6 +1,7 @@
 import type {
   Adoption,
   ExecCommand,
+  Finding,
   MachineRef,
   MachineState,
   Operation,
@@ -105,6 +106,7 @@ export interface Interface {
     machines: readonly MachineRef[]
   ) => ReturnType<Runtime["Service"]["capacity"]>;
   readonly adopt: (machines: readonly MachineRef[]) => Effect.Effect<Adoption>;
+  readonly find: (checkpoints: readonly Ref[]) => Effect.Effect<Finding>;
   readonly sweep: (retired: Retired) => Effect.Effect<void, Internal>;
   readonly exec: (
     command: ExecCommand
@@ -1382,6 +1384,45 @@ export const make = (
         };
       });
 
+    const find: Interface["find"] = (checkpoints) =>
+      Effect.gen(function* () {
+        const searched = new Map<string, Ref>();
+
+        yield* Effect.forEach(
+          checkpoints,
+          (checkpoint) =>
+            found("checkpoint", checkpoint).pipe(
+              Effect.tap((handle) =>
+                Effect.sync(() => {
+                  searched.set(checkpoint.name, {
+                    name: checkpoint.name,
+                    instance: checkpoint.instance,
+                    ...(handle === undefined ? {} : { handle }),
+                  });
+                })
+              ),
+              Effect.tap((handle) =>
+                Effect.logInfo(
+                  `find ${checkpoint.name}: ${handle === undefined ? "the runtime keeps nothing of its own for it" : `held as ${handle}`}`
+                )
+              ),
+              Effect.catch((error) =>
+                Effect.logWarning(
+                  `find ${checkpoint.name}: couldn't find it, so the next find tries again: ${error.message}`
+                )
+              )
+            ),
+          { concurrency: 1, discard: true }
+        ).pipe(Effect.timeoutOption(stateReadWait));
+
+        return {
+          found: [...searched.values()],
+          unresolved: checkpoints
+            .filter(({ name }) => !searched.has(name))
+            .map(({ name }) => name),
+        };
+      });
+
     const namedBySteps = () => {
       const named = new Set<string>();
 
@@ -1499,6 +1540,7 @@ export const make = (
           inTime(`the ${traits.runtime} runtime`)
         ),
       adopt,
+      find,
       sweep,
       exec: Effect.fn("Operations.exec")(exec),
     } satisfies Interface;

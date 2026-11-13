@@ -114,7 +114,8 @@ or `composition/`.
 - `operations.ts`: the `Operations` service. It runs a step to its end, keeps its
   report until collected, fences by sequence, and tells a restart by `boot`. Its
   `sweep` deletes what the runtime's `owned` facet lists whose instance the
-  control plane retired and no step it holds names.
+  control plane retired and no step it holds names. Its `find` answers the
+  handle of each checkpoint a row holds without one, in the time a read takes.
 - `guest.ts`: setup, preparation, and the hook a stop, pause or delete
   runs first, all run in the guest.
 - `usage.ts`: the machines in use, and the RAM a runtime holds beside them, for the RAM budget and capacity.

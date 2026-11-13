@@ -90,7 +90,7 @@ plane's URL), `server.pid`, `hosts/<id>.url`, `hosts/<id>.pid` and
 | `build.log`         | the build's output                                                    |
 | `server.log`        | the control plane's log, warnings included                            |
 | `host-<id>.log`     | that host's log                                                       |
-| `runtime-calls.txt` | one line per runtime call as it happens, such as `capture snap`, and on `tart`, whose fake is relayed as Tart is, `relay <name>` each time a relay opens |
+| `runtime-calls.txt` | one line per runtime call as it happens, such as `capture snap`; `find <machine or checkpoint> <name>` each time the host searches its runtime for a resource whose handle it wasn't given; and on `tart`, whose fake is relayed as Tart is, `relay <name>` each time a relay opens |
 | `transcript.txt`    | each `cb.sh` command as a JSON argv, its output and `[exit N]`, and each fault |
 | `<provider>-calls.txt` | on `smol-cloud` or `boat`, one line per call the fake API answers, `METHOD /path STATUS` with no body, and on `boat` `dropped` where `drop-answer` lost the answer |
 | `boat-requests.jsonl` | on `boat`, the same calls, each with its JSON body, so a proof can show what reached the provider and what didn't |
