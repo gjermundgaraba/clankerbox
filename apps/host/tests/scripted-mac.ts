@@ -97,7 +97,15 @@ export const scriptedMac = (stateDir: string) => {
         );
       }
 
+      // https://github.com/openai/tart/blob/2.41.1/Sources/tart/Commands/Clone.swift#L165
       case "clone": {
+        if (vms.has(rest[1] ?? "")) {
+          return {
+            exitCode: 1,
+            stderr: `Error: VM "${rest[1] ?? ""}" already exists, use --overwrite to replace it\n`,
+          };
+        }
+
         vms.set(rest[1] ?? "", "stopped");
 
         return undefined;

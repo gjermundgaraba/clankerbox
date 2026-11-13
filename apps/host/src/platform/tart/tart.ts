@@ -560,6 +560,22 @@ export const make = (
         }
       });
 
+    const removed = (vm: string) =>
+      Effect.gen(function* () {
+        const { target, plist: file, log } = job(vm);
+
+        yield* deleteVm(vm);
+
+        yield* launchctl(["bootout", target], `bootout ${vm}`, [0, 3]);
+
+        for (const leftover of [file, log]) {
+          yield* files(
+            `couldn't remove ${leftover}`,
+            fs.remove(leftover, { force: true })
+          );
+        }
+      });
+
     const set = (machine: Target, sizes: Sizes, flags: readonly string[]) =>
       Effect.gen(function* () {
         const vm = machine.handle;
@@ -598,7 +614,11 @@ export const make = (
             launch(made)
           )
         );
-        yield* ready(made);
+        yield* ready(made).pipe(
+          Effect.catchTag("Capacity", (refused) =>
+            Effect.andThen(removed(made.handle), Effect.fail(refused))
+          )
+        );
 
         return made.handle;
       });
@@ -867,23 +887,7 @@ export const make = (
       ),
       stop: Effect.fn("Tart.stop")(stop),
       pause: Effect.fn("Tart.pause")(suspend),
-      delete: Effect.fn("Tart.delete")((machine) =>
-        Effect.gen(function* () {
-          const vm = machine.handle;
-          const { target, plist: file, log } = job(vm);
-
-          yield* deleteVm(vm);
-
-          yield* launchctl(["bootout", target], `bootout ${vm}`, [0, 3]);
-
-          for (const leftover of [file, log]) {
-            yield* files(
-              `couldn't remove ${leftover}`,
-              fs.remove(leftover, { force: true })
-            );
-          }
-        })
-      ),
+      delete: Effect.fn("Tart.delete")((machine) => removed(machine.handle)),
       capture: Effect.fn("Tart.capture")((machine, checkpoint) => {
         const handle = checkpointVm(checkpoint);
 

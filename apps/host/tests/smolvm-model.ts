@@ -262,6 +262,14 @@ export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
       };
     }
 
+    // https://github.com/smol-machines/smolvm/blob/v1.34.1/src/cli/vm_common.rs
+    if ((command === "create" || command === "branch") && vms.has(name)) {
+      return {
+        exitCode: 1,
+        stderr: `Error: machine '${name}' already exists or is being created\n`,
+      };
+    }
+
     if (command === "create" || command === "branch") {
       return command === "create" ? create(name, args) : branch(name, args);
     }
