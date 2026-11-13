@@ -248,7 +248,7 @@ describe("ssh", () => {
 
           expect(code).toBe(1);
           expect(stderr).toContain(
-            "clankerbox: WrongState: dev has no SSH endpoint"
+            "clankerbox: WrongState: dev has no SSH login"
           );
           expect(ssh.spawned).toStrictEqual([]);
         })
@@ -349,7 +349,7 @@ describe("ssh", () => {
 
           expect(code).toBe(1);
           expect(stderr).toContain(
-            "clankerbox: WrongState: dev has no SSH endpoint"
+            "clankerbox: WrongState: dev has no SSH login"
           );
         })
     );

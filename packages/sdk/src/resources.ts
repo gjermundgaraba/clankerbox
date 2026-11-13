@@ -160,9 +160,12 @@ export const templateRef = (
  * what the last request asked for, `phase` what the control plane is doing about it, and `error`
  * why the last step failed, until the next request. A request takes the row out of rest in the
  * write that records it, so a resting `phase` read after a request has seen it. `template` is the
- * build a create cloned. `traits` are its runtime's, as they were when it was made. `ssh` is only on a running machine whose runtime gives it an endpoint, and
- * `hostKey`, `<type> <base64>`, once preparation has recorded it. `tailnet` is on a running machine
- * of a host that joins its machines to a tailnet, once the host has checked it.
+ * build a create cloned. `traits` are its runtime's, as they were when it was made. `hostKey`,
+ * `<type> <base64>`, is on a machine once preparation has read one from its sshd, which a machine
+ * made from a base its host doesn't prepare may lack. `ssh` is the login sshd answers: it is only
+ * on a machine with a `hostKey` and an endpoint, while it runs, or while its host can't be read
+ * (`state` `unknown`) and it is asked to run. `tailnet` is on a running machine of a host that
+ * joins its machines to a tailnet, once the host has checked it.
  */
 export const Machine = Schema.Struct({
   id: Name,

@@ -528,10 +528,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ["a", "unknown"],
           ["b", "unknown"],
         ]);
-        expect(listed.map(({ ssh }) => ssh)).toStrictEqual([
-          undefined,
-          undefined,
-        ]);
         expect((yield* machine("b")).state).toBe("running");
       })
   );
@@ -662,12 +658,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a machine has an SSH endpoint, as the runtime's user at its row's endpoint, only while it runs",
+    "a machine shows an SSH login, as the runtime's user at its row's endpoint, only while it has a host key on record and runs",
     () =>
       Effect.gen(function* () {
-        const { client, fake, machine, row } = yield* served();
+        const { client, fake, machine, row } =
+          yield* servedWithBuildOf(installsStart);
 
-        const made = yield* client.create("dev", request("dev"));
+        const plain = yield* client.create("plain", request("plain"));
+        const made = yield* client.create("dev", fromWeb);
         const stopped = yield* client.stopMachine({ id: "dev" });
 
         fake.machines.clear();
@@ -677,12 +675,37 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(endpoint?.host).toBe("127.0.0.1");
         expect(made.ssh).toStrictEqual({ user: "admin", ...endpoint });
-        expect(made.hostKey).toBeUndefined();
+        expect(made.hostKey).toBeDefined();
         expect(
-          [stopped, missing].map(({ state, ssh }) => [state, ssh])
+          [plain, stopped, missing].map(({ state, ssh }) => [state, ssh])
         ).toStrictEqual([
+          ["running", undefined],
           ["stopped", undefined],
           ["missing", undefined],
+        ]);
+        expect(plain.hostKey).toBeUndefined();
+        expect((yield* row("plain")).endpoint?.host).toBe("127.0.0.1");
+      })
+  );
+
+  it.effect(
+    "a machine whose host can't be read shows its SSH login while it is asked to run, and none once asked to stop",
+    () =>
+      Effect.gen(function* () {
+        const { client, fake } = yield* servedWithBuildOf(installsStart);
+
+        const made = yield* client.create("dev", fromWeb);
+        yield* client.create("idle", fromWeb);
+        yield* client.stopMachine({ id: "idle" });
+        fake.failNextObserve(new Internal({ message: "host frozen" }));
+
+        const listed = yield* client.listMachines();
+
+        expect(
+          listed.map(({ id, state, ssh }) => [id, state, ssh])
+        ).toStrictEqual([
+          ["dev", "unknown", made.ssh],
+          ["idle", "unknown", undefined],
         ]);
       })
   );
@@ -2709,18 +2732,20 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             })
         );
 
-        const { client } = yield* served({
+        const { client, row } = yield* served({
           runtime: { ports: portsOfHere },
         });
 
-        const made = yield* Effect.forEach(
+        yield* Effect.forEach(
           ["a", "b", "c"],
           (name) => client.create(name, request(name)),
           { concurrency: "unbounded" }
         );
 
-        const taken = made
-          .map(({ ssh }) => ssh?.port ?? 0)
+        const rows = yield* Effect.forEach(["a", "b", "c"], row);
+
+        const taken = rows
+          .map(({ endpoint }) => endpoint?.port ?? 0)
           .toSorted((a, b) => a - b);
 
         expect(taken).toStrictEqual([

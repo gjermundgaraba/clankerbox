@@ -61,6 +61,18 @@ export const phaseShown = (
   return seen === "unknown" && phase !== "failed" ? "waiting" : phase;
 };
 
+const loginOf = (found: MachineRow, state: MachineState): Machine["ssh"] => {
+  const { endpoint, hostKey } = found;
+
+  const runs =
+    state === "running" ||
+    (state === "unknown" && desiredOf(found) === "running");
+
+  return runs && hostKey !== undefined && endpoint?.host !== undefined
+    ? { user: loginUser, host: endpoint.host, port: endpoint.port }
+    : undefined;
+};
+
 export const machineOf = (
   found: MachineRow,
   seen: MachineState | undefined,
@@ -68,7 +80,7 @@ export const machineOf = (
 ): Machine => {
   const state = seen ?? "unknown";
   const running = state === "running";
-  const { endpoint } = found;
+  const ssh = loginOf(found, state);
 
   return {
     id: found.name,
@@ -84,9 +96,7 @@ export const machineOf = (
     ...(found.labels === undefined ? {} : { labels: found.labels }),
     ...(found.template === undefined ? {} : { template: found.template }),
     ...(found.error === undefined ? {} : { error: found.error }),
-    ...(running && endpoint?.host !== undefined
-      ? { ssh: { user: loginUser, host: endpoint.host, port: endpoint.port } }
-      : {}),
+    ...(ssh === undefined ? {} : { ssh }),
     ...(found.hostKey === undefined ? {} : { hostKey: found.hostKey }),
     ...(running && tailnet !== undefined ? { tailnet } : {}),
   };

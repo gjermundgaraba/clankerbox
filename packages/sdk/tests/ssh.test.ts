@@ -4,6 +4,7 @@ import { Effect, FileSystem } from "effect";
 import { expect } from "vite-plus/test";
 
 import {
+  buildId,
   pinnedSsh,
   ScriptFailed,
   sshTarget,
@@ -20,6 +21,13 @@ const hostKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample root@dev";
 const reachable = machine("dev", { ssh: login, hostKey });
 
 const knownHostsOption = "UserKnownHostsFile=";
+
+const plain = ({ _tag, message, machine: id, state }: WrongState) => ({
+  _tag,
+  message,
+  machine: id,
+  state,
+});
 
 const knownHostsIn = (args: readonly string[]): string =>
   args
@@ -40,17 +48,68 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a machine without an endpoint or a host key is no target, and says which it lacks",
+    "a machine without a login is no target, and says why: no host key on record, or a VM that doesn't run",
     () =>
       Effect.gen(function* () {
         const said: ReadonlyArray<readonly [Machine, WrongState]> = [
           [
-            machine("dev", { state: "stopped", hostKey }),
+            machine("dev", { state: "stopped", desired: "stopped", hostKey }),
             new WrongState({
               message:
-                "dev has no SSH endpoint (stopped): see clankerbox get dev",
+                "dev has no SSH login (stopped): its VM doesn't run, so start it with clankerbox start dev",
               machine: "dev",
               state: "stopped",
+            }),
+          ],
+          [
+            machine("dev", { state: "paused", desired: "paused", hostKey }),
+            new WrongState({
+              message:
+                "dev has no SSH login (paused): its VM doesn't run, so start it with clankerbox start dev",
+              machine: "dev",
+              state: "paused",
+            }),
+          ],
+          ...(["stopped", "paused"] as const).map(
+            (state) =>
+              [
+                machine("dev", { state, desired: state }),
+                new WrongState({
+                  message: `dev has no SSH login (${state}): its VM doesn't run, so start it with clankerbox start dev; its host has no SSH host key on record for it, as for a machine made from a base the host didn't prepare, so then reach it with clankerbox exec, or create it from a template`,
+                  machine: "dev",
+                  state,
+                }),
+              ] as const
+          ),
+          [
+            machine("dev", { state: "unknown", hostKey }),
+            new WrongState({
+              message: "dev has no SSH login (unknown): see clankerbox get dev",
+              machine: "dev",
+              state: "unknown",
+            }),
+          ],
+          [
+            machine("dev", {
+              template: buildId("web", 1),
+              state: "stopped",
+              desired: "running",
+              phase: "starting",
+            }),
+            new WrongState({
+              message:
+                "dev has no SSH login (stopped, wants running (starting)): its host has no SSH host key on record for it yet: a host reads one as it prepares a machine, and one made from a base only where its host prepares it; see clankerbox get dev",
+              machine: "dev",
+              state: "stopped, wants running (starting)",
+            }),
+          ],
+          [
+            machine("dev", { template: buildId("web", 1), phase: "failed" }),
+            new WrongState({
+              message:
+                "dev has no SSH login (running (failed)): its host has no SSH host key on record for it; see clankerbox get dev",
+              machine: "dev",
+              state: "running (failed)",
             }),
           ],
           [
@@ -64,7 +123,7 @@ layer(NodeServices.layer)((it) => {
             }),
             new WrongState({
               message:
-                "dev has no SSH host key on record (running (failed)): see clankerbox get dev",
+                "dev has no SSH login (running (failed)): its host has no SSH host key on record for it, as for a machine made from a base the host didn't prepare; reach it with clankerbox exec, or create it from a template",
               machine: "dev",
               state: "running (failed)",
             }),
@@ -77,7 +136,7 @@ layer(NodeServices.layer)((it) => {
             }),
             new WrongState({
               message:
-                "dev has no SSH endpoint (stopped, wants running (starting)): see clankerbox get dev",
+                "dev has no SSH login (stopped, wants running (starting)): its host has no SSH host key on record for it yet: a host reads one as it prepares a machine, and one made from a base only where its host prepares it; see clankerbox get dev",
               machine: "dev",
               state: "stopped, wants running (starting)",
             }),
@@ -85,7 +144,9 @@ layer(NodeServices.layer)((it) => {
         ];
 
         for (const [held, expected] of said) {
-          expect(yield* Effect.flip(sshTarget(held))).toStrictEqual(expected);
+          expect(plain(yield* Effect.flip(sshTarget(held)))).toStrictEqual(
+            plain(expected)
+          );
         }
       })
   );

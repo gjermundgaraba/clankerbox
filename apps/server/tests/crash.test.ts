@@ -12,6 +12,7 @@ import {
   applying,
   at,
   clientOf,
+  createWithLogin,
   eventually,
   patched,
   pause,
@@ -610,7 +611,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const client = yield* clientOf(served.url);
         const [host] = served.hosts;
 
-        const made = yield* client.create("dev", request("dev"));
+        const made = yield* createWithLogin(client, "dev");
 
         const before = Option.getOrThrow(
           yield* served.store.findMachine("dev")
@@ -657,7 +658,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const client = yield* clientOf(served.url);
         const [host] = served.hosts;
 
-        const made = yield* client.create("dev", request("dev"));
+        const made = yield* createWithLogin(client, "dev");
 
         host!.fake.calls.length = 0;
         yield* restartedHost(host!);

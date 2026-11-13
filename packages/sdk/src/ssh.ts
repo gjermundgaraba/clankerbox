@@ -2,7 +2,7 @@ import { Effect, FileSystem, Path } from "effect";
 import type { PlatformError, Scope } from "effect";
 
 import { WrongState } from "./errors.ts";
-import { stateLabel } from "./resources.ts";
+import { isResting, stateLabel } from "./resources.ts";
 import type { Machine, SshLogin } from "./resources.ts";
 
 export interface SshTarget {
@@ -11,9 +11,42 @@ export interface SshTarget {
   readonly hostKey: string;
 }
 
+const noLoginBecause = ({
+  id,
+  hostKey,
+  template,
+  state,
+  desired,
+  phase,
+}: Machine) => {
+  if (hostKey === undefined && !isResting(phase)) {
+    return `its host has no SSH host key on record for it yet: a host reads one as it prepares a machine, and one made from a base only where its host prepares it; see clankerbox get ${id}`;
+  }
+
+  const unprepared =
+    "its host has no SSH host key on record for it, as for a machine made from a base the host didn't prepare";
+
+  if ((state === "stopped" || state === "paused") && desired === state) {
+    const start = `its VM doesn't run, so start it with clankerbox start ${id}`;
+
+    return hostKey === undefined && template === undefined
+      ? `${start}; ${unprepared}, so then reach it with clankerbox exec, or create it from a template`
+      : start;
+  }
+
+  if (hostKey === undefined) {
+    return template === undefined
+      ? `${unprepared}; reach it with clankerbox exec, or create it from a template`
+      : `its host has no SSH host key on record for it; see clankerbox get ${id}`;
+  }
+
+  return `see clankerbox get ${id}`;
+};
+
 /**
- * Only a running machine has an endpoint, and only a prepared one a host key; a machine without
- * either is `WrongState`, naming what it lacks and why.
+ * A machine with no `ssh` login is `WrongState`, saying why: no host key on record yet, on a
+ * machine not yet prepared, or at all, as for one made from a base its host didn't prepare, or a
+ * VM that doesn't run, which a start runs.
  */
 export const sshTarget = (
   machine: Machine
@@ -24,11 +57,15 @@ export const sshTarget = (
     return Effect.succeed({ id, login, hostKey });
   }
 
-  const lacks = login === undefined ? "SSH endpoint" : "SSH host key on record";
   const state = stateLabel(machine);
-  const message = `${id} has no ${lacks} (${state}): see clankerbox get ${id}`;
 
-  return Effect.fail(new WrongState({ message, machine: id, state }));
+  return Effect.fail(
+    new WrongState({
+      message: `${id} has no SSH login (${state}): ${noLoginBecause(machine)}`,
+      machine: id,
+      state,
+    })
+  );
 };
 
 /** A known_hosts line pinning `name` to a host key on record, `<type> <base64>`. */

@@ -7,6 +7,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   startHost,
   writeTailscaleStubs,
+  hostKeySetup,
 } from "@gjermundgaraba/clankerbox-host/testing";
 import type {
   FakeRuntimeName,
@@ -83,6 +84,20 @@ export const request = (
   diskGib: 10,
   ...fields,
 });
+
+/**
+ * A machine with an SSH login: a clone of a template whose build's setup gave sshd its host keys,
+ * as a base create the host doesn't prepare lacks them.
+ */
+export const createWithLogin = (client: Client.Interface, name: string) =>
+  Effect.andThen(
+    client.buildTemplate({
+      ...request("unused"),
+      template: "keyed",
+      setup: { script: `#!/bin/sh\n${hostKeySetup}`, timeoutSeconds: 30 },
+    }),
+    client.create(name, { template: "keyed" })
+  );
 
 export const at = ({ state, desired, phase }: Machine) => [
   state,
