@@ -249,7 +249,7 @@ const ended = (
       ? Effect.logError(
           `${name} died, operation ${id}:\n${Cause.pretty(exit.cause)}`
         )
-      : Effect.logWarning(`${name} failed, operation ${id}: ${error.message}`);
+      : Effect.logInfo(`${name} failed, operation ${id}: ${error.message}`);
   });
 
 type Make = Extract<Step, { readonly _tag: "make" }>;

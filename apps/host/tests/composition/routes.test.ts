@@ -283,12 +283,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           expect.stringMatching(/^Info Listening on /u),
           "Info make machine dev done, operation op-1",
           expect.stringMatching(
-            /^Error Sent HTTP response .*smolvm didn't answer/su
+            /^Error a request answered Internal .*smolvm didn't answer/su
           ),
           expect.stringMatching(
             /^Error the smolvm runtime's read died:\n.*observe blew up/su
           ),
-          expect.stringMatching(/^Error Sent HTTP response .*read died/su),
+          expect.stringMatching(
+            /^Error a request answered Internal .*read died/su
+          ),
         ]);
       })
   );
