@@ -6,20 +6,6 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { lastLines } from "../guest.ts";
 import type { Dial, Execution } from "../runtime.ts";
 
-export type Asked = "read" | "change" | "settle";
-
-/**
- * How long a provider's API may take to answer a request, by what it asks: a `read`, a `change`
- * it answers once it has taken it, or one it answers only once the machine has `settle`d, as smol
- * cloud's start and capture do. A request not answered in time leaves its outcome unknown, as a
- * dropped connection does, so a stalled connection costs its step a read, not its whole deadline.
- */
-export const answerWithin: Readonly<Record<Asked, Duration.Duration>> = {
-  read: Duration.seconds(30),
-  change: Duration.minutes(1),
-  settle: Duration.minutes(5),
-};
-
 export const describe = (error: PlatformError.PlatformError): string =>
   `${error.reason._tag}: ${error.reason.method}${error.reason.description === undefined ? "" : `: ${error.reason.description}`}`;
 

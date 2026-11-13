@@ -110,7 +110,7 @@ Each line names where the code holds it and how to check it again.
   `error` are stopped; `cancelled`, a sandbox boat removed for want of a
   machine, a set `dataExpiredAt` or a 404 is missing; the rest are starting.
   (`boat.ts`'s `stateOf`; the YAML's `Sandbox.state`.)
-- Each request is bounded by `answerWithin` in `platform/process.ts`: 30
+- Each request is bounded by `answerWithin` in `platform/provider-http.ts`: 30
   seconds for a read, a minute for a change. A request unanswered by then is
   one whose answer was lost.
 - The apt Tailscale package enables its own `tailscaled` unit on boat's

@@ -43,6 +43,7 @@ import type {
 } from "../../runtime.ts";
 import { KeyedApiUrl } from "../../settings.ts";
 import type { HostSettings } from "../../settings.ts";
+import { untilRest } from "../provider-http.ts";
 import * as Api from "./api.ts";
 import type { ApiError, MachineRecord, Refused } from "./api.ts";
 import { traits } from "./traits.ts";
@@ -105,6 +106,8 @@ const moves: Readonly<Record<Goal, Readonly<Record<string, Move>>>> = {
 
 const transitional = new Set(["creating", "pausing", "starting", "stopping"]);
 
+const checkpointEnds = new Set(["available", "failed"]);
+
 const moveOf = (goal: Goal, state: string): Move => {
   const move = moves[goal][state];
 
@@ -147,7 +150,7 @@ const stateOf = (record: MachineRecord | undefined): MachineState => {
 };
 
 const unknownOutcome = (error: ApiError) =>
-  error._tag === "Unanswered" || error.retryable;
+  error._tag === "Unanswered" || (error._tag === "Refused" && error.retryable);
 
 const isGone = (error: ApiError) =>
   error._tag === "Refused" && error.status === 404;
@@ -474,22 +477,16 @@ export const make = (
       );
 
     const available = (machine: Target, checkpoint: Handle) =>
-      api.checkpoint(checkpoint).pipe(
-        Effect.flatMap(({ status }) =>
-          status === "available" || status === "failed"
-            ? Effect.succeed(status === "available")
-            : Effect.fail(
-                new Api.Unanswered({
-                  message: `checkpoint ${checkpoint} is ${status}`,
-                })
-              )
+      Effect.map(
+        read(
+          `capture ${machine.name}`,
+          untilRest(
+            api.checkpoint(checkpoint),
+            ({ status }) => checkpointEnds.has(status),
+            poll
+          )
         ),
-        Effect.retry({
-          while: unknownOutcome,
-          schedule: Schedule.spaced(poll),
-          times: 600,
-        }),
-        Effect.mapError(internal(`capture ${machine.name}`))
+        ({ status }) => status === "available"
       );
 
     const streamed = (

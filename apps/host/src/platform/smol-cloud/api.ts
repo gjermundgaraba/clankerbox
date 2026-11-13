@@ -1,11 +1,18 @@
 import { Duration, Effect, Option, Redacted, Schema, Stream } from "effect";
 import { Sse } from "effect/encoding";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
-import type { HttpClientError, HttpMethod } from "effect/http";
+import type { HttpMethod } from "effect/http";
 
-import { Handle, timeoutFail } from "../../runtime.ts";
-import { answerWithin } from "../process.ts";
-import type { Asked } from "../process.ts";
+import { Handle } from "../../runtime.ts";
+import {
+  fromGateway,
+  lost,
+  recordReader,
+  retryAfter,
+  Unanswered,
+  within,
+} from "../provider-http.ts";
+import type { Asked, Unreadable } from "../provider-http.ts";
 
 export const MachineRecord = Schema.Struct({
   id: Handle,
@@ -77,15 +84,7 @@ export class Refused extends Schema.TaggedError<
   retryAfterSeconds: Schema.Finite,
 }) {}
 
-/** No answer, or one that couldn't be read, so whether `call` happened is unknown. */
-export class Unanswered extends Schema.TaggedError<
-  Unanswered,
-  { readonly brand: unique symbol }
->()("Unanswered", {
-  message: Schema.String,
-}) {}
-
-export type ApiError = Refused | Unanswered;
+export type ApiError = Refused | Unanswered | Unreadable;
 
 export interface Sizes {
   readonly cpus?: number | undefined;
@@ -115,16 +114,6 @@ export type Frame =
 export type Verb = "start" | "stop" | "pause" | "resume";
 
 const problemOf = Schema.decodeUnknownOption(Schema.fromJsonString(Problem));
-
-const longestRetryAfter = 30;
-
-const retryAfterOf = (response: HttpClientResponse.HttpClientResponse) => {
-  const seconds = Number(response.headers["retry-after"] ?? "1");
-
-  return Number.isFinite(seconds) && seconds > 0
-    ? Math.min(seconds, longestRetryAfter)
-    : 1;
-};
 
 const frameOf = ({ event, data }: Sse.Event): readonly Frame[] => {
   if (event === "stdout" || event === "stderr") {
@@ -156,22 +145,6 @@ const frames = <E>(
     Stream.flattenIterable
   );
 
-const unanswered = (call: string) => (error: HttpClientError.HttpClientError) =>
-  new Unanswered({ message: `${call}: ${error.message}` });
-
-const within =
-  (asked: Asked, call: string) =>
-  <A, E>(answer: Effect.Effect<A, E>) =>
-    answer.pipe(
-      timeoutFail(
-        answerWithin[asked],
-        () =>
-          new Unanswered({
-            message: `${call}: no answer within ${Duration.format(answerWithin[asked])}`,
-          })
-      )
-    );
-
 const marksOf = (record: unknown): Marks =>
   Option.getOrElse(Schema.decodeUnknownOption(Marks)(record), () => ({}));
 
@@ -180,13 +153,12 @@ const open = { mode: "open" };
 /**
  * smol cloud's API, the routes the adapter uses. Requests are encoded exactly; answers are read
  * leniently, keeping only the fields the adapter reads, and `state` and `status` stay open strings.
- * A list keeps each record it can read; one it can't is this host's business only if `ours` says
- * so by its marks, which fails the list, and is skipped otherwise, logged the first time.
+ * A list fails on a record it can't read only if `ours` claims it by its marks.
  */
 export const make = (url: string, key: Redacted.Redacted) =>
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient;
-    const skipped = new Set<string>();
+    const readRecords = recordReader();
 
     const send = (
       method: HttpMethod.HttpMethod,
@@ -206,7 +178,7 @@ export const make = (url: string, key: Redacted.Redacted) =>
           )
         )
         .pipe(
-          Effect.mapError(unanswered(call)),
+          Effect.mapError(lost(call)),
           Effect.filterOrElse(
             (response) => response.status < 400,
             (response) =>
@@ -215,12 +187,14 @@ export const make = (url: string, key: Redacted.Redacted) =>
                 (text): Effect.Effect<never, ApiError> => {
                   const problem = Option.getOrUndefined(problemOf(text));
 
-                  if (problem === undefined && response.status >= 500) {
-                    return Effect.fail(
-                      new Unanswered({
-                        message: `${call} answered ${response.status} with no problem of smol cloud's, as a gateway does`,
-                      })
-                    );
+                  const gateway = fromGateway(
+                    call,
+                    response.status,
+                    problem !== undefined
+                  );
+
+                  if (gateway !== undefined) {
+                    return Effect.fail(gateway);
                   }
 
                   const code = problem?.code ?? "unknown";
@@ -233,7 +207,9 @@ export const make = (url: string, key: Redacted.Redacted) =>
                       code,
                       detail,
                       retryable: problem?.retryable ?? false,
-                      retryAfterSeconds: retryAfterOf(response),
+                      retryAfterSeconds: Duration.toSeconds(
+                        retryAfter(response)
+                      ),
                     })
                   );
                 }
@@ -278,37 +254,17 @@ export const make = (url: string, key: Redacted.Redacted) =>
         Effect.flatMap(
           json(Schema.Array(Schema.Unknown))("GET", route, "read"),
           (records) =>
-            Effect.forEach(records, (record) => {
-              const read = Schema.decodeUnknownOption(schema)(record);
+            readRecords(records, {
+              call: `GET ${route}`,
+              what,
+              read: Schema.decodeUnknownOption(schema),
+              ours: (record) => ours(marksOf(record)),
+              label: (record) => {
+                const marks = marksOf(record);
 
-              if (Option.isSome(read)) {
-                return Effect.succeed([read.value]);
-              }
-
-              const marks = marksOf(record);
-
-              if (ours(marks)) {
-                return Effect.fail(
-                  new Unanswered({
-                    message: `GET ${route} answered ${what} ${marks.name ?? marks.id ?? "with no id"} of this host's, which couldn't be read`,
-                  })
-                );
-              }
-
-              const seen = marks.id ?? JSON.stringify(record);
-
-              return skipped.has(seen)
-                ? Effect.succeed([])
-                : Effect.as(
-                    Effect.andThen(
-                      Effect.sync(() => skipped.add(seen)),
-                      Effect.logWarning(
-                        `smol cloud listed ${what} ${marks.name ?? marks.id ?? "with no id"} that this host can't read and isn't its own, so it skips it`
-                      )
-                    ),
-                    []
-                  );
-            }).pipe(Effect.map((kept) => kept.flat()))
+                return marks.name ?? marks.id ?? JSON.stringify(record);
+              },
+            })
         );
 
     const machine = json(MachineRecord);
@@ -317,7 +273,7 @@ export const make = (url: string, key: Redacted.Redacted) =>
     return {
       account: json(Account)("GET", "/v1/account", "read"),
       inUse: json(InUse)("GET", "/v1/capacity", "read"),
-      machines: listed(MachineRecord, "a machine", "/v1/machines"),
+      machines: listed(MachineRecord, "machine", "/v1/machines"),
       machine: (id: Handle) => machine("GET", `/v1/machines/${id}`, "read"),
       create: (creation: Creation) =>
         machine("POST", "/v1/machines", "change", {
@@ -348,7 +304,7 @@ export const make = (url: string, key: Redacted.Redacted) =>
         ),
       deleteMachine: (id: Handle) =>
         done("DELETE", `/v1/machines/${id}`, "change"),
-      checkpoints: listed(CheckpointRecord, "a checkpoint", "/v1/checkpoints"),
+      checkpoints: listed(CheckpointRecord, "checkpoint", "/v1/checkpoints"),
       checkpoint: (id: Handle) =>
         checkpoint("GET", `/v1/checkpoints/${id}`, "read"),
       capture: (id: Handle) =>

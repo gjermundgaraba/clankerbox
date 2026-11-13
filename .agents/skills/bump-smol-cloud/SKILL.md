@@ -83,7 +83,7 @@ Each is an assertion of the live suite, in the case named.
   provider answers 413 `payload_too_large`, `Failed to buffer the request
   body: length limit exceeded`. The adapter sizes stdin by its JSON encoding
   (`smol-cloud.ts`'s `bodyLength`) and stages what doesn't fit.
-- Each request is bounded by `answerWithin` in `platform/process.ts`: 30
+- Each request is bounded by `answerWithin` in `platform/provider-http.ts`: 30
   seconds for a read, a minute for a create, restore or delete, 5 minutes for
   what the provider answers once the machine settles.
 - A create answers 201 `stopped`; a start answers `started`.

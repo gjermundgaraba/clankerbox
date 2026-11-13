@@ -1,6 +1,7 @@
 import { RuleTester } from "vite-plus/lint/plugins-dev";
 import { describe, it } from "vite-plus/test";
 
+import repository from "../../../oxlint.config.ts";
 import {
   allowedImportsRule,
   noImpureRule,
@@ -19,24 +20,52 @@ const tester = new RuleTester({
   languageOptions: { sourceType: "module", parserOptions: { lang: "ts" } },
 });
 
-const domain = [
-  {
-    allow: [
-      "^\\./[a-z-]+\\.ts$",
-      "^effect$",
-      "^@gjermundgaraba/clankerbox-sdk$",
-    ],
-    because: "a domain file",
-  },
-];
+type Options =
+  NonNullable<
+    Parameters<typeof tester.run>[2]["valid"][number]
+  > extends infer Case
+    ? Case extends { readonly options?: infer O }
+      ? NonNullable<O>
+      : never
+    : never;
 
-const chart = [
-  {
-    allow: ["^xstate$"],
-    allowTypes: ["^\\./store\\.ts$"],
-    because: "a chart",
-  },
-];
+const isJson = (value: unknown): value is Options[number] => {
+  if (Array.isArray(value)) {
+    return value.every(isJson);
+  }
+
+  return typeof value === "object" && value !== null
+    ? Object.values(value).every(isJson)
+    : ["string", "number", "boolean"].includes(typeof value) || value === null;
+};
+
+const fencedInRepository = (glob: string): Options => {
+  const rule = repository.overrides?.find(({ files }) => files.includes(glob))
+    ?.rules?.["fence/allowed-imports"];
+
+  if (!Array.isArray(rule)) {
+    throw new TypeError(`oxlint.config.ts fences no imports of ${glob}`);
+  }
+
+  return rule.slice(1).filter(isJson);
+};
+
+const domain = fencedInRepository("apps/server/src/*.ts");
+
+const hostDomain = fencedInRepository("apps/host/src/*.ts");
+
+const chart = fencedInRepository("apps/server/src/chart.ts");
+
+const onBothDomains = <Case extends { readonly options?: Options }>(
+  each: Case
+): Case[] =>
+  each.options === domain ? [each, { ...each, options: hostDomain }] : [each];
+
+const platform = fencedInRepository("apps/host/src/platform/*.ts");
+
+const adapter = fencedInRepository("apps/host/src/platform/*/*.ts");
+
+const providerClient = fencedInRepository("apps/host/src/platform/boat/*.ts");
 
 tester.run("allowed-imports", allowedImportsRule, {
   valid: [
@@ -54,8 +83,48 @@ tester.run("allowed-imports", allowedImportsRule, {
       code: 'const sdk = await import("@gjermundgaraba/clankerbox-sdk");',
       options: domain,
     },
-  ],
+    { code: 'import { describe } from "./process.ts";', options: platform },
+    { code: 'import { describe } from "../process.ts";', options: adapter },
+    { code: 'import { Runtime } from "../../runtime.ts";', options: adapter },
+    {
+      code: 'import { within } from "../provider-http.ts";',
+      options: providerClient,
+    },
+    {
+      code: 'import { describe } from "../process.ts";',
+      options: providerClient,
+    },
+    {
+      code: 'import { Runtime } from "../../runtime.ts";',
+      options: providerClient,
+    },
+  ].flatMap(onBothDomains),
   invalid: [
+    {
+      code: 'import { within } from "./provider-http.ts";',
+      options: platform,
+      errors: [{ messageId: "notAllowed" }],
+    },
+    {
+      code: 'import { within } from "../provider-http.ts";',
+      options: adapter,
+      errors: [{ messageId: "notAllowed" }],
+    },
+    {
+      code: 'import { make } from "../tart/tart.ts";',
+      options: adapter,
+      errors: [{ messageId: "notAllowed" }],
+    },
+    {
+      code: 'import { tailnet } from "../tailscale.ts";',
+      options: providerClient,
+      errors: [{ messageId: "notAllowed" }],
+    },
+    {
+      code: 'import { make } from "../smol-cloud/api.ts";',
+      options: providerClient,
+      errors: [{ messageId: "notAllowed" }],
+    },
     {
       code: 'import { Store } from "./store.ts";',
       options: chart,
@@ -106,7 +175,7 @@ tester.run("allowed-imports", allowedImportsRule, {
       options: domain,
       errors: [{ messageId: "notAllowed" }],
     },
-  ],
+  ].flatMap(onBothDomains),
 });
 
 tester.run("no-impure", noImpureRule, {

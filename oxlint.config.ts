@@ -10,6 +10,11 @@ const adapterPackages = [
 const adapterBecause =
   "an adapter imports the domain files, platform's shared process.ts, and its own subfolder; never composition/ or another adapter";
 
+const providerClients = [
+  "apps/host/src/platform/boat/*.ts",
+  "apps/host/src/platform/smol-cloud/*.ts",
+];
+
 export default config({
   jsPlugins: [{ name: "fence", specifier: "./tools/lint-fence/src/index.ts" }],
   testBlocks: ["it", "it.effect", "it.live", "it.prop", "it.effect.prop"],
@@ -205,6 +210,7 @@ export default config({
       },
     },
     {
+      excludeFiles: providerClients,
       files: ["apps/host/src/platform/*/*.ts"],
       rules: {
         "fence/allowed-imports": [
@@ -217,6 +223,24 @@ export default config({
               ...adapterPackages,
             ],
             because: adapterBecause,
+          },
+        ],
+      },
+    },
+    {
+      files: providerClients,
+      rules: {
+        "fence/allowed-imports": [
+          "error",
+          {
+            allow: [
+              "^\\./[a-z-]+\\.ts$",
+              "^\\.\\./(process|provider-http)\\.ts$",
+              "^\\.\\./\\.\\./[a-z-]+\\.ts$",
+              ...adapterPackages,
+            ],
+            because:
+              "a provider's client imports the domain files, platform's shared process.ts, the rules provider-http.ts holds for a provider's HTTP API, and its own subfolder; never composition/ or another adapter",
           },
         ],
       },

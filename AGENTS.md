@@ -161,8 +161,15 @@ a box to one smolvm host in `one-per-box.ts`), `tart/`,
 `smol-cloud/` (smol cloud's API in `api.ts`, the SSH tunnel in `tunnel.ts`) and
 `boat/` (boat's REST API with its retries and headers in `api.ts`, the guest
 channel in `ssh.ts`, OpenSSH from the host pinned to the host key boat answers),
-each with its `RuntimeTraits` in its `traits.ts`, and what they share,
-`process.ts`. `tests/fake-smol-cloud.ts` and `tests/fake-boat.ts` serve each
+each with its `RuntimeTraits` in its `traits.ts`, and what they share:
+`process.ts`, a child process's run, and `provider-http.ts`, what the smol
+cloud and boat clients keep with their provider's API: each request's bound by
+what it asks, a gateway's 5xx and an unanswered request as a lost answer, a
+refusal that asks to be waited out waited as `Retry-After` says, within its
+clamp, and sent again, six sends in all, a change whose answer was lost read
+until its resource rests and sent again only when that doesn't hold it, three
+sends in all, and a list read one record at a time, which one of the host's
+own that it can't read fails. `tests/fake-smol-cloud.ts` and `tests/fake-boat.ts` serve each
 provider's API over loopback, for its adapter's tests and for the verify skill,
 and `tests/live/smol-cloud.test.ts` and `tests/live/boat.test.ts`, run by
 `vp run test:live` in `apps/host` with `SMOL_MACHINES_API_KEY` or
@@ -370,7 +377,8 @@ fence's tests, which compare no tagged errors, load none. None of the
   them; `apps/server/src/hosts.ts` alone calls a host; the server's `composition/` and `main.ts` never load the
   host package; the server's only adapter is the `Store`, and a host's adapters
   can't import `node:sqlite`; a host adapter imports domain files, its own
-  folder and `platform/`'s `process.ts`; the host contract
+  folder and `platform/`'s `process.ts`, and the boat and smol cloud clients
+  `provider-http.ts` too; the host contract
   imports `effect`, the SDK and effect-actions, but for `journal.ts`, which
   imports `effect` and its `http` alone, and the server's `composition/` takes
   only its journal; an app command imports only

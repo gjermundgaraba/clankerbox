@@ -1,19 +1,18 @@
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
-import {
-  Duration,
-  Effect,
-  FileSystem,
-  Option,
-  Redacted,
-  Result,
-  Schedule,
-  Schema,
-} from "effect";
+import { Effect, FileSystem, Option, Redacted, Result, Schema } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
-import type { HttpClientResponse } from "effect/http";
 
-import { timeoutFail } from "../../runtime.ts";
-import { answerWithin, describe } from "../process.ts";
+import { describe } from "../process.ts";
+import {
+  askedAgain,
+  fromGateway,
+  lost,
+  recordReader,
+  Unanswered,
+  waitedOut,
+  within,
+} from "../provider-http.ts";
+import type { Busy, Unreadable } from "../provider-http.ts";
 
 export const BoatType = Schema.Literals([
   "small",
@@ -91,6 +90,12 @@ const SavedList = Schema.Struct({ snapshots: Schema.Array(Schema.Unknown) });
 
 const Named = Schema.Struct({ name: Schema.String });
 
+const nameOf = (record: unknown): string =>
+  Option.match(Schema.decodeUnknownOption(Named)(record), {
+    onNone: () => JSON.stringify(record),
+    onSome: (named) => named.name,
+  });
+
 const SavedOne = Schema.Struct({ snapshot: SavedSnapshot });
 
 const Envelope = Schema.Struct({
@@ -113,23 +118,17 @@ export class Refused extends Schema.TaggedError<
   message: Schema.String,
 }) {}
 
-export class Unanswered extends Schema.TaggedError<
-  Unanswered,
-  { readonly brand: unique symbol }
->()("Unanswered", {
-  message: Schema.String,
-}) {}
+export type ApiError = Refused | Unanswered | Busy | Unreadable;
 
-export class Busy extends Schema.TaggedError<
-  Busy,
-  { readonly brand: unique symbol }
->()("Busy", {
-  message: Schema.String,
-}) {}
+/** The codes that mean the account has no room now, which moves a create to the next host. */
+export const noRoom: ReadonlySet<string> = new Set([
+  "limit_reached",
+  "rate_limited",
+  "out_of_capacity",
+  "no_ready_machine",
+]);
 
-export type ApiError = Refused | Unanswered | Busy;
-
-const waitedOut = new Set([
+const asksToWait = new Set([
   "IP_RATE_LIMIT_EXCEEDED",
   "sandbox_starting",
   "sandbox_stopping",
@@ -137,16 +136,12 @@ const waitedOut = new Set([
   "ssh_host_key_unavailable",
 ]);
 
-const longestWait = Duration.seconds(30);
-
 const lostOrBusy: ReadonlySet<ApiError["_tag"]> = new Set([
   "Unanswered",
   "Busy",
 ]);
 
 const busy: ReadonlySet<ApiError["_tag"]> = new Set(["Busy"]);
-
-const triesPerCall = 6;
 
 interface Answer<A> {
   readonly status: number;
@@ -182,15 +177,6 @@ const refusalOf = (status: number, body: unknown) => {
   });
 };
 
-const retryAfter = (response: HttpClientResponse.HttpClientResponse) => {
-  const seconds = Number(response.headers["retry-after"] ?? "1");
-
-  return Duration.min(
-    Duration.seconds(Number.isFinite(seconds) && seconds > 0 ? seconds : 1),
-    longestWait
-  );
-};
-
 const keyed = (path: string, body: Body, idempotencyKey: string) =>
   HttpClientRequest.post(path).pipe(
     HttpClientRequest.setHeader("Idempotency-Key", idempotencyKey),
@@ -211,8 +197,7 @@ const resumeOf = (id: string, type: BoatType | undefined) =>
  * boat's API, the routes the adapter uses. A call asks again after a refusal whose code says it
  * passes once waited out, and after a lost answer, but for a create, a fork, a resume onto another
  * type and a save, whose callers read what boat holds before they send one again. The saved-snapshot
- * list keeps each record it can read; one it can't fails the list only if `ours` claims its name,
- * and is skipped otherwise, logged the first time.
+ * list fails on a record it can't read only if `ours` claims its name.
  */
 export const make = (settings: Settings) =>
   Effect.gen(function* () {
@@ -231,7 +216,6 @@ export const make = (settings: Settings) =>
 
     const exchange = (request: HttpClientRequest.HttpClientRequest) => {
       const what = `${request.method} ${request.url}`;
-      const within = answerWithin[request.method === "GET" ? "read" : "change"];
 
       return http
         .execute(
@@ -248,16 +232,8 @@ export const make = (settings: Settings) =>
               body,
             }))
           ),
-          Effect.mapError(
-            (error) => new Unanswered({ message: `${what}: ${error.message}` })
-          ),
-          timeoutFail(
-            within,
-            () =>
-              new Unanswered({
-                message: `${what}: no answer within ${Duration.format(within)}`,
-              })
-          )
+          Effect.mapError(lost(what)),
+          within(request.method === "GET" ? "read" : "change", what)
         );
     };
 
@@ -275,21 +251,18 @@ export const make = (settings: Settings) =>
             Result.getOrUndefined(body)
           );
 
-          if (
-            response.status >= 500 &&
-            refused.code === `http_${response.status}`
-          ) {
-            return yield* new Unanswered({
-              message: `${what}: HTTP ${response.status} with no answer of boat's, as a gateway gives`,
-            });
+          const gateway = fromGateway(
+            what,
+            response.status,
+            refused.code !== `http_${response.status}`
+          );
+
+          if (gateway !== undefined) {
+            return yield* gateway;
           }
 
-          if (waitedOut.has(refused.code)) {
-            yield* Effect.sleep(retryAfter(response));
-
-            return yield* new Busy({
-              message: `${what}: ${refused.code}, waited out`,
-            });
+          if (asksToWait.has(refused.code)) {
+            return yield* waitedOut(what, response, refused.code);
           }
 
           return yield* refused;
@@ -315,21 +288,14 @@ export const make = (settings: Settings) =>
     const call = <A>(
       request: HttpClientRequest.HttpClientRequest,
       decode: Schema.Decoder<A>,
-      askedAgain: ReadonlySet<ApiError["_tag"]> = lostOrBusy
-    ) =>
-      once(request, decode).pipe(
-        Effect.retry({
-          while: (error) => askedAgain.has(error._tag),
-          schedule: Schedule.exponential(Duration.millis(250)),
-          times: triesPerCall - 1,
-        })
-      );
+      asked: ReadonlySet<ApiError["_tag"]> = lostOrBusy
+    ) => askedAgain(asked)(once(request, decode));
 
     const done = <A>(
       request: HttpClientRequest.HttpClientRequest,
       decode: Schema.Decoder<A>,
-      askedAgain: ReadonlySet<ApiError["_tag"]> = lostOrBusy
-    ) => Effect.map(call(request, decode, askedAgain), ({ body }) => body);
+      asked: ReadonlySet<ApiError["_tag"]> = lostOrBusy
+    ) => Effect.map(call(request, decode, asked), ({ body }) => body);
 
     const found = <A>(
       request: HttpClientRequest.HttpClientRequest,
@@ -342,44 +308,7 @@ export const make = (settings: Settings) =>
         )
       );
 
-    const skipped = new Set<string>();
-
-    const readSnapshot = (
-      record: unknown,
-      ours: (name: string) => boolean
-    ): Effect.Effect<readonly SavedSnapshot[], Unanswered> => {
-      const read = Schema.decodeUnknownOption(SavedSnapshot)(record);
-
-      if (Option.isSome(read)) {
-        return Effect.succeed([read.value]);
-      }
-
-      const name = Option.match(Schema.decodeUnknownOption(Named)(record), {
-        onNone: () => JSON.stringify(record),
-        onSome: (named) => named.name,
-      });
-
-      if (ours(name)) {
-        return Effect.fail(
-          new Unanswered({
-            message: `GET /saved-snapshots answered snapshot ${name}, which carries this adapter's mark and couldn't be read`,
-          })
-        );
-      }
-
-      if (skipped.has(name)) {
-        return Effect.succeed([]);
-      }
-
-      skipped.add(name);
-
-      return Effect.as(
-        Effect.logWarning(
-          `boat's saved snapshot ${name} couldn't be read, and isn't this adapter's, so its lists skip it`
-        ),
-        []
-      );
-    };
+    const readRecords = recordReader();
 
     const list = (labels: Readonly<Record<string, string>>) =>
       Effect.gen(function* () {
@@ -483,10 +412,13 @@ export const make = (settings: Settings) =>
             SavedList
           ),
           ({ snapshots }) =>
-            Effect.map(
-              Effect.forEach(snapshots, (record) => readSnapshot(record, ours)),
-              (read) => read.flat()
-            )
+            readRecords(snapshots, {
+              call: "GET /saved-snapshots",
+              what: "saved snapshot",
+              read: Schema.decodeUnknownOption(SavedSnapshot),
+              ours: (record) => ours(nameOf(record)),
+              label: nameOf,
+            })
         ),
       unsave: (name: string) =>
         Effect.asVoid(

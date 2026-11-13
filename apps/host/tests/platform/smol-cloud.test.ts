@@ -25,6 +25,7 @@ import { expect } from "vite-plus/test";
 
 import { hostLayer } from "../../src/composition/host.ts";
 import { Operations } from "../../src/operations.ts";
+import { Unanswered } from "../../src/platform/provider-http.ts";
 import * as Api from "../../src/platform/smol-cloud/api.ts";
 import * as SmolCloud from "../../src/platform/smol-cloud/smol-cloud.ts";
 import { Handle, Runtime } from "../../src/runtime.ts";
@@ -189,9 +190,7 @@ const flaky = Effect.gen(function* () {
           if (failing.deletes > 0) {
             failing.deletes -= 1;
 
-            return Effect.fail(
-              new Api.Unanswered({ message: "connection reset" })
-            );
+            return Effect.fail(new Unanswered({ message: "connection reset" }));
           }
 
           return api.deleteCheckpoint(id);
@@ -760,7 +759,7 @@ describe("the smol cloud runtime over an account without a card", () => {
           ]);
           expect(
             lines.filter((line) =>
-              line.includes("can't read and isn't its own")
+              line.includes("couldn't be read and isn't this host's")
             )
           ).toHaveLength(1);
 

@@ -40,7 +40,7 @@ import type {
 } from "../../runtime.ts";
 import { KeyedApiUrl } from "../../settings.ts";
 import type { HostSettings } from "../../settings.ts";
-import { answerWithin } from "../process.ts";
+import { triesAfterLoss, untilRest } from "../provider-http.ts";
 import * as Api from "./api.ts";
 import type { ApiError, Sandbox, SavedSnapshot, SshKey } from "./api.ts";
 import * as Ssh from "./ssh.ts";
@@ -107,13 +107,6 @@ const stateOf = (sandbox: Sandbox | undefined): MachineState => {
     : "unknown";
 };
 
-const capacityCodes = new Set([
-  "limit_reached",
-  "rate_limited",
-  "out_of_capacity",
-  "no_ready_machine",
-]);
-
 const settled = new Set(["ready", "failed"]);
 
 const isType = Schema.is(Api.BoatType);
@@ -122,7 +115,7 @@ const pollEvery = Duration.millis(500);
 
 const pollFor = Duration.minutes(10);
 
-const triesAfterLoss = 3;
+const listedWithin = Duration.minutes(1);
 
 const internal =
   (what: string) =>
@@ -134,7 +127,7 @@ const internal =
 const failure =
   (what: string) =>
   (error: ApiError): Internal | Capacity =>
-    error._tag === "Refused" && capacityCodes.has(error.code)
+    error._tag === "Refused" && Api.noRoom.has(error.code)
       ? new Capacity({
           message: `boat refused ${what}: ${error.code}: ${error.message}`,
         })
@@ -243,8 +236,7 @@ export const make = (
       done: (sandbox: Sandbox | undefined) => boolean,
       what: string
     ) =>
-      read(machine).pipe(
-        Effect.repeat({ until: done, schedule: Schedule.spaced(pollEvery) }),
+      untilRest(read(machine), done, pollEvery).pipe(
         timeoutFail(
           pollFor,
           () =>
@@ -392,7 +384,7 @@ export const make = (
           until: (found) => found !== undefined,
           schedule: Schedule.spaced(pollEvery),
         }),
-        timeoutFail(answerWithin.change, () => inProgress),
+        timeoutFail(listedWithin, () => inProgress),
         Effect.filterOrFail(
           (found): found is Sandbox => found !== undefined,
           () => inProgress
