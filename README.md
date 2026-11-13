@@ -375,7 +375,7 @@ WantedBy=multi-user.target
 
 VMs run in their own scopes, so restarting the unit leaves them running.
 
-A host's log holds a line for each step it ends, with its operation ID, and a warning or error for what failed or went on despite a failure, but none for a request it answered: the control plane reads and polls each host every few seconds. A request that fails with a 5xx logs an error with its cause. `--log-level debug` on `ExecStart` logs every response too, with its method, path and status.
+A host's log holds one info line for each step it ends, done, cancelled or failed with its error's first line, annotated with its `operation`, its `step` and its machine or checkpoint, as the operation's report carries a setup's output; an error for a step that died, with its cause; a warning for what a host went on past, such as a leftover it couldn't remove; and no line for a request it answered: the control plane reads and polls each host every few seconds. A request that fails with a 5xx logs an error with its cause. `--log-level debug` on `ExecStart` logs every response too, with its method, path and status.
 
 **The control plane** runs in the same kind of unit, as any user that owns its `stateDir`, with `ExecStart=/opt/clankerbox/<version>/bin/clankerbox-server --config /etc/clankerbox/server.json`. It runs no VMs and can share a box with a host, or sit on anything small on the tailnet. Keep a backup of its `stateDir`: with the file gone, the VMs run on with nothing that knows them.
 

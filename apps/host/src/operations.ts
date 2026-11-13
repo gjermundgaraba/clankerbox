@@ -44,6 +44,7 @@ import {
   Layer,
   Option,
   Path,
+  References,
   Semaphore,
 } from "effect";
 import type { Scope } from "effect";
@@ -218,6 +219,14 @@ interface Entry {
   readonly progress: Progress;
 }
 
+const oneLine = ({ message }: HostError): string => {
+  const [first = "", ...rest] = message.split("\n");
+
+  return rest.length === 0
+    ? first
+    : `${first} (${rest.length} more lines in the operation's report)`;
+};
+
 const ended = (
   progress: Progress,
   id: string,
@@ -246,11 +255,22 @@ const ended = (
     progress.error = error;
 
     yield* Cause.hasDies(exit.cause)
-      ? Effect.logError(
-          `${name} died, operation ${id}:\n${Cause.pretty(exit.cause)}`
-        )
-      : Effect.logInfo(`${name} failed, operation ${id}: ${error.message}`);
+      ? Effect.logError(`${name} died, operation ${id}`, exit.cause)
+      : Effect.logInfo(`${name} failed, operation ${id}: ${oneLine(error)}`);
   });
+
+const apartFromItsRequest = <E>(
+  { id, step, scope }: Operation,
+  effect: Effect.Effect<void, E>
+): Effect.Effect<void, E> =>
+  effect.pipe(
+    Effect.provideService(References.CurrentLogAnnotations, {
+      operation: id,
+      step: step._tag,
+      [scope.resource]: scope.name,
+    }),
+    Effect.provideService(References.CurrentLogSpans, [])
+  );
 
 type Make = Extract<Step, { readonly _tag: "make" }>;
 
@@ -1124,14 +1144,17 @@ export const make = (
         return yield* Effect.uninterruptible(
           Effect.gen(function* () {
             const fiber = yield* Effect.forkIn(
-              Effect.onExit(
-                before === undefined
-                  ? work
-                  : Effect.andThen(
-                      Effect.uninterruptible(forgetting(before)),
-                      work
-                    ),
-                (exit) => ended(progress, id, name, exit)
+              apartFromItsRequest(
+                operation,
+                Effect.onExit(
+                  before === undefined
+                    ? work
+                    : Effect.andThen(
+                        Effect.uninterruptible(forgetting(before)),
+                        work
+                      ),
+                  (exit) => ended(progress, id, name, exit)
+                )
               ),
               hostScope
             );

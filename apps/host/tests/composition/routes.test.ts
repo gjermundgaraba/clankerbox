@@ -12,7 +12,7 @@ import {
   version,
   versionHeader,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Exit, Fiber, Logger, Schema } from "effect";
+import { Effect, Exit, Fiber, Logger, References, Schema } from "effect";
 import { expect } from "vite-plus/test";
 
 import { accepts, holding, hostOn, image, presets } from "../support.ts";
@@ -291,6 +291,56 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           expect.stringMatching(
             /^Error a request answered Internal .*read died/su
           ),
+        ]);
+      })
+  );
+
+  it.effect(
+    "a step's journal line holds the step's own fields alone, on one line, and leaves the output a failure carries to its report",
+    () =>
+      Effect.gen(function* () {
+        const logged: Array<{
+          readonly line: string;
+          readonly annotations: string;
+          readonly spans: number;
+        }> = [];
+
+        const { url, fake } = yield* serve({
+          logger: Logger.make(({ message, fiber }) =>
+            logged.push({
+              line: [message].flat().join(" "),
+              annotations: JSON.stringify(
+                fiber.getRef(References.CurrentLogAnnotations)
+              ),
+              spans: fiber.getRef(References.CurrentLogSpans).length,
+            })
+          ),
+        });
+
+        fake.failNext(
+          "create",
+          new Internal({
+            message: "setup exited 1; its last output:\nTOKEN=one\ntwo",
+          })
+        );
+
+        yield* deliver(url, made("op-1"));
+
+        const { error } = yield* finished(url, "op-1");
+
+        const step = logged.filter(({ line }) => line.includes("op-1"));
+
+        expect(error?.message).toContain("TOKEN=one\ntwo");
+        expect(step).toStrictEqual([
+          {
+            line: "make machine dev failed, operation op-1: setup exited 1; its last output: (2 more lines in the operation's report)",
+            annotations: JSON.stringify({
+              operation: "op-1",
+              step: "make",
+              machine: "dev",
+            }),
+            spans: 0,
+          },
         ]);
       })
   );

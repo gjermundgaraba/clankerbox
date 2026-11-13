@@ -29,6 +29,7 @@ import {
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import {
+  Cause,
   Context,
   Deferred,
   Duration,
@@ -274,8 +275,13 @@ const counted = (calls: readonly string[], call: string) =>
   calls.filter((seen) => seen === call).length;
 
 const capturing = (lines: string[]) =>
-  Logger.make(({ message }) => {
-    lines.push(String(message));
+  Logger.make(({ message, cause }) => {
+    lines.push(
+      [
+        String(message),
+        ...(cause.reasons.length === 0 ? [] : [Cause.pretty(cause)]),
+      ].join("\n")
+    );
   });
 
 const errorOf = (report: Report) => [report.status, report.error?._tag];
