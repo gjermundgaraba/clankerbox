@@ -35,6 +35,7 @@ import {
   runCommand,
   runSetup,
 } from "../../src/guest.ts";
+import * as BoatApi from "../../src/platform/boat/api.ts";
 import { BoatSettings, image, make } from "../../src/platform/boat/boat.ts";
 import { types } from "../../src/platform/boat/traits.ts";
 import { Runtime } from "../../src/runtime.ts";
@@ -998,6 +999,84 @@ const stalled = (stalls: string) =>
 
     return reply({ sandboxes: [], pageInfo: { nextCursor: null } });
   });
+
+const pagesAtMost = 20;
+
+const paging = (cursors: ReadonlyArray<string | null>) => {
+  let page = 0;
+
+  return {
+    pages: () => page,
+    client: HttpClient.make((request) =>
+      Effect.suspend(() => {
+        const nextCursor = cursors[Math.min(page, cursors.length - 1)];
+
+        page += 1;
+
+        return page > pagesAtMost
+          ? Effect.die(`the list asked for page ${page}`)
+          : Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                Response.json({ sandboxes: [], pageInfo: { nextCursor } })
+              )
+            );
+      })
+    ),
+  };
+};
+
+const listedBy = (client: HttpClient.HttpClient) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const dir = yield* scratch;
+      const apiKeyFile = path.join(dir, "key");
+
+      writeFileSync(apiKeyFile, "fake\n", { mode: 0o600 });
+
+      const api = yield* BoatApi.make({
+        api: "https://boat.test/api/v1",
+        apiKeyFile,
+      }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+
+      return yield* Effect.exit(api.sandboxes({ "cbx-host": "boat" }));
+    }).pipe(Effect.provide(NodeServices.layer))
+  );
+
+describe("boat's sandbox list", () => {
+  it.effect(
+    "fails as unanswered on a cursor boat answered before, and asks no page again",
+    () =>
+      Effect.gen(function* () {
+        for (const [cursors, asked] of [
+          [["same"], 2],
+          [["a", "b", "a"], 3],
+        ] as const) {
+          const { client, pages } = paging(cursors);
+          const listed = yield* listedBy(client);
+
+          expect(
+            Exit.isFailure(listed) && Cause.squash(listed.cause)
+          ).toMatchObject({ _tag: "Unanswered" });
+          expect(pages(), cursors.join(" ")).toBe(asked);
+        }
+      })
+  );
+
+  it.effect("ends on a null or an empty cursor", () =>
+    Effect.gen(function* () {
+      for (const cursors of [
+        ["a", null],
+        ["a", ""],
+      ]) {
+        const { client, pages } = paging(cursors);
+
+        expect(Exit.isSuccess(yield* listedBy(client))).toBe(true);
+        expect(pages()).toBe(2);
+      }
+    })
+  );
+});
 
 describe("a boat request's bound", () => {
   it.effect(

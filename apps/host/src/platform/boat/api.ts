@@ -313,6 +313,7 @@ export const make = (settings: Settings) =>
     const list = (labels: Readonly<Record<string, string>>) =>
       Effect.gen(function* () {
         const sandboxes: Sandbox[] = [];
+        const seen = new Set<string>();
         let cursor: string | undefined;
 
         do {
@@ -330,7 +331,19 @@ export const make = (settings: Settings) =>
           );
 
           sandboxes.push(...page.sandboxes);
-          cursor = page.pageInfo?.nextCursor ?? undefined;
+          const next = page.pageInfo?.nextCursor ?? "";
+
+          cursor = next === "" ? undefined : next;
+
+          if (cursor !== undefined && seen.has(cursor)) {
+            return yield* new Unanswered({
+              message: `GET /sandboxes answered the page cursor ${cursor} twice, so its list has no end`,
+            });
+          }
+
+          if (cursor !== undefined) {
+            seen.add(cursor);
+          }
         } while (cursor !== undefined);
 
         return sandboxes;

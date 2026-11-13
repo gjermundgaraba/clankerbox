@@ -56,7 +56,8 @@ Each line names where the code holds it and how to check it again.
 - Routes and bodies: `POST /sandboxes` and `POST /sandboxes/{id}/fork` with
   `Idempotency-Key`, `noEnv: true`, `monitoring: false`, `ttlSeconds: null`;
   `GET /sandboxes/{id}` answers `{sandbox}`; `GET /sandboxes?label=k=v`
-  pages by `limit`, `cursor` and `pageInfo.nextCursor`; `POST .../resume {type?, ttlSeconds}`,
+  pages by `limit`, `cursor` and `pageInfo.nextCursor`, null or empty on the
+  last page, and a cursor answered twice fails the list as unanswered; `POST .../resume {type?, ttlSeconds}`,
   `POST .../stop`, `DELETE /sandboxes/{id}` with `X-Ascii-Confirm-Delete:
   <id>`; `POST .../sshkey {key}` answers `hostKey`, `machineIp` and
   `sshEndpoint`; `POST /saved-snapshots {sandboxId, name}`,
