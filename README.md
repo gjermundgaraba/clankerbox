@@ -50,7 +50,7 @@ The npm packages are `@gjermundgaraba/clankerbox` (the CLI), `@gjermundgaraba/cl
 
 ## Install
 
-Each package needs Node 26.13 or later, and bundles everything else it runs.
+Each package needs Node 26.13 or later. The CLI bundles everything it runs. The control plane and the host bundle the SDK and the host contract, and install `effect`, `@effect/platform-node` and `@gjermundgaraba/effect-actions` from npm, the control plane `xstate` too, with what those depend on. The SDK takes `effect`, `@effect/platform-node` and `@gjermundgaraba/effect-actions` as peers, from the program that uses it.
 
 ```sh
 npm install --global @gjermundgaraba/clankerbox          # where you run commands
