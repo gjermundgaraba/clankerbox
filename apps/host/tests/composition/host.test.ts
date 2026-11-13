@@ -1,7 +1,11 @@
+import path from "node:path";
+
+import { Handle } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { Effect, Layer, Logger } from "effect";
+import { version, versionHeader } from "@gjermundgaraba/clankerbox-sdk";
+import { read, scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import { Duration, Effect, Fiber, Layer, Logger, Schedule } from "effect";
 import { expect } from "vite-plus/test";
 
 import { hostLayer } from "../../src/composition/host.ts";
@@ -57,6 +61,64 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(report.status).toBe("absent");
         expect(report.boot).toBe(second.operations.boot);
         expect(report.boot).not.toBe(first.operations.boot);
+      })
+  );
+
+  it.effect(
+    "a host told to stop ends an exec still running at once, rather than wait for it",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        const host = yield* started({ dir });
+        const handle = Handle.make("held-dev");
+
+        const machine = {
+          name: "dev",
+          instance: "1".repeat(32),
+          cpu: 1,
+          ramMib: 1024,
+          diskGib: 10,
+          handle,
+        };
+
+        const began = path.join(dir, "began");
+
+        host.fake.hold({
+          state: "running",
+          name: machine.name,
+          root: "",
+          instance: machine.instance,
+          handle,
+        });
+
+        const exec = yield* Effect.forkChild(
+          Effect.promise(
+            async () =>
+              await fetch(`${host.url}/host/execMachine`, {
+                method: "POST",
+                headers: {
+                  "content-type": "application/json",
+                  [versionHeader]: version,
+                },
+                body: JSON.stringify({
+                  machine,
+                  argv: ["/bin/sh", "-c", `: >"${began}"; sleep 30`],
+                }),
+              }).then(
+                (response) => response.status,
+                () => 0
+              )
+          )
+        );
+
+        yield* read(began).pipe(
+          Effect.retry(Schedule.spaced(Duration.millis(20)))
+        );
+
+        const [took] = yield* Effect.timed(host.dispose);
+
+        expect(Duration.toMillis(took)).toBeLessThan(1000);
+        expect(yield* Fiber.join(exec)).not.toBe(200);
       })
   );
 

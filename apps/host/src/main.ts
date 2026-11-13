@@ -10,7 +10,7 @@ import { Effect, Layer } from "effect";
 import { Command, Flag } from "effect/cli";
 
 import { loadConfig } from "./composition/config.ts";
-import { hostLayer } from "./composition/host.ts";
+import { hostLayer, listening } from "./composition/host.ts";
 import { runtimeLayer } from "./composition/runtimes.ts";
 
 const run = (file: string) =>
@@ -21,10 +21,7 @@ const run = (file: string) =>
       hostLayer(
         config,
         runtimeLayer(config.runtime, config),
-        NodeHttpServer.layer(createServer, {
-          host: config.listen.address,
-          port: config.listen.port,
-        })
+        NodeHttpServer.layer(createServer, listening(config))
       )
     );
   });

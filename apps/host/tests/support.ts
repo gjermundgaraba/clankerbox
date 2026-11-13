@@ -12,7 +12,7 @@ import { HttpClient, HttpServer } from "effect/http";
 import { expect } from "vite-plus/test";
 
 import { BuildStore } from "../src/builds.ts";
-import { hostLayer } from "../src/composition/host.ts";
+import { hostLayer, listening } from "../src/composition/host.ts";
 import type { PortRange } from "../src/machine-ports.ts";
 import { Operations } from "../src/operations.ts";
 import type { Interface as OperationsInterface } from "../src/operations.ts";
@@ -53,16 +53,11 @@ export const hostConfig = (
   machinePorts,
 });
 
-/**
- * A test host's server, which ends as a kill does: it cuts the requests still open, as a control
- * plane's wait on a step, instead of answering them before it closes.
- */
 export const loopbackServer = (port = 0) =>
-  NodeHttpServer.layer(createServer, {
-    host: "127.0.0.1",
-    port,
-    disablePreemptiveShutdown: true,
-  });
+  NodeHttpServer.layer(
+    createServer,
+    listening({ listen: { address: "127.0.0.1", port } })
+  );
 
 export interface TestHost {
   readonly id: string;

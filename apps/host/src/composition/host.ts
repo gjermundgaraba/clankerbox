@@ -31,6 +31,19 @@ export type ServerLayer = Layer.Layer<
   HttpServerError.ServeError
 >;
 
+/**
+ * How a host's Node server listens: on its config's address, and stopping at once, cutting the
+ * requests still open, as its process's end would. An exec runs only as long as its request, and a
+ * control plane's wait on a step asks the host again once it is back, so neither is owed the wait
+ * Node gives them by default.
+ */
+export const listening = ({ listen }: Pick<HostSettings, "listen">) =>
+  ({
+    host: listen.address,
+    port: listen.port,
+    disablePreemptiveShutdown: true,
+  }) as const;
+
 export interface HostLayerConfig extends HostSettings {
   readonly tailnet?: Tailscale.TailnetSettings | undefined;
   readonly builds?: S3.BuildsSettings | undefined;
