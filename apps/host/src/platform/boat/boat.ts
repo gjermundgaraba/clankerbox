@@ -488,44 +488,91 @@ export const make = (
     const retyped = (
       machine: Target,
       type: Api.BoatType
-    ): Effect.Effect<void, Internal | Unsizable> =>
+    ): Effect.Effect<void, Internal> =>
       Effect.gen(function* () {
-        const sandbox = yield* read(machine);
-        const state = sandbox?.state ?? "missing";
+        const untaken: string[] = [];
+        let taken = false;
 
-        if (state === "archived" && sandbox?.type === type) {
-          return;
+        while (true) {
+          const sandbox = yield* read(machine);
+          const held = heldOf(sandbox);
+          const now = sandbox?.type ?? "none";
+
+          if (
+            taken &&
+            (held === "running" || held === "stopped") &&
+            now !== type
+          ) {
+            return yield* new Internal({
+              message: `boat took the resize of ${machine.name} to ${type}, and resumed it at ${now}`,
+            });
+          }
+
+          switch (held) {
+            case "gone":
+            case "cancelled": {
+              return yield* new Internal({
+                message: `boat holds no machine ${machine.name} to resize`,
+              });
+            }
+
+            case "error": {
+              return yield* new Internal({
+                message: `boat holds ${machine.name} in error, which it resizes from no snapshot: start it to recover it, or delete it`,
+              });
+            }
+
+            case "moving": {
+              yield* Effect.sleep(pollEvery);
+              break;
+            }
+
+            case "running": {
+              yield* stopped(machine);
+              break;
+            }
+
+            case "stopped": {
+              if (now === type) {
+                return;
+              }
+
+              if (untaken.length === triesAfterLoss) {
+                return yield* new Internal({
+                  message: `boat took none of ${triesAfterLoss} resizes of ${machine.name} to ${type}, and holds it at ${now}: ${untaken.join("; ")}`,
+                });
+              }
+
+              pins.delete(machine.handle);
+
+              const unsent = yield* api.retype(machine.handle, type).pipe(
+                Effect.as(undefined),
+                Effect.catchTag("Unanswered", () =>
+                  Effect.succeed("its answer was lost")
+                ),
+                Effect.catchIf(
+                  (error): error is Api.Refused =>
+                    error._tag === "Refused" &&
+                    error.code === "sandbox_running_stop_first",
+                  (error) =>
+                    Effect.succeed(
+                      `boat refused it as running while it read archived, ${error.code}: ${error.message}`
+                    )
+                ),
+                Effect.mapError(internal(`couldn't resize ${machine.name}`))
+              );
+
+              taken = unsent === undefined;
+
+              if (unsent !== undefined) {
+                untaken.push(unsent);
+                yield* Effect.sleep(pollEvery);
+              }
+
+              break;
+            }
+          }
         }
-
-        if (state === "archived") {
-          yield* api.retype(machine.handle, type).pipe(
-            Effect.catchTag("Unanswered", () => Effect.sleep(pollEvery)),
-            Effect.catchIf(
-              (error) =>
-                error._tag === "Refused" &&
-                error.code === "sandbox_running_stop_first",
-              () => Effect.void
-            ),
-            Effect.mapError((error) =>
-              error._tag === "Refused" && error.code === "type_too_small"
-                ? new Unsizable({
-                    message: `boat keeps ${machine.name} off ${type}: ${error.message}`,
-                  })
-                : internal(`couldn't resize ${machine.name}`)(error)
-            )
-          );
-          pins.delete(machine.handle);
-        } else if (running.has(state)) {
-          yield* stopped(machine);
-        } else if (heldOf(sandbox) === "moving") {
-          yield* Effect.sleep(pollEvery);
-        } else {
-          return yield* new Internal({
-            message: `boat holds machine ${machine.name} ${state}, and can't resize it from there`,
-          });
-        }
-
-        return yield* retyped(machine, type);
       });
 
     return {

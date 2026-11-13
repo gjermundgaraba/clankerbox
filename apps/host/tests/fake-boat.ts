@@ -518,7 +518,7 @@ export const fakeBoat = (
     const calls: string[] = [];
     const requests: FakeRequest[] = [];
     const dropping = new Set<BoatCall>();
-    const losing = new Set<BoatCall>();
+    const losing = new Map<BoatCall, number>();
     const pageSize = options.pageSize ?? 200;
     let savingLate = false;
     let listsLagging = 0;
@@ -1277,7 +1277,8 @@ export const fakeBoat = (
         return;
       }
 
-      if (call !== undefined && losing.delete(call)) {
+      if (call !== undefined && (losing.get(call) ?? 0) > 0) {
+        losing.set(call, (losing.get(call) ?? 0) - 1);
         const lost = `${method} ${url.pathname} lost`;
 
         calls.push(lost);
@@ -1467,9 +1468,9 @@ export const fakeBoat = (
         await save(theirs.id, `cbx-${instance}`);
       }),
       dropAnswer,
-      loseRequest: (call: BoatCall) =>
+      loseRequest: (call: BoatCall, times = 1) =>
         Effect.sync(() => {
-          losing.add(call);
+          losing.set(call, times);
         }),
       landSaveDuringDelete: Effect.sync(() => {
         savingLate = true;
@@ -1545,7 +1546,7 @@ export interface FakeBoat {
   readonly faults: Faults;
   readonly unmarked: Effect.Effect<void>;
   readonly dropAnswer: (call: BoatCall) => Effect.Effect<void>;
-  readonly loseRequest: (call: BoatCall) => Effect.Effect<void>;
+  readonly loseRequest: (call: BoatCall, times?: number) => Effect.Effect<void>;
   readonly landSaveDuringDelete: Effect.Effect<void>;
   readonly listsLag: (times: number) => Effect.Effect<void>;
   readonly gatewayOnce: (call: BoatCall) => Effect.Effect<void>;

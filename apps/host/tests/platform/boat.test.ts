@@ -616,6 +616,74 @@ describe("the boat runtime over fake boat", () => {
   );
 
   it.live(
+    "a resize boat takes but resumes at the old type fails naming both, at one start",
+    () => {
+      let revert: (() => void) | undefined;
+
+      return onBoat(
+        ({ boat, runtime }) =>
+          Effect.gen(function* () {
+            const machine = yield* made(runtime, "dev");
+
+            yield* runtime.stop(machine);
+            revert = () => {
+              const sandbox = boat.sandboxes.get(machine.handle);
+
+              if (sandbox !== undefined) {
+                sandbox.type = "small";
+              }
+            };
+
+            const from = boat.starts();
+
+            const failed = yield* Effect.flip(
+              runtime.resize(machine, types.default, false)
+            );
+
+            expect(failed).toMatchObject({ _tag: "Internal" });
+            expect(failed.message).toContain("to default");
+            expect(failed.message).toContain("at small");
+            expect(boat.starts() - from).toBe(1);
+          }),
+        {
+          onCall: (line) => {
+            if (line.includes("/resume")) {
+              revert?.();
+            }
+          },
+        }
+      );
+    },
+    30_000
+  );
+
+  it.live(
+    "a resize whose every request is lost fails after three, at no start",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          const machine = yield* made(runtime, "dev");
+
+          yield* runtime.stop(machine);
+          yield* boat.loseRequest("resume", 10);
+
+          const from = boat.starts();
+
+          const failed = yield* Effect.flip(
+            runtime.resize(machine, types.default, false)
+          );
+
+          expect(failed.message).toContain("none of 3 resizes");
+          expect(
+            boat.calls.filter((line) => line.includes("/resume"))
+          ).toHaveLength(3);
+          expect(boat.starts() - from).toBe(0);
+        })
+      ),
+    30_000
+  );
+
+  it.live(
     "a save that lands while its sandbox is deleted is deleted with it",
     () =>
       onBoat(({ boat, runtime }) =>

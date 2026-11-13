@@ -100,13 +100,20 @@ Each line names where the code holds it and how to check it again.
   `no_ready_machine` mean no room, which moves a create to the next host;
   `IP_RATE_LIMIT_EXCEEDED`, `sandbox_starting`, `sandbox_stopping`,
   `save_in_progress` and `ssh_host_key_unavailable` are waited out by
-  `Retry-After`; `type_too_small` refuses a resume onto a type whose disk is
-  smaller than the data, which a resize answers `Unsizable`. Neither
-  `type_too_small` nor a `/sshkey` 503 was provoked on the operator's
-  account: a sandbox holding 85G of written data on `large` resumed onto
-  `small`, and `/sshkey` answered 200 right after a create's answer.
-  (`boat.ts`'s `capacityCodes` and `retyped`, `api.ts`'s `waitedOut`; grep
-  the YAML for each code.)
+  `Retry-After`. The YAML says `type_too_small` refuses a resume onto a
+  type whose disk is smaller than the data, but the operator's account took
+  a sandbox holding 85G of written data on `large` onto `small`, so the
+  adapter maps no such refusal: one fails the resize `Internal` with boat's
+  code. A `/sshkey` 503 was never provoked either: `/sshkey` answered 200
+  right after a create's answer. (`boat.ts`'s `capacityCodes`, `api.ts`'s
+  `waitedOut`; grep the YAML for each code.)
+- A resize sends its typed resume to an archived sandbox only: once boat
+  takes it, the sandbox comes back at the new type or the resize fails
+  naming both types, as each resume counts a start; a lost one is read back
+  and sent again at the next poll, and so is one boat refuses
+  `sandbox_running_stop_first` while it reads the sandbox archived, three
+  untaken sends in all, never provoked on the account. (`boat.ts`'s
+  `retyped`; the fake's `loseRequest` and the resize tests.)
 - The states: `ready`, `idle` and `running` run; `archived` is stopped;
   `error`, a machine boat lost or failed to start, is unbilled, read as
   stopped, ends a stop at once and fails a start; `cancelled`, a create or
