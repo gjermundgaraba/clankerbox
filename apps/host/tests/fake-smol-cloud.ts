@@ -66,6 +66,7 @@ export interface FakeFaults extends Faults {
 export interface FakeSmolCloud {
   readonly url: string;
   readonly faults: FakeFaults;
+  readonly holdCapture: Effect.Effect<void>;
   readonly calls: readonly string[];
   readonly machines: ReadonlyMap<string, FakeMachine>;
   readonly checkpoints: ReadonlyMap<string, FakeCheckpoint>;
@@ -860,21 +861,6 @@ export const fakeSmolCloud = (
         }),
     };
 
-    const controlled = (fault: string) =>
-      Effect.gen(function* () {
-        const [what = "", argument = ""] = fault.split("/");
-
-        if (what === "hold-capture") {
-          holdingCapture = true;
-        } else if (what === "land-late") {
-          yield* faults.landLate(Duration.millis(Number(argument)));
-        } else {
-          return problem(404, "not_found", `no fault ${fault}`);
-        }
-
-        return answer(204);
-      });
-
     const handler = (request: HttpServerRequest.HttpServerRequest) =>
       Effect.gen(function* () {
         const call = `${request.method} ${new URL(request.url, "http://fake").pathname}`;
@@ -885,9 +871,7 @@ export const fakeSmolCloud = (
           return json(problem(401, "unauthorized", "unknown key"));
         }
 
-        const reply = call.startsWith("POST /_fake/")
-          ? yield* controlled(call.slice("POST /_fake/".length))
-          : yield* route(request);
+        const reply = yield* route(request);
 
         const response = HttpServerResponse.isHttpServerResponse(reply)
           ? reply
@@ -917,6 +901,9 @@ export const fakeSmolCloud = (
         Context.get(context, HttpServer.HttpServer).address
       ),
       faults,
+      holdCapture: Effect.sync(() => {
+        holdingCapture = true;
+      }),
       calls,
       machines,
       checkpoints,

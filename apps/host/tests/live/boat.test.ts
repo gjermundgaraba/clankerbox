@@ -1,0 +1,596 @@
+import { appendFileSync } from "node:fs";
+import path from "node:path";
+
+import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { describe, it } from "@effect/vitest";
+import {
+  read,
+  scratch,
+  write,
+} from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import { Context, Duration, Effect, FileSystem, Layer, Redacted } from "effect";
+import { Hex } from "effect/encoding";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { expect } from "vite-plus/test";
+
+import {
+  checkTailnet,
+  identify,
+  prepare,
+  prepareBase,
+  runCommand,
+  scrubNode,
+} from "../../src/guest.ts";
+import type { TailnetReport } from "../../src/guest.ts";
+import * as Api from "../../src/platform/boat/api.ts";
+import type { BoatType, Sandbox, SshKey } from "../../src/platform/boat/api.ts";
+import * as Boat from "../../src/platform/boat/boat.ts";
+import { types } from "../../src/platform/boat/traits.ts";
+import { Runtime } from "../../src/runtime.ts";
+import type { Target } from "../../src/runtime.ts";
+
+const key = process.env["BOAT_API_KEY"];
+
+const live = process.env["CLANKERBOX_LIVE"] === "1" && key !== undefined;
+
+const evidence = process.env["CLANKERBOX_LIVE_EVIDENCE"];
+
+const api = process.env["BOAT_API"] ?? "https://boat.dev/api/v1";
+
+const minted = (prefix: string) =>
+  `${prefix}-${Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(6)))}`;
+
+const host = minted("0live");
+
+const finding = (text: string) =>
+  Effect.sync(() => {
+    const line = `${new Date().toISOString()} ${text}\n`;
+
+    if (evidence === undefined) {
+      process.stdout.write(line);
+    } else {
+      appendFileSync(path.join(evidence, "boat-live.txt"), line);
+    }
+  });
+
+const ofTheRun = (sandbox: Sandbox) => sandbox.labels?.["cbx-host"] === host;
+
+const labels = (instance: string) => ({
+  "cbx-host": host,
+  "cbx-instance": instance,
+});
+
+const running = new Set(["ready", "idle", "running"]);
+
+const services = Layer.mergeAll(
+  NodeServices.layer,
+  NodeHttpClient.layerNodeHttp
+);
+
+const client = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const dir = yield* scratch;
+  const file = path.join(dir, "boat-key");
+
+  yield* fs.writeFileString(file, key ?? "", { mode: 0o600 });
+
+  return { api: yield* Api.make({ api, apiKeyFile: file }), dir };
+});
+
+const sshKeyOf = (dir: string) =>
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const file = path.join(dir, "id_ed25519");
+
+    yield* spawner.exitCode(
+      ChildProcess.make("ssh-keygen", [
+        "-q",
+        "-t",
+        "ed25519",
+        "-N",
+        "",
+        "-C",
+        "cbx-live",
+        "-f",
+        file,
+      ])
+    );
+
+    return { file, publicKey: (yield* read(`${file}.pub`)).trim() };
+  });
+
+const addressOf = (answer: SshKey) => {
+  const [host_, port] = (answer.sshEndpoint ?? "").split(":");
+
+  return host_ === undefined || host_ === "" || port === undefined
+    ? { host: answer.machineIp ?? "", port: "22" }
+    : { host: host_, port };
+};
+
+const backendOf = (report: TailnetReport | undefined) =>
+  report?.state === "reported" ? report.backend : (report?.state ?? "none");
+
+const family = (address: string | null | undefined) => {
+  if (address === undefined || address === null) {
+    return "none";
+  }
+
+  return address.includes(":") ? "IPv6" : "IPv4";
+};
+
+const sshAs = (
+  dir: string,
+  identity: string,
+  answer: SshKey,
+  command: string
+) =>
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const knownHosts = path.join(dir, "known_hosts");
+    const { host: address, port } = addressOf(answer);
+
+    yield* write(knownHosts, `live ${answer.hostKey}\n`);
+
+    return yield* spawner.string(
+      ChildProcess.make("ssh", [
+        "-F",
+        "/dev/null",
+        "-i",
+        identity,
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        "IdentityAgent=none",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=yes",
+        "-o",
+        `UserKnownHostsFile=${knownHosts}`,
+        "-o",
+        "HostKeyAlias=live",
+        "-p",
+        port,
+        "-l",
+        "user",
+        address,
+        command,
+      ])
+    );
+  });
+
+describe.runIf(live)("boat, against the real account", () => {
+  it.live(
+    "answers as the planning probe found, and settles what it left open",
+    () =>
+      Effect.gen(function* () {
+        const { api: boat, dir } = yield* client;
+        const identity = yield* sshKeyOf(dir);
+        const made: string[] = [];
+        const saved: string[] = [];
+
+        yield* finding(`host ${host}: the run's mark on every sandbox`);
+
+        yield* Effect.addFinalizer(() =>
+          Effect.gen(function* () {
+            yield* Effect.forEach(made, (id) => Effect.ignore(boat.remove(id)));
+            yield* Effect.forEach(saved, (name) =>
+              Effect.ignore(boat.unsave(name))
+            );
+
+            const left = yield* boat.sandboxes({ "cbx-host": host });
+            const snapshots = yield* boat.savedSnapshots;
+
+            yield* finding(
+              `left at the end: ${left.length} sandboxes labelled cbx-host=${host}, ${snapshots.filter(({ name }) => saved.includes(name)).length} of the run's saved snapshots`
+            );
+          }).pipe(Effect.orDie)
+        );
+
+        const startsUsed = Effect.map(
+          boat.limits,
+          (limits) => limits.starts?.hour?.used ?? -1
+        );
+
+        const until = (id: string, states: ReadonlySet<string>) =>
+          Effect.gen(function* () {
+            for (let tries = 0; tries < 600; tries += 1) {
+              const sandbox = yield* boat.sandbox(id);
+
+              if (sandbox !== undefined && states.has(sandbox.state)) {
+                return sandbox;
+              }
+
+              yield* Effect.sleep(Duration.millis(500));
+            }
+
+            return yield* Effect.die(
+              `${id} never reached ${[...states].join(", ")}`
+            );
+          });
+
+        const limits = yield* boat.limits;
+
+        const offered = (limits.machineTypes ?? []).flatMap(
+          ({ type, available }) => (available ? [type] : [])
+        );
+
+        yield* finding(`GET /limits offers ${offered.join(", ")}`);
+        expect(offered).toStrictEqual(
+          expect.arrayContaining(["small", "default", "large"])
+        );
+
+        const a = minted("live");
+        const before = yield* startsUsed;
+
+        const first = yield* boat.create(
+          { type: "small", labels: labels(a) },
+          a
+        );
+
+        made.push(first.id);
+
+        const listed = yield* boat.sandboxes(labels(a));
+
+        yield* until(first.id, running);
+
+        const afterFirst = yield* startsUsed;
+
+        const second = yield* boat.create(
+          { type: "small", labels: labels(a) },
+          a
+        );
+
+        const afterSecond = yield* startsUsed;
+
+        yield* finding(
+          `a create spent ${afterFirst - before} start, and the same create sent again under its Idempotency-Key answered ${second.id === first.id ? "the same sandbox" : second.id} and spent ${afterSecond - afterFirst}; the label list right after the create showed ${listed.map(({ state }) => state).join(", ")}`
+        );
+        expect(second.id).toBe(first.id);
+        expect(listed.map(({ id }) => id)).toStrictEqual([first.id]);
+        expect(afterFirst - before).toBe(1);
+        expect(afterSecond - afterFirst).toBe(0);
+
+        const once = yield* boat.sshKey(first.id, identity.publicKey);
+        const twice = yield* boat.sshKey(first.id, identity.publicKey);
+
+        yield* finding(
+          `/sshkey answered machineIp ${family(once.machineIp)} and sshEndpoint ${once.sshEndpoint === undefined || once.sshEndpoint === null ? "none" : "set"}, and the same key and address when sent the key again`
+        );
+        expect(twice.hostKey).toBe(once.hostKey);
+        expect(addressOf(twice)).toStrictEqual(addressOf(once));
+
+        const ssh = (answer: SshKey, command: string) =>
+          sshAs(dir, identity.file, answer, command);
+
+        const lines = (yield* ssh(
+          once,
+          `grep -cxF -e '${identity.publicKey}' "$HOME/.ssh/authorized_keys"`
+        )).trim();
+
+        yield* finding(
+          `a key sent to /sshkey twice is in authorized_keys ${lines} time(s)`
+        );
+
+        const disk = (answer: SshKey) =>
+          Effect.map(
+            ssh(
+              answer,
+              `lsblk -bdno SIZE "/dev/$(lsblk -no PKNAME "$(findmnt -no SOURCE /)" | head -n 1)" 2>/dev/null || lsblk -bdno SIZE "$(findmnt -no SOURCE /)"`
+            ),
+            (output) => Number(output.trim()) / 1024 ** 3
+          );
+
+        yield* finding(
+          `small: the root's block device holds ${(yield* disk(once)).toFixed(2)} GiB`
+        );
+
+        const stopped = (id: string) =>
+          Effect.andThen(boat.stop(id), until(id, new Set(["archived"])));
+
+        const resumed = (id: string, type?: BoatType) =>
+          Effect.gen(function* () {
+            const starts = yield* startsUsed;
+            const answer = yield* boat.resume(id, type);
+
+            yield* until(id, running);
+
+            return {
+              answer,
+              spent: (yield* startsUsed) - starts,
+              key: yield* boat.sshKey(id, identity.publicKey),
+            };
+          });
+
+        yield* stopped(first.id);
+
+        const warm = yield* resumed(first.id);
+
+        yield* finding(
+          `a resume right after a stop answered ${warm.answer}, spent ${warm.spent} start, ${warm.key.hostKey === once.hostKey ? "the same" : "a new"} host key`
+        );
+        expect(warm.answer).toBe("kept");
+        expect(warm.spent).toBe(0);
+        expect(warm.key.hostKey).toBe(once.hostKey);
+
+        for (const type of ["default", "large", "small"] as const) {
+          yield* stopped(first.id);
+
+          const resized = yield* resumed(first.id, type);
+
+          yield* finding(
+            `a resume onto ${type} answered ${resized.answer}, spent ${resized.spent} start, ${resized.key.hostKey === once.hostKey ? "the same" : "a new"} host key; the root's block device holds ${(yield* disk(resized.key)).toFixed(2)} GiB`
+          );
+          expect(resized.answer).toBe("started");
+          expect(resized.spent).toBe(1);
+        }
+
+        yield* stopped(first.id);
+
+        const snapshot = `cbx-${minted("live")}`;
+
+        saved.push(snapshot);
+        yield* boat.save(first.id, snapshot);
+
+        for (let tries = 0; tries < 240; tries += 1) {
+          const state = yield* boat.saved(snapshot);
+
+          if (state?.status !== "saving") {
+            yield* finding(
+              `a save of a stopped sandbox ended ${state?.status}, from ${state?.sourceSandboxId === first.id ? "its" : "another"} sandbox`
+            );
+            expect(state?.status).toBe("ready");
+            expect(state?.sourceSandboxId).toBe(first.id);
+            break;
+          }
+
+          yield* Effect.sleep(Duration.millis(500));
+        }
+
+        const b = minted("live");
+
+        const restored = yield* boat.create(
+          { type: "small", labels: labels(b), from: snapshot },
+          b
+        );
+
+        made.push(restored.id);
+        yield* until(restored.id, running);
+        yield* boat.unsave(snapshot);
+
+        const gone = yield* boat.saved(snapshot);
+
+        yield* finding(
+          `a restore from the snapshot ran; once deleted, the snapshot reads ${gone === undefined ? "404" : gone.status}`
+        );
+        expect(gone).toBeUndefined();
+
+        yield* stopped(restored.id);
+
+        const stoppedAt = Date.now();
+
+        yield* boat.remove(first.id);
+        yield* boat.remove(first.id);
+
+        const deleted = yield* boat.sandbox(first.id);
+
+        yield* finding(
+          `a sandbox deleted twice then reads ${deleted === undefined ? "404" : deleted.state}`
+        );
+        expect(deleted).toBeUndefined();
+
+        const restoredKey = yield* Effect.flatMap(
+          boat.resume(restored.id),
+          () => until(restored.id, running)
+        ).pipe(
+          Effect.andThen(boat.sshKey(restored.id, identity.publicKey)),
+          Effect.tap(() => stopped(restored.id))
+        );
+
+        yield* Effect.sleep(
+          Duration.millis(
+            Math.max(0, 11 * 60 * 1000 - (Date.now() - stoppedAt))
+          )
+        );
+
+        const cold = yield* resumed(restored.id);
+
+        yield* finding(
+          `a plain resume 11 minutes after a stop answered ${cold.answer}, spent ${cold.spent} start, ${cold.key.hostKey === restoredKey.hostKey ? "the same" : "a new"} host key and ${addressOf(cold.key).host === addressOf(restoredKey).host ? "the same" : "a new"} address`
+        );
+      }).pipe(Effect.scoped, Effect.provide(services)),
+    { timeout: 40 * 60 * 1000 }
+  );
+  it.live(
+    "makes, prepares, joins, restarts and forks a machine through the boat runtime",
+    () =>
+      Effect.gen(function* () {
+        const { api: boat, dir } = yield* client;
+        const identity = yield* sshKeyOf(dir);
+        const tailnetKey = process.env["TAILSCALE_AUTHKEY"];
+
+        yield* finding(`host ${host}: the runtime run's mark`);
+
+        yield* Effect.addFinalizer(() =>
+          Effect.gen(function* () {
+            const listed = yield* boat.sandboxes({ "cbx-host": host });
+
+            const left = listed.filter(ofTheRun);
+
+            yield* Effect.forEach(left, ({ id }) =>
+              Effect.ignore(boat.remove(id))
+            );
+
+            const snapshots = yield* boat.savedSnapshots;
+
+            const ours = snapshots.filter(({ sourceSandboxId }) =>
+              left.some(({ id }) => id === sourceSandboxId)
+            );
+
+            yield* Effect.forEach(ours, ({ name }) =>
+              Effect.ignore(boat.unsave(name))
+            );
+
+            const after = yield* boat.sandboxes({ "cbx-host": host });
+
+            yield* finding(
+              `left at the end: ${after.filter(ofTheRun).length} sandboxes labelled cbx-host=${host}, of ${after.length} the filter listed; the finalizer deleted ${left.length} sandboxes and ${ours.length} snapshots`
+            );
+          }).pipe(Effect.orDie)
+        );
+
+        const context = yield* Layer.build(
+          Boat.layer(
+            { apiKeyFile: path.join(dir, "boat-key"), api },
+            {
+              id: host,
+              stateDir: path.join(dir, "state"),
+              listen: { address: "127.0.0.1", port: 1 },
+            }
+          )
+        );
+
+        const runtime = Context.get(context, Runtime);
+
+        yield* finding(
+          `the runtime's size classes: ${runtime.traits.sizes._tag === "classes" ? runtime.traits.sizes.classes.map(({ name }) => name).join(", ") : "free"}`
+        );
+
+        const providerKey = (machine: Target) =>
+          Effect.map(
+            boat.sshKey(machine.handle, identity.publicKey),
+            ({ hostKey }) => hostKey.split(" ").slice(0, 2).join(" ")
+          );
+
+        const whoami = (machine: Target) =>
+          Effect.map(
+            runCommand(runtime, { machine, argv: ["whoami"], user: "admin" }),
+            ({ output }) => output.trim()
+          );
+
+        const tailnet = (machine: Target, authKey?: string) =>
+          checkTailnet(
+            runtime,
+            machine,
+            minted("cbx-live"),
+            authKey === undefined
+              ? undefined
+              : { key: Redacted.make(authKey), rejoin: false }
+          );
+
+        const source = { name: "ci", instance: minted("live"), ...types.small };
+
+        const made = yield* runtime.make(
+          source,
+          { _tag: "image", image: Boat.image },
+          { _tag: "none" }
+        );
+
+        const ci: Target = { ...source, handle: made.handle };
+
+        yield* prepareBase(runtime, ci, true);
+        yield* identify(runtime, ci);
+
+        const started = yield* prepare(runtime, ci);
+
+        yield* finding(
+          `after the base script and the identity script, the start script's host key ${started === (yield* providerKey(ci)) ? "equals" : "differs from"} the one /sshkey answers, and the guest runs commands as ${yield* whoami(ci)}`
+        );
+        expect(started).toBe(yield* providerKey(ci));
+        expect(yield* whoami(ci)).toBe("admin");
+
+        if (tailnetKey !== undefined) {
+          const before = yield* tailnet(ci);
+          const joined = yield* tailnet(ci, tailnetKey);
+
+          yield* finding(
+            `the tailnet script answered ${backendOf(before)} before the join and ${backendOf(joined)} after it`
+          );
+          expect(backendOf(joined)).toBe("Running");
+        }
+
+        yield* runtime.stop(ci);
+        yield* runtime.start(ci, new Set());
+
+        const warm = yield* prepare(runtime, ci);
+        const warmTailnet = yield* tailnet(ci);
+
+        yield* finding(
+          `a stop then a start kept the host key: ${warm === started}; the tailnet answers ${backendOf(warmTailnet)}`
+        );
+
+        yield* runtime.stop(ci);
+
+        const twin = { name: "twin", instance: minted("live"), ...types.small };
+
+        const forked = yield* runtime.make(
+          twin,
+          { _tag: "machine", machine: { ...ci, ...types.small } },
+          { _tag: "none" }
+        );
+
+        const copy: Target = { ...twin, handle: forked.handle };
+
+        yield* identify(runtime, copy);
+
+        const copyKey = yield* prepare(runtime, copy);
+        const copyTailnet = yield* tailnet(copy);
+
+        yield* finding(
+          `the fork's start script key ${copyKey === (yield* providerKey(copy)) ? "equals" : "differs from"} /sshkey's, ${copyKey === started ? "the same as" : "unlike"} its source's; its tailnet answers ${backendOf(copyTailnet)} after the identity script`
+        );
+        expect(copyKey).toBe(yield* providerKey(copy));
+
+        if (tailnetKey !== undefined) {
+          expect(backendOf(copyTailnet)).toBe("NeedsLogin");
+        }
+
+        yield* runtime.resize(
+          { ...ci, ...types.small },
+          { cpu: types.default.cpu, ramMib: types.default.ramMib },
+          false
+        );
+
+        const resized = yield* runtime.sizes(ci);
+
+        yield* runtime.start(ci, new Set());
+
+        const cold = yield* prepare(runtime, ci);
+        const coldTailnet = yield* tailnet(ci);
+
+        yield* finding(
+          `a stopped resize to default reads ${resized.cpu} vCPUs and ${resized.ramMib} MiB; the start after it gave ${cold === started ? "the same" : "a new"} host key, which ${cold === (yield* providerKey(ci)) ? "equals" : "differs from"} /sshkey's, and the tailnet answers ${backendOf(coldTailnet)}`
+        );
+        expect(cold).toBe(yield* providerKey(ci));
+
+        yield* scrubNode(runtime, ci);
+        yield* runtime.stop(ci);
+
+        const snapshot = yield* runtime.capture(ci, {
+          name: "snap",
+          instance: minted("live"),
+        });
+
+        yield* finding(`a capture of the stopped machine saved ${snapshot}`);
+
+        yield* runtime.delete(ci, new Set());
+        yield* runtime.delete(ci, new Set());
+        yield* runtime.delete(copy, new Set());
+
+        const gone = yield* runtime.find("machine", ci);
+
+        const snapshotGone = yield* runtime.find("checkpoint", {
+          name: "snap",
+          instance: snapshot.slice("cbx-".length),
+        });
+
+        yield* finding(
+          `after two deletes the machine is ${gone === undefined ? "gone" : "still found"}, and its unkept snapshot is ${snapshotGone === undefined ? "gone" : "still found"}`
+        );
+        expect(gone).toBeUndefined();
+        expect(snapshotGone).toBeUndefined();
+      }).pipe(Effect.scoped, Effect.provide(services)),
+    { timeout: 30 * 60 * 1000 }
+  );
+});

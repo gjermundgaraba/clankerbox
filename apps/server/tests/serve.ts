@@ -42,6 +42,15 @@ while [ ! -e "${run}/setup-go" ]; do sleep 0.05; done
 echo slow-recipe >"${run}/recipe-ran"
 `;
 
+const templates = {
+  smolvm: "base: ubuntu\ncpu: 1\nram: 1G\ndisk: 10G\n",
+  tart: "base: macos\ncpu: 1\nram: 1G\ndisk: 10G\n",
+  boat: "base: ubuntu\ncpu: 2\nram: 4G\ndisk: 80G\n",
+} as const;
+
+const isTemplated = (runtime: string): runtime is keyof typeof templates =>
+  Object.hasOwn(templates, runtime);
+
 const memberOf = (run: string) => (file: string) => {
   const id = path.basename(file, ".url");
 
@@ -65,10 +74,8 @@ const clientFiles = (run: string, url: string) =>
       JSON.stringify({ server: url })
     );
 
-    const base =
-      readFileSync(path.join(run, "runtime"), "utf8").trim() === "tart"
-        ? "macos"
-        : "ubuntu";
+    const runtime = readFileSync(path.join(run, "runtime"), "utf8").trim();
+    const template = templates[isTemplated(runtime) ? runtime : "smolvm"];
 
     for (const [name, recipe] of [
       ["web", webRecipe(run)],
@@ -78,7 +85,7 @@ const clientFiles = (run: string, url: string) =>
       yield* write(path.join(run, "recipes", name, "setup.sh"), recipe);
       yield* write(
         path.join(run, "recipes", `${name}.yaml`),
-        `base: ${base}\ncpu: 1\nram: 1G\ndisk: 10G\nsetup: ${name}\n`
+        `${template}setup: ${name}\n`
       );
     }
 

@@ -26,8 +26,7 @@ export default config({
       files: [
         "apps/cli/src/main.ts",
         "apps/host/src/main.ts",
-        "apps/host/tests/serve.ts",
-        "apps/host/tests/smol-cloud/serve.ts",
+        "apps/host/tests/serving.ts",
         "apps/server/src/main.ts",
         "apps/server/tests/serve.ts",
         "packages/amp-orbs/src/main.ts",

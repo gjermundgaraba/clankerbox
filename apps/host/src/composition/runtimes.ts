@@ -3,6 +3,7 @@ import type { FileSystem, Layer, Schema } from "effect";
 import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 
+import * as Boat from "../platform/boat/boat.ts";
 import * as SmolCloud from "../platform/smol-cloud/smol-cloud.ts";
 import * as Smolvm from "../platform/smolvm/smolvm.ts";
 import * as Tart from "../platform/tart/tart.ts";
@@ -18,6 +19,7 @@ type RuntimeLayer = Layer.Layer<
 >;
 
 export const runtimes = {
+  boat: { settings: Boat.BoatSettings, layer: Boat.layer },
   smolvm: { settings: Smolvm.SmolvmSettings, layer: Smolvm.layer },
   tart: { settings: Tart.TartSettings, layer: Tart.layer },
   "smol-cloud": {

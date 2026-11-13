@@ -1,0 +1,5 @@
+base: ubuntu
+cpu: 2
+ram: 4G
+disk: 80G
+setup: ubuntu

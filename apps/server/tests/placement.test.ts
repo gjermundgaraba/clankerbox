@@ -2,6 +2,7 @@ import type { HostInfo } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, layer } from "@effect/vitest";
 import { presets } from "@gjermundgaraba/clankerbox-host/testing";
+import { traits as boat } from "@gjermundgaraba/clankerbox-host/testing/boat";
 import { traits as smolCloud } from "@gjermundgaraba/clankerbox-host/testing/smol-cloud";
 import { Capacity, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Option, Result } from "effect";
@@ -63,6 +64,11 @@ const classed = (
           },
   };
 };
+
+const withTraits = (reached: Reached, traits: HostInfo["traits"]): Reached => ({
+  ...reached,
+  info: reached.info === undefined ? undefined : { ...reached.info, traits },
+});
 
 const draining = (id: string): Reached => {
   const reached = up(id);
@@ -180,6 +186,35 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         })
     );
 
+    it.effect(
+      "a fleet of smolvm, smol cloud and boat hosts takes one of boat's types on all three, other sizes off boat, and refuses them on boat by its types",
+      () =>
+        Effect.sync(() => {
+          const fleet = [
+            up("smolvm-1"),
+            withTraits(up("smol-cloud-1"), smolCloud),
+            withTraits(up("boat-1"), boat),
+          ];
+
+          const boatSmall = { cpu: 2, ramMib: 4096, diskGib: 80 };
+          const odd = { sizes: { cpu: 3, ramMib: 6144, diskGib: 40 } };
+
+          expect(
+            placed(fleet, "ubuntu", { sizes: boatSmall, host: undefined })
+          ).toStrictEqual(["smolvm-1", "smol-cloud-1", "boat-1"]);
+          expect(
+            placed(fleet, "ubuntu", { ...odd, host: undefined })
+          ).toStrictEqual(["smolvm-1", "smol-cloud-1"]);
+          expect(
+            refusal(fleet, "ubuntu", { ...odd, host: "boat-1" })
+          ).toMatchObject({
+            _tag: "NotOffered",
+            message:
+              "no host offers base ubuntu: boat-1 has no size class of 3 vCPUs, 6G of RAM and 40G of disk, and gives only its size classes small (2 vCPUs, 4G of RAM, 80G of disk), default (4 vCPUs, 8G of RAM, 80G of disk), large (8 vCPUs, 16G of RAM, 149G of disk)",
+          });
+        })
+    );
+
     it.effect("an ask that names a host is placed on that host alone", () =>
       Effect.sync(() => {
         expect(
@@ -217,19 +252,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       "a fleet of a smolvm host and a smol cloud host offers both in config order, for a base, an image reference and any sizes",
       () =>
         Effect.sync(() => {
-          const local = up("local");
-          const cloud = up("cloud");
-
-          const fleet = [
-            local,
-            {
-              ...cloud,
-              info:
-                cloud.info === undefined
-                  ? undefined
-                  : { ...cloud.info, traits: smolCloud },
-            },
-          ];
+          const fleet = [up("local"), withTraits(up("cloud"), smolCloud)];
 
           expect(placed(fleet)).toStrictEqual(["local", "cloud"]);
           expect(placed(fleet, "docker.io/library/ubuntu:24.04")).toStrictEqual(

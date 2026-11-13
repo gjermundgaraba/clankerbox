@@ -17,6 +17,7 @@
   "type": "module",
   "exports": {
     "./testing": "./tests/support.ts",
+    "./testing/boat": "./tests/fake-boat.ts",
     "./testing/smol-cloud": "./tests/fake-smol-cloud.ts"
   },
   "publishConfig": {

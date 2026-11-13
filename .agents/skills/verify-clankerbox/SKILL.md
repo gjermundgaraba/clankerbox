@@ -51,15 +51,25 @@ fleet's order and are named `<runtime>-<n>`, numbered per runtime: `fixed-1`,
   checkpoints, machines that stop unasked, and machines that carry the host's
   mark, so that at each recheck the host deletes what it marked whose instance
   the control plane retired and no step it holds names. Its base is `ubuntu`;
-- `smol-cloud`, which is no fake runtime: the real adapter over
-  `fake-smol-cloud.ts`, a fake of smol cloud's API that runs as its own process
-  so it outlives a host `fault.sh` kills, shared by every `smol-cloud` host of
-  the run. It logs each call it answers, `METHOD /path STATUS` with no body, to
-  `evidence/smol-cloud-calls.txt`. Its base is `ubuntu`, it takes no budget,
-  and `drift` is refused, as a smol cloud host isn't told a machine's instance
-  by its name. Set `CLANKERBOX_FAKE_TAILNET=1` for `fault.sh start-host` too, or
-  the restarted host joins nothing. A host runs `apps/host/tests/<runtime>/serve.ts`
-  where its runtime has one, and `apps/host/tests/serve.ts` otherwise.
+- `smol-cloud` and `boat`, which are no fake runtimes: each is the real
+  adapter over a fake of its provider's API, `fake-smol-cloud.ts` or
+  `fake-boat.ts`, that runs as its own process so it outlives a host
+  `fault.sh` kills, shared by every host of that runtime in the run. Its base
+  is `ubuntu`, and it takes no budget. On `smol-cloud`, `drift` is refused, as a
+  smol cloud host isn't told a machine's instance by its name. On `boat`, each
+  sandbox's SSH is a relay the fake opens, and the host's `ssh` runs the command
+  on this machine once the fake admits its key, host key alias and `--`; a create
+  takes one of boat's types, `small` (2 vCPUs, 4G, 80G), `default` (4, 8G, 80G)
+  or `large` (8, 16G, 149G); a capture or fork takes a stopped machine; and
+  `CLANKERBOX_FAKE_BOAT_WARM_SECONDS` sets how long a stopped sandbox stays warm,
+  so a start within it spends no start, which the fake keeps for minutes
+  otherwise. Set `CLANKERBOX_FAKE_TAILNET=1` for `fault.sh start-host` too, or
+  the restarted host joins nothing.
+
+A host runs `apps/host/tests/<runtime>/serve.ts` where its runtime has one, and
+`apps/host/tests/serve.ts` otherwise. Each is a thin entry over
+`apps/host/tests/serving.ts`, which serves a host for the run's protocol and, for
+a provider, its fake API and the faults it takes.
 
 The budget applies to each host. A `fixed` host's fake has no admission, so no
 start there is checked against it; it shows only as the limit its `capacity`
@@ -82,18 +92,22 @@ plane's URL), `server.pid`, `hosts/<id>.url`, `hosts/<id>.pid` and
 | `host-<id>.log`     | that host's log                                                       |
 | `runtime-calls.txt` | one line per runtime call as it happens, such as `capture snap`, and on `tart`, whose fake is relayed as Tart is, `relay <name>` each time a relay opens |
 | `transcript.txt`    | each `cb.sh` command as a JSON argv, its output and `[exit N]`, and each fault |
+| `<provider>-calls.txt` | on `smol-cloud` or `boat`, one line per call the fake API answers, `METHOD /path STATUS` with no body, and on `boat` `dropped` where `drop-answer` lost the answer |
+| `boat-requests.jsonl` | on `boat`, the same calls, each with its JSON body, so a proof can show what reached the provider and what didn't |
+| `<provider>-api.log` | the fake API's own log                                         |
 
 The control plane's authorized keys are `server-keys.pub`, read at each start.
 It holds the test operator key and is kept across restarts: append a key, then
 `fault.sh <run> kill-server` and `start-server`, to rotate them. The HOME's
 config names no keys.
 
-IDs are bare names. The base is `ubuntu` on smolvm and fixed and `macos` on
-tart. A create on a fixed host takes one class's sizes. The recheck
+IDs are bare names. The base is `macos` on tart and `ubuntu` on every other
+runtime. A create on a fixed or boat host takes one class's sizes, and the
+recipes' template files name `small`'s on boat. The recheck
 runs every 2 seconds. The optional budget is the RAM, in MiB, that a host refuses
 to pass. The run has two recipes, each a directory with a `setup.sh`, and
 beside each a template file naming it with the runtime's base and 1 vCPU, 1G of
-RAM and a 10G disk: `$S/cb.sh "$RUN" template build "$RUN/recipes/web.yaml"`
+RAM and a 10G disk, or on boat 2 vCPUs, 4G and 80G: `$S/cb.sh "$RUN" template build "$RUN/recipes/web.yaml"`
 builds the template `web`, and a copy beside it under another name builds
 another. A create runs no setup. `$RUN/recipes/web` writes `$RUN/recipe-ran`.
 `$RUN/recipes/slow` touches `$RUN/setup-began` and waits for
@@ -102,8 +116,9 @@ another. A create runs no setup. `$RUN/recipes/web` writes `$RUN/recipe-ran`.
 ## Doctor
 
 `$S/cb.sh "$RUN" hosts --json` is the one check to run first, and again when
-anything looks off. It's healthy with exit 0 and each host `up` with
-`runtimeVersion` `fake`. Exit 3 is `cb.sh` refusing: launch a new run.
+anything looks off. It's healthy with exit 0 and each host `up`, with
+`runtimeVersion` `fake` on a fake runtime, and its adapter's API version on
+`smol-cloud` and `boat`. Exit 3 is `cb.sh` refusing: launch a new run.
 
 ## Drive
 
@@ -138,26 +153,32 @@ times out while it keeps its machines and steps, and `fault.sh <run> thaw-host
 <id>` sends `CONT`.
 `fault.sh <run> hold-capture <id>` makes a host hold its next capture until it
 dies, as the fake's captures are too quick for a kill to catch one.
-`fault.sh <run> drift <id> <machine>` has a fixed host's fake stop that running
-machine on its own, as `drift <machine>` in `runtime-calls.txt`; the control
-plane starts it again, a `start <machine>`, at the next recheck that reads it.
-`fault.sh <run> land-late <id>` has a fixed host's fake fail its next make and
-make the machine anyway 5 seconds later, as `landed <machine>`. The failed
-make's undo searches for the machine well within that and finds nothing, so the
-row rests undone with its instance retired, and the host's sweep deletes the
-machine at the first recheck after it lands, logging `sweep: deleting machine <instance> (<handle>)` in
-`host-<id>.log` and `delete <instance>` in `runtime-calls.txt`.
+`fault.sh <run> drift <id> <machine>` has a fixed or boat host's fake stop that
+running machine on its own, as `drift <machine>` in `runtime-calls.txt` on
+fixed; the control plane starts it again, a `start <machine>`, at the next
+recheck that reads it.
+`fault.sh <run> land-late <id>` has the host's fake fail its next make and
+make the machine anyway 5 seconds later, as `landed <machine>` on fixed. The
+failed make's undo searches for the machine well within that and finds nothing,
+so the row rests undone with its instance retired, and the host's sweep deletes
+the machine at the first recheck after it lands, logging `sweep: deleting machine <instance> (<handle>)` in
+`host-<id>.log`, and `delete <instance>` in `runtime-calls.txt` on fixed.
+`fault.sh <run> quota <id> on|off` has the host's fake refuse every make for
+want of room until it is off, which a create reads as `Capacity`.
+`fault.sh <run> drop-answer <id> make|delete` has the host's fake do its next
+make or delete and lose the answer, so the host finds or retries it.
 `fault.sh <run> setup-go` lets the `slow` recipe's setup finish. Each is written
 to the transcript.
 
-`hold-capture`, `drift` and `land-late` ask the host itself: `fault.sh` writes
+`hold-capture`, `drift`, `land-late`, `quota` and `drop-answer` ask the host itself: `fault.sh` writes
 the fault to `hosts/<id>.fault`, sends the host `USR2`, and waits up to 10
 seconds for its answer, `hosts/<id>.fault.ok` or `hosts/<id>.fault.refused`. The
 host logs the answer as a `fault:` line in `host-<id>.log`, with its time, and
 `fault.sh` writes it to the transcript. A refusal also goes to stderr, with exit
-1: a host whose fake keeps its machines running refuses `drift`, as does one with
-no running machine of that name; a host whose fake marks nothing refuses
-`land-late`, since nothing would sweep what landed. Only `fixed` takes both. A host started with `CLANKERBOX_FAKE_FAIL_FIND` set to
+1: `smolvm` and `tart`, whose fakes keep their machines running, refuse
+`drift`, as does `smol-cloud`, which isn't told a machine's instance by its
+name, and any host with no running machine of that name; one whose fake marks nothing refuses `land-late`, since nothing would
+sweep what landed; and `boat` refuses `hold-capture`. A host started with `CLANKERBOX_FAKE_FAIL_FIND` set to
 names, comma-separated, as by `start-host` or `upgrade.sh`, fails each search
 for a machine or a checkpoint of those names, as smolvm does when its database
 is locked.
@@ -196,9 +217,10 @@ launched before fleets a `hosts/<id>.runtime` of the run's `runtime`, records th
 builds it, and starts its hosts under the same IDs and ports and its control
 plane on the same port and state. Run it from the worktree it names, so that
 tree's `cb.sh` drives the run: launch from a trunk worktree, drive it, then
-`$S/upgrade.sh "$RUN" "$PWD"` here. The hosts restart as `start-host` does, with
-no machines, so each machine reads `missing` while its row keeps what the old
-build stored.
+`$S/upgrade.sh "$RUN" "$PWD"` here. Its `cleanup.sh` stops a `smol-cloud` or
+`boat` run's fake API with the hosts, so every host restarts with no machines,
+whatever its runtime, and each machine reads `missing` while its row keeps what
+the old build stored.
 
 ## Evidence
 
@@ -227,12 +249,17 @@ reported the evidence.
 The fake stands in for the VM, so this proves none of:
 
 - a VM's boot, pause, resume or stop under smolvm or Tart, or its pin;
+- what smol cloud's or boat's real API answers, which only its live suite under
+  `apps/host/tests/live/` shows, on the operator's account;
 - what a capture, fork or restore copies;
 - setup and preparation in a real guest;
 - `ssh` and `ssh-proxy` (see the index);
 - the tailnet;
-- what a restarted host keeps: `start-host` starts a new fake with no machines,
-  so each of its machines reads `missing`, where a real runtime keeps its VMs.
+- what a restarted host keeps: on `smolvm`, `tart` and `fixed`, `start-host`
+  starts a new fake with no machines, so each of its machines reads `missing`,
+  where a real runtime keeps its VMs. On `smol-cloud` and `boat` the fake API
+  is its own process and outlives the host, so the restarted host finds its
+  machines there and each reads as it was, such as `running`.
 
 Proving those takes a Linux host with KVM and the pinned smolvm
 (`bump-smolvm`), or a Mac with Tart (`bump-tart`), running

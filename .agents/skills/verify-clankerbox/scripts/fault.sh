@@ -2,7 +2,7 @@
 set -eu
 . "$(dirname "$0")/common.sh"
 use_run "$@"
-action=${2:?usage: fault.sh <run-dir> kill-server|start-server|kill-host <id>|start-host <id>|freeze-host <id>|thaw-host <id>|hold-capture <id>|drift <id> <machine>|land-late <id>|setup-go}
+action=${2:?usage: fault.sh <run-dir> kill-server|start-server|kill-host <id>|start-host <id>|freeze-host <id>|thaw-host <id>|hold-capture <id>|drift <id> <machine>|land-late <id>|quota <id> on|off|drop-answer <id> make|delete|setup-go}
 
 ask() {
   host=$1
@@ -67,6 +67,21 @@ case $action in
     ;;
   land-late)
     ask "${3:?host id}" '{"_tag":"land-late"}'
+    ;;
+  quota)
+    case ${4:?on or off} in
+      on) on=true ;;
+      off) on=false ;;
+      *) echo "fault: quota takes on or off" >&2; exit 2 ;;
+    esac
+    ask "${3:?host id}" "{\"_tag\":\"quota\",\"on\":$on}"
+    ;;
+  drop-answer)
+    case ${4:?make or delete} in
+      make | delete) ;;
+      *) echo "fault: drop-answer takes make or delete" >&2; exit 2 ;;
+    esac
+    ask "${3:?host id}" "{\"_tag\":\"drop-answer\",\"call\":\"$4\"}"
     ;;
   setup-go)
     touch "$run/setup-go"

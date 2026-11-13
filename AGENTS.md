@@ -140,20 +140,23 @@ or `composition/`.
   the suite each runtime passes over its own fake provider: the fake runtime's
   three presets, `smolvm`, `tart` and `fixed`, which is neither and has size
   classes, a pause that stops, machines that stop on their own and the `owned`
-  facet, and the three adapters over `tests/smolvm-model.ts`,
-  `tests/scripted-mac.ts` and `tests/fake-smol-cloud.ts`.
+  facet, and the four adapters over `tests/smolvm-model.ts`,
+  `tests/scripted-mac.ts`, `tests/fake-smol-cloud.ts` and `tests/fake-boat.ts`.
 
 Adapters live in `platform/`: `bind-probe.ts` (`PortProbe`), `relay.ts`
 (`Relays`, a TCP listener that carries each connection through a runtime's
 dial), `tailscale.ts` (`Tailnet`, over Tailscale's API), `s3.ts` (`BuildStore`,
-over S3, path-style and signed), the runtimes `smolvm/`, `tart/` and
-`smol-cloud/` (smol cloud's API in `api.ts`, the SSH tunnel in `tunnel.ts`),
+over S3, path-style and signed), the runtimes `smolvm/`, `tart/`,
+`smol-cloud/` (smol cloud's API in `api.ts`, the SSH tunnel in `tunnel.ts`) and
+`boat/` (boat's REST API with its retries and headers in `api.ts`, the guest
+channel in `ssh.ts`, OpenSSH from the host pinned to the host key boat answers),
 each with its `RuntimeTraits` in its `traits.ts`, and what they share,
-`process.ts`. `tests/fake-smol-cloud.ts` serves smol cloud's API over loopback
-for the adapter's tests and `tests/smol-cloud/serve.ts`, and
-`tests/live/smol-cloud.test.ts`, run by `vp run test:live` in `apps/host` with
-`SMOL_MACHINES_API_KEY` and `TAILSCALE_AUTHKEY` set and never in CI, checks the
-real account. A domain file never imports `platform/` or `composition/`.
+`process.ts`. `tests/fake-smol-cloud.ts` and `tests/fake-boat.ts` serve each
+provider's API over loopback, for its adapter's tests and for the verify skill,
+and `tests/live/smol-cloud.test.ts` and `tests/live/boat.test.ts`, run by
+`vp run test:live` in `apps/host` with `SMOL_MACHINES_API_KEY` or
+`BOAT_API_KEY`, and `TAILSCALE_AUTHKEY`, set and never in CI, check the real
+accounts. A domain file never imports `platform/` or `composition/`.
 
 `composition/` assembles the host: `config.ts` reads the config file,
 `runtimes.ts` is the registry of runtimes, one entry each under the name a host
@@ -197,7 +200,8 @@ runtime, from the registry, and Node's HTTP server, given to `hostLayer`), the S
 client over Node's HTTP), the provider's `index.ts` (the client over its
 server URL, given to `provider`), and the Amp orb provider's `main.ts` (Node's
 services and HTTP client, given to its command). Tests pass their own: the host's `./testing`
-export builds a host over a fake runtime, the server's `./testing` a control
+export builds a host over a fake runtime, its `./testing/smol-cloud` and
+`./testing/boat` serve a provider's fake API and give its traits, the server's `./testing` a control
 plane over such hosts with real HTTP between them, and the SDK's
 `./testing/stub-server` serves a stub control plane over an in-memory transport,
 beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
@@ -224,9 +228,10 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
   pass `excludeTestServices: true`. Effect is run by hand only in each app's
   `main.ts` and the provider's `provider.ts`, in the provider's tests that
   drive its Promise API or a child program, in the Amp orb provider's `main.ts`,
-  and in `tests/serve.ts` of the server
-  and the host and the host's `tests/smol-cloud/serve.ts`, the programs that
-  serve them over the fake runtime or the fake smol cloud API for the
+  and in the server's `tests/serve.ts` and the host's `tests/serving.ts`, which
+  the host's `tests/serve.ts` and each `tests/<runtime>/serve.ts` run: the
+  programs that serve a control plane, and a host over the fake runtime or over
+  a provider's fake API with the faults `fault.sh` asks, for the
   `verify-clankerbox` skill.
 - **Property and model tests** cover IDs, units, the RAM budget, recipe
   packing, the rules of runtime traits, and the store's `advance` and leases, as models checked against
@@ -306,9 +311,11 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
   create of the name replaces it. A `Capacity` failure moves the create to the
   next host instead, for a template's the next that holds its build, once its VM is gone, while the control plane that took the create runs; after a restart it rests `undone`. Nothing ambiguous ever moves one.
 - **A start starts the machine, also when it runs already, or resumes it when it
-  is paused, and prepares it.** A pause saves a running machine and stops its
-  VM, leaving a stopped one stopped, and stops one the runtime can't save: a VM
-  booted under another pin, or one Tart can't suspend. A paused machine resumes
+  is paused, and prepares it.** A pause leaves a stopped machine stopped. On a
+  runtime whose `pause` trait `saves`, it saves a running machine and stops its
+  VM, and stops one it can't save: a VM booted under another pin, or one Tart
+  can't suspend. On one whose `pause` `stops`, as boat's, it stops the machine
+  and saves nothing. A paused machine resumes
   only under the pin it booted under, for a start, and for a stop on a runtime
   whose stop resumes it, and a capture or fork copies only a VM booted under the
   host's pin; the step carries the pin and the host compares. A resize is a step

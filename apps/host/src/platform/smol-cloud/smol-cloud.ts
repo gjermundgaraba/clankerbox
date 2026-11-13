@@ -41,6 +41,7 @@ import type {
   Sizes,
   Target,
 } from "../../runtime.ts";
+import { KeyedApiUrl } from "../../settings.ts";
 import type { HostSettings } from "../../settings.ts";
 import * as Api from "./api.ts";
 import type { ApiError, MachineRecord, Refused } from "./api.ts";
@@ -49,23 +50,9 @@ import { tunnel } from "./tunnel.ts";
 
 export const defaultApi = "https://api.smolmachines.com";
 
-const loopback = /^(?:localhost|\[::1\]|127(?:\.\d{1,3}){3})$/u;
-
-const ApiUrl = Schema.String.check(
-  Schema.makeFilter((text: string) => {
-    const url = URL.parse(text);
-
-    return (
-      url?.protocol === "https:" ||
-      (url?.protocol === "http:" && loopback.test(url.hostname)) ||
-      "an https URL, or an http one to a loopback address, as the key rides on every request"
-    );
-  })
-);
-
 export const SmolCloudSettings = Schema.Struct({
   apiKeyFile: Schema.String.check(Schema.isNonEmpty()),
-  api: Schema.optionalKey(ApiUrl),
+  api: Schema.optionalKey(KeyedApiUrl),
   ttlSeconds: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
 });
 
