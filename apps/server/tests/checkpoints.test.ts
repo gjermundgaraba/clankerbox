@@ -2,7 +2,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { startHost } from "@gjermundgaraba/clankerbox-host/testing";
+import { presets, startHost } from "@gjermundgaraba/clankerbox-host/testing";
 import type {
   TestHost,
   FakeRuntimeName,
@@ -897,13 +897,43 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(refused).toMatchObject({ _tag: "WrongState", state: "running" });
         expect(refused.message).toBe(
-          "machine dev's traits capture only a stopped machine, and a pause leaves it paused, so no pause captures it: stop it and capture it, or pause it without a capture"
+          "machine dev's host captures only a stopped machine, and its pause leaves it paused, so no pause captures it: stop it and capture it, or pause it without a capture"
         );
         expect([dev.desired, dev.state]).toStrictEqual(["running", "running"]);
         expect(
           yield* Effect.flip(client.getCheckpoint({ id: "snap" }))
         ).toMatchObject({ _tag: "NotFound" });
         expect(host.fake.calls).toStrictEqual([]);
+      })
+  );
+
+  it.effect(
+    "a pause with a capture takes its order from the host's traits as it answers now, not the machine's stamp",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* withClient();
+        const { client, host, store } = served;
+
+        yield* client.create("dev", request("dev"));
+        yield* patched(store, "dev", { traits: presets.tart.traits });
+        host.fake.calls.length = 0;
+
+        const paused = yield* client.pauseMachine({
+          id: "dev",
+          capture: { name: "snap" },
+        });
+
+        const snap = yield* client.getCheckpoint({ id: "snap" });
+
+        expect([paused.state, paused.phase]).toStrictEqual([
+          "paused",
+          "settled",
+        ]);
+        expect(snap.phase).toBe("ready");
+        expect(callsTo(host, "capture")).toStrictEqual(["capture snap"]);
+        expect(host.fake.calls.indexOf("capture snap")).toBeLessThan(
+          host.fake.calls.indexOf("pause dev")
+        );
       })
   );
 
@@ -957,7 +987,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(taken._tag).toBe("Conflict");
         expect(stopped).toMatchObject({ _tag: "WrongState", state: "stopped" });
         expect(stopped.message).toBe(
-          "machine dev is stopped, and a pause captures only a running machine. Its traits capture a running machine: start it, then capture it"
+          "machine dev is stopped, and its host captures only a running machine, so a pause captures it only running: start it, then capture it"
         );
         expect(dev.desired).toBe("stopped");
         expect(host.fake.calls).toStrictEqual(["exec dev", "stop dev"]);

@@ -60,10 +60,11 @@ export interface Interface {
     request: CaptureRequest
   ) => Effect.Effect<Checkpoint, Declared<"captureCheckpoint">>;
   /**
-   * Asks a machine to pause, capturing it too if `capture` says so, where its traits' `pauseCapture`
-   * says: `before` records the capture first and the pause waits for it to begin, so the checkpoint
-   * holds the machine as it ran; `after` records the pause first, and the capture waits for the
-   * machine to rest; `never` is refused, recording nothing.
+   * Asks a machine to pause, capturing it too if `capture` says so, where `pauseCapture` of its
+   * host's traits, as the host answers now, says: `before` records the capture first and the pause
+   * waits for it to begin, so the checkpoint holds the machine as it ran; `after` records the pause
+   * first, and the capture waits for the machine to rest; `never` is refused, recording nothing. A
+   * host that can't be read is `Unavailable`, recording nothing.
    */
   readonly pause: (
     request: PauseRequest
@@ -362,10 +363,12 @@ export const make = (settings: {
           return yield* unmade(found);
         }
 
-        switch (pauseCapture(found.traits)) {
+        const { traits } = yield* answering(hosts, found.host);
+
+        switch (pauseCapture(traits)) {
           case "never": {
             return yield* new WrongState({
-              message: `machine ${id}'s traits capture only a stopped machine, and a pause leaves it paused, so no pause captures it: stop it and capture it, or pause it without a capture`,
+              message: `machine ${id}'s host captures only a stopped machine, and its pause leaves it paused, so no pause captures it: stop it and capture it, or pause it without a capture`,
               machine: id,
               state: yield* stateOf(hosts, found),
             });
@@ -396,7 +399,7 @@ export const make = (settings: {
 
         if (seen !== "running") {
           return yield* new WrongState({
-            message: `machine ${id} is ${seen}, and a pause captures only a running machine. Its traits capture a running machine: start it, then capture it`,
+            message: `machine ${id} is ${seen}, and its host captures only a running machine, so a pause captures it only running: start it, then capture it`,
             machine: id,
             state: seen,
           });
