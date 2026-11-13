@@ -6,7 +6,7 @@ import {
   outputLimit,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Machine } from "@gjermundgaraba/clankerbox-sdk";
-import { Console, Effect, Option, Stdio, Stream } from "effect";
+import { Config, Console, Effect, Option, Stdio, Stream } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 
 import {
@@ -274,6 +274,33 @@ export const restore = Command.make(
   )
 );
 
+const environment = (texts: readonly string[]) =>
+  Effect.gen(function* () {
+    const pairs: Array<readonly [string, string]> = [];
+
+    for (const text of texts) {
+      if (text.includes("=")) {
+        pairs.push(
+          ...Object.entries((yield* parsePairs("--env", [text])) ?? {})
+        );
+      } else {
+        const value = yield* Config.option(Config.String(text)).pipe(
+          Effect.orElseSucceed(() => Option.none<string>())
+        );
+
+        if (Option.isNone(value)) {
+          return yield* new Invalid({
+            message: `--env ${text} takes ${text}'s value from this environment, which doesn't set it`,
+          });
+        }
+
+        pairs.push([text, value.value]);
+      }
+    }
+
+    return pairs.length === 0 ? undefined : Object.fromEntries(pairs);
+  });
+
 export const exec = Command.make(
   "exec",
   {
@@ -290,9 +317,9 @@ export const exec = Command.make(
       Flag.optional
     ),
     env: Flag.String("env").pipe(
-      Flag.withMetavar("NAME=VALUE"),
+      Flag.withMetavar("NAME[=VALUE]"),
       Flag.withDescription(
-        "An environment variable for the command; repeat for more."
+        "An environment variable for the command, with NAME's value in this environment when no VALUE is given, as a secret should be, since a VALUE given shows in this process's arguments; repeat for more."
       ),
       Flag.atLeast(0)
     ),
@@ -317,7 +344,7 @@ export const exec = Command.make(
         Effect.catch(fail(flags.json))
       );
 
-      const env = yield* parsePairs("--env", flags.env).pipe(
+      const env = yield* environment(flags.env).pipe(
         Effect.catch(fail(flags.json))
       );
 

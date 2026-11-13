@@ -54,7 +54,8 @@ const execOn = (
     exitCode: 3,
     output: "hi\n",
     truncated: false,
-  })
+  }),
+  env: Record<string, string> = {}
 ) =>
   Effect.gen(function* () {
     const dir = yield* scratch;
@@ -81,6 +82,7 @@ const execOn = (
     const run = yield* cli(["exec", "--config", config, ...args], {
       server: stub,
       stdio,
+      env,
     });
 
     return { ...run, printed: printed.join(""), execs: stub.execs, stub };
@@ -738,20 +740,45 @@ describe("machines", () => {
       })
     );
 
-    it.effect("exec --env without a value is refused before any call", () =>
-      Effect.gen(function* () {
-        const { code, stderr, execs } = yield* execOn([
-          "--env",
-          "TOKEN",
-          "dev",
-          "--",
-          "true",
-        ]);
+    it.effect(
+      "exec --env NAME sends NAME's value in this environment, so the value is in no argument",
+      () =>
+        Effect.gen(function* () {
+          const { code, execs } = yield* execOn(
+            ["--env", "TOKEN", "--env", "MODE=fast", "dev", "--", "true"],
+            undefined,
+            { TOKEN: "t=1 secret" }
+          );
 
-        expect(code).toBe(1);
-        expect(stderr).toContain('--env "TOKEN" isn\'t a KEY=VALUE pair');
-        expect(execs).toStrictEqual([]);
-      })
+          expect(code).toBe(3);
+          expect(execs).toStrictEqual([
+            {
+              id: "dev",
+              argv: ["true"],
+              env: { TOKEN: "t=1 secret", MODE: "fast" },
+            },
+          ]);
+        })
+    );
+
+    it.effect(
+      "exec --env NAME that this environment doesn't set is refused before any call",
+      () =>
+        Effect.gen(function* () {
+          const { code, stderr, execs } = yield* execOn([
+            "--env",
+            "TOKEN",
+            "dev",
+            "--",
+            "true",
+          ]);
+
+          expect(code).toBe(1);
+          expect(stderr).toContain(
+            "--env TOKEN takes TOKEN's value from this environment, which doesn't set it"
+          );
+          expect(execs).toStrictEqual([]);
+        })
     );
 
     it.effect(
