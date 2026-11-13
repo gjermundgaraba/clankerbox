@@ -12,6 +12,7 @@ import type { HostError, Sizing } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Duration,
   Effect,
+  Exit,
   FileSystem,
   Layer,
   Match,
@@ -303,6 +304,20 @@ const freezerOf = (base: string) => `${base}_freeze`;
 
 const basePattern = /^base_(?<bootId>[^_]+)_(?<build>[^_]+)(?:_freeze)?$/u;
 
+// 16 hex digits of the seed's key, then the calling smolvm's PID, which Linux keeps under 2^22:
+// https://github.com/smol-machines/smolvm/blob/v1.34.1/src/image_seed.rs#L827
+// https://github.com/smol-machines/smolvm/blob/v1.34.1/src/image_seed.rs#L1019
+// https://man7.org/linux/man-pages/man5/proc_sys_kernel.5.html
+const seedBuilder = /^image-seed-[0-9a-f]{16}-(?<pid>[1-9]\d{0,6})$/u;
+
+const pidLimit = 2 ** 22;
+
+const seedCaller = (name: string): number | undefined => {
+  const pid = Number(seedBuilder.exec(name)?.groups?.["pid"]);
+
+  return pid < pidLimit ? pid : undefined;
+};
+
 const baseParts = (name: string): BaseName | undefined => {
   const { bootId, build } = basePattern.exec(name)?.groups ?? {};
 
@@ -486,12 +501,6 @@ export const make = (
     const observe = (machines: readonly Target[]) =>
       observeEach(machines, (machine) => state(machine.handle));
 
-    const boot = (native: string) =>
-      call(
-        ["machine", "start", "--name", native, "--branchable"],
-        `machine start ${native}`
-      );
-
     const resume = (native: string) =>
       call(["machine", "resume", "--name", native], `machine resume ${native}`);
 
@@ -593,6 +602,63 @@ export const make = (
 
     const removeNative = (native: string) =>
       Effect.flatMap(status(native), (recorded) => removing(native, recorded));
+
+    const listed = Effect.flatMap(
+      call(["machine", "ls", "--json"], "machine ls"),
+      (ran) =>
+        Effect.mapError(
+          decodeList(ran.stdout),
+          (error) =>
+            new Internal({
+              message: `smolvm machine ls answered something unexpected: ${error.message}`,
+            })
+        )
+    );
+
+    const seedBuilds = Effect.map(listed, (vms) =>
+      vms.flatMap(({ name }) => {
+        const pid = seedCaller(name);
+
+        return pid === undefined ? [] : [{ name, pid }];
+      })
+    );
+
+    const callEnded = (pid: number) =>
+      Effect.map(
+        Effect.orElseSucceed(
+          fs.exists(path.join("/proc", String(pid))),
+          () => true
+        ),
+        (exists) => !exists
+      );
+
+    const removeSeedBuilds = (left: (pid: number) => Effect.Effect<boolean>) =>
+      Effect.gen(function* () {
+        for (const { name, pid } of yield* seedBuilds) {
+          if (yield* left(pid)) {
+            yield* Effect.logWarning(
+              `removing ${name}, an image seed build that a smolvm call cut short left behind`
+            );
+            yield* removeNative(name);
+          }
+        }
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning(
+            `remove the image seed builds smolvm left behind: ${error.message}`
+          )
+        )
+      );
+
+    const boot = (native: string) =>
+      call(
+        ["machine", "start", "--name", native, "--branchable"],
+        `machine start ${native}`
+      ).pipe(
+        Effect.onExit((exit) =>
+          Exit.isSuccess(exit) ? Effect.void : removeSeedBuilds(callEnded)
+        )
+      );
 
     const updated = (native: string, to: Sizing) => {
       const flags = [
@@ -938,18 +1004,6 @@ export const make = (
       return named === undefined ? Effect.void : retireStale(named);
     };
 
-    const listed = Effect.flatMap(
-      call(["machine", "ls", "--json"], "machine ls"),
-      (ran) =>
-        Effect.mapError(
-          decodeList(ran.stdout),
-          (error) =>
-            new Internal({
-              message: `smolvm machine ls answered something unexpected: ${error.message}`,
-            })
-        )
-    );
-
     const builds = Effect.map(
       files(`couldn't list ${paths.store}`, fs.readDirectory(paths.store)),
       (entries) =>
@@ -1021,7 +1075,9 @@ export const make = (
 
     const heldMib = Effect.gen(function* () {
       const held = (yield* listed).flatMap(({ name }) =>
-        baseParts(name) === undefined ? [] : [scopeName(name)]
+        baseParts(name) === undefined && seedCaller(name) === undefined
+          ? []
+          : [scopeName(name)]
       );
 
       if (held.length === 0) {
@@ -1339,6 +1395,7 @@ export const make = (
           }
         }
 
+        yield* removeSeedBuilds(() => Effect.succeed(true));
         yield* Effect.forkIn(settle, layerScope);
       }),
       find: Effect.fn("Smolvm.find")((what, ref) => {

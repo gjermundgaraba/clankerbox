@@ -78,6 +78,7 @@ const inUse = (forward: string): Reply => ({
  */
 export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
   const vms = new Map<string, Vm>();
+  const unrecorded = new Set<string>();
 
   const record = (name: string, vm: Vm) => ({
     name,
@@ -102,12 +103,18 @@ export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
       const held = args.slice(3).map((scope) => {
         const { name } = scopeOf.exec(scope)?.groups ?? {};
 
-        return name !== undefined && vms.has(name)
+        return name !== undefined && (vms.has(name) || unrecorded.has(name))
           ? String(heldBytes)
           : "[not set]";
       });
 
       return { stdout: `${held.join("\n\n")}\n` };
+    }
+
+    if (args[0] === "kill") {
+      const { name } = scopeOf.exec(args.at(-1) ?? "")?.groups ?? {};
+
+      unrecorded.delete(name ?? "");
     }
 
     return args[1] === "--property=LoadState" ? { stdout: "loaded\n" } : {};
@@ -358,7 +365,14 @@ export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
     return call.file === "systemctl" ? systemctl(call) : smolvm(call);
   });
 
-  return { vms, spawner, faults };
+  const orphanVmm = (name: string) => {
+    vms.set(name, { state: "created", forwards: [] });
+    unrecorded.add(name);
+  };
+
+  const vmmsLeft = () => [...unrecorded];
+
+  return { vms, spawner, faults, orphanVmm, vmmsLeft };
 };
 
 /** Settings for a smolvm runtime over a scratch prefix holding `expanded`, its state on a short path for its sockets. */

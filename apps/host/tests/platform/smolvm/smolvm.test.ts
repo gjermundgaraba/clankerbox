@@ -2047,6 +2047,103 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
+    "a host that starts removes every image seed build a killed smolvm call left, the VM its record lost included",
+    () =>
+      Effect.gen(function* () {
+        const model = smolvmModel();
+        const left = `image-seed-0123456789abcdef-${process.pid}`;
+
+        model.orphanVmm(left);
+
+        const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
+
+        yield* runtime.startup;
+
+        expect(model.vms.has(left)).toBe(false);
+        expect(model.vmmsLeft()).toStrictEqual([]);
+      })
+  );
+
+  it.effect(
+    "a boot cut short or failed removes the seed build its smolvm call left, and keeps one whose call still runs",
+    () =>
+      Effect.gen(function* () {
+        for (const ends of ["cut", "failed"] as const) {
+          const model = smolvmModel();
+          const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
+          const left = "image-seed-0123456789abcdef-4194303";
+          const running = `image-seed-fedcba9876543210-${process.pid}`;
+
+          model.faults.reply = ({ args }) => {
+            if (args[1] !== "start") {
+              return undefined;
+            }
+
+            model.orphanVmm(left);
+            model.orphanVmm(running);
+
+            return ends === "cut"
+              ? { hangs: true }
+              : { exitCode: 1, stderr: "Error: image seed failed\n" };
+          };
+
+          const making = yield* Effect.forkChild(
+            Effect.exit(
+              runtime.make(machine, { _tag: "image", image }, { _tag: "none" })
+            )
+          );
+
+          yield* waitFor(
+            Effect.sync(() =>
+              model.spawner.calls.some(({ args }) => args[1] === "start")
+            ),
+            Boolean
+          );
+
+          model.faults.reply = undefined;
+
+          yield* ends === "cut"
+            ? Fiber.interrupt(making)
+            : Effect.asVoid(Fiber.join(making));
+
+          expect([model.vms.has(left), model.vms.has(running)]).toStrictEqual([
+            false,
+            true,
+          ]);
+          expect(model.vmmsLeft()).toStrictEqual([running]);
+        }
+      })
+  );
+
+  it.effect(
+    "a smolvm host counts a running image seed build's RAM as held",
+    () =>
+      Effect.gen(function* () {
+        const model = smolvmModel(1024 * 1024 * 1024);
+
+        const runtime = yield* runtimeOf(
+          { ...(yield* prepared()), ramBudgetMib: 2048 },
+          model.spawner
+        );
+
+        const admitted = (machines: readonly Held[]) =>
+          admitOn(runtime)({
+            action: "createMachine",
+            machine,
+            machines: [{ _tag: "booting", machine }, ...machines],
+          });
+
+        yield* admitted([]);
+
+        model.orphanVmm(`image-seed-0123456789abcdef-${process.pid}`);
+
+        const refused = yield* Effect.flip(admitted([]));
+
+        expect(refused._tag).toBe("Capacity");
+      })
+  );
+
+  it.effect(
     "a delete of a build whose base won't go keeps the build for find, so a retry with no handle retires the base",
     () =>
       Effect.gen(function* () {
@@ -2718,13 +2815,17 @@ layer(NodeServices.layer)((it) => {
           );
 
           const steps = ["status", "create", "start", "resize"];
+          const seedBuildsRead = failing === "start" ? ["ls"] : [];
 
           expect(error.message).toBe(
             `smolvm machine ${failing} copy-abcdefab exited 1: Error: database is locked`
           );
           expect(
             smolvmArgs(spawner.calls).map((args) => args[1])
-          ).toStrictEqual(steps.slice(0, steps.indexOf(failing) + 1));
+          ).toStrictEqual([
+            ...steps.slice(0, steps.indexOf(failing) + 1),
+            ...seedBuildsRead,
+          ]);
         }
       })
   );
@@ -2759,14 +2860,16 @@ layer(NodeServices.layer)((it) => {
 
         yield* runtime.startup;
         yield* waitFor(
-          Effect.sync(() =>
-            spawner.calls.some(({ args }) => args[1] === listing[1])
+          Effect.sync(
+            () =>
+              spawner.calls.filter(({ args }) => args[1] === listing[1]).length
           ),
-          (listed) => listed
+          (lists) => lists === 2
         );
         yield* runtime.make(copy, fromMachine(machine), copyPort);
 
         expect(smolvmArgs(spawner.calls)).toStrictEqual([
+          listing,
           listing,
           ["machine", "status", "--name", "dev-01234567", "--json"],
           [
@@ -2857,14 +2960,16 @@ layer(NodeServices.layer)((it) => {
 
         yield* runtime.startup;
         yield* waitFor(
-          Effect.sync(() =>
-            spawner.calls.some(({ args }) => args[1] === listing[1])
+          Effect.sync(
+            () =>
+              spawner.calls.filter(({ args }) => args[1] === listing[1]).length
           ),
-          (listed) => listed
+          (lists) => lists === 2
         );
         yield* runtime.deleteCheckpoint(ramCheckpoint);
 
         expect(smolvmArgs(spawner.calls)).toStrictEqual([
+          listing,
           listing,
           freezerStatus,
           baseStatus,
@@ -2889,7 +2994,11 @@ layer(NodeServices.layer)((it) => {
           (calls) => calls.some((call) => call[1] === prune[1])
         );
 
-        expect(smolvmArgs(spawner.calls)).toStrictEqual([listing, prune]);
+        expect(smolvmArgs(spawner.calls)).toStrictEqual([
+          listing,
+          listing,
+          prune,
+        ]);
       })
   );
 
@@ -3166,9 +3275,17 @@ layer(NodeServices.layer)((it) => {
           (scoped) => scoped.make(child, fromCheckpoint(buildRef), on(10_001))
         );
 
+        let lists = 0;
+
         const afterSettle = yield* cutWith(
           "5bfae059",
-          (args) => (args[1] === "ls" ? { stdout: "[]" } : undefined),
+          (args) => {
+            lists += args[1] === "ls" ? 1 : 0;
+
+            return args[1] === "ls" && lists === 2
+              ? { stdout: "[]" }
+              : undefined;
+          },
           (scoped) => scoped.startup
         );
 
