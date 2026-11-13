@@ -55,10 +55,12 @@ TLC checks these invariants on every reachable state:
 
 Only `Drifting.cfg` sets `Drifts` and `LandsLate`. Elsewhere no VM drifts or
 lands late, so `RestTrue` and `NoOrphan` keep their whole strength there. Under
-`Drifting.cfg`, `AnswerTrue` also excuses an answer given while the VM had
-drifted, after the request, since the last decided read, or while a late VM
-awaited the sweep: the client answers from the row's phase, and neither is in
-the row yet.
+`Drifting.cfg`, `AnswerTrue` excuses two answers, and only these, as the client
+answers from the row's phase and neither fault is in the row yet: an answer that
+the machine runs, to a request made before its VM drifted stopped, given before
+a read that saw the drift was decided; and an answer that the machine is gone,
+given while a VM that landed late awaits the sweep. Once the sweep deletes that
+VM, `late` is `swept` and excuses nothing more.
 
 ## Run it
 
@@ -165,6 +167,26 @@ A pass covers this scope, and only it:
 - **A step may begin over a cut link.** `Decide` records a make or a delete with
   the boot it last knew, where a loop reads the host first for the boot its `read`
   event carries, and rests when it can't. The model is the wider of the two.
+
+## What a pass doesn't cover
+
+A pass says nothing of these, which rest on tests or on nothing:
+
+- **One store and one control plane.** A second control plane over the same
+  hosts, a wiped store and a restored backup are out, as are a store's
+  migrations. README's leftovers and `apps/server/tests/platform/sqlite.test.ts`
+  cover what they leave.
+- **One machine, one host, one instance.** Copies, checkpoints, templates and
+  their builds, resize, the tailnet join, placement and a move on `Capacity`,
+  a host of another release or contract, and every other machine's loop are
+  out.
+- **No clock.** The two minutes a wait reads on before `Unavailable`, a failed
+  row's day, the retired window and an expiry are out: the model's faults end,
+  and its fairness answers every request.
+- **Drift and a late make only on `Drifting.cfg`,** without a crash, a
+  partition or a lost delivery, and each at most once.
+- **The host's own rules beyond the fence:** the RAM budget, a pin, a hook, a
+  guest's preparation, and what a runtime does to a VM inside a step.
 
 ## Coverage and sync
 

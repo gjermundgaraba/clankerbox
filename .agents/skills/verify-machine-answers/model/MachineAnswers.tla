@@ -35,7 +35,8 @@ VARIABLES
   drops,      \* deliveries lost so far
   drift,      \* none; unread once the VM stops by itself, until a read that
               \* saw it is decided; then read
-  late,       \* none; out once a make's call may yet land; then landed
+  late,       \* none; out once a make's call may yet land; then landed; swept
+              \* once the sweep deleted what landed
   sent        \* a sweep on its way to the host names the instance retired
 
 vars == <<row, up, script, read, known, linked, vm, boot, high, runs, net, cut,
@@ -83,7 +84,12 @@ Orphaned == (row.state = "absent" \/ row.state = Undone) /\ vm # "missing"
 
 Landed == late = "landed" /\ vm # "missing"
 
-Excused(k) == (drift = "unread" /\ cl[k].pre = "none") \/ Landed
+\* A drift stops a running VM, so it can falsify only an answer that it runs,
+\* to a request made before it. A late VM runs where none should, so it can
+\* falsify only an answer that the machine is gone.
+Excused(k) ==
+  \/ drift = "unread" /\ cl[k].pre = "none" /\ cl[k].d = "running"
+  \/ Landed /\ cl[k].d = "deleted"
 
 Finish(k, res, by) ==
   cl' = [cl EXCEPT ![k] = [@ EXCEPT !.pc = "done", !.res = res, !.by = by,
@@ -116,7 +122,7 @@ Request(k) ==
             /\ cl' = [cl EXCEPT ![k] = [@ EXCEPT !.pc = "done", !.d = d,
                                                  !.res = "ok",
                                                  !.vmAt = vm,
-                                                 !.excused = Landed]]
+                                                 !.excused = Landed /\ d = "deleted"]]
        ELSE IF row.desired = "deleted" /\ d # "deleted"
        THEN /\ cl' = [cl EXCEPT ![k] = [@ EXCEPT !.pc = "done", !.d = d,
                                                  !.res = "superseded",
@@ -384,9 +390,10 @@ Sweep ==
   /\ linked /\ sent /\ runs.id = 0 /\ vm # "missing"
   /\ vm' = "missing"
   /\ sent' = FALSE
+  /\ late' = IF late = "landed" THEN "swept" ELSE late
   /\ UNCHANGED <<row, up, script, read, known, linked, boot, high, runs, net,
                  cut, applied, cl, nextOp>>
-  /\ UNCHANGED <<faults, crashes, partitions, restarts, drops, drift, late>>
+  /\ UNCHANGED <<faults, crashes, partitions, restarts, drops, drift>>
 
 Init ==
   /\ row = Absent
