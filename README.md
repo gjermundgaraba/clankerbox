@@ -79,6 +79,8 @@ for t in storage-template.ext4 overlay-template.ext4; do
 done
 ```
 
+A box runs one smolvm host. smolvm counts each VM's uid up from the same base in every host's state and names its systemd scope by the VM alone, so a smolvm host holds the abstract unix socket `@clankerbox-smolvm-host` while it runs, and a second one, under any `stateDir`, refuses to start, naming the first's PID and `stateDir`. The kernel frees the name however a host ends, so an old `stateDir` left beside the live one stops nothing. The lock holds between hosts in one network namespace, as an abstract socket belongs to one, and a host older than 0.41 holds none, so stop an old host before you start a new one on its box. Any local process can take the name first: a host then refuses to start, saying so, and `ss -xlp | grep clankerbox-smolvm-host` names that process.
+
 smolvm runs every VM in `smolvm.slice`. Cap it at 97% of physical RAM, once per host, so that VMs that outgrow the RAM budget are killed rather than the host's own services. The host doesn't check for it; `systemctl show smolvm.slice -p MemoryMax` does.
 
 ```sh
@@ -173,6 +175,8 @@ clankerbox-server --config /etc/clankerbox/server.json
 The control plane exits 130 on SIGINT or SIGTERM and 1 when it fails.
 
 ### Upgrading from 0.40
+
+Stop a 0.40 smolvm host before you start the new one on its box, as an upgrade does in its unit: a 0.40 host holds no box lock, so the new one can't tell it runs.
 
 A host config's `kind` and its block become `runtime`, an object naming the host's one runtime with that block's settings: `"kind": "linux"` with `"linux": { "prefix": ... }` becomes `"runtime": { "smolvm": { "prefix": ... } }`, and `"kind": "mac"` with `"mac": { "binary": ... }` becomes `"runtime": { "tart": { "binary": ... } }`. A host whose config still says `kind` refuses to start, saying so. Nothing else in a host config or the server config changes, host IDs included. The host contract changed, so upgrade hosts and the control plane together.
 

@@ -48,6 +48,7 @@ import type {
 import type { HostSettings } from "../../settings.ts";
 import { allotted, checkRamBudget, inUse } from "../../usage.ts";
 import { cliIn, expect, failure, files, regularFiles } from "../process.ts";
+import { aloneOnBox, boxLock } from "./one-per-box.ts";
 import { traits } from "./traits.ts";
 
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
@@ -1554,7 +1555,8 @@ export const make = (
 
 export const layer = (
   settings: typeof SmolvmSettings.Type,
-  config: Pick<HostSettings, "stateDir" | "listen">
+  config: Pick<HostSettings, "stateDir" | "listen">,
+  lock = boxLock
 ): Layer.Layer<
   Runtime,
   HostError | CannotStart,
@@ -1564,6 +1566,8 @@ export const layer = (
     Runtime,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
+
+      yield* aloneOnBox(lock, config.stateDir);
 
       const bootId = yield* files(
         `couldn't read the host's boot ID from ${bootIdFile}`,

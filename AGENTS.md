@@ -146,7 +146,8 @@ or `composition/`.
 Adapters live in `platform/`: `bind-probe.ts` (`PortProbe`), `relay.ts`
 (`Relays`, a TCP listener that carries each connection through a runtime's
 dial), `tailscale.ts` (`Tailnet`, over Tailscale's API), `s3.ts` (`BuildStore`,
-over S3, path-style and signed), the runtimes `smolvm/`, `tart/`,
+over S3, path-style and signed), the runtimes `smolvm/` (the lock that keeps
+a box to one smolvm host in `one-per-box.ts`), `tart/`,
 `smol-cloud/` (smol cloud's API in `api.ts`, the SSH tunnel in `tunnel.ts`) and
 `boat/` (boat's REST API with its retries and headers in `api.ts`, the guest
 channel in `ssh.ts`, OpenSSH from the host pinned to the host key boat answers),
