@@ -689,10 +689,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a machine whose host can't be read shows its SSH login while it is asked to run, and none once asked to stop",
+    "a machine whose host can't be read shows its SSH login while it rests asked to run, and none once asked to stop or lost",
     () =>
       Effect.gen(function* () {
         const { client, fake } = yield* servedWithBuildOf(installsStart);
+
+        yield* client.create("gone", fromWeb);
+        yield* client.stopMachine({ id: "gone" });
+        fake.machines.clear();
+        yield* Effect.flip(client.startMachine({ id: "gone" }));
 
         const made = yield* client.create("dev", fromWeb);
         yield* client.create("idle", fromWeb);
@@ -702,10 +707,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const listed = yield* client.listMachines();
 
         expect(
-          listed.map(({ id, state, ssh }) => [id, state, ssh])
+          listed.map(({ id, state, phase, ssh }) => [id, state, phase, ssh])
         ).toStrictEqual([
-          ["dev", "unknown", made.ssh],
-          ["idle", "unknown", undefined],
+          ["gone", "unknown", "waiting", undefined],
+          ["dev", "unknown", "waiting", made.ssh],
+          ["idle", "unknown", "waiting", undefined],
         ]);
       })
   );

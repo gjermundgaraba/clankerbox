@@ -66,7 +66,9 @@ const loginOf = (found: MachineRow, state: MachineState): Machine["ssh"] => {
 
   const runs =
     state === "running" ||
-    (state === "unknown" && desiredOf(found) === "running");
+    (state === "unknown" &&
+      desiredOf(found) === "running" &&
+      phaseOf(found.state) === "settled");
 
   return runs && hostKey !== undefined && endpoint?.host !== undefined
     ? { user: loginUser, host: endpoint.host, port: endpoint.port }

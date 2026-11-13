@@ -164,7 +164,7 @@ export const templateRef = (
  * `<type> <base64>`, is on a machine once preparation has read one from its sshd, which a machine
  * made from a base its host doesn't prepare may lack. `ssh` is the login sshd answers: it is only
  * on a machine with a `hostKey` and an endpoint, while it runs, or while its host can't be read
- * (`state` `unknown`) and it is asked to run. `tailnet` is on a running machine of a host that
+ * (`state` `unknown`) and it was last read running and is asked to run still. `tailnet` is on a running machine of a host that
  * joins its machines to a tailnet, once the host has checked it.
  */
 export const Machine = Schema.Struct({
