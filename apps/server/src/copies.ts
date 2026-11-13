@@ -103,7 +103,7 @@ export const cloned = (
 export const refusedBySource = (
   store: Store,
   found: MachineRow,
-  traits: RuntimeTraits | undefined
+  traits: RuntimeTraits
 ): Effect.Effect<NotFound | NotBuilt | Unsizable | undefined, Internal> =>
   Effect.gen(function* () {
     const { source } = found;
@@ -124,10 +124,6 @@ export const refusedBySource = (
             message: `build ${found.template} went before machine ${found.name} could clone it`,
             template: templateRef(found.template).template,
           });
-    }
-
-    if (traits === undefined) {
-      return undefined;
     }
 
     return yield* copied(found.name, from.value, found, traits).pipe(

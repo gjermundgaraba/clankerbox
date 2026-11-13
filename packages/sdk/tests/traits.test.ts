@@ -28,6 +28,24 @@ const Bases = Schema.Array(Schema.Literals(["ubuntu", "macos"]));
 
 const State = Schema.Literals(["running", "stopped", "paused"]);
 
+const Given = Schema.Union([
+  Schema.TaggedStruct("free", {}),
+  Schema.TaggedStruct("classes", {
+    classes: Schema.NonEmptyArray(
+      Schema.Struct({ name: Schema.Literals(["a", "b"]), ...Sizes.fields })
+    ),
+  }),
+]);
+
+type Given = typeof Given.Type;
+
+const gives = (given: Given, sizes: typeof Sizes.Type): boolean =>
+  given._tag === "free" ||
+  given.classes.some(
+    ({ cpu, ramMib, diskGib }) =>
+      cpu === sizes.cpu && ramMib === sizes.ramMib && diskGib === sizes.diskGib
+  );
+
 describe("offers", () => {
   it.effect.prop(
     "a host creates from each base it names, whatever its runtime",
@@ -84,31 +102,19 @@ describe("fitted", () => {
   );
 
   it.effect.prop(
-    "a runtime of size classes gives each class, and sizes one size off a class only where another class is exactly them",
-    { traits: RuntimeTraits, sizes: Sizes, extra: Sizes },
-    ({ traits, sizes, extra }) =>
+    "a runtime of size classes gives each class exactly, and no other sizes",
+    { traits: RuntimeTraits, given: Given, sizes: Sizes },
+    ({ traits, given, sizes }) =>
       Effect.sync(() => {
-        const classed = {
-          ...traits,
-          sizes: {
-            _tag: "classes" as const,
-            classes: [
-              { name: "a", ...sizes },
-              { name: "b", ...extra },
-            ] as const,
-          },
-        };
+        const sized = { ...traits, sizes: given };
 
-        expect(fitted(classed, sizes)).toBe(true);
-        expect(fitted(classed, extra)).toBe(true);
+        expect(fitted(sized, sizes)).toBe(gives(given, sizes));
 
-        const off = { ...sizes, cpu: sizes.cpu + 1 };
-
-        expect(fitted(classed, off)).toBe(
-          off.cpu === extra.cpu &&
-            off.ramMib === extra.ramMib &&
-            off.diskGib === extra.diskGib
-        );
+        if (given._tag === "classes") {
+          for (const each of given.classes) {
+            expect(fitted(sized, each)).toBe(true);
+          }
+        }
       })
   );
 });
@@ -125,40 +131,52 @@ describe("resizable", () => {
 
   it.effect.prop(
     "a state the runtime resizes `none` refuses any resize, and one it resizes `any` takes every one it gives",
-    { traits: RuntimeTraits, state: State, from: Sizes, to: Sizes },
-    ({ traits, state, from, to }) =>
+    {
+      traits: RuntimeTraits,
+      given: Given,
+      state: State,
+      from: Sizes,
+      to: Sizes,
+    },
+    ({ traits, given, state, from, to }) =>
       Effect.sync(() => {
         if (state === "paused") {
           return;
         }
 
-        const decided = resizable(traits, state, from, to);
+        const sized = { ...traits, sizes: given };
+        const decided = resizable(sized, state, from, to);
 
         if (traits.resize[state] === "none") {
           expect(decided).toBe("refuses");
         }
 
         if (traits.resize[state] === "any") {
-          expect(decided).toBe(fitted(traits, to) ? "resizes" : "unfitted");
+          expect(decided).toBe(gives(given, to) ? "resizes" : "unfitted");
         }
       })
   );
 
   it.effect.prop(
     "a state the runtime only grows takes a resize it gives exactly when neither vCPUs nor RAM go down",
-    { traits: RuntimeTraits, state: State, from: Sizes, to: Sizes },
-    ({ traits, state, from, to }) =>
+    {
+      traits: RuntimeTraits,
+      given: Given,
+      state: State,
+      from: Sizes,
+      to: Sizes,
+    },
+    ({ traits, given, state, from, to }) =>
       Effect.sync(() => {
         if (state === "paused" || traits.resize[state] !== "grow") {
           return;
         }
 
         const lower = to.cpu < from.cpu || to.ramMib < from.ramMib;
+        const fits = gives(given, to) ? "resizes" : "unfitted";
 
-        const given = fitted(traits, to) ? "resizes" : "unfitted";
-
-        expect(resizable(traits, state, from, to)).toBe(
-          lower ? "shrinks" : given
+        expect(resizable({ ...traits, sizes: given }, state, from, to)).toBe(
+          lower ? "shrinks" : fits
         );
       })
   );
@@ -178,19 +196,21 @@ describe("copySizable", () => {
 
   it.effect.prop(
     "a copy at its source's own sizes is made wherever the runtime gives them",
-    { traits: RuntimeTraits, from: Sizes },
-    ({ traits, from }) =>
+    { traits: RuntimeTraits, given: Given, from: Sizes },
+    ({ traits, given, from }) =>
       Effect.sync(() => {
-        expect(copySizable(traits, from, from)).toBe(fitted(traits, from));
+        expect(copySizable({ ...traits, sizes: given }, from, from)).toBe(
+          gives(given, from)
+        );
       })
   );
 
   it.effect.prop(
     "copies that grow take no lower vCPUs or RAM, copies of any sizes take any vCPUs and RAM, and copies of the same sizes take only the source's, of the sizes the runtime gives",
-    { traits: RuntimeTraits, from: Sizes, to: Sizes },
-    ({ traits, from, to }) =>
+    { traits: RuntimeTraits, given: Given, from: Sizes, to: Sizes },
+    ({ traits, given, from, to }) =>
       Effect.sync(() => {
-        const disk = to.diskGib >= from.diskGib && fitted(traits, to);
+        const disk = to.diskGib >= from.diskGib && gives(given, to);
         const grows = to.cpu >= from.cpu && to.ramMib >= from.ramMib;
 
         const equal =
@@ -198,12 +218,16 @@ describe("copySizable", () => {
           to.ramMib === from.ramMib &&
           to.diskGib === from.diskGib;
 
-        expect(copySizable({ ...traits, copies: "grow" }, from, to)).toBe(
-          disk && grows
-        );
-        expect(copySizable({ ...traits, copies: "any" }, from, to)).toBe(disk);
-        expect(copySizable({ ...traits, copies: "same" }, from, to)).toBe(
-          equal && fitted(traits, to)
+        const sized = (copies: RuntimeTraits["copies"]) => ({
+          ...traits,
+          copies,
+          sizes: given,
+        });
+
+        expect(copySizable(sized("grow"), from, to)).toBe(disk && grows);
+        expect(copySizable(sized("any"), from, to)).toBe(disk);
+        expect(copySizable(sized("same"), from, to)).toBe(
+          equal && gives(given, to)
         );
       })
   );

@@ -395,14 +395,11 @@ export const make = (
     const looking = (found: MachineRow) =>
       Effect.gen(function* () {
         const { name } = found;
+        const info = yield* hosts.read(found.host);
 
         const refused =
           found.state === "making.due"
-            ? yield* refusedBySource(
-                store,
-                found,
-                hosts.known(found.host)?.traits
-              )
+            ? yield* refusedBySource(store, found, info.traits)
             : undefined;
 
         if (refused !== undefined) {
@@ -414,7 +411,6 @@ export const make = (
             ? yield* stateOf(hosts, found)
             : "unknown";
 
-        const info = yield* hosts.read(found.host);
         const check = tailnets.get(name) ?? firstCheck;
 
         const answer = yield* applying(name, {

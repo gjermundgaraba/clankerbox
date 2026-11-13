@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { accepts } from "@gjermundgaraba/clankerbox-host/testing";
+import { accepts, presets } from "@gjermundgaraba/clankerbox-host/testing";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Logger, Option, Schedule } from "effect";
 import { expect } from "vite-plus/test";
@@ -486,6 +486,63 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             ["restore copy", "deleteCheckpoint snap"].includes(call)
           )
         ).toStrictEqual(["restore copy", "deleteCheckpoint snap"]);
+      })
+  );
+
+  it.effect(
+    "a restore recorded but never sent, at sizes its copy can't take, is refused by its host's traits as it answers, not the copy's stamp, though the host was down when the control plane restarted",
+    () =>
+      Effect.gen(function* () {
+        const { client, first, fake, planned, restart } = yield* killedPlane({
+          recheck: Duration.millis(50),
+        });
+
+        const [host] = planned.hosts;
+
+        yield* client.create("dev", request("dev"));
+        yield* client.captureCheckpoint({ machine: "dev", name: "snap" });
+        fake.calls.length = 0;
+
+        const template = Option.getOrThrow(
+          yield* first.store.findMachine("dev")
+        );
+
+        yield* first.store.insertMachine({
+          ...template,
+          name: "copy",
+          instance: "unsent",
+          handle: undefined,
+          endpoint: undefined,
+          traits: presets.tart.traits,
+          state: "making.due",
+          prepared: false,
+          hostKey: undefined,
+          ramMib: 512,
+          source: { kind: "checkpoint", name: "snap" },
+        });
+
+        yield* host!.dispose;
+
+        const second = yield* restart;
+
+        yield* Effect.sleep(Duration.millis(200));
+        yield* restartedHost(host!);
+
+        const copy = yield* eventually(
+          second.client.getMachine({ id: "copy" }),
+          ({ phase }) => ["settled", "failed"].includes(phase)
+        );
+
+        expect([
+          copy.phase,
+          copy.error?._tag,
+          copy.error?.message,
+        ]).toStrictEqual([
+          "failed",
+          "Unsizable",
+          "a smolvm copy holds its source's RAM, so machine copy's vCPUs and RAM only grow from the source's 1 vCPUs and 1G",
+        ]);
+        expect(fake.calls).not.toContain("restore copy");
       })
   );
 
