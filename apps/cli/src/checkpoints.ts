@@ -41,13 +41,18 @@ const checkpointColumns: ReadonlyArray<
   ["AGE", (checkpoint, now) => age(checkpoint.createdAt, now)],
 ];
 
+const listColumns: typeof checkpointColumns = [
+  ...checkpointColumns,
+  ["ERROR", (checkpoint) => checkpoint.error?._tag ?? "-"],
+];
+
 export const checkpointRows = (
   checkpoints: readonly Checkpoint[],
   now: DateTime.Utc
 ) => [
-  checkpointColumns.map(([label]) => label),
+  listColumns.map(([label]) => label),
   ...checkpoints.map((checkpoint) =>
-    checkpointColumns.map(([, cell]) => cell(checkpoint, now))
+    listColumns.map(([, cell]) => cell(checkpoint, now))
   ),
 ];
 

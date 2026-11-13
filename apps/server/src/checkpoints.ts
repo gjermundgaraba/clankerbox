@@ -436,7 +436,6 @@ export const make = (settings: {
       list: Effect.fn("Checkpoints.list")((filter) =>
         Effect.map(store.checkpoints, (records) =>
           records.flatMap((record) =>
-            record.state === "ready" &&
             record.build === undefined &&
             labelledWith(record.labels, filter.labels)
               ? [shown(record)]

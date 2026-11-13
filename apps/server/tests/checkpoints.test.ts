@@ -460,7 +460,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a capture of a stopped machine on a ram runtime is WrongState, leaves nothing on its host, and leaves a failed row no list shows",
+    "a capture of a stopped machine on a ram runtime is WrongState, leaves nothing on its host, and leaves a failed row a list shows as a get does",
     () =>
       Effect.gen(function* () {
         const served = yield* withSource();
@@ -481,7 +481,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           phase: "failed",
           error: { _tag: "WrongState" },
         });
-        expect(yield* checkpointIds(client)).toStrictEqual([]);
+        expect(yield* client.listCheckpoints()).toMatchObject([
+          { id: "cold", phase: "failed", error: { _tag: "WrongState" } },
+        ]);
         expect(host.fake.calls).not.toContain("deleteCheckpoint cold");
       })
   );
@@ -591,7 +593,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(missing._tag).toBe("Missing");
         expect(none._tag).toBe("NotFound");
-        expect(yield* checkpointIds(client)).toStrictEqual([]);
+        expect(
+          (yield* client.listCheckpoints()).map(({ id, phase, error }) => [
+            id,
+            phase,
+            error?._tag,
+          ])
+        ).toStrictEqual([["snap", "failed", "Missing"]]);
       })
   );
 
@@ -1001,7 +1009,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a capture under way is no checkpoint yet: a restore of it is NotFound and no list shows it",
+    "a capture under way is no checkpoint to restore yet: a restore of it is NotFound, and a list shows it capturing as a get does",
     () =>
       Effect.gen(function* () {
         const { client, host, machines, checkpoints } = yield* withSource();
@@ -1014,14 +1022,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           machines.restore({ checkpoint: "snap", name: "copy" })
         );
 
-        const listed = yield* checkpointIds(client);
+        const listed = yield* client.listCheckpoints();
         const got = yield* client.getCheckpoint({ id: "snap" });
 
         yield* release;
-        yield* eventually(checkpointIds(client), (ids) => ids.length === 1);
 
         expect(restoring._tag).toBe("NotFound");
-        expect(listed).toStrictEqual([]);
+        expect(listed).toStrictEqual([got]);
         expect(got.phase).toBe("capturing");
       })
   );
@@ -1583,12 +1590,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           client.deleteCheckpoint({ id: "snap" })
         );
 
-        const unlisted = yield* checkpointIds(client);
+        const listed = yield* client.listCheckpoints();
 
         yield* gone(served, "snap");
 
         expect(error.message).toBe("EBUSY");
-        expect(unlisted).toStrictEqual([]);
+        expect(listed.map(({ id, phase }) => [id, phase])).toStrictEqual([
+          ["snap", "deleting"],
+        ]);
         expect(host.fake.calls).toStrictEqual([
           "deleteCheckpoint snap",
           "deleteCheckpoint snap",

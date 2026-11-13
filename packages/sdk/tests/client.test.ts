@@ -158,7 +158,10 @@ describe("client", () => {
         );
 
         expect(seen.machines.map(({ id }) => id)).toStrictEqual(["dev"]);
-        expect(seen.checkpoints.map(({ id }) => id)).toStrictEqual(["snap"]);
+        expect(seen.checkpoints.map(({ id }) => id)).toStrictEqual([
+          "snap",
+          "taking",
+        ]);
         expect(seen.hosts).toMatchObject([{ state: "up", bases: ["ubuntu"] }]);
         expect(seen.capacity.unreachable).toStrictEqual(["mac"]);
       })

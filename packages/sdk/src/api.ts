@@ -188,7 +188,7 @@ export const Http = ActionHttp.make(
       ...read,
       error: listing,
       description:
-        "List every ready checkpoint, or those carrying every label given.",
+        "List every checkpoint, or those carrying every label given, in any phase, as getCheckpoint reads each: one capturing, ready, failed with its error, or deleting. Only a `ready` one can be restored.",
       input: ListFilter,
       success: Schema.Array(Checkpoint),
     }),

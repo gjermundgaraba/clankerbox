@@ -756,8 +756,8 @@ export const stubServer = (options: StubServerOptions = {}) => {
         "listCheckpoints",
         "checkpoint.list",
         Effect.sync(() =>
-          [...checkpoints.values()].filter(
-            (row) => row.phase === "ready" && labelledWith(row.labels, labels)
+          [...checkpoints.values()].filter((row) =>
+            labelledWith(row.labels, labels)
           )
         )
       ),

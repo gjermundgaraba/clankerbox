@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { ScriptFailed } from "@gjermundgaraba/clankerbox-sdk";
+import { Missing, ScriptFailed } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import {
   checkpoint,
@@ -159,7 +159,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "checkpoint list shows every ready checkpoint with its kind and machine",
+    "checkpoint list shows every checkpoint in any phase with its kind, machine and error",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
@@ -169,7 +169,13 @@ layer(NodeServices.layer)((it) => {
           checkpoints: [
             checkpoint("snap", { machine: "dev" }),
             other,
-            checkpoint("broken", { phase: "failed" }),
+            checkpoint("broken", {
+              phase: "failed",
+              error: new Missing({
+                message: "machine dev is gone",
+                machine: "dev",
+              }),
+            }),
           ],
         });
 
@@ -181,7 +187,7 @@ layer(NodeServices.layer)((it) => {
         const rows = stdout.split("\n").map((line) => line.split(/\s+/u));
 
         expect(code).toBe(0);
-        expect(rows).toHaveLength(3);
+        expect(rows).toHaveLength(4);
         expect(rows[0]).toStrictEqual([
           "ID",
           "PHASE",
@@ -189,6 +195,7 @@ layer(NodeServices.layer)((it) => {
           "MACHINE",
           "BASE",
           "AGE",
+          "ERROR",
         ]);
         expect(rows[1]?.slice(0, 5)).toStrictEqual([
           "snap",
@@ -204,6 +211,8 @@ layer(NodeServices.layer)((it) => {
           "dev",
           "ubuntu",
         ]);
+        expect(rows[3]?.slice(0, 2)).toStrictEqual(["broken", "failed"]);
+        expect(rows[3]?.at(-1)).toBe("Missing");
       })
   );
 
