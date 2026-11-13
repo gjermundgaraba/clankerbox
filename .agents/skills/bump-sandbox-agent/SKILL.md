@@ -105,8 +105,26 @@ publish, change production hosts, or commit unless asked.
   `CODEX_API_KEY`) or in the user's `~/.claude.json` and
   `~/.claude/.credentials.json` (`extract_all_credentials`,
   server/packages/agent-credentials/src/lib.rs, whose
-  `include_oauth` is on by default). Ours: the recipes' `agent.env`, sourced into
-  the server's environment at every launch.
+  `include_oauth` is on by default). Ours: the recipes' `agent.env`, which
+  `setup.sh` installs as `/etc/sandbox-agent.env`, and which `serve.sh`,
+  installed as `/usr/local/bin/sandbox-agent-serve`, sources into the
+  server's environment at every launch. `/etc/clankerbox/` holds only the
+  hooks the host runs by name.
+- A request's POST waits for the agent's answer for
+  `SANDBOX_AGENT_ACP_REQUEST_TIMEOUT_MS`, 2 min unless set
+  (`DEFAULT_REQUEST_TIMEOUT_MS`,
+  server/packages/sandbox-agent/src/acp_proxy_runtime.rs). Past it, `post`
+  (server/packages/acp-http-adapter/src/process.rs) asks
+  `try_process_exit_info`, which waits on the `child` lock that
+  `spawn_exit_watcher` holds until the agent exits, so the POST stays open with
+  no answer while the agent runs; the turn's answer still comes on the SSE
+  stream. Ours: each recipe's `serve.sh`, which starts the server, sources
+  the `agent.env` its launcher names and sets the bound to a day only if
+  that left it unset. `tests/recipes.test.ts` takes what each recipe's
+  launcher runs, the Ubuntu start hook's command and the macOS launch
+  daemon's `ProgramArguments`, checks it is the `serve.sh` and the
+  `agent.env` where `setup.sh` installs them, and runs it as installed under
+  a scratch root, over a stand-in server, with and without an `agent.env`.
 - `@sandbox-agent/cli`, the SDK's optional dependency, carries a server binary
   for the machine the SDK runs on. Ours: `ignoredOptionalDependencies` in
   `pnpm-workspace.yaml` keeps it out of this workspace.

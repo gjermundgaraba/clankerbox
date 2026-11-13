@@ -27,6 +27,7 @@ fetch "https://nodejs.org/dist/v$node_version/node-v$node_version-linux-x64.tar.
 tar -xJf /var/tmp/node.tar.xz -C /usr/local --strip-components=1 --no-same-owner
 rm /var/tmp/node.tar.xz
 
+install -m 755 serve.sh /usr/local/bin/sandbox-agent-serve
 # The agents run as `admin`: as root, Claude Code offers no bypass-permissions mode.
 if [ -s agent.env ]; then
   install -m 600 -o admin -g "$(id -gn admin)" agent.env /etc/sandbox-agent.env
@@ -73,10 +74,7 @@ if running && ! answers_within 10; then
 fi
 
 if ! running; then
-  su - admin -c '
-    if [ -r /etc/sandbox-agent.env ]; then set -a; . /etc/sandbox-agent.env; set +a; fi
-    setsid -f sandbox-agent server --no-token --no-telemetry >/dev/null 2>&1
-  '
+  su - admin -c 'setsid -f /usr/local/bin/sandbox-agent-serve /etc/sandbox-agent.env >/dev/null 2>&1'
 fi
 
 if ! answers_within 20; then

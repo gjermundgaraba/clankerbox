@@ -24,6 +24,7 @@ fetch "https://nodejs.org/dist/v$node_version/node-v$node_version-darwin-arm64.t
 tar -xzf /var/tmp/node.tar.gz -C /usr/local --strip-components=1 --no-same-owner
 rm /var/tmp/node.tar.gz
 
+install -m 755 serve.sh /usr/local/bin/sandbox-agent-serve
 if [ -s agent.env ]; then
   install -m 600 -o admin -g staff agent.env /etc/sandbox-agent.env
 fi
@@ -50,9 +51,8 @@ cat >/Library/LaunchDaemons/dev.clankerbox.sandbox-agent.plist <<'PLIST'
   <string>/Users/admin</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/sh</string>
-    <string>-c</string>
-    <string>if [ -r /etc/sandbox-agent.env ]; then set -a; . /etc/sandbox-agent.env; set +a; fi; exec /usr/local/bin/sandbox-agent server --no-token --no-telemetry</string>
+    <string>/usr/local/bin/sandbox-agent-serve</string>
+    <string>/etc/sandbox-agent.env</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
