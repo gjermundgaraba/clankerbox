@@ -19,6 +19,7 @@ import * as Tailscale from "../platform/tailscale.ts";
 import * as Reach from "../reach.ts";
 import { CannotStart, Runtime } from "../runtime.ts";
 import type { HostSettings } from "../settings.ts";
+import { journal } from "./journal.ts";
 import { routes } from "./routes.ts";
 
 export type ServerLayer = Layer.Layer<
@@ -72,7 +73,10 @@ export const hostLayer = <E, R>(
   HostError | CannotStart | E,
   R | FileSystem.FileSystem | Path.Path | HttpClient.HttpClient
 > =>
-  HttpRouter.serve(routes(config)).pipe(
+  HttpRouter.serve(routes(config), {
+    disableLogger: true,
+    middleware: journal,
+  }).pipe(
     Layer.provideMerge(
       Layer.catchTag(server, "ServeError", (error) =>
         Layer.effectContext(

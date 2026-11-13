@@ -220,6 +220,7 @@ interface Entry {
 
 const ended = (
   progress: Progress,
+  id: string,
   name: string,
   exit: Exit.Exit<void, HostError>
 ) =>
@@ -227,13 +228,13 @@ const ended = (
     if (Exit.isSuccess(exit)) {
       progress.status = "done";
 
-      return;
+      return yield* Effect.logInfo(`${name} done, operation ${id}`);
     }
 
     if (Cause.hasInterruptsOnly(exit.cause)) {
       progress.status = "cancelled";
 
-      return;
+      return yield* Effect.logInfo(`${name} cancelled, operation ${id}`);
     }
 
     const error = Option.getOrElse(
@@ -245,8 +246,10 @@ const ended = (
     progress.error = error;
 
     yield* Cause.hasDies(exit.cause)
-      ? Effect.logError(`${name} died:\n${Cause.pretty(exit.cause)}`)
-      : Effect.logWarning(`${name} failed: ${error.message}`);
+      ? Effect.logError(
+          `${name} died, operation ${id}:\n${Cause.pretty(exit.cause)}`
+        )
+      : Effect.logWarning(`${name} failed, operation ${id}: ${error.message}`);
   });
 
 type Make = Extract<Step, { readonly _tag: "make" }>;
@@ -1128,7 +1131,7 @@ export const make = (
                       Effect.uninterruptible(forgetting(before)),
                       work
                     ),
-                (exit) => ended(progress, name, exit)
+                (exit) => ended(progress, id, name, exit)
               ),
               hostScope
             );

@@ -239,6 +239,60 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
+  it.effect(
+    "a host's journal holds each step's end with its operation, and no line for a request it answers",
+    () =>
+      Effect.gen(function* () {
+        const logged: string[] = [];
+
+        const { url, fake } = yield* serve({
+          logger: Logger.make(({ message, logLevel }) =>
+            logged.push(`${logLevel} ${[message].flat().join(" ")}`)
+          ),
+        });
+
+        yield* deliver(url, made("op-1"));
+
+        const { outcome } = yield* finished(url, "op-1");
+
+        yield* post(url, "readHost", {});
+        yield* post(url, "collectOperation", { id: "op-1" });
+
+        fake.failNextObserve(new Internal({ message: "smolvm didn't answer" }));
+
+        const failed = yield* post(url, "readMachines", {
+          machines: [
+            { name: "dev", instance: dev.instance, handle: outcome.handle },
+          ],
+        });
+
+        const refused = yield* deliver(url, made("op-2", 1));
+
+        fake.dieNextObserve();
+
+        const died = yield* post(url, "readMachines", {
+          machines: [
+            { name: "dev", instance: dev.instance, handle: outcome.handle },
+          ],
+        });
+
+        expect([failed.status, refused.status, died.status]).toStrictEqual([
+          500, 409, 500,
+        ]);
+        expect(logged).toStrictEqual([
+          expect.stringMatching(/^Info Listening on /u),
+          "Info make machine dev done, operation op-1",
+          expect.stringMatching(
+            /^Error Sent HTTP response .*smolvm didn't answer/su
+          ),
+          expect.stringMatching(
+            /^Error the smolvm runtime's read died:\n.*observe blew up/su
+          ),
+          expect.stringMatching(/^Error Sent HTTP response .*read died/su),
+        ]);
+      })
+  );
+
   it.effect("a read the runtime fails answers its Internal", () =>
     Effect.gen(function* () {
       const { url, fake } = yield* serve();

@@ -161,7 +161,8 @@ accounts. A domain file never imports `platform/` or `composition/`.
 
 `composition/` assembles the host: `config.ts` reads the config file,
 `runtimes.ts` is the registry of runtimes, one entry each under the name a host
-config's `runtime` gives it, with its settings and its Layer, `routes.ts` serves the host contract, and `host.ts` builds the
+config's `runtime` gives it, with its settings and its Layer, `routes.ts` serves the host contract, `journal.ts` is what its log holds of
+the requests it serves, and `host.ts` builds the
 host over a runtime Layer and a server Layer it is given, with the config's
 tailnet and build store, if any.
 
