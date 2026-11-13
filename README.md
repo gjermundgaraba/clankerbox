@@ -238,7 +238,7 @@ The client config is `$XDG_CONFIG_HOME/clankerbox/config.json` (`~/.config` when
 }
 ```
 
-A machine made from a template's build, and a fork or restore of one, is logged in to as `admin`, with the keys of the server config's `authorizedKeys`. A create from a base gets no keys, and a host prepares a base only where its images lack `admin`, as on smol cloud and boat: on smolvm such a machine has no `admin` and no sshd, and on a Mac it has the base's own `admin`. A machine shows an `SSH` login only once its host has read it an SSH host key, so one without sshd shows none, and `exec` reaches it.
+A machine made from a template's build, and a fork or restore of one, is logged in to as `admin`, with the keys of the server config's `authorizedKeys`. A create from a base gets no keys, and only smol cloud and boat prepare it, creating `admin` and installing sshd as a build's setup does: on smolvm, whose images lack both, it has no `admin` and no sshd, and on a Mac it has the base's own `admin`. A machine shows an `SSH` login only once its host has read it an SSH host key, so one without sshd shows none, and `exec` reaches it.
 
 ```sh
 clankerbox create dev --template web       # waits until it runs, prints dev
