@@ -344,12 +344,13 @@ export const builtFrom = (
 
 /**
  * An operator's view of a host: `up` with what it reported, `draining` when placement passes it
- * over, or `unreachable` with why. `runtime` names what it drives, whose `traits` it answers, and
- * `runtimeVersion` is that runtime's own version.
+ * over, `unreachable` with why, or `incompatible`, one that answers but of another release or in
+ * another contract, with why, which the control plane uses for nothing. `runtime` names what it
+ * drives, whose `traits` it answers, and `runtimeVersion` is that runtime's own version.
  */
 export const Host = Schema.Struct({
   id: HostId,
-  state: Schema.Literals(["up", "draining", "unreachable"]),
+  state: Schema.Literals(["up", "draining", "unreachable", "incompatible"]),
   runtime: Schema.optionalKey(RuntimeName),
   traits: Schema.optionalKey(RuntimeTraits),
   version: Schema.optionalKey(Schema.String),
@@ -387,9 +388,18 @@ export const Usage = Schema.Union([
 
 export type Usage = typeof Usage.Type;
 
+/** A host that reported no usage: `unreachable` when it didn't answer, or `incompatible`, and why. */
+export const Unreported = Schema.Struct({
+  host: HostId,
+  state: Schema.Literals(["unreachable", "incompatible"]),
+  problem: Schema.String,
+}).annotate({ identifier: "Unreported" });
+
+export type Unreported = typeof Unreported.Type;
+
 export const CapacityReport = Schema.Struct({
   usage: Schema.Array(Usage),
-  unreachable: Schema.Array(HostId),
+  unreported: Schema.Array(Unreported),
 }).annotate({ identifier: "CapacityReport" });
 
 export type CapacityReport = typeof CapacityReport.Type;

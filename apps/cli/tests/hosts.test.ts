@@ -108,7 +108,19 @@ layer(NodeServices.layer)((it) => {
               { host: "mac", resource: "cpu", unread: ["review", "ci"] },
               { host: "mac", resource: "ramMib", unread: ["review", "ci"] },
             ],
-            unreachable: ["spare"],
+            unreported: [
+              {
+                host: "spare",
+                state: "unreachable",
+                problem: "host spare didn't answer in time",
+              },
+              {
+                host: "old",
+                state: "incompatible",
+                problem:
+                  "host old runs clankerbox 0.39.4, and this control plane 0.41.0",
+              },
+            ],
           },
         });
 
@@ -137,7 +149,8 @@ layer(NodeServices.layer)((it) => {
         ]);
         expect(stderr.split("\n")).toStrictEqual([
           "clankerbox: mac couldn't read the state of review, ci, so it shows ? for what they use",
-          "clankerbox: host spare didn't answer",
+          "clankerbox: host spare didn't report its capacity: host spare didn't answer in time",
+          "clankerbox: host old is incompatible: host old runs clankerbox 0.39.4, and this control plane 0.41.0",
         ]);
         expect(JSON.parse(json.stdout)).toMatchObject({
           usage: [
@@ -147,7 +160,10 @@ layer(NodeServices.layer)((it) => {
             { host: "mac", resource: "cpu", unread: ["review", "ci"] },
             { host: "mac", resource: "ramMib", unread: ["review", "ci"] },
           ],
-          unreachable: ["spare"],
+          unreported: [
+            { host: "spare", state: "unreachable" },
+            { host: "old", state: "incompatible" },
+          ],
         });
       })
   );

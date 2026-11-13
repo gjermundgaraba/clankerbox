@@ -7,6 +7,7 @@ import { traits as smolCloud } from "@gjermundgaraba/clankerbox-host/testing/smo
 import { Capacity, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Option, Result } from "effect";
 
+import { Unreachable } from "../src/hosts.ts";
 import type { Reached } from "../src/hosts.ts";
 import { holding, placing } from "../src/placement.ts";
 import type { Ask } from "../src/placement.ts";
@@ -79,7 +80,17 @@ const draining = (id: string): Reached => {
 const silent = (id: string): Reached => ({
   member: { id, url: `http://${id}`, draining: false },
   info: undefined,
-  problem: "connection refused",
+  problem: new Unreachable({ host: id, message: "connection refused" }),
+});
+
+const incompatible = (id: string): Reached => ({
+  member: { id, url: `http://${id}`, draining: false },
+  info: undefined,
+  problem: new Unreachable({
+    host: id,
+    message: `host ${id} runs clankerbox 0.39.4`,
+    incompatible: true,
+  }),
 });
 
 const ids = (hosts: readonly HostInfo[]) => hosts.map(({ id }) => id);
@@ -294,6 +305,20 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           });
           expect(noReply.message).toContain("no host answered");
           expect(noReply.message).toContain("b failed: connection refused");
+        })
+    );
+
+    it.effect(
+      "a host of another release is passed over, saying why, as no reply that may come",
+      () =>
+        Effect.sync(() => {
+          const refused = refusal([incompatible("b")], "ubuntu");
+
+          expect(placed([incompatible("a"), up("b")])).toStrictEqual(["b"]);
+          expect(refused._tag).toBe("NotOffered");
+          expect(refused.message).toContain(
+            "b can't be used: host b runs clankerbox 0.39.4"
+          );
         })
     );
 

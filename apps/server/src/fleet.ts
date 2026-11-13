@@ -1,5 +1,9 @@
 import type { Adopted, Ref } from "@clankerbox/host-contract";
-import type { Internal, Usage } from "@gjermundgaraba/clankerbox-sdk";
+import type {
+  Internal,
+  Unreported,
+  Usage,
+} from "@gjermundgaraba/clankerbox-sdk";
 import { Cause, DateTime, Duration, Effect, Option } from "effect";
 
 import { applied } from "./chart.ts";
@@ -11,7 +15,7 @@ import type { Interface as Store } from "./store.ts";
 
 export interface CapacityRead {
   readonly usage: readonly Usage[];
-  readonly unreachable: readonly string[];
+  readonly unreported: readonly Unreported[];
 }
 
 /** What each host reports its machines use, and which hosts couldn't say. */
@@ -22,7 +26,7 @@ export const capacity = (
   Effect.gen(function* () {
     const reached = yield* hosts.reachAll;
     const rows = yield* store.machines;
-    const unreachable: string[] = [];
+    const unreported: Unreported[] = [];
 
     const usage = yield* Effect.forEach(
       reached,
@@ -42,9 +46,16 @@ export const capacity = (
                 ...reading,
               }))
             ),
-            Effect.catch(() =>
+            Effect.catch((error) =>
               Effect.sync((): Usage[] => {
-                unreachable.push(member.id);
+                unreported.push({
+                  host: member.id,
+                  state:
+                    "incompatible" in error && error.incompatible
+                      ? "incompatible"
+                      : "unreachable",
+                  problem: error.message,
+                });
 
                 return [];
               })
@@ -53,7 +64,7 @@ export const capacity = (
       { concurrency: "unbounded" }
     );
 
-    return { usage: usage.flat(), unreachable };
+    return { usage: usage.flat(), unreported };
   });
 
 const holding = (store: Store, { name, ...reach }: Adopted) =>

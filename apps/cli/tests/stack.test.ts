@@ -114,7 +114,13 @@ const CapacityJson = Schema.Struct({
       limit: Schema.optionalKey(Schema.Int),
     })
   ),
-  unreachable: Schema.Array(Schema.String),
+  unreported: Schema.Array(
+    Schema.Struct({
+      host: Schema.String,
+      state: Schema.String,
+      problem: Schema.String,
+    })
+  ),
 });
 
 const used = (text: string) =>
@@ -320,9 +326,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         });
         expect(partedText.stdout).toMatch(/^beta\s+unreachable\s+-\s/mu);
         expect(
-          (yield* decodeJson(CapacityJson, short.stdout)).unreachable
-        ).toStrictEqual(["beta"]);
-        expect(shortText.stderr).toContain("host beta didn't answer");
+          (yield* decodeJson(CapacityJson, short.stdout)).unreported.map(
+            ({ host, state }) => [host, state]
+          )
+        ).toStrictEqual([["beta", "unreachable"]]);
+        expect(shortText.stderr).toContain(
+          "host beta didn't report its capacity"
+        );
       })
   );
 

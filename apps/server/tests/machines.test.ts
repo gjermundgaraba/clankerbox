@@ -2583,7 +2583,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       expect(yield* client.capacity).toStrictEqual({
         usage: [],
-        unreachable: ["smolvm"],
+        unreported: [
+          {
+            host: "smolvm",
+            state: "unreachable",
+            problem: "tart list exited 1",
+          },
+        ],
       });
     })
   );

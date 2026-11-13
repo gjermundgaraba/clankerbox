@@ -144,7 +144,13 @@ describe("client", () => {
           ],
           capacity: {
             usage: [{ host: "linux", resource: "cpu", used: 2 }],
-            unreachable: ["mac"],
+            unreported: [
+              {
+                host: "mac",
+                state: "unreachable",
+                problem: "host mac: refused",
+              },
+            ],
           },
         });
 
@@ -163,7 +169,9 @@ describe("client", () => {
           "taking",
         ]);
         expect(seen.hosts).toMatchObject([{ state: "up", bases: ["ubuntu"] }]);
-        expect(seen.capacity.unreachable).toStrictEqual(["mac"]);
+        expect(seen.capacity.unreported).toStrictEqual([
+          { host: "mac", state: "unreachable", problem: "host mac: refused" },
+        ]);
       })
     );
 

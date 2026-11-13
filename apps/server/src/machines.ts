@@ -724,7 +724,8 @@ export const make = (
           .pipe(
             Effect.catchTag(
               "Unreachable",
-              ({ message }) => new Unavailable({ message, readOnly: false })
+              ({ message, unsent }) =>
+                new Unavailable({ message, readOnly: unsent === true })
             )
           );
       });

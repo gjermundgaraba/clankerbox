@@ -88,8 +88,12 @@ export const capacity = Command.make("capacity", clientFlags, (flags) =>
         yield* Console.error(`clankerbox: ${note}`);
       }
 
-      for (const host of report.unreachable) {
-        yield* Console.error(`clankerbox: host ${host} didn't answer`);
+      for (const { host, state, problem } of report.unreported) {
+        yield* Console.error(
+          state === "incompatible"
+            ? `clankerbox: host ${host} is incompatible: ${problem}`
+            : `clankerbox: host ${host} didn't report its capacity: ${problem}`
+        );
       }
     })
   )

@@ -55,9 +55,11 @@ const sifted = <K, A>(
 
     if (Result.isFailure(known)) {
       passed(member.id, known.failure);
+    } else if (problem?.incompatible === true) {
+      passed(member.id, missed(`can't be used: ${problem.message}`));
     } else if (info === undefined) {
       noReply = true;
-      misses.push(`${member.id} failed: ${problem ?? "no answer"}`);
+      misses.push(`${member.id} failed: ${problem?.message ?? "no answer"}`);
     } else {
       const took = take(info, known.success);
 

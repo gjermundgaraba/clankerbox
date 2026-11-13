@@ -46,7 +46,7 @@ Machines and checkpoints stay on the host they were made on: forks and restores 
 
 The control plane is one instance over one SQLite file. Back up its state directory: it is the only record of what exists.
 
-The npm packages are `@gjermundgaraba/clankerbox` (the CLI), `@gjermundgaraba/clankerbox-server`, `@gjermundgaraba/clankerbox-host`, and the TypeScript SDK `@gjermundgaraba/clankerbox-sdk`. All four share a version, and a control plane refuses a client or host of another `major.minor`, so upgrade them together.
+The npm packages are `@gjermundgaraba/clankerbox` (the CLI), `@gjermundgaraba/clankerbox-server`, `@gjermundgaraba/clankerbox-host`, and the TypeScript SDK `@gjermundgaraba/clankerbox-sdk`. All four share a version, and a control plane refuses a client or host of another `major.minor`, so upgrade them together. `clankerbox hosts` shows such a host `incompatible`, with why under `PROBLEM`, as it does one that answers in another contract, and the control plane uses it for nothing: a create passes it over, saying why.
 
 ## Install
 
@@ -195,6 +195,7 @@ What a client reads changes in a few places:
 - A machine shows `ssh` only once its host has read it an SSH host key, so a machine created from a base on smolvm, which has no sshd, shows none, and `ssh` answers `WrongState` saying why. A machine on a host that can't be read shows its login if it was last read running and is asked to run still.
 - `checkpoint list` and `listCheckpoints` show every checkpoint in any phase, as `checkpoint get` does, and the table adds `ERROR`.
 - A create whose sizes no host that offers the base gives answers `Unsizable`, not `NotOffered`, and so does a template build. A refusal carries `made` only where something may have been made.
+- `hosts` shows `incompatible` for a host of another release or contract, which the control plane uses for nothing. `capacity` says of such a host that it is incompatible, and why, and of one that doesn't answer why; in `--json` and the SDK's `CapacityReport`, `unreported` lists each with its `host`, `state` and `problem`, replacing `unreachable`. An `exec` on a machine there answers `Unavailable`, saying why the host is incompatible, with `readOnly` set, since nothing reached it.
 - `pause --capture` on a host whose traits capture a stopped machine and stop it on a pause, as boat, pauses first and captures what the pause left, and on one that saves it, as a Mac, answers `WrongState`. A host that can't be read answers `Unavailable`.
 - A retired instance's day now runs from the first sweep that reached its host, and the migration retires every row that already rested undone or failed, so its host's next sweep deletes what such a make left.
 - The control plane logs an answered request at debug, not at info.

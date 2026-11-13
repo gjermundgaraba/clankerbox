@@ -3,6 +3,7 @@ import type { HostInfo } from "@clankerbox/host-contract";
 import {
   HostError,
   readTimeout,
+  release,
   Unavailable,
   version,
   versionHeader,
@@ -24,10 +25,16 @@ export interface Member {
   readonly draining: boolean;
 }
 
-/** A host gave no usable answer. Nothing can tell what became of a mutation it was sent. */
+/**
+ * A host gave no usable answer. Nothing can tell what became of a mutation it was sent, unless it
+ * was `unsent`, refused before it left. `incompatible` is a host that answers, but of another
+ * release than the control plane's, or in another contract, so nothing it says can be used.
+ */
 export class Unreachable extends Data.TaggedError("Unreachable")<{
   readonly host: string;
   readonly message: string;
+  readonly incompatible?: true;
+  readonly unsent?: true;
 }> {}
 
 const hostApi = (member: Member) =>
@@ -43,7 +50,7 @@ export type HostApi = Effect.Success<ReturnType<typeof hostApi>>;
 export interface Reached {
   readonly member: Member;
   readonly info: HostInfo | undefined;
-  readonly problem: string | undefined;
+  readonly problem: Unreachable | undefined;
 }
 
 export interface Interface {
@@ -51,7 +58,8 @@ export interface Interface {
   /**
    * One call to a host, bounded by `readTimeout` unless `within` says otherwise, as a command runs
    * as long as its request does. It fails with an error its action declares, as the host answered
-   * it, and with `Unreachable` for every way it got no answer.
+   * it, and with `Unreachable` for every way it got no answer. A host whose last read found it
+   * `incompatible` isn't called: only a read, which may find it upgraded, reaches it.
    */
   readonly call: <A, E>(
     host: string,
@@ -63,7 +71,7 @@ export interface Interface {
    * through here, so this logs when it stops answering and when it answers again, and no one else.
    */
   readonly read: (host: string) => Effect.Effect<Fresh, Unreachable>;
-  /** What the host last said, read or not since. */
+  /** What the host last said, read or not since, unless a read since found it incompatible. */
   readonly known: (host: string) => HostInfo | undefined;
   readonly reachAll: Effect.Effect<readonly Reached[]>;
 }
@@ -77,9 +85,9 @@ export const listed = ({ member, info, problem }: Reached): Host =>
   info === undefined
     ? {
         id: member.id,
-        state: "unreachable",
+        state: problem?.incompatible === true ? "incompatible" : "unreachable",
         bases: [],
-        ...(problem === undefined ? {} : { problem }),
+        ...(problem === undefined ? {} : { problem: problem.message }),
       }
     : {
         id: member.id,
@@ -138,6 +146,7 @@ export const make = (
     );
 
     const infos = new Map<string, HostInfo>();
+    const incompatibles = new Map<string, Unreachable>();
     const unanswered = new Set<string>();
 
     const answered = (host: string) =>
@@ -158,7 +167,7 @@ export const make = (
         return Effect.logWarning(message);
       });
 
-    const call = <A, E>(
+    const reaching = <A, E>(
       host: string,
       run: (api: HostApi) => Effect.Effect<A, E>,
       within: Duration.Duration = readTimeout
@@ -171,6 +180,7 @@ export const make = (
               new Unreachable({
                 host,
                 message: `host ${host} isn't in the control plane's config`,
+                unsent: true,
               })
             )
           : bounded(
@@ -182,10 +192,16 @@ export const make = (
                   Effect.fail,
                   (error) =>
                     Effect.fail(
-                      new Unreachable({
-                        host,
-                        message: `host ${host}: ${describe(error)}`,
-                      })
+                      Schema.isSchemaError(error)
+                        ? new Unreachable({
+                            host,
+                            message: `host ${host} answers in another contract than this control plane's: ${error.message.replaceAll(/\s*\n\s*/gu, " ")}`,
+                            incompatible: true,
+                          })
+                        : new Unreachable({
+                            host,
+                            message: `host ${host}: ${describe(error)}`,
+                          })
                     )
                 )
               ),
@@ -193,18 +209,43 @@ export const make = (
             );
       });
 
+    const call: Interface["call"] = (host, run, within) =>
+      Effect.suspend(() => {
+        const refused = incompatibles.get(host);
+
+        return refused === undefined
+          ? reaching(host, run, within)
+          : Effect.fail(
+              new Unreachable({
+                host,
+                message: refused.message,
+                incompatible: true,
+                unsent: true,
+              })
+            );
+      });
+
     const read = (host: string) =>
       Effect.gen(function* () {
-        const info = yield* call(host, (api) => api.readHost({})).pipe(
+        const info = yield* reaching(host, (api) => api.readHost({})).pipe(
           Effect.catchTag("Invalid", ({ message }) =>
             Effect.fail(
               new Unreachable({
                 host,
                 message: `host ${host} refused the read: ${message}`,
+                incompatible: true,
               })
             )
           )
         );
+
+        if (release(info.version) !== release(version)) {
+          return yield* new Unreachable({
+            host,
+            message: `host ${host} runs clankerbox ${info.version}, and this control plane ${version}; their major.minor must match, so upgrade them together`,
+            incompatible: true,
+          });
+        }
 
         if (info.id !== host) {
           return yield* new Unreachable({
@@ -217,8 +258,19 @@ export const make = (
 
         return { ...info, boot: freshBoot(info.boot) };
       }).pipe(
-        Effect.tap(() => answered(host)),
-        Effect.tapError(unanswering)
+        Effect.tap(() => {
+          incompatibles.delete(host);
+
+          return answered(host);
+        }),
+        Effect.tapError((error) => {
+          if (error.incompatible === true) {
+            incompatibles.set(host, error);
+            infos.delete(host);
+          }
+
+          return unanswering(error);
+        })
       );
 
     return {
@@ -239,7 +291,7 @@ export const make = (
               onFailure: (error): Reached => ({
                 member,
                 info: undefined,
-                problem: error.message,
+                problem: error,
               }),
             })
           ),

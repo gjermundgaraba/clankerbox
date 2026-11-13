@@ -199,13 +199,22 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             { host: "smolvm", resource: "cpu", used: 0 },
             { host: "smolvm", resource: "ramMib", limit: 4096, used: 0 },
           ],
-          unreachable: [],
+          unreported: [],
         });
         expect(after.usage).toStrictEqual([
           { host: "smolvm", resource: "cpu", used: 1 },
           { host: "smolvm", resource: "ramMib", limit: 4096, used: 1024 },
         ]);
-        expect(unread).toStrictEqual({ usage: [], unreachable: ["smolvm"] });
+        expect(unread).toStrictEqual({
+          usage: [],
+          unreported: [
+            {
+              host: "smolvm",
+              state: "unreachable",
+              problem: "smolvm machine status didn't answer",
+            },
+          ],
+        });
         expect(hosts.map(({ id }) => id)).toStrictEqual(["smolvm"]);
         expect(placed.id).toBe("other");
       })

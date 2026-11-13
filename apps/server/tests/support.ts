@@ -27,6 +27,7 @@ import { HttpServer } from "effect/http";
 import { applied } from "../src/chart.ts";
 import * as Checkpoints from "../src/checkpoints.ts";
 import { serverLayer, stopsAtOnce } from "../src/composition/server.ts";
+import type { Member } from "../src/hosts.ts";
 import {
   machineChart,
   phaseOf as phaseOfLeaf,
@@ -219,6 +220,8 @@ export const plane = (options?: {
   readonly tailscaled?: boolean;
   /** Hears the control plane's log, which goes nowhere without one. */
   readonly logger?: Logger.Logger<unknown, unknown>;
+  /** Members beside the test hosts, such as one served by a stub. */
+  readonly members?: readonly Member[];
 }) =>
   Effect.gen(function* () {
     const dir = yield* scratch;
@@ -249,11 +252,14 @@ export const plane = (options?: {
     const settings: ServerSettings = {
       listen: { address: "127.0.0.1", port: 0 },
       stateDir,
-      hosts: hosts.map(({ id, url }) => ({
-        id,
-        url,
-        draining: options?.draining?.includes(id) === true,
-      })),
+      hosts: [
+        ...hosts.map(({ id, url }) => ({
+          id,
+          url,
+          draining: options?.draining?.includes(id) === true,
+        })),
+        ...(options?.members ?? []),
+      ],
       recheck: options?.recheck ?? quiet,
       failedRowsLast: options?.failedRowsLast ?? defaultFailedRowsLast,
       authorizedKeys: `${operatorKey}\n`,

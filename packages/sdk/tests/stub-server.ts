@@ -808,7 +808,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
       recording(
         "getCapacity",
         "host.capacity",
-        Effect.succeed(options.capacity ?? { usage: [], unreachable: [] })
+        Effect.succeed(options.capacity ?? { usage: [], unreported: [] })
       ),
   });
 
