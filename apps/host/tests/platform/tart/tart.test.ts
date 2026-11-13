@@ -980,6 +980,28 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a capture whose clone fails names the machine it copied and the checkpoint it made",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const source = machineOn("src");
+        const checkpoint = snapOf();
+
+        mac.vms.set(vmOf(source), "stopped");
+        mac.hooks.clone = () => ({
+          exitCode: 1,
+          stderr: "Error: no space left",
+        });
+
+        const refused = yield* Effect.flip(runtime.capture(source, checkpoint));
+
+        expect(refused.message).toContain(
+          `tart clone ${vmOf(source)} ${checkpointName("mac", checkpoint)}`
+        );
+      })
+  );
+
+  it.effect(
     "capture clones the machine to the checkpoint's name; fork and restore clone into the new machine",
     () =>
       Effect.gen(function* () {

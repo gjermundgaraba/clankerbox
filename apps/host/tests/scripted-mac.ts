@@ -36,6 +36,7 @@ interface Hooks {
   probe?: (vm: string) => Reply;
   shutdown?: (vm: string) => Reply;
   set?: (vm: string) => Reply | undefined;
+  clone?: (from: string, to: string) => Reply | undefined;
   delete?: (vm: string) => Reply | undefined;
   suspend?: (vm: string) => void;
   print?: (vm: string) => Reply | undefined;
@@ -230,6 +231,12 @@ export const scriptedMac = (stateDir: string, tart = binary) => {
 
       // https://github.com/openai/tart/blob/2.41.1/Sources/tart/Commands/Clone.swift#L165
       case "clone": {
+        const hooked = hooks.clone?.(vm, rest[1] ?? "");
+
+        if (hooked !== undefined) {
+          return hooked;
+        }
+
         if (vms.has(rest[1] ?? "")) {
           return {
             exitCode: 1,

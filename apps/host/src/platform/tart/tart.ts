@@ -924,7 +924,10 @@ export const make = (
 
         return copyable("checkpoint", machine).pipe(
           Effect.andThen(
-            call(["clone", machine.handle, handle], `clone ${handle}`)
+            call(
+              ["clone", machine.handle, handle],
+              `clone ${machine.handle} ${handle}`
+            )
           ),
           Effect.as(handle)
         );
