@@ -1352,7 +1352,7 @@ export const make = (
               fs.makeDirectory(objects, { recursive: true, mode: 0o700 })
             );
 
-            // Prune removes every store object with one link, so each takes the store's name too.
+            // Prune removes every store object with one link:
             // https://github.com/smol-machines/smolvm/blob/v1.34.1/crates/smolvm-checkpoint/src/store.rs#L3021
             for (const file of yield* regularFiles(fs, staged)) {
               const object = storedObject(file);

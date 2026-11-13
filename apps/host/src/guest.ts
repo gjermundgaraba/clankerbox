@@ -350,8 +350,9 @@ const baseScript = (guest: Runtime["guest"]) =>
 const baseTimeout = Duration.minutes(10);
 
 /**
- * Makes a base what a setup starts on: the login user with passwordless `sudo`, sshd that refuses
- * root, and `tailscale` where the host joins its machines to the tailnet.
+ * Makes a base what a setup starts on, by the guest's script: on Debian, the login user with
+ * passwordless `sudo` and sshd that refuses root; on macOS, the guest's DNS servers and clock; on
+ * both, `tailscale` where the host joins its machines to the tailnet.
  */
 export const prepareBase = (
   runtime: Runtime,
@@ -377,9 +378,9 @@ export const prepareBase = (
     )
   );
 
-// A guest's /dev/shm may be mounted noexec, so the script's interpreter reads it, as the guest's
-// kernel would run it: Linux gives the rest of a `#!` line as one argument, macOS splits it on
-// blanks, and a script without one runs under sh:
+// A guest's /dev/shm may be mounted noexec. A kernel gives the rest of a `#!` line to its
+// interpreter, on Linux as one argument and on macOS split on blanks, and a script without one
+// runs under sh:
 // https://man7.org/linux/man-pages/man2/execve.2.html#DESCRIPTION
 const setupHeld = [
   "set -eu",
@@ -861,7 +862,7 @@ export const prepare = (
 
 const tailnetTimeout = Duration.seconds(90);
 
-export interface TailnetJoin {
+interface TailnetJoin {
   readonly key: Redacted.Redacted;
   readonly rejoin: boolean;
 }

@@ -117,7 +117,7 @@ export const checkpointName = (host: string, checkpoint: Identity): Handle =>
 const tartHome = (settings: Pick<Settings, "tartHome">): string =>
   settings.tartHome ?? path.join(homedir(), ".tart");
 
-export const vmsDir = (settings: Pick<Settings, "tartHome">): string =>
+const vmsDir = (settings: Pick<Settings, "tartHome">): string =>
   path.join(tartHome(settings), "vms");
 
 const fetchingDir = (settings: Pick<Settings, "tartHome">): string =>

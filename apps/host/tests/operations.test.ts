@@ -1891,6 +1891,70 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
+  it.effect(
+    "a delete of a published copy that unpublishes it empties the build store of it, and one on a host with no store logs that it stays",
+    () => {
+      const logged: string[] = [];
+
+      return Effect.gen(function* () {
+        const { layer: builds, objects } = memoryBuildStore();
+        const host = yield* runner({ builds });
+
+        yield* finished(host, makes("dev"));
+        yield* finished(host, capturingSnap);
+        yield* finished(
+          host,
+          { _tag: "publish", checkpoint: checkpoint("snap") },
+          2
+        );
+
+        const published = objects.size;
+
+        const deleted = yield* finished(
+          host,
+          {
+            _tag: "deleteCheckpoint",
+            checkpoint: checkpoint("snap"),
+            unpublish: true,
+          },
+          3
+        );
+
+        const bare = yield* runner();
+
+        yield* finished(bare, makes("dev"));
+        yield* finished(bare, capturingSnap);
+
+        const kept = yield* finished(
+          bare,
+          {
+            _tag: "deleteCheckpoint",
+            checkpoint: checkpoint("snap"),
+            unpublish: true,
+          },
+          2
+        );
+
+        expect({
+          published: published > 0,
+          left: objects.size,
+          statuses: [deleted.status, kept.status],
+          deleted: [host, bare].map((each) =>
+            each.fake.calls.includes("deleteCheckpoint snap")
+          ),
+        }).toStrictEqual({
+          published: true,
+          left: 0,
+          statuses: ["done", "done"],
+          deleted: [true, true],
+        });
+        expect(logged.join("\n")).toContain(
+          "so what it published stays in the build store"
+        );
+      }).pipe(Effect.provide(Logger.layer([capturing(logged)])));
+    }
+  );
+
   it.effect("a resize answers the sizes the runtime reads back", () =>
     Effect.gen(function* () {
       const host = yield* runner();
