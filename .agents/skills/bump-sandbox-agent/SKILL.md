@@ -21,7 +21,8 @@ publish, change production hosts, or commit unless asked.
   `packages/rivet-sandbox-agent/package.json`; `agent_version` and
   `agent_sha256` in `recipes/ubuntu/setup.sh` and `recipes/macos/setup.sh`,
   with `node_version` and `node_sha256` beside them. The SDK and the server
-  move together: one version in all of them. `git grep -n '0\.5\.3'`.
+  move together: one version in all of them. `git grep -nF` the old version
+  finds each.
 - **Target:** the latest stable `sandbox-agent` on npm (`npm view
   sandbox-agent version`), unless the user names one. Record old and new
   versions; if already current, say so.
@@ -31,7 +32,7 @@ publish, change production hosts, or commit unless asked.
   read at the release's tag. The published SDK is also at hand, built, in
   `packages/rivet-sandbox-agent/node_modules/sandbox-agent/dist`.
 - **Notation:** a citation is a path in that repository's `sandbox-agent/`
-  directory at the tested release, 0.5.4, or `dist:` in the published
+  directory at the tested release, 0.5.6, or `dist:` in the published
   package's `dist/`; the identifier beside it finds the code.
 
 ## Claims to re-check
@@ -79,20 +80,21 @@ publish, change production hosts, or commit unless asked.
 - The binaries are at
   `https://releases.rivet.dev/sandbox-agent/<version>/binaries/sandbox-agent-<target>`,
   with the recipes' targets `x86_64-unknown-linux-musl` and
-  `aarch64-apple-darwin`. Rivet publishes no checksum file, so the recipes pin
-  a sha256 taken from the download itself (`agent_sha256` in each recipe).
-  Cross-check the Linux one against the npm package of the same version,
-  `@sandbox-agent/cli-linux-x64`, whose binary is identical.
+  `aarch64-apple-darwin`. Rivet publishes no checksum file, so each recipe's
+  `agent_sha256` is the sha256 of that release download. npm's
+  `@sandbox-agent/cli-linux-x64` and `@sandbox-agent/cli-darwin-arm64` of the
+  same version carry byte-identical binaries, and the registry pins each
+  tarball by its `dist.integrity`, so compare both downloads against them.
 - `install-agent claude` installs Claude Code at its latest release and its
   ACP adapter from npm, which needs Node 22 or newer and npm on the path:
   Ubuntu 24.04's Node 18 fails the adapter's check. The recipes install a
-  pinned Node 22 from nodejs.org (`node_sha256` from that release's
-  `SHASUMS256.txt`; move it to the latest 22.x, or to the major the adapters
-  then need).
+  pinned Node 22 from nodejs.org (`node_sha256` is that file's line in
+  `https://nodejs.org/dist/v<version>/SHASUMS256.txt`; move it to the latest
+  22.x, or to the major the adapters then need).
 - `install-agent codex` never returns: its check starts `codex app-server`,
   which doesn't exit. The recipes install Claude alone; whoever adds Codex
   bounds its install with a timeout and ends what it leaves running. If the
-  target fixes this, drop this claim and the macOS recipe's note on it.
+  target fixes this, drop this claim.
 - As root, Claude Code offers no `bypassPermissions` mode, so the server runs
   as the login user, `admin`. The server keeps its state under
   the user's `~/.local/share/sandbox-agent` (Linux) or

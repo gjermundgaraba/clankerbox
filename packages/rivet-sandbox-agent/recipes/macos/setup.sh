@@ -3,10 +3,10 @@ set -eu
 [ "$(id -u)" -eq 0 ] || exec sudo -n /bin/sh "$0" "$@"
 PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 
-agent_version=0.5.4
-agent_sha256=bbd978d96e1e835c98562b7f195f53bcc30e41253e23b41125def3896ddcbd2a
-node_version=22.23.4
-node_sha256=c9e1dbc748b33ed2d14f42445191ecaf14c56259c7a9a26d0042c49ec2b66428
+agent_version=0.5.6
+agent_sha256=5435442cb01b8dca0c4bfbcb666e140c14c7c9970785aa34a4a9b313bd315e9f
+node_version=22.23.5
+node_sha256=e7131995759b61a0170b646010d2ad35a5d37b4cb0d471f3e8317eac6f742f3d
 
 fetch() {
   curl -fsSL "$1" -o "$3"
