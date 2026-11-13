@@ -7,6 +7,7 @@ export const traits: RuntimeTraits = {
   checkpoint: "ram",
   captureFrom: "running",
   pause: "saves",
+  stop: "resumes",
   copies: "same",
   resize: { running: "grow", stopped: "grow" },
   sizes: { _tag: "free" },

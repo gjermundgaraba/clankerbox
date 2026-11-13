@@ -921,7 +921,7 @@ export const make = (
             const machine = yield* machineTarget(step.machine);
             const stopped = runtime.stop(machine);
 
-            if (runtime.admission?.stopBoots !== true) {
+            if (traits.stop === "discards") {
               yield* beforeLeaving(
                 machine,
                 "stop",

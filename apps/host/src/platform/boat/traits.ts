@@ -35,6 +35,7 @@ export const traits = (
   checkpoint: "disk",
   captureFrom: "stopped",
   pause: "stops",
+  stop: "discards",
   copies: "any",
   resize: { running: "none", stopped: "any" },
   sizes: {

@@ -779,7 +779,6 @@ export const make = (
             }
           })
         ),
-        stopBoots: false,
       },
       files: {
         checkpointFiles: Effect.fn("Tart.checkpointFiles")((checkpoint) => {

@@ -85,7 +85,7 @@ export interface Preset {
   readonly guest: Interface["guest"];
   readonly pin: string | undefined;
   readonly prepares: Interface["prepares"];
-  readonly admission: { readonly stopBoots: boolean } | undefined;
+  readonly admits: boolean;
   readonly files: { readonly keyed: boolean } | undefined;
   readonly owned: { readonly checkpoints: "held" | "marked" } | undefined;
 }
@@ -96,6 +96,7 @@ export const fixed: RuntimeTraits = {
   checkpoint: "disk",
   captureFrom: "stopped",
   pause: "stops",
+  stop: "discards",
   copies: "any",
   resize: { running: "none", stopped: "any" },
   sizes: {
@@ -115,7 +116,7 @@ export const presets = {
     guest: "debian",
     pin: "fake 1",
     prepares: "with-setup",
-    admission: { stopBoots: true },
+    admits: true,
     files: { keyed: true },
     owned: undefined,
   },
@@ -124,7 +125,7 @@ export const presets = {
     guest: "macos",
     pin: undefined,
     prepares: "with-setup",
-    admission: { stopBoots: false },
+    admits: true,
     files: { keyed: false },
     owned: undefined,
   },
@@ -133,7 +134,7 @@ export const presets = {
     guest: "debian",
     pin: undefined,
     prepares: "always",
-    admission: undefined,
+    admits: false,
     files: undefined,
     owned: { checkpoints: "held" },
   },
@@ -905,28 +906,26 @@ export const fakeRuntime = (options: FakeOptions) => {
                 },
               }
             : { _tag: "published", address: "127.0.0.1" },
-        admission:
-          preset.admission === undefined
-            ? undefined
-            : {
-                admit: (activation: Activation) =>
-                  Effect.andThen(
-                    Effect.sync(() => activations.push(activation)),
-                    call(
-                      "admit",
-                      activation.machine,
-                      options.ramBudgetMib === undefined
-                        ? Effect.void
-                        : checkRamBudget(
-                            options.ramBudgetMib,
-                            activation,
-                            states,
-                            0
-                          )
-                    )
-                  ),
-                stopBoots: preset.admission.stopBoots,
-              },
+        admission: preset.admits
+          ? {
+              admit: (activation: Activation) =>
+                Effect.andThen(
+                  Effect.sync(() => activations.push(activation)),
+                  call(
+                    "admit",
+                    activation.machine,
+                    options.ramBudgetMib === undefined
+                      ? Effect.void
+                      : checkRamBudget(
+                          options.ramBudgetMib,
+                          activation,
+                          states,
+                          0
+                        )
+                  )
+                ),
+            }
+          : undefined,
         owned:
           owned === undefined
             ? undefined

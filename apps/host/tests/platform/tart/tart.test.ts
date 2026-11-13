@@ -185,7 +185,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(runtime.version).toBe("2.41.1");
         expect(runtime.pin).toBeUndefined();
-        expect(runtime.admission?.stopBoots).toBe(false);
+        expect(runtime.traits.stop).toBe("discards");
 
         for (const call of mac.spawner.calls) {
           expect(call.file).toBe(binary);

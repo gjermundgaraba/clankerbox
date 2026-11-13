@@ -236,6 +236,12 @@ export const migrations: readonly string[] = [
     retired_at TEXT NOT NULL,
     PRIMARY KEY (host, resource, instance)
   ) STRICT`,
+  `UPDATE machines SET traits = json_set(traits, '$.stop',
+    CASE json_extract(traits, '$.runtime') WHEN 'smolvm' THEN 'resumes'
+      WHEN 'smol-cloud' THEN 'resumes' ELSE 'discards' END);
+  UPDATE checkpoints SET traits = json_set(traits, '$.stop',
+    CASE json_extract(traits, '$.runtime') WHEN 'smolvm' THEN 'resumes'
+      WHEN 'smol-cloud' THEN 'resumes' ELSE 'discards' END)`,
 ];
 
 const isSqliteError = (

@@ -8,6 +8,8 @@ import { Handle } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { presets } from "@gjermundgaraba/clankerbox-host/testing";
+import { traits as boatTraits } from "@gjermundgaraba/clankerbox-host/testing/boat";
+import { traits as smolCloudTraits } from "@gjermundgaraba/clankerbox-host/testing/smol-cloud";
 import { Conflict, Internal, NotFound } from "@gjermundgaraba/clankerbox-sdk";
 import {
   mkdir,
@@ -651,17 +653,77 @@ layer(NodeServices.layer)((it) => {
           ["msnap", undefined],
         ]);
         expect(after.user_version).toBe(migrations.length);
-        expect(after.machines.map(without("handle", "endpoint"))).toStrictEqual(
-          before.machines.map(without("port"))
-        );
+        expect(
+          after.machines.map(without("traits", "handle", "endpoint"))
+        ).toStrictEqual(before.machines.map(without("traits", "port")));
         expect(after.machines.map(({ endpoint }) => endpoint)).toStrictEqual(
           portsOf(before.machines)
         );
-        expect(after.checkpoints.map(without("handle"))).toStrictEqual(
-          before.checkpoints.map(without("port"))
+        expect(machines.map(({ traits }) => traits)).toStrictEqual(
+          machines.map(({ host }) =>
+            host === "tart-1" ? presets.tart.traits : presets.smolvm.traits
+          )
         );
+        expect(
+          after.checkpoints.map(without("traits", "handle"))
+        ).toStrictEqual(before.checkpoints.map(without("traits", "port")));
         expect(after.rest).toStrictEqual({ ...before.rest, hosts: [] });
         expect(dumped(stateDir)).toStrictEqual(once);
+      })
+  );
+
+  it.effect(
+    "a store written before the stop trait opens with each row's traits stamped with what its runtime's stop does to a paused machine",
+    () =>
+      Effect.gen(function* () {
+        const runtimes = [
+          presets.smolvm.traits,
+          presets.tart.traits,
+          smolCloudTraits,
+          boatTraits,
+        ];
+
+        const stateDir = yield* stateDirAt(9, (db) => {
+          for (const migration of migrations.slice(0, 9)) {
+            db.exec(migration);
+          }
+
+          for (const [index, traits] of runtimes.entries()) {
+            const { stop: _stop, ...stamped } = traits;
+            const name = `m${index}`;
+
+            db.prepare(
+              `INSERT INTO machines (name, instance, created_at, base, cpu, ram_mib, disk_gib, host,
+                desired, state, prepared, ephemeral, source, traits)
+                VALUES (?, ?, '2026-11-13T12:00:00.000Z', 'ubuntu', 1, 1024, 10, ?, 'running',
+                  'made.settled', 1, 0, '{"kind":"base"}', ?)`
+            ).run(
+              name,
+              `instance-${name}`,
+              traits.runtime,
+              JSON.stringify(stamped)
+            );
+            db.prepare(
+              `INSERT INTO checkpoints (name, instance, created_at, machine, host, base, cpu,
+                ram_mib, disk_gib, state, traits)
+                VALUES (?, ?, '2026-11-13T12:00:00.000Z', ?, ?, 'ubuntu', 1, 1024, 10, 'ready', ?)`
+            ).run(
+              `c${index}`,
+              `instance-c${index}`,
+              name,
+              traits.runtime,
+              JSON.stringify(stamped)
+            );
+          }
+        });
+
+        const [machines, checkpoints] = yield* withStore(stateDir, (store) =>
+          Effect.all([store.machines, store.checkpoints])
+        );
+
+        expect(machines.map(({ traits }) => traits)).toStrictEqual(runtimes);
+        expect(checkpoints.map(({ traits }) => traits)).toStrictEqual(runtimes);
+        expect(rowsOf(stateDir).user_version).toBe(migrations.length);
       })
   );
 

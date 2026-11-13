@@ -173,7 +173,6 @@ export type Reach =
 
 export interface Admission {
   readonly admit: (activation: Activation) => Effect.Effect<void, RoomError>;
-  readonly stopBoots: boolean;
 }
 
 export interface CheckpointFiles {

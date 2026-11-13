@@ -117,7 +117,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: reading,
       description:
-        "Ask for a machine to stay stopped: a power-off that keeps its disk and ends its processes. A start under way is cut short; a machine still being made is made first, and its create answers Superseded. A paused machine is either resumed to end its processes, where its runtime's stop boots it, and then needs room as a start does and the runtime pin it booted under, or has its saved state discarded.",
+        "Ask for a machine to stay stopped: a power-off that keeps its disk and ends its processes. A start under way is cut short; a machine still being made is made first, and its create answers Superseded. A paused machine is resumed to end its processes where its traits' `stop` is `resumes`, and then needs room as a start does and the runtime pin it booted under, and has its saved state discarded where it is `discards`.",
       input: ById,
       success: Machine,
     }),

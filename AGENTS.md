@@ -330,7 +330,7 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
   can't suspend. On one whose `pause` `stops`, as boat's, it stops the machine
   and saves nothing. A paused machine resumes
   only under the pin it booted under, for a start, and for a stop on a runtime
-  whose stop resumes it, and a capture or fork copies only a VM booted under the
+  whose `stop` trait `resumes` it, and a capture or fork copies only a VM booted under the
   host's pin; the step carries the pin and the host compares. A resize is a step
   too, and the row keeps the sizes the runtime reads after it, also after one
   that failed part way. A checkpoint is usable only `ready`, and never changes; a

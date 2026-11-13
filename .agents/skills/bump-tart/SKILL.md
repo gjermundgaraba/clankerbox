@@ -234,8 +234,8 @@ Each: what Tart does, where, and what of ours depends on it.
   boots a stopped one, its log emptied first.
 - `tart stop` of a suspended VM removes its `state.vzvmsave` and exits 0,
   booting nothing (`stopSuspended`, Commands/Stop.swift). Ours: `stop` of a
-  paused machine is `tart stop <vm>`, and `admission.stopBoots` is false, so the core
-  neither admits it nor checks its pin.
+  paused machine is `tart stop <vm>`, and Tart's `stop` trait is `discards`, so
+  the core neither admits it nor checks its pin.
 - Virtualization.framework seals saved state with a key in the operator's
   session keychain: a restore while the session is locked fails, printed by
   `tart run` as `Error Domain=VZErrorDomain Code=12 "The virtual machine

@@ -7,6 +7,7 @@ export const traits: RuntimeTraits = {
   checkpoint: "disk",
   captureFrom: "stopped",
   pause: "saves",
+  stop: "discards",
   copies: "any",
   resize: { running: "none", stopped: "any" },
   sizes: { _tag: "free" },

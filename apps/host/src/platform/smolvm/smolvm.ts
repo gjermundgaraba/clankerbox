@@ -1330,7 +1330,6 @@ export const make = (
             checkRamBudget(settings.ramBudgetMib, activation, observe, held)
           )
         ),
-        stopBoots: true,
       },
       files: {
         checkpointFiles: Effect.fn("Smolvm.checkpointFiles")((checkpoint) =>

@@ -38,6 +38,8 @@ const Growth = Schema.Literals(["grow", "any", "none"]);
  *   any other state fails the capture or the fork, and a template build stops its builder before
  *   its copy where it is `stopped`.
  * - `pause`: `saves` keeps the machine's RAM; `stops` stops it.
+ * - `stop`: what a stop does to a paused machine: `resumes` it first, to end its processes, which
+ *   takes room as a start does and the runtime pin it booted under; or `discards` its saved state.
  * - `copies`: a fork's or restore's vCPUs and RAM against its source's: `grow`, the source's or
  *   larger; `any`; or `same`, the source's sizes alone, its disk's included.
  * - `resize`: what a running and what a stopped machine take of a resize of vCPUs and RAM: `grow`,
@@ -53,6 +55,7 @@ export const RuntimeTraits = Schema.Struct({
   checkpoint: Schema.Literals(["ram", "disk"]),
   captureFrom: Schema.Literals(["running", "stopped"]),
   pause: Schema.Literals(["saves", "stops"]),
+  stop: Schema.Literals(["resumes", "discards"]),
   copies: Schema.Literals(["grow", "any", "same"]),
   resize: Schema.Struct({ running: Growth, stopped: Growth }),
   sizes: Schema.Union([
