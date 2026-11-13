@@ -489,7 +489,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
     return ready === undefined
       ? Effect.fail(
           new NotBuilt({
-            message: `template ${name} has no ready build${id === undefined ? "" : ` ${id}`}: run clankerbox template build ${name} to make one`,
+            message: `template ${name} has no ready build${id === undefined ? "" : ` ${id}`}: run clankerbox template build on ${name}'s template file to make one`,
             template: name,
           })
         )

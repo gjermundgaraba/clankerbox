@@ -6,6 +6,7 @@ import { Array as Arr, Effect, Result } from "effect";
 import type { Interface as Hosts } from "./hosts.ts";
 import { desiredOf, phaseOf } from "./machine-chart.ts";
 import type { MachineRow } from "./machine-chart.ts";
+import { identityOf } from "./steps.ts";
 
 /** What each machine's VM is doing, from each host that answers. An undone row's VM is gone. */
 export const readStates = (
@@ -23,10 +24,7 @@ export const readStates = (
         hosts
           .call(host, (api) =>
             api.readMachines({
-              machines: onHost.map(({ name, instance }) => ({
-                name,
-                instance,
-              })),
+              machines: onHost.map(identityOf),
             })
           )
           .pipe(Effect.orElseSucceed(() => [])),
@@ -63,20 +61,14 @@ export const phaseShown = (
   return seen === "unknown" && phase !== "failed" ? "waiting" : phase;
 };
 
-/**
- * What a client reads of a machine: its row, what its host `seen` its VM doing if it was read, and
- * where its host and the tailnet reach it.
- */
 export const machineOf = (
   found: MachineRow,
   seen: MachineState | undefined,
-  reach: {
-    readonly address: string | undefined;
-    readonly tailnet: TailnetStatus | undefined;
-  }
+  tailnet: TailnetStatus | undefined
 ): Machine => {
   const state = seen ?? "unknown";
   const running = state === "running";
+  const { endpoint } = found;
 
   return {
     id: found.name,
@@ -92,12 +84,10 @@ export const machineOf = (
     ...(found.labels === undefined ? {} : { labels: found.labels }),
     ...(found.template === undefined ? {} : { template: found.template }),
     ...(found.error === undefined ? {} : { error: found.error }),
-    ...(running && found.port !== undefined && reach.address !== undefined
-      ? { ssh: { user: loginUser, host: reach.address, port: found.port } }
+    ...(running && endpoint?.host !== undefined
+      ? { ssh: { user: loginUser, host: endpoint.host, port: endpoint.port } }
       : {}),
     ...(found.hostKey === undefined ? {} : { hostKey: found.hostKey }),
-    ...(running && reach.tailnet !== undefined
-      ? { tailnet: reach.tailnet }
-      : {}),
+    ...(running && tailnet !== undefined ? { tailnet } : {}),
   };
 };

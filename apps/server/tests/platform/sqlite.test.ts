@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { SQLOutputValue } from "node:sqlite";
 
+import { Handle } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { runtimeTraits } from "@gjermundgaraba/clankerbox-host/testing";
@@ -146,17 +147,22 @@ const stateDirAt = (version: number, fill: (db: DatabaseSync) => void) =>
 const stateDirAtVersion1 = (fill: (db: DatabaseSync) => void) =>
   stateDirAt(1, fill);
 
-const trunkStore = Effect.gen(function* () {
-  const stateDir = yield* stateIn;
+const storeFrom = (fixture: string) =>
+  Effect.gen(function* () {
+    const stateDir = yield* stateIn;
 
-  yield* mkdir(stateDir);
-  copyFileSync(
-    new URL("fixtures/store-d5f7dac.db", import.meta.url),
-    path.join(stateDir, databaseFile)
-  );
+    yield* mkdir(stateDir);
+    copyFileSync(
+      new URL(`fixtures/${fixture}`, import.meta.url),
+      path.join(stateDir, databaseFile)
+    );
 
-  return stateDir;
-});
+    return stateDir;
+  });
+
+const trunkStore = storeFrom("store-d5f7dac.db");
+
+const p2Store = storeFrom("store-4b73940.db");
 
 type SqlRow = Readonly<Record<string, SQLOutputValue>>;
 
@@ -210,9 +216,14 @@ const traitsOf = (rows: readonly SqlRow[]) =>
   );
 
 const without =
-  (column: string) =>
+  (...columns: readonly string[]) =>
   (row: SqlRow): SqlRow =>
-    Object.fromEntries(Object.entries(row).filter(([key]) => key !== column));
+    Object.fromEntries(
+      Object.entries(row).filter(([key]) => !columns.includes(key))
+    );
+
+const portsOf = (rows: readonly SqlRow[]) =>
+  rows.map(({ port }) => JSON.stringify({ port }));
 
 const row = (name: string, fields?: Partial<MachineRow>): MachineRow => ({
   name,
@@ -224,7 +235,8 @@ const row = (name: string, fields?: Partial<MachineRow>): MachineRow => ({
   ramMib: 1024,
   diskGib: 10,
   host: "linux",
-  port: undefined,
+  handle: undefined,
+  endpoint: undefined,
   desired: "running",
   state: "making.due",
   prepared: false,
@@ -252,7 +264,7 @@ const checkpoint = (
   host: "linux",
   traits: runtimeTraits.smolvm,
   pin: "smolvm 0.0.0-test linux-x64",
-  port: 10_000,
+  handle: undefined,
   base: "ubuntu",
   cpu: 1,
   ramMib: 1024,
@@ -406,7 +418,8 @@ layer(NodeServices.layer)((it) => {
         const rows = [
           row("dev", {
             traits: runtimeTraits.tart,
-            port: 10_000,
+            handle: Handle.make("dev-handle"),
+            endpoint: { host: "127.0.0.1", port: 10_000 },
             hostKey: "ssh-ed25519 AAAA",
             ephemeral: true,
             state: "made.failed",
@@ -564,14 +577,108 @@ layer(NodeServices.layer)((it) => {
           traitsOf(before.checkpoints)
         );
         expect(after.user_version).toBe(migrations.length);
-        expect(after.machines.map(without("traits"))).toStrictEqual(
-          before.machines.map(without("kind"))
+        expect(
+          after.machines.map(without("traits", "handle", "endpoint"))
+        ).toStrictEqual(before.machines.map(without("kind", "port")));
+        expect(after.machines.map(({ endpoint }) => endpoint)).toStrictEqual(
+          portsOf(before.machines)
         );
-        expect(after.checkpoints.map(without("traits"))).toStrictEqual(
-          before.checkpoints.map(without("kind"))
-        );
-        expect(after.rest).toStrictEqual(before.rest);
+        expect(
+          after.checkpoints.map(without("traits", "handle"))
+        ).toStrictEqual(before.checkpoints.map(without("kind", "port")));
+        expect(after.rest).toStrictEqual({ ...before.rest, hosts: [] });
         expect(dumped(stateDir)).toStrictEqual(once);
+      })
+  );
+
+  it.effect(
+    "a store P2's control plane wrote opens with each machine's port inside its endpoint and no handle yet, its checkpoints without a port, and every host to be given its machines again",
+    () =>
+      Effect.gen(function* () {
+        const stateDir = yield* p2Store;
+        const before = rowsOf(stateDir);
+
+        const [machines, checkpoints] = yield* withStore(stateDir, (store) =>
+          Effect.all([store.machines, store.checkpoints])
+        );
+
+        const after = rowsOf(stateDir);
+        const once = dumped(stateDir);
+
+        yield* withStore(stateDir, (store) => store.machines);
+
+        expect(before.user_version).toBe(7);
+        expect(
+          machines.map(({ name, host, handle, endpoint }) => ({
+            name,
+            host,
+            handle,
+            endpoint,
+          }))
+        ).toStrictEqual([
+          {
+            name: "keep",
+            host: "smolvm-1",
+            handle: undefined,
+            endpoint: { port: 21_000 },
+          },
+          {
+            name: "big",
+            host: "smolvm-1",
+            handle: undefined,
+            endpoint: { port: 21_001 },
+          },
+          {
+            name: "fast",
+            host: "smolvm-1",
+            handle: undefined,
+            endpoint: { port: 21_002 },
+          },
+          {
+            name: "mbox",
+            host: "tart-1",
+            handle: undefined,
+            endpoint: { port: 21_000 },
+          },
+        ]);
+        expect(
+          checkpoints.map(({ name, handle }) => [name, handle])
+        ).toStrictEqual([
+          ["snap", undefined],
+          ["built-df5613ce21aef7f5", undefined],
+          ["msnap", undefined],
+        ]);
+        expect(after.user_version).toBe(migrations.length);
+        expect(after.machines.map(without("handle", "endpoint"))).toStrictEqual(
+          before.machines.map(without("port"))
+        );
+        expect(after.machines.map(({ endpoint }) => endpoint)).toStrictEqual(
+          portsOf(before.machines)
+        );
+        expect(after.checkpoints.map(without("handle"))).toStrictEqual(
+          before.checkpoints.map(without("port"))
+        );
+        expect(after.rest).toStrictEqual({ ...before.rest, hosts: [] });
+        expect(dumped(stateDir)).toStrictEqual(once);
+      })
+  );
+
+  it.effect(
+    "a P2 store whose upgrade fails after its machines moved is refused, and left as it was",
+    () =>
+      Effect.gen(function* () {
+        const stateDir = yield* p2Store;
+        const db = new DatabaseSync(path.join(stateDir, databaseFile));
+
+        db.exec("CREATE INDEX checkpoint_ports ON checkpoints (port)");
+        db.close();
+
+        const before = dumped(stateDir);
+        const error = yield* opening(stateDir);
+
+        expect(error).toBeInstanceOf(Internal);
+        expect(error.message).toContain("checkpoint_ports");
+        expect(dumped(stateDir)).toStrictEqual(before);
       })
   );
 
@@ -712,7 +819,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a state dir that 96bd402 wrote opens, reads every row as it wrote it but for the profile and the prebuild that templates replaced, and takes writes",
+    "a state dir that 96bd402 wrote opens, reads every row as it wrote it but for the profile and the prebuild that templates replaced and the host boots that a recheck reads again, and takes writes",
     () =>
       Effect.gen(function* () {
         const stateDir = yield* stateDirAtVersion1((db) => {
@@ -797,7 +904,7 @@ layer(NodeServices.layer)((it) => {
           cpu: 2,
           ramMib: 2048,
           diskGib: 20,
-          port: 10_000,
+          endpoint: { port: 10_000 },
           desired: "paused",
           state: "made.failed",
           prepared: true,
@@ -864,7 +971,7 @@ layer(NodeServices.layer)((it) => {
             to: { cpu: 4, diskGib: 40 },
           })
         );
-        expect(boot).toStrictEqual(Option.some("boot-1"));
+        expect(boot).toStrictEqual(Option.none());
         expect(written).toStrictEqual({
           ...dev,
           cpu: 4,
@@ -1013,54 +1120,46 @@ layer(NodeServices.layer)((it) => {
       })
   );
 
-  it.effect(
-    "a taken machine name is Conflict and writes nothing, and a host's taken port fails, while another host may use it",
-    () =>
-      Effect.gen(function* () {
-        const stateDir = yield* stateIn;
-        const first = row("dev", { port: 10_000 });
-        const elsewhere = row("away", { host: "mac", port: 10_000 });
+  it.effect("a taken machine name is Conflict and writes nothing", () =>
+    Effect.gen(function* () {
+      const stateDir = yield* stateIn;
+      const first = row("dev");
 
-        const [name, port, rows] = yield* withStore(stateDir, (store) =>
-          Effect.gen(function* () {
-            yield* store.insertMachine(first);
-            yield* store.insertMachine(elsewhere);
+      const [name, rows] = yield* withStore(stateDir, (store) =>
+        Effect.gen(function* () {
+          yield* store.insertMachine(first);
 
-            return [
-              yield* Effect.flip(
-                store.insertMachine(row("dev", { port: 10_001, base: "other" }))
-              ),
-              yield* Effect.flip(
-                store.insertMachine(row("other", { port: 10_000 }))
-              ),
-              yield* store.machines,
-            ] as const;
-          })
-        );
+          return [
+            yield* Effect.flip(
+              store.insertMachine(row("dev", { base: "other" }))
+            ),
+            yield* store.machines,
+          ] as const;
+        })
+      );
 
-        expect(name).toStrictEqual(
-          new Conflict({ message: "machine dev exists", id: "dev" })
-        );
-        expect(port._tag).toBe("Internal");
-        expect(port.message).toContain("insert machine other");
-        expect(rows).toStrictEqual([elsewhere, first]);
-      })
+      expect(name).toStrictEqual(
+        new Conflict({ message: "machine dev exists", id: "dev" })
+      );
+      expect(rows).toStrictEqual([first]);
+    })
   );
 
   it.effect(
-    "machines without a port yet may share a host, and a removed row frees its name and port",
+    "machines on one host may hold any endpoint, which their host gives them, and a removed row frees its name",
     () =>
       Effect.gen(function* () {
         const stateDir = yield* stateIn;
+        const endpoint = { host: "127.0.0.1", port: 10_000 };
 
         const rows = yield* withStore(stateDir, (store) =>
           Effect.gen(function* () {
-            yield* store.insertMachine(row("one"));
-            yield* store.insertMachine(row("two"));
-            yield* store.insertMachine(row("dev", { port: 10_000 }));
+            yield* store.insertMachine(row("one", { endpoint }));
+            yield* store.insertMachine(row("two", { endpoint }));
+            yield* store.insertMachine(row("dev", { endpoint }));
             yield* removing(store, "dev");
-            yield* store.insertMachine(row("dev", { port: 10_000 }));
-            yield* store.insertMachine(row("gone", { port: 10_001 }));
+            yield* store.insertMachine(row("dev", { endpoint }));
+            yield* store.insertMachine(row("gone"));
             yield* removing(store, "gone");
             yield* removing(store, "gone");
 
@@ -1135,7 +1234,7 @@ layer(NodeServices.layer)((it) => {
                   next: {
                     ...given,
                     state: "made.settled",
-                    port: 10_000,
+                    endpoint: { host: "127.0.0.1", port: 10_000 },
                     prepared: true,
                     pin: undefined,
                     error: undefined,
@@ -1155,7 +1254,7 @@ layer(NodeServices.layer)((it) => {
         const after = {
           ...before,
           state: "made.settled",
-          port: 10_000,
+          endpoint: { host: "127.0.0.1", port: 10_000 },
           prepared: true,
           pin: undefined,
           error: undefined,
@@ -1191,7 +1290,8 @@ layer(NodeServices.layer)((it) => {
         ramMib: 2048,
         diskGib: 40,
         host: "mac",
-        port: 10_001,
+        handle: Handle.make("abcd-handle"),
+        endpoint: { host: "127.0.0.1", port: 10_001 },
         desired: "paused",
         state: "undoing.held",
         prepared: true,
@@ -1417,7 +1517,6 @@ layer(NodeServices.layer)((it) => {
           yield* withStore(stateDir, (store) =>
             Effect.gen(function* () {
               yield* store.insertMachine(row("dev"));
-              yield* store.insertMachine(row("full", { port: 10_000 }));
               yield* store.insertMachine(row("other"));
 
               const first = yield* store.advance(
@@ -1439,7 +1538,7 @@ layer(NodeServices.layer)((it) => {
                 yield* store.advance("machine", "gone", starting("fake 4")),
                 yield* Effect.flip(
                   store.advance("machine", "other", (given) => ({
-                    next: { ...given, port: 10_000 },
+                    next: { ...given, cpu: 0.5 },
                     begin: operation("other"),
                     finish: false,
                   }))
@@ -1511,10 +1610,11 @@ layer(NodeServices.layer)((it) => {
   it.effect("a finish frees the leases and writes the row, in one write", () =>
     Effect.gen(function* () {
       const stateDir = yield* stateIn;
+      const endpoint = { host: "127.0.0.1", port: 10_000 };
 
       const [operations, after, again] = yield* withStore(stateDir, (store) =>
         Effect.gen(function* () {
-          yield* store.insertMachine(row("dev", { port: 10_000 }));
+          yield* store.insertMachine(row("dev", { endpoint }));
           yield* beginning(store, operation("dev"));
           yield* store.advance("machine", "dev", (given) => ({
             next: { ...given, state: "made.observing", prepared: true },
@@ -1531,7 +1631,7 @@ layer(NodeServices.layer)((it) => {
 
       expect(operations).toStrictEqual(Option.none());
       expect(after).toStrictEqual(
-        row("dev", { port: 10_000, state: "made.observing", prepared: true })
+        row("dev", { endpoint, state: "made.observing", prepared: true })
       );
       expect(again.at).toBe("written");
     })

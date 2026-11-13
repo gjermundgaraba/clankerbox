@@ -54,7 +54,7 @@ While it serves, the run directory holds `runtime` (the runtime its hosts fake),
 | `build.log`         | the build's output                                                    |
 | `server.log`        | the control plane's log, warnings included                            |
 | `host-<id>.log`     | that host's log                                                       |
-| `runtime-calls.txt` | one line per runtime call as it happens, such as `capture snap`       |
+| `runtime-calls.txt` | one line per runtime call as it happens, such as `capture snap`, and on `tart`, whose fake is relayed as Tart is, `relay <name>` each time a relay opens |
 | `transcript.txt`    | each `cb.sh` command as a JSON argv, its output and `[exit N]`, and each fault |
 
 The control plane's authorized keys are `server-keys.pub`, read at each start.
@@ -112,7 +112,9 @@ times out while it keeps its machines and steps, and `fault.sh <run> thaw-host
 `fault.sh <run> hold-capture <id>` makes a host hold its next capture until it
 dies, as the fake's captures are too quick for a kill to catch one.
 `fault.sh <run> setup-go` lets the `slow` recipe's setup finish. Each is written
-to the transcript.
+to the transcript. A host started with `CLANKERBOX_FAKE_FAIL_FIND` set to
+machine names, comma-separated, as by `start-host` or `upgrade.sh`, fails each
+search for those machines, as smolvm does when its database is locked.
 
 What a kill catches decides the outcome:
 
@@ -130,7 +132,7 @@ So does what a restarted host held:
 
 | What the host held when it died     | Where it must end                                                               |
 | ----------------------------------- | ------------------------------------------------------------------------------- |
-| A capture                           | `capturing` while the host is down, then `failed` with its error, and `deleteCheckpoint <name>` in `runtime-calls.txt` from the restarted host: the row went `discarding`, which a client reads as `failed` |
+| A capture                           | `capturing` while the host is down, then `failed` with its error: the row went `discarding`, which a client reads as `failed`, and the restarted host finds no checkpoint of its instance, so no `deleteCheckpoint <name>` reaches `runtime-calls.txt` |
 | A delete of a checkpoint            | `deleting` while the host is down, then `NotFound`                              |
 
 Run them with `hold-capture <id>`, then `checkpoint capture <machine> <name>

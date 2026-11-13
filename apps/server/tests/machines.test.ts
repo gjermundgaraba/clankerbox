@@ -3,6 +3,7 @@ import { createServer } from "node:net";
 import type { Server } from "node:net";
 import path from "node:path";
 
+import type { MachineState } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { runtimeTraits } from "@gjermundgaraba/clankerbox-host/testing";
@@ -127,11 +128,23 @@ const served = (options?: Parameters<typeof running>[0]) =>
     };
   });
 
+const turned = (
+  fake: Effect.Success<ReturnType<typeof served>>["fake"],
+  name: string,
+  state: MachineState
+) => {
+  const held = fake.machines.get(name);
+
+  if (held !== undefined) {
+    held.state = state;
+  }
+};
+
 const unready = (
   fake: Effect.Success<ReturnType<typeof served>>["fake"],
   name: string
 ) => {
-  fake.machines.set(name, { state: "unknown", root: fake.root(name) ?? "" });
+  turned(fake, name, "unknown");
 };
 
 const countsRuns = (dir: string) => ({
@@ -413,10 +426,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { asking, client, fake } = yield* served();
-        const making = fake.holdNext("create");
 
-        yield* asking.create("dev", request("dev"));
-        yield* making.entered;
+        yield* client.create("dev", request("dev"));
+        yield* client.stopMachine({ id: "dev" });
+
+        const starting = fake.holdNext("start");
+
+        yield* asking.startMachine({ id: "dev" });
+        yield* starting.entered;
 
         const readsBefore = fake.observed.length;
 
@@ -431,11 +448,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
 
         yield* pause;
-        yield* making.release;
+        yield* starting.release;
 
         const [woken, rested] = yield* Fiber.join(resting);
 
-        expect([unrested.phase, hostReads]).toStrictEqual(["creating", 1]);
+        expect([unrested.phase, hostReads]).toStrictEqual(["starting", 1]);
         expect(Duration.toMillis(bounded)).toBeGreaterThanOrEqual(1000);
         expect(at(rested)).toStrictEqual(["running", "running", "settled"]);
         expect(Duration.toMillis(woken)).toBeLessThan(4000);
@@ -542,10 +559,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const whileUnread = [...fake.calls];
 
-        fake.machines.set("dev", {
-          state: "running",
-          root: fake.root("dev") ?? "",
-        });
+        turned(fake, "dev", "running");
 
         const stopped = yield* Fiber.join(stop);
 
@@ -580,10 +594,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const unread = yield* machine("dev");
 
-        fake.machines.set("dev", {
-          state: "running",
-          root: fake.root("dev") ?? "",
-        });
+        turned(fake, "dev", "running");
 
         const settled = yield* rests("dev");
 
@@ -651,7 +662,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a machine has an SSH endpoint, as the runtime's user on its port of the publish address, only while it runs",
+    "a machine has an SSH endpoint, as the runtime's user at its row's endpoint, only while it runs",
     () =>
       Effect.gen(function* () {
         const { client, fake, machine, row } = yield* served();
@@ -662,14 +673,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         fake.machines.clear();
 
         const missing = yield* machine("dev");
-        const { port } = yield* row("dev");
+        const { endpoint } = yield* row("dev");
 
-        expect(port).toBeDefined();
-        expect(made.ssh).toStrictEqual({
-          user: "admin",
-          host: "127.0.0.1",
-          port,
-        });
+        expect(endpoint?.host).toBe("127.0.0.1");
+        expect(made.ssh).toStrictEqual({ user: "admin", ...endpoint });
         expect(made.hostKey).toBeUndefined();
         expect(
           [stopped, missing].map(({ state, ssh }) => [state, ssh])
@@ -776,7 +783,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "Capacity",
         ]);
         expect(fake.machines.size).toBe(0);
-        expect(fake.calls).toStrictEqual(["admit dev", "delete dev"]);
+        expect(fake.calls).toStrictEqual(["admit dev"]);
       })
   );
 
@@ -891,7 +898,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* host.operations.run({
           id: "from-another-store",
           boot: host.operations.boot,
-          scope: "machine dev",
+          scope: { resource: "machine", name: "dev" },
           sequence: 4,
           step: { _tag: "remove", machine: { name: "dev", instance: "old" } },
         });
@@ -1747,12 +1754,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           _tag: "Superseded",
           by: "deleted",
         });
-        expect(fake.calls).toStrictEqual([
-          "admit dev",
-          "create dev",
-          "delete dev",
-        ]);
-        expect(yield* rows).toStrictEqual([]);
+        expect(fake.calls).toStrictEqual(["admit dev", "create dev"]);
+        expect([fake.machines.size, yield* rows]).toStrictEqual([0, []]);
       })
   );
 
@@ -2471,7 +2474,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(
           fake.activations
             .at(-1)
-            ?.machines.map(({ machine, booting }) => [machine.name, booting])
+            ?.machines.map(({ machine, _tag }) => [
+              machine.name,
+              _tag === "booting",
+            ])
         ).toStrictEqual([
           ["a", false],
           ["b", true],
@@ -2697,10 +2703,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           2048,
         ]);
         expect(
-          activation?.machines.map(({ machine, booting }) => [
+          activation?.machines.map(({ machine, _tag }) => [
             machine.name,
             machine.ramMib,
-            booting,
+            _tag === "booting",
           ])
         ).toStrictEqual([
           ["a", 1024, false],
@@ -2985,10 +2991,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       yield* asking.stopMachine({ id: "dev" });
       yield* resuming.entered;
-      fake.machines.set("dev", {
-        state: "running",
-        root: fake.root("dev") ?? "",
-      });
+      turned(fake, "dev", "running");
 
       const resize = yield* Effect.forkChild(
         client.resizeMachine({ id: "dev", cpu: 2 })
@@ -3317,7 +3320,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       expect(unknown).toMatchObject({ _tag: "NotBuilt", template: "nope" });
       expect(unknown.message).toContain(
-        "template nope has no ready build: run clankerbox template build nope to make one"
+        "template nope has no ready build: run clankerbox template build on nope's template file to make one"
       );
       expect(failed).toMatchObject({ _tag: "NotBuilt", template: "broken" });
       expect(unkept.message).toBe(

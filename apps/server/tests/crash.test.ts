@@ -1,6 +1,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { Duration, Effect, Option } from "effect";
+import { accepts } from "@gjermundgaraba/clankerbox-host/testing";
+import { Internal } from "@gjermundgaraba/clankerbox-sdk";
+import { Duration, Effect, Logger, Option, Schedule } from "effect";
 import { expect } from "vite-plus/test";
 
 import { applied } from "../src/chart.ts";
@@ -11,6 +13,7 @@ import {
   at,
   clientOf,
   eventually,
+  patched,
   pause,
   phaseOf,
   plane,
@@ -50,6 +53,17 @@ const killedPlane = (options?: Parameters<typeof plane>[0]) =>
 
     return { planned, first, client, asking, fake, restart };
   });
+
+const counted = (calls: readonly string[], call: string) =>
+  calls.filter((seen) => seen === call).length;
+
+const heard = (lines: string[]) =>
+  Logger.make(({ message }) => {
+    lines.push(String(message));
+  });
+
+const adoptsOf = (lines: readonly string[], name: string) =>
+  lines.filter((line) => line.startsWith(`adopt ${name}: `)).length;
 
 const unsent = (
   store: Started["store"],
@@ -115,6 +129,51 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(stageOf(Option.getOrThrow(row))).toBe("made");
       })
+  );
+
+  it.effect(
+    "a control plane killed after a make's running report holds the make's handle in its row at restart, and finishes on that machine",
+    () =>
+      Effect.gen(function* () {
+        const { client, asking, fake, restart, first } = yield* killedPlane();
+
+        yield* client.create("dev", request("dev"));
+        yield* client.captureCheckpoint({ machine: "dev", name: "snap" });
+        yield* eventually(
+          client.getCheckpoint({ id: "snap" }),
+          ({ phase }) => phase === "ready"
+        );
+
+        const preparing = fake.holdNext("exec");
+
+        yield* asking.restoreMachine({ checkpoint: "snap", name: "copy" });
+        yield* preparing.entered;
+
+        const told = yield* first.store.findMachine("copy").pipe(
+          Effect.repeat({
+            until: Option.exists(({ handle }) => handle !== undefined),
+            schedule: Schedule.spaced(Duration.millis(100)).pipe(
+              Schedule.upTo({ duration: Duration.seconds(10) })
+            ),
+          })
+        );
+
+        const second = yield* restart;
+        const held = yield* second.store.findMachine("copy");
+
+        yield* preparing.release;
+
+        const rested = yield* second.rests("copy");
+
+        expect(Option.map(held, ({ handle }) => handle)).toStrictEqual(
+          Option.some(fake.machines.get("copy")?.handle)
+        );
+        expect(Option.map(rested, ({ handle }) => handle)).toStrictEqual(
+          Option.map(told, ({ handle }) => handle)
+        );
+        expect(counted(fake.calls, "restore copy")).toBe(1);
+      }),
+    { timeout: 20_000 }
   );
 
   it.effect(
@@ -321,7 +380,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ...template,
           name: "building",
           instance: "unsent",
-          port: undefined,
+          handle: undefined,
+          endpoint: undefined,
           state: "making.due",
           prepared: false,
           ephemeral: true,
@@ -359,7 +419,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ...template,
           name: "dev",
           instance: "unsent",
-          port: undefined,
+          handle: undefined,
+          endpoint: undefined,
           state: "making.due",
           prepared: false,
         });
@@ -392,7 +453,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ...template,
           name: "copy",
           instance: "unsent",
-          port: undefined,
+          handle: undefined,
+          endpoint: undefined,
           state: "making.due",
           prepared: false,
           hostKey: undefined,
@@ -445,7 +507,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ...template,
           name: "copy",
           instance: "unsent",
-          port: undefined,
+          handle: undefined,
+          endpoint: undefined,
           state: "making.due",
           prepared: false,
           hostKey: undefined,
@@ -482,7 +545,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a make its host lost to a restart is undone, and its row says why",
+    "a make its host lost to a restart is undone, its host finding no VM to delete, and its row says why",
     () =>
       Effect.gen(function* () {
         const served = yield* running();
@@ -504,7 +567,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "missing",
           "Internal",
         ]);
-        expect(host!.fake.calls.at(-1)).toBe("delete dev");
+        expect([
+          host!.fake.calls.includes("delete dev"),
+          host!.fake.machines.has("dev"),
+        ]).toStrictEqual([false, false]);
       })
   );
 
@@ -535,25 +601,161 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     })
   );
 
-  it.effect("a host that restarts is told the machines it holds, once", () =>
-    Effect.gen(function* () {
-      const served = yield* running({ recheck: Duration.millis(50) });
-      const client = yield* clientOf(served.url);
-      const [host] = served.hosts;
+  it.effect(
+    "a row an upgrade left with its port and no handle or address is filled from its host's next adopt, and reads the ssh it had",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* running({ recheck: Duration.millis(50) });
+        const client = yield* clientOf(served.url);
+        const [host] = served.hosts;
 
-      yield* client.create("dev", request("dev"));
-      host!.fake.calls.length = 0;
-      yield* restartedHost(host!);
-      yield* eventually(
-        Effect.sync(() => [...host!.fake.calls]),
-        (calls) => calls.includes("adopt dev")
-      );
-      yield* Effect.sleep(Duration.millis(200));
+        const made = yield* client.create("dev", request("dev"));
 
-      expect(
-        host!.fake.calls.filter((call) => call.startsWith("adopt"))
-      ).toStrictEqual(["adopt dev"]);
-    })
+        const before = Option.getOrThrow(
+          yield* served.store.findMachine("dev")
+        );
+
+        yield* patched(served.store, "dev", {
+          handle: undefined,
+          endpoint: { port: made.ssh?.port ?? 0 },
+        });
+
+        const upgraded = yield* client.getMachine({ id: "dev" });
+
+        yield* restartedHost(host!);
+
+        const filled = yield* eventually(
+          served.store.findMachine("dev"),
+          Option.exists(
+            ({ handle, endpoint }) =>
+              handle !== undefined && endpoint?.host !== undefined
+          )
+        );
+
+        expect(upgraded.ssh).toBeUndefined();
+        expect(
+          Option.map(filled, ({ handle, endpoint }) => ({ handle, endpoint }))
+        ).toStrictEqual(
+          Option.some({ handle: before.handle, endpoint: before.endpoint })
+        );
+        expect((yield* client.getMachine({ id: "dev" })).ssh).toStrictEqual(
+          made.ssh
+        );
+      })
+  );
+
+  it.effect(
+    "a relayed host that restarts is told the machines it holds, once, and reaches each again where its row says",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* running({
+          recheck: Duration.millis(50),
+          runtime: { runtime: { relayed: true } },
+        });
+
+        const client = yield* clientOf(served.url);
+        const [host] = served.hosts;
+
+        const made = yield* client.create("dev", request("dev"));
+
+        host!.fake.calls.length = 0;
+        yield* restartedHost(host!);
+        yield* eventually(
+          Effect.sync(() => [...host!.fake.calls]),
+          (calls) => calls.includes("relay dev")
+        );
+        yield* Effect.sleep(Duration.millis(200));
+
+        const read = yield* client.getMachine({ id: "dev" });
+
+        expect(
+          host!.fake.calls.filter((call) => call.startsWith("relay"))
+        ).toStrictEqual(["relay dev"]);
+        expect(read.ssh).toStrictEqual(made.ssh);
+        expect(yield* accepts(made.ssh?.port ?? 0)).toBe(true);
+      })
+  );
+
+  it.effect(
+    "a published host that restarts is told the machines it holds once",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* running({ recheck: Duration.millis(50) });
+        const client = yield* clientOf(served.url);
+        const [host] = served.hosts;
+        const lines: string[] = [];
+
+        yield* client.create("dev", request("dev"));
+        yield* restartedHost(host!, { logger: heard(lines) });
+        yield* eventually(
+          Effect.sync(() => adoptsOf(lines, "dev")),
+          (adopts) => adopts > 0
+        );
+        yield* Effect.sleep(Duration.millis(300));
+
+        expect(adoptsOf(lines, "dev")).toBe(1);
+      })
+  );
+
+  it.effect(
+    "a host that restarts while its runtime can't find one machine has every other row filled at once, and is adopted again until it finds that one, then no more",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* running({ recheck: Duration.millis(50) });
+        const client = yield* clientOf(served.url);
+        const [host] = served.hosts;
+        const lines: string[] = [];
+
+        const handleOf = (name: string) =>
+          Effect.map(served.store.findMachine(name), (found) =>
+            Option.getOrUndefined(Option.map(found, ({ handle }) => handle))
+          );
+
+        yield* client.create("ok", request("ok"));
+        yield* client.create("broken", request("broken"));
+
+        const before = [yield* handleOf("ok"), yield* handleOf("broken")];
+
+        for (const name of ["ok", "broken"]) {
+          yield* patched(served.store, name, { handle: undefined });
+        }
+
+        host!.fake.failFind(
+          "broken",
+          new Internal({ message: "database is locked" })
+        );
+        yield* restartedHost(host!, { logger: heard(lines) });
+
+        const ok = yield* eventually(
+          handleOf("ok"),
+          (handle) => handle !== undefined
+        );
+
+        yield* eventually(
+          Effect.sync(() => adoptsOf(lines, "broken")),
+          (adopts) => adopts > 2
+        );
+
+        const unfound = yield* handleOf("broken");
+
+        host!.fake.mendFind("broken");
+
+        const broken = yield* eventually(
+          handleOf("broken"),
+          (handle) => handle !== undefined
+        );
+
+        const adopted = adoptsOf(lines, "broken");
+
+        yield* Effect.sleep(Duration.millis(300));
+
+        expect([ok, unfound, broken]).toStrictEqual([
+          before[0],
+          undefined,
+          before[1],
+        ]);
+        expect(adoptsOf(lines, "broken")).toBe(adopted);
+      })
   );
 
   it.effect(

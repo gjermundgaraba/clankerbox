@@ -71,31 +71,31 @@ const sizes = { cpu: 1, ramMib: 1024, diskGib: 10 };
 
 const make: Omit<Operation, "boot"> = {
   id: "make",
-  scope: "machine dev",
+  scope: { resource: "machine", name: "dev" },
   sequence: 1,
   step: {
     _tag: "make",
     machine: { name: "dev", instance, ...sizes },
     source: { _tag: "base", base: "ubuntu" },
-    ports: [],
+    taken: [],
     machines: [],
   },
 };
 
-const join = (port: number): Omit<Operation, "boot"> => ({
+const join: Omit<Operation, "boot"> = {
   id: "join",
-  scope: "machine dev",
+  scope: { resource: "machine", name: "dev" },
   sequence: 2,
   step: {
     _tag: "join",
-    machine: { name: "dev", instance, ...sizes, port },
+    machine: { name: "dev", instance, ...sizes },
     hostname: "linux-dev",
   },
-});
+};
 
 const build: Omit<Operation, "boot"> = {
   id: "build",
-  scope: "machine building-1",
+  scope: { resource: "machine", name: "building-1" },
   sequence: 1,
   step: {
     _tag: "make",
@@ -110,7 +110,7 @@ const build: Omit<Operation, "boot"> = {
       setup: { script: "#!/bin/sh\necho set up\n" },
     },
     join: { hostname: "cbx-building-1" },
-    ports: [],
+    taken: [],
     machines: [],
   },
 };
@@ -136,16 +136,9 @@ const keysOf = (tailnetSettings: TailnetSettings) =>
 
     expect(built.status, built.error?.message).toBe("done");
 
-    const { outcome } = yield* operations.run({
-      ...make,
-      boot: operations.boot,
-    });
-
+    yield* operations.run({ ...make, boot: operations.boot });
     yield* operations.wait("make");
-    yield* operations.run({
-      ...join(outcome.port ?? 0),
-      boot: operations.boot,
-    });
+    yield* operations.run({ ...join, boot: operations.boot });
     yield* operations.wait("join");
 
     return tagged;
@@ -167,16 +160,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           http: tailscaleApi(minted),
         });
 
-        const { outcome } = yield* operations.run({
-          ...make,
-          boot: operations.boot,
-        });
-
+        yield* operations.run({ ...make, boot: operations.boot });
         yield* operations.wait("make");
-        yield* operations.run({
-          ...join(outcome.port ?? 0),
-          boot: operations.boot,
-        });
+        yield* operations.run({ ...join, boot: operations.boot });
 
         const report = yield* operations.wait("join");
 

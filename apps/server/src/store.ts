@@ -1,4 +1,4 @@
-import { Step } from "@clankerbox/host-contract";
+import { Endpoint, Handle, Step } from "@clankerbox/host-contract";
 import {
   Build,
   Desired,
@@ -104,6 +104,7 @@ const made = {
   diskGib: Schema.Int,
   host: Schema.String,
   pin: UndefinedFromNull(Schema.String),
+  handle: UndefinedFromNull(Handle),
   error: UndefinedFromNull(Schema.fromJsonString(HostError)),
   labels: UndefinedFromNull(Schema.fromJsonString(Labels)),
 };
@@ -111,7 +112,7 @@ const made = {
 /** What a machine's row holds but for its leaf: what no leaf can tell, and its chart's context. */
 export const Facts = Schema.Struct({
   ...made,
-  port: UndefinedFromNull(Schema.Int),
+  endpoint: UndefinedFromNull(Schema.fromJsonString(Endpoint)),
   desired: Desired.pick(["running", "stopped", "paused"]),
   prepared: Schema.BooleanFromBit,
   /** The resize still owed. One that runs is on its operation. */
@@ -134,7 +135,6 @@ export type ShownPhase = Checkpoint["phase"];
 export const CheckpointFacts = Schema.Struct({
   ...made,
   machine: Schema.String,
-  port: Schema.Int,
   failedAt: UndefinedFromNull(Schema.DateTimeUtcFromString),
   /** When the control plane deletes it, once ready. */
   expiresAt: UndefinedFromNull(Schema.DateTimeUtcFromString),

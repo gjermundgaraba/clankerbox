@@ -10,6 +10,7 @@ import { Context, Duration, Effect, Layer, Redacted, Schema } from "effect";
 import { BuildStore, fetch, publish } from "../../src/builds.ts";
 import { BuildsSettings, make } from "../../src/platform/s3.ts";
 import { Runtime } from "../../src/runtime.ts";
+import type { Identity } from "../../src/runtime.ts";
 import { fakeRuntime } from "../fake-runtime.ts";
 import { dockerAnswers, seaweedfs } from "./seaweedfs.ts";
 
@@ -45,7 +46,6 @@ const checkpointRef = (instance: string) => ({
   cpu: 1,
   ramMib: 1024,
   diskGib: 10,
-  port: 2222,
 });
 
 const files = (root: string, contents: Readonly<Record<string, string>>) => {
@@ -54,6 +54,20 @@ const files = (root: string, contents: Readonly<Record<string, string>>) => {
     writeFileSync(path.join(root, name), content);
   }
 };
+
+const planted = (
+  runtime: Runtime["Service"],
+  checkpoint: Identity,
+  contents: Readonly<Record<string, string>>
+) =>
+  Effect.gen(function* () {
+    const held = yield* Effect.fromNullishOr(runtime.files);
+    const staged = held.staging(checkpoint);
+
+    files(staged, contents);
+
+    return { ...checkpoint, handle: yield* held.install(checkpoint, staged) };
+  });
 
 describe.skipIf(!dockerAnswers && process.env["CI"] === undefined)(
   "the S3 build store, against SeaweedFS",
@@ -153,16 +167,19 @@ describe.skipIf(!dockerAnswers && process.env["CI"] === undefined)(
               ),
           };
 
-          files(path.join(from, "checkpoints", "built"), {
+          const publishing = yield* runtimeIn(from);
+
+          const built = yield* planted(publishing, checkpointRef("built"), {
             "disk.raw": "the disk",
             "memory/one": "first memory",
             "memory/two": "second memory",
           });
+
           files(path.join(to, "checkpoints", "earlier"), {
             "disk.raw": "the disk",
           });
 
-          yield* publish(store, yield* runtimeIn(from), checkpointRef("built"));
+          yield* publish(store, publishing, built);
           yield* fetch(
             counted,
             yield* runtimeIn(to),

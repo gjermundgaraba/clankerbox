@@ -1,4 +1,4 @@
-import { HostHttp, HostInfo, Report } from "@clankerbox/host-contract";
+import { Handle, HostHttp, HostInfo, Report } from "@clankerbox/host-contract";
 import type {
   HostAction,
   Operation,
@@ -71,13 +71,13 @@ const dev = {
 
 const made = (id: string, sequence = 1): Omit<Operation, "boot"> => ({
   id,
-  scope: "machine dev",
+  scope: { resource: "machine", name: "dev" },
   sequence,
   step: {
     _tag: "make",
     machine: dev,
     source: { _tag: "base", base: "ubuntu" },
-    ports: [],
+    taken: [],
     machines: [],
   },
 });
@@ -87,10 +87,22 @@ const removed = (
   { name, instance }: { readonly name: string; readonly instance: string }
 ): Omit<Operation, "boot"> => ({
   id,
-  scope: `machine ${name}`,
+  scope: { resource: "machine", name },
   sequence: 1,
   step: { _tag: "remove", machine: { name, instance } },
 });
+
+const keptByRuntime = (
+  fake: Effect.Success<ReturnType<typeof serve>>["fake"],
+  { name, instance }: { readonly name: string; readonly instance: string }
+) => {
+  fake.machines.set(name, {
+    state: "running",
+    root: "",
+    instance,
+    handle: Handle.make(`held-${name}`),
+  });
+};
 
 type Body<N extends HostAction> =
   (typeof hostActionsByName)[N]["input"]["Encoded"];
@@ -117,7 +129,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           images: { ubuntu: image },
           boot: operations.boot,
           pin: "fake 1",
-          publishAddress: "127.0.0.1",
           joins: false,
           builds: false,
         });
@@ -194,7 +205,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* deliver(url, made("op-1"));
 
         const { outcome } = yield* finished(url, "op-1");
-        const ref = { ...dev, port: outcome.port ?? 0 };
+
+        const ref = {
+          ...dev,
+          handle: outcome.handle,
+          endpoint: outcome.endpoint,
+        };
 
         const states = yield* post(url, "readMachines", {
           machines: [
@@ -226,10 +242,16 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     Effect.gen(function* () {
       const { url, fake } = yield* serve();
 
+      yield* deliver(url, made("op-1"));
+
+      const { outcome } = yield* finished(url, "op-1");
+
       fake.failNextObserve(new Internal({ message: "smolvm didn't answer" }));
 
       const answer = yield* post(url, "readMachines", {
-        machines: [{ name: "dev", instance: dev.instance }],
+        machines: [
+          { name: "dev", instance: dev.instance, handle: outcome.handle },
+        ],
       });
 
       expect(answer.status).toBe(500);
@@ -237,17 +259,42 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     })
   );
 
-  it.effect("adoptMachines hands the runtime what the host holds", () =>
-    Effect.gen(function* () {
-      const { url, fake } = yield* serve();
+  it.effect(
+    "adoptMachines answers what the host holds of each machine: the runtime's handle and the endpoint at this host's address, and nothing of one it doesn't hold",
+    () =>
+      Effect.gen(function* () {
+        const { url } = yield* serve();
 
-      const answer = yield* post(url, "adoptMachines", {
-        machines: [{ ...dev, port: 21_130 }],
-      });
+        yield* deliver(url, made("op-1"));
 
-      expect(answer.status).toBeLessThan(300);
-      expect(fake.calls).toContain("adopt dev");
-    })
+        const { outcome } = yield* finished(url, "op-1");
+        const gone = { ...dev, name: "gone", endpoint: { port: 21_131 } };
+
+        const answer = yield* post(url, "adoptMachines", {
+          machines: [
+            { ...dev, endpoint: { port: outcome.endpoint?.port } },
+            gone,
+          ],
+        });
+
+        expect(outcome.handle).toBeDefined();
+        expect(JSON.parse(answer.body)).toStrictEqual({
+          adopted: [
+            {
+              name: dev.name,
+              instance: dev.instance,
+              handle: outcome.handle,
+              endpoint: outcome.endpoint,
+            },
+            {
+              name: gone.name,
+              instance: gone.instance,
+              endpoint: { host: "127.0.0.1", port: 21_131 },
+            },
+          ],
+          unresolved: [],
+        });
+      })
   );
 
   it.effect(
@@ -255,10 +302,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { url, fake } = yield* serve({ runtime: { relayed: true } });
-        const up = { ...dev, name: "up", port: 21_138 };
+        const up = { ...dev, name: "up", endpoint: { port: 21_138 } };
+
+        keptByRuntime(fake, up);
 
         const answer = yield* post(url, "adoptMachines", { machines: [up] });
-        const listening = yield* accepts(up.port);
+        const listening = yield* accepts(up.endpoint.port);
 
         yield* deliver(url, removed("op-1", up));
 
@@ -266,10 +315,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect([
           answer.status < 300,
-          fake.calls.includes("adopt up"),
+          fake.calls.includes("relay up"),
           listening,
           report.status,
-          yield* accepts(up.port),
+          yield* accepts(up.endpoint.port),
         ]).toStrictEqual([true, true, true, "done", false]);
       })
   );
@@ -285,11 +334,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           logger: Logger.make(({ message }) => logged.push(message)),
         });
 
-        const blocked = { ...dev, name: "blocked", port: 21_139 };
+        const blocked = { ...dev, name: "blocked", endpoint: { port: 21_139 } };
+
+        keptByRuntime(fake, blocked);
 
         const [answer, report] = yield* Effect.scoped(
           Effect.andThen(
-            holding(blocked.port),
+            holding(blocked.endpoint.port),
             Effect.gen(function* () {
               const adopted = yield* post(url, "adoptMachines", {
                 machines: [blocked],
@@ -305,7 +356,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(answer.status).toBeLessThan(300);
         expect(logged.flat()).toContainEqual(
           expect.stringMatching(
-            /^adopt: no forwarder for blocked: the forwarder couldn't listen on 127\.0\.0\.1:21139: /u
+            /^adopt: no relay for blocked: the relay couldn't listen on 127\.0\.0\.1:21139: /u
           )
         );
         expect([
@@ -340,7 +391,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { url, fake } = yield* serve();
-        const ref = { ...dev, port: 10_022 };
+        const ref = { ...dev, endpoint: { host: "127.0.0.1", port: 10_022 } };
 
         const bodies = {
           readHost: {},

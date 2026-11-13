@@ -6,8 +6,7 @@ import { Effect, Layer, Option } from "effect";
 
 import { BuildStore } from "../builds.ts";
 import { Operations } from "../operations.ts";
-import { Reaches } from "../reach.ts";
-import { Runtime, stateIn, sizedBy } from "../runtime.ts";
+import { Runtime, stateIn } from "../runtime.ts";
 import type { HostSettings } from "../settings.ts";
 import { Tailnet } from "../tailnet.ts";
 
@@ -19,7 +18,6 @@ const app = (config: Served) =>
     Effect.gen(function* () {
       const operations = yield* Operations;
       const runtime = yield* Runtime;
-      const reaches = yield* Reaches;
       const tailnet = yield* Effect.serviceOption(Tailnet);
       const builds = yield* Effect.serviceOption(BuildStore);
 
@@ -34,7 +32,6 @@ const app = (config: Served) =>
             images: Object.fromEntries(config.bases),
             boot: operations.boot,
             ...(runtime.pin === undefined ? {} : { pin: runtime.pin }),
-            publishAddress: runtime.reach.address,
             joins: Option.isSome(tailnet),
             builds: Option.isSome(builds),
           }),
@@ -45,11 +42,9 @@ const app = (config: Served) =>
               state: stateIn(observed, { name }),
             }))
           ),
-        readSizes: ({ machine }) =>
-          Effect.map(runtime.sizes(machine), (read) => sizedBy(machine, read)),
+        readSizes: ({ machine }) => operations.sizes(machine),
         readCapacity: ({ machines }) => operations.capacity(machines),
-        adoptMachines: ({ machines }) =>
-          Effect.andThen(reaches.adopt(machines), runtime.adopt(machines)),
+        adoptMachines: ({ machines }) => operations.adopt(machines),
         runOperation: operations.run,
         waitOperation: ({ id }) => operations.wait(id),
         cancelOperation: ({ id }) => operations.cancel(id),

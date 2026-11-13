@@ -14,6 +14,7 @@ import {
   Effect,
   FileSystem,
   Layer,
+  Match,
   Schedule,
   Schema,
   Semaphore,
@@ -26,21 +27,23 @@ import {
   atLeast,
   CannotStart,
   changes,
+  Handle,
   missing,
   Runtime,
   stateReadWait,
   timeoutFail,
 } from "../../runtime.ts";
 import type {
-  CheckpointRef,
+  Bind,
   Command,
+  Identity,
   Interface,
   MachineRef,
   MachineState,
-  Native,
   Observed,
   Sizes,
   StateError,
+  Target,
 } from "../../runtime.ts";
 import type { HostSettings } from "../../settings.ts";
 import { allotted, checkRamBudget, inUse } from "../../usage.ts";
@@ -131,9 +134,11 @@ const storedObject = (file: string): string | undefined => {
 
 const instanceChars = 8;
 
-export const nativeName = (
-  resource: Pick<MachineRef, "name" | "instance">
-): string => `${resource.name}-${resource.instance.slice(0, instanceChars)}`;
+export const nativeName = (resource: Identity): Handle =>
+  Handle.make(`${resource.name}-${resource.instance.slice(0, instanceChars)}`);
+
+const forwarded = (bind: Bind): readonly string[] =>
+  bind._tag === "forward" ? [`${bind.port}:22`] : [];
 
 const nameOf = (native: string): string =>
   native.slice(0, -(instanceChars + 1));
@@ -153,8 +158,8 @@ export const machineReadWait = Duration.subtract(
 );
 
 export const observeEach = (
-  machines: readonly Native[],
-  read: (machine: Native) => Effect.Effect<MachineState, Internal>
+  machines: readonly Target[],
+  read: (machine: Target) => Effect.Effect<MachineState, Internal>
 ): Effect.Effect<Observed> =>
   Effect.flatMap(Semaphore.make(observeConcurrency), (turns) =>
     Effect.forEach(
@@ -477,8 +482,8 @@ export const make = (
         )
       );
 
-    const observe = (machines: readonly Native[]) =>
-      observeEach(machines, (machine) => state(nativeName(machine)));
+    const observe = (machines: readonly Target[]) =>
+      observeEach(machines, (machine) => state(machine.handle));
 
     const boot = (native: string) =>
       call(
@@ -489,9 +494,9 @@ export const make = (
     const resume = (native: string) =>
       call(["machine", "resume", "--name", native], `machine resume ${native}`);
 
-    const copyable = (machine: MachineRef, stopped: string) =>
+    const copyable = (machine: Target, stopped: string) =>
       Effect.flatMap(
-        status(nativeName(machine)),
+        status(machine.handle),
         (recorded): Effect.Effect<void, StateError> => {
           if (recorded === "running") {
             return Effect.void;
@@ -520,11 +525,8 @@ export const make = (
     const storedAt = (native: string) =>
       path.join(paths.store, `${native}${checkpointSuffix}`);
 
-    const checkpointDir = (checkpoint: CheckpointRef) =>
-      storedAt(nativeName(checkpoint));
-
-    const captureRam = (machine: MachineRef, store: string, output: string) => {
-      const native = nativeName(machine);
+    const captureRam = (machine: Target, store: string, output: string) => {
+      const native = machine.handle;
 
       return call(
         [
@@ -718,11 +720,16 @@ export const make = (
         `machine create ${native}`
       );
 
-    const restoreRam = (from: string, source: Sizes, machine: MachineRef) =>
+    const restoreRam = (
+      from: string,
+      source: Sizes,
+      machine: Identity & Sizes,
+      bind: Bind
+    ) =>
       Effect.gen(function* () {
         const native = nativeName(machine);
 
-        yield* createdFrom(native, from, [`${machine.port}:22`]);
+        yield* createdFrom(native, from, forwarded(bind));
         yield* boot(native);
         yield* grown(native, source, changes(source, machine));
       });
@@ -968,15 +975,27 @@ export const make = (
       });
     });
 
-    const parked = Effect.fn("Smolvm.park")((build: CheckpointRef) =>
+    const parked = Effect.fn("Smolvm.park")((build: Target) =>
       isBuildCopy(build.name)
-        ? parking(nativeName(build)).pipe(
+        ? parking(build.handle).pipe(
             Effect.catch((error) =>
               Effect.logWarning(`park build ${build.name}: ${error.message}`)
             )
           )
         : Effect.void
     );
+
+    const objects = path.join(paths.store, "objects");
+
+    const prune = Effect.gen(function* () {
+      // https://github.com/smol-machines/smolvm/blob/v1.34.1/crates/smolvm-checkpoint/src/store.rs#L1666
+      if (yield* files(`couldn't check ${objects}`, fs.exists(objects))) {
+        yield* call(
+          ["machine", "checkpoint-prune", "--store", paths.store],
+          "machine checkpoint-prune"
+        );
+      }
+    });
 
     const settle = Effect.gen(function* () {
       yield* retireAllStale;
@@ -991,6 +1010,8 @@ export const make = (
           ),
         { discard: true }
       );
+
+      yield* prune;
     }).pipe(
       Effect.catch((error) =>
         Effect.logWarning(`settle the parked bases: ${error.message}`)
@@ -1019,7 +1040,7 @@ export const make = (
       return Math.ceil(bytes / mib);
     });
 
-    const branched = (base: string, machine: MachineRef) =>
+    const branched = (base: string, machine: Identity, bind: Bind) =>
       Effect.gen(function* () {
         const native = nativeName(machine);
 
@@ -1034,8 +1055,7 @@ export const make = (
               native,
               "--freeze-source",
               "--branchable",
-              "-p",
-              `${machine.port}:22`,
+              ...forwarded(bind).flatMap((forward) => ["-p", forward]),
             ],
             `machine branch ${native}`
           )
@@ -1047,10 +1067,10 @@ export const make = (
       });
 
     const execIn = Effect.fn("Smolvm.exec")(function* (
-      machine: Native,
+      machine: Target,
       { argv, stdin, user }: Command
     ) {
-      const native = nativeName(machine);
+      const native = machine.handle;
       const what = `smolvm machine exec ${native}`;
 
       const inGuest = (as: string, command: readonly string[]) => [
@@ -1087,6 +1107,129 @@ export const make = (
       );
     });
 
+    const created = (machine: Identity & Sizes, image: string, bind: Bind) =>
+      Effect.gen(function* () {
+        const native = nativeName(machine);
+
+        yield* call(
+          [
+            "machine",
+            "create",
+            "--name",
+            native,
+            "--image",
+            image,
+            "--cpus",
+            String(machine.cpu),
+            "--mem",
+            String(machine.ramMib),
+            "--net",
+            "--net-backend",
+            "virtio-net",
+            ...forwarded(bind).flatMap((forward) => ["-p", forward]),
+            "--storage",
+            String(machine.diskGib),
+          ],
+          `machine create ${native}`
+        );
+
+        yield* boot(native);
+      });
+
+    const restored = (
+      checkpoint: Target & Sizes,
+      machine: Identity & Sizes,
+      bind: Bind
+    ) =>
+      Effect.gen(function* () {
+        const base = baseOf(checkpoint.handle);
+        const native = nativeName(machine);
+
+        const frozen = Effect.matchEffect(status(base), {
+          onFailure: (error) =>
+            Effect.as(
+              Effect.logWarning(
+                `couldn't read ${base}, so ${native} restores the copy: ${error.message}`
+              ),
+              false
+            ),
+          onSuccess: (recorded) => Effect.succeed(recorded === "frozen"),
+        });
+
+        const copied = restoreRam(
+          storedAt(checkpoint.handle),
+          checkpoint,
+          machine,
+          bind
+        );
+
+        if (!(yield* frozen)) {
+          return yield* copied;
+        }
+
+        const went = yield* branched(base, machine, bind).pipe(
+          Effect.as(false),
+          Effect.catch((error) =>
+            Effect.flatMap(frozen, (still) =>
+              still
+                ? Effect.fail(error)
+                : removeNative(native).pipe(
+                    Effect.as(true),
+                    Effect.catch((error_) =>
+                      Effect.andThen(
+                        Effect.logWarning(
+                          `${base} went before ${native} could branch it, and ${native} couldn't be removed to restore the copy: ${error_.message}`
+                        ),
+                        Effect.fail(error)
+                      )
+                    )
+                  )
+            )
+          )
+        );
+
+        if (went) {
+          yield* Effect.logWarning(
+            `${base} went before ${native} could branch it, so ${native} restores the copy`
+          );
+
+          return yield* copied;
+        }
+
+        yield* grown(native, checkpoint, changes(checkpoint, machine));
+      }).pipe(
+        Effect.andThen(Effect.forkIn(parked(checkpoint), layerScope)),
+        Effect.asVoid
+      );
+
+    const forked = (
+      source: Target & Sizes,
+      machine: Identity & Sizes,
+      bind: Bind
+    ) => {
+      const store = path.join(paths.forks, nativeName(machine));
+      const output = path.join(store, `${nativeName(machine)}.checkpoint`);
+
+      return Effect.andThen(
+        copyable(
+          source,
+          `a fork copies a running machine, RAM included, and ${source.name} is stopped: start it first`
+        ),
+        Effect.andThen(
+          captureRam(source, store, output),
+          restoreRam(output, source, machine, bind)
+        ).pipe(
+          Effect.ensuring(
+            removeAll(store).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning(`fork ${machine.name}: ${error.message}`)
+              )
+            )
+          )
+        )
+      );
+    };
+
     return {
       version,
       pin,
@@ -1101,7 +1244,7 @@ export const make = (
       },
       files: {
         checkpointFiles: Effect.fn("Smolvm.checkpointFiles")((checkpoint) =>
-          Effect.map(regularFiles(fs, checkpointDir(checkpoint)), (found) =>
+          Effect.map(regularFiles(fs, storedAt(checkpoint.handle)), (found) =>
             found.flatMap((file) => {
               const object = storedObject(file);
 
@@ -1110,7 +1253,7 @@ export const make = (
                 : [
                     {
                       path: file,
-                      file: path.join(checkpointDir(checkpoint), file),
+                      file: path.join(storedAt(checkpoint.handle), file),
                       ...(object === undefined
                         ? {}
                         : { key: `${objectKeyPrefix}${object}` }),
@@ -1134,8 +1277,6 @@ export const make = (
           path.join(paths.store, `${nativeName(checkpoint)}.fetching`),
         install: Effect.fn("Smolvm.install")((checkpoint, staged) =>
           Effect.gen(function* () {
-            const objects = path.join(paths.store, "objects");
-
             yield* files(
               `couldn't create ${objects}`,
               fs.makeDirectory(objects, { recursive: true, mode: 0o700 })
@@ -1162,11 +1303,15 @@ export const make = (
               }
             }
 
+            const handle = nativeName(checkpoint);
+
             yield* files(
               `couldn't install checkpoint ${checkpoint.name}`,
-              fs.rename(staged, checkpointDir(checkpoint))
+              fs.rename(staged, storedAt(handle))
             );
-            yield* parked(checkpoint);
+            yield* parked({ ...checkpoint, handle });
+
+            return handle;
           })
         ),
       },
@@ -1193,7 +1338,19 @@ export const make = (
 
         yield* Effect.forkIn(settle, layerScope);
       }),
-      adopt: () => Effect.void,
+      find: Effect.fn("Smolvm.find")((what, ref) => {
+        const handle = nativeName(ref);
+
+        return Effect.map(
+          what === "machine"
+            ? Effect.map(status(handle), (recorded) => recorded !== "missing")
+            : files(
+                `couldn't check ${storedAt(handle)}`,
+                fs.exists(storedAt(handle))
+              ),
+          (kept) => (kept ? handle : undefined)
+        );
+      }),
       observe: Effect.fn("Smolvm.observe")(observe),
       capacity: Effect.fn("Smolvm.capacity")((machines) =>
         Effect.map(inUse(machines, observe), ({ running, unread }) =>
@@ -1215,151 +1372,48 @@ export const make = (
           );
         }
 
+        const handle = nativeName(checkpoint);
+
         yield* copyable(
           machine,
           `a smolvm checkpoint holds a running machine's RAM, and ${machine.name} is stopped: start it first`
         );
-        yield* captureRam(machine, paths.store, checkpointDir(checkpoint));
-        yield* parked(checkpoint);
+        yield* captureRam(machine, paths.store, storedAt(handle));
+        yield* parked({ ...checkpoint, handle });
+
+        return handle;
       }),
-      restore: Effect.fn("Smolvm.restore")((checkpoint, machine) =>
-        Effect.gen(function* () {
-          const base = baseOf(nativeName(checkpoint));
-          const native = nativeName(machine);
-
-          const frozen = Effect.matchEffect(status(base), {
-            onFailure: (error) =>
-              Effect.as(
-                Effect.logWarning(
-                  `couldn't read ${base}, so ${native} restores the copy: ${error.message}`
-                ),
-                false
-              ),
-            onSuccess: (recorded) => Effect.succeed(recorded === "frozen"),
-          });
-
-          const restored = restoreRam(
-            checkpointDir(checkpoint),
-            checkpoint,
-            machine
-          );
-
-          if (!(yield* frozen)) {
-            return yield* restored;
+      make: Effect.fn("Smolvm.make")((machine, origin, bind) =>
+        Effect.as(
+          Match.valueTags(origin, {
+            image: ({ image }) => created(machine, image, bind),
+            checkpoint: ({ checkpoint }) => restored(checkpoint, machine, bind),
+            machine: (source) => forked(source.machine, machine, bind),
+          }),
+          {
+            handle: nativeName(machine),
+            sizes: {
+              cpu: machine.cpu,
+              ramMib: machine.ramMib,
+              diskGib: machine.diskGib,
+            },
           }
-
-          const went = yield* branched(base, machine).pipe(
-            Effect.as(false),
-            Effect.catch((error) =>
-              Effect.flatMap(frozen, (still) =>
-                still
-                  ? Effect.fail(error)
-                  : removeNative(native).pipe(
-                      Effect.as(true),
-                      Effect.catch((error_) =>
-                        Effect.andThen(
-                          Effect.logWarning(
-                            `${base} went before ${native} could branch it, and ${native} couldn't be removed to restore the copy: ${error_.message}`
-                          ),
-                          Effect.fail(error)
-                        )
-                      )
-                    )
-              )
-            )
-          );
-
-          if (went) {
-            yield* Effect.logWarning(
-              `${base} went before ${native} could branch it, so ${native} restores the copy`
-            );
-
-            return yield* restored;
-          }
-
-          yield* grown(native, checkpoint, changes(checkpoint, machine));
-        }).pipe(
-          Effect.andThen(Effect.forkIn(parked(checkpoint), layerScope)),
-          Effect.asVoid
         )
       ),
-      fork: Effect.fn("Smolvm.fork")((source, machine) => {
-        const store = path.join(paths.forks, nativeName(machine));
-        const output = path.join(store, `${nativeName(machine)}.checkpoint`);
-
-        return Effect.andThen(
-          copyable(
-            source,
-            `a fork copies a running machine, RAM included, and ${source.name} is stopped: start it first`
-          ),
-          Effect.andThen(
-            captureRam(source, store, output),
-            restoreRam(output, source, machine)
-          ).pipe(
-            Effect.ensuring(
-              removeAll(store).pipe(
-                Effect.catch((error) =>
-                  Effect.logWarning(`fork ${machine.name}: ${error.message}`)
-                )
-              )
-            )
-          )
-        );
-      }),
       deleteCheckpoint: Effect.fn("Smolvm.deleteCheckpoint")((checkpoint) => {
-        const objects = path.join(paths.store, "objects");
-
-        const base = baseOf(nativeName(checkpoint));
+        const base = baseOf(checkpoint.handle);
 
         return alone(base)(
           Effect.gen(function* () {
-            yield* removeAll(checkpointDir(checkpoint));
-
-            // https://github.com/smol-machines/smolvm/blob/v1.34.1/crates/smolvm-checkpoint/src/store.rs#L1666
-            if (yield* files(`couldn't check ${objects}`, fs.exists(objects))) {
-              yield* call(
-                ["machine", "checkpoint-prune", "--store", paths.store],
-                "machine checkpoint-prune"
-              );
-            }
-
             yield* retire(base);
+            yield* removeAll(storedAt(checkpoint.handle));
+            yield* prune;
           })
         );
       }),
-      create: Effect.fn("Smolvm.create")((machine, image) =>
-        Effect.gen(function* () {
-          const native = nativeName(machine);
-
-          yield* call(
-            [
-              "machine",
-              "create",
-              "--name",
-              native,
-              "--image",
-              image,
-              "--cpus",
-              String(machine.cpu),
-              "--mem",
-              String(machine.ramMib),
-              "--net",
-              "--net-backend",
-              "virtio-net",
-              "-p",
-              `${machine.port}:22`,
-              "--storage",
-              String(machine.diskGib),
-            ],
-            `machine create ${native}`
-          );
-
-          yield* boot(native);
-        })
-      ),
       start: Effect.fn("Smolvm.start")((machine) =>
         Effect.gen(function* () {
-          const native = nativeName(machine);
+          const native = machine.handle;
           const recorded = yield* status(native);
 
           if (recorded === "running") {
@@ -1390,7 +1444,7 @@ export const make = (
       ),
       stop: Effect.fn("Smolvm.stop")((machine) =>
         Effect.gen(function* () {
-          const native = nativeName(machine);
+          const native = machine.handle;
           const recorded = yield* status(native);
 
           if (recorded === "missing") {
@@ -1413,7 +1467,7 @@ export const make = (
       ),
       pause: Effect.fn("Smolvm.pause")((machine) =>
         Effect.gen(function* () {
-          const native = nativeName(machine);
+          const native = machine.handle;
           const recorded = yield* status(native);
 
           if (recorded === "paused") {
@@ -1443,11 +1497,11 @@ export const make = (
       sizable,
       resize: Effect.fn("Smolvm.resize")((machine, to, running) =>
         running
-          ? grown(nativeName(machine), machine, to)
-          : updated(nativeName(machine), to)
+          ? grown(machine.handle, machine, to)
+          : updated(machine.handle, to)
       ),
       sizes: Effect.fn("Smolvm.sizes")((machine) => {
-        const native = nativeName(machine);
+        const native = machine.handle;
 
         return Effect.flatMap(
           call(
@@ -1472,7 +1526,7 @@ export const make = (
       }),
       delete: Effect.fn("Smolvm.delete")((machine) =>
         Effect.gen(function* () {
-          const native = nativeName(machine);
+          const native = machine.handle;
           const found = yield* recordOf(native);
 
           if (found === "missing") {

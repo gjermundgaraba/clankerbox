@@ -1,10 +1,9 @@
-import type { CheckpointRef } from "@clankerbox/host-contract";
 import { describeFileError, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, Effect, FileSystem, Option, Path, Schema } from "effect";
 import type { PlatformError } from "effect";
 import { Hex } from "effect/encoding";
 
-import type { Runtime } from "./runtime.ts";
+import type { Handle, Identity, Runtime, Target } from "./runtime.ts";
 
 /**
  * Where a host copies template builds to and from, shared by every host of the fleet: objects by
@@ -209,7 +208,7 @@ const filesOf = (runtime: Runtime["Service"], what: string) =>
 export const publish = (
   store: Interface,
   runtime: Runtime["Service"],
-  checkpoint: CheckpointRef
+  checkpoint: Target
 ): Effect.Effect<void, Internal, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -291,10 +290,10 @@ export const publish = (
 export const fetch = (
   store: Interface,
   runtime: Runtime["Service"],
-  checkpoint: CheckpointRef,
+  checkpoint: Identity,
   from: string,
   build: string
-): Effect.Effect<void, Internal, FileSystem.FileSystem | Path.Path> =>
+): Effect.Effect<Handle, Internal, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const paths = yield* Path.Path;
@@ -381,7 +380,7 @@ export const fetch = (
         );
       });
 
-    yield* Effect.gen(function* () {
+    const installed = yield* Effect.gen(function* () {
       yield* onFile(`couldn't make ${staged}`)(
         fs.makeDirectory(staged, { recursive: true })
       );
@@ -389,7 +388,8 @@ export const fetch = (
         concurrency,
         discard: true,
       });
-      yield* local.install(checkpoint, staged);
+
+      return yield* local.install(checkpoint, staged);
     }).pipe(
       Effect.ensuring(
         Effect.ignore(fs.remove(staged, { recursive: true, force: true }))
@@ -399,6 +399,8 @@ export const fetch = (
     yield* Effect.logInfo(
       `fetch ${build} downloaded ${downloaded} bytes in ${fetched} objects, for ${manifest.files.length} files`
     );
+
+    return installed;
   });
 
 /**

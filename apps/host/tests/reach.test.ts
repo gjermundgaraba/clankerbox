@@ -9,22 +9,23 @@ import { expect } from "vite-plus/test";
 import { PortProbe } from "../src/machine-ports.ts";
 import * as Relay from "../src/platform/relay.ts";
 import * as Reach from "../src/reach.ts";
-import type { MachineRef, Reach as RuntimeReach } from "../src/runtime.ts";
+import { Handle } from "../src/runtime.ts";
+import type { Reach as RuntimeReach } from "../src/runtime.ts";
 import { accepts, holding } from "./support.ts";
 
 let nextPort = 21_500;
 
-const machineOn = (name: string): MachineRef => {
+const machineOn = (name: string): Reach.Reopened => {
   const port = nextPort;
 
   nextPort += 1;
 
   return {
-    name,
-    instance: `${name}-instance`,
-    cpu: 1,
-    ramMib: 1024,
-    diskGib: 10,
+    machine: {
+      name,
+      instance: `${name}-instance`,
+      handle: Handle.make(`${name}-handle`),
+    },
     port,
   };
 };
@@ -40,7 +41,7 @@ const reachesOf = (reach: RuntimeReach) =>
     Layer.build(
       Layer.merge(
         Layer.succeed(PortProbe, { free: () => Effect.succeed(true) }),
-        Relay.layer("127.0.0.1")
+        Relay.layer
       )
     ),
     (context) =>
@@ -72,11 +73,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect("a relayed runtime's port carries bytes to its dial", () =>
     Effect.gen(function* () {
       const reaches = yield* reachesOf(relayed);
-      const machine = machineOn("dev");
+      const { machine, port } = machineOn("dev");
 
-      yield* reaches.open(machine);
+      yield* reaches.open(machine, port);
 
-      expect(yield* roundTrip(machine.port, "to the guest and back")).toBe(
+      expect(yield* roundTrip(port, "to the guest and back")).toBe(
         "to the guest and back"
       );
     })
@@ -122,7 +123,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         [
           expect.stringMatching(
             new RegExp(
-              `^adopt: no forwarder for dev: the forwarder couldn't listen on 127\\.0\\.0\\.1:${blocked.port}: `,
+              `^adopt: no relay for dev: the relay couldn't listen on 127\\.0\\.0\\.1:${blocked.port}: `,
               "u"
             )
           ),
@@ -143,11 +144,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(yield* accepts(machine.port)).toBe(true);
 
-        yield* reaches.close({
-          name: machine.name,
-          instance: machine.instance,
-        });
-        yield* reaches.close({ name: never.name, instance: never.instance });
+        yield* reaches.close(machine.machine.name);
+        yield* reaches.close(never.machine.name);
 
         expect(yield* accepts(machine.port)).toBe(false);
       })
@@ -162,12 +160,38 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           address: "127.0.0.1",
         });
 
-        const machine = machineOn("dev");
+        const adopted = machineOn("dev");
 
-        yield* reaches.open(machine);
-        yield* reaches.adopt([machine]);
+        yield* reaches.open(adopted.machine, adopted.port);
+        yield* reaches.adopt([adopted]);
 
-        expect(yield* accepts(machine.port)).toBe(false);
+        expect(yield* accepts(adopted.port)).toBe(false);
+      })
+  );
+
+  it.effect(
+    "either reach answers a port at its host's address, and only a published one has the runtime bind it",
+    () =>
+      Effect.gen(function* () {
+        const address = "127.0.0.1";
+
+        const [published, relaying] = yield* Effect.all([
+          reachesOf({ _tag: "published", address }),
+          reachesOf(relayed),
+        ]);
+
+        expect(
+          [published, relaying].map((reaches) => [
+            reaches.endpoint(2222),
+            reaches.bind(2222),
+          ])
+        ).toStrictEqual([
+          [
+            { host: address, port: 2222 },
+            { _tag: "forward", port: 2222 },
+          ],
+          [{ host: address, port: 2222 }, { _tag: "none" }],
+        ]);
       })
   );
 });

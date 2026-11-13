@@ -9,6 +9,7 @@ import {
 import { homedir } from "node:os";
 import path from "node:path";
 
+import type { Step } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
@@ -18,10 +19,22 @@ import {
   scratch,
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { Deferred, Duration, Effect, Exit, Fiber, Layer, Stream } from "effect";
+import {
+  Context,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Stream,
+} from "effect";
 import { TestClock } from "effect/testing";
 import { expect } from "vite-plus/test";
 
+import { PortProbe } from "../../../src/machine-ports.ts";
+import * as Operations from "../../../src/operations.ts";
+import * as Relay from "../../../src/platform/relay.ts";
 import {
   checkpointName,
   diskGb,
@@ -35,10 +48,20 @@ import {
   supported,
 } from "../../../src/platform/tart/tart.ts";
 import type { Settings } from "../../../src/platform/tart/tart.ts";
-import type { Interface, MachineRef } from "../../../src/runtime.ts";
+import * as Reach from "../../../src/reach.ts";
+import { Runtime } from "../../../src/runtime.ts";
+import type {
+  Activation,
+  Bind,
+  Identity,
+  Interface,
+  Origin,
+  Sized,
+  Sizes,
+} from "../../../src/runtime.ts";
 import { scripted } from "../../scripted.ts";
 import type { Call, Reply } from "../../scripted.ts";
-import { admitOn } from "../../support.ts";
+import { admitOn, eventually } from "../../support.ts";
 
 const failure = (error: HostError) => [error._tag, error.message];
 
@@ -46,23 +69,47 @@ const binary = "/opt/tart/2.41.1/tart.app/Contents/MacOS/tart";
 
 const launchctl = "/bin/launchctl";
 
-let nextPort = 21_200;
-
-const ownPort = () => {
-  const port = nextPort;
-  nextPort += 1;
-
-  return port;
-};
-
-const machineOn = (name: string): MachineRef => ({
-  name,
-  instance: `${name.length.toString(16).padStart(2, "0")}23456789abcdef0123456789abcdef`,
-  cpu: 4,
-  ramMib: 8192,
-  diskGib: 60,
-  port: ownPort(),
+const vmFor = (ref: Identity & Sizes): Sized => ({
+  ...ref,
+  handle: machineName("mac", ref),
 });
+
+const checkpointFor = (ref: Identity & Sizes): Sized => ({
+  ...ref,
+  handle: checkpointName("mac", ref),
+});
+
+const machineOn = (name: string) =>
+  vmFor({
+    name,
+    instance: `${name.length.toString(16).padStart(2, "0")}23456789abcdef0123456789abcdef`,
+    cpu: 4,
+    ramMib: 8192,
+    diskGib: 60,
+  });
+
+const unbound: Bind = { _tag: "none" };
+
+const fromImage = (image: string): Origin => ({ _tag: "image", image });
+
+const fromCheckpoint = (checkpoint: Sized): Origin => ({
+  _tag: "checkpoint",
+  checkpoint,
+});
+
+const fromMachine = (source: Sized): Origin => ({
+  _tag: "machine",
+  machine: source,
+});
+
+const snapOf = () =>
+  checkpointFor({
+    name: "snap",
+    instance: "fedcba9876543210fedcba9876543210",
+    cpu: 4,
+    ramMib: 8192,
+    diskGib: 60,
+  });
 
 interface Hooks {
   list?: () => Reply | undefined;
@@ -388,7 +435,7 @@ const calls = (mac: ScriptedMac) =>
     )
     .filter((line) => !line.startsWith("tart list"));
 
-const vmOf = (machine: MachineRef) => machineName("mac", machine);
+const vmOf = (machine: Identity) => machineName("mac", machine);
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it("native names carry the host ID, the kind and the instance, and disk sizes round up to GB", () => {
@@ -474,7 +521,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const vm = vmOf(machine);
         const image = "ghcr.io/cirruslabs/macos-golden-gate-xcode@sha256:d764";
 
-        yield* runtime.create(machine, image);
+        yield* runtime.make(machine, fromImage(image), unbound);
 
         expect(calls(mac)).toStrictEqual([
           `tart clone ${image} ${vm}`,
@@ -573,7 +620,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const vm = vmOf(machine);
         let probes = 0;
 
-        yield* runtime.create(machine, "base");
+        yield* runtime.make(machine, fromImage("base"), unbound);
         mac.vms.set(vm, "stopped");
         mac.hooks.probe = () => {
           probes += 1;
@@ -641,7 +688,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const machine = machineOn("dev");
         const vm = vmOf(machine);
 
-        yield* runtime.create(machine, "base");
+        yield* runtime.make(machine, fromImage("base"), unbound);
         mac.jobs.clear();
         mac.vms.set(vm, "stopped");
 
@@ -675,7 +722,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           );
         };
 
-        const error = yield* Effect.flip(runtime.create(machine, "base"));
+        const error = yield* Effect.flip(
+          runtime.make(machine, fromImage("base"), unbound)
+        );
 
         expect(error._tag).toBe("Capacity");
         expect(error.message).toBe(
@@ -701,7 +750,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           });
         };
 
-        const error = yield* Effect.flip(runtime.create(machine, "base"));
+        const error = yield* Effect.flip(
+          runtime.make(machine, fromImage("base"), unbound)
+        );
 
         expect(error._tag).toBe("Internal");
         expect(error.message).toBe(
@@ -728,7 +779,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const creating = Effect.gen(function* () {
           const fiber = yield* Effect.forkChild(
-            Effect.flip(runtime.create(machine, "base"))
+            Effect.flip(runtime.make(machine, fromImage("base"), unbound))
           );
 
           yield* Effect.promise(async () => {
@@ -762,7 +813,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const machine = { ...machineOn("small"), diskGib: 20 };
         const vm = vmOf(machine);
 
-        const error = yield* Effect.flip(runtime.create(machine, "base"));
+        const error = yield* Effect.flip(
+          runtime.make(machine, fromImage("base"), unbound)
+        );
 
         expect([error._tag, error.message]).toStrictEqual([
           "Unsizable",
@@ -783,7 +836,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { mac, runtime } = yield* runtimeOn();
         const [gone, stale] = [machineOn("gone"), machineOn("stale")];
 
-        const file = (machine: MachineRef) =>
+        const file = (machine: Identity) =>
           path.join(jobsDir(mac.settings.stateDir), `${vmOf(machine)}.plist`);
 
         yield* write(
@@ -829,7 +882,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           path.join(jobsDir(mac.settings.stateDir), `${vm}.plist`);
 
         for (const machine of [current, older]) {
-          yield* runtime.create(machine, "base");
+          yield* runtime.make(machine, fromImage("base"), unbound);
           yield* runtime.stop(machine);
           mac.exited.set(vmOf(machine), 0);
         }
@@ -892,8 +945,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             action: "startMachine",
             machine: b,
             machines: [
-              { machine: a, booting: false },
-              { machine: b, booting: true },
+              { _tag: "found", machine: a },
+              { _tag: "booting", machine: b },
             ],
           })
         );
@@ -910,9 +963,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             action: "startMachine",
             machine: b,
             machines: [
-              { machine: a, booting: false },
-              { machine: b, booting: true },
-              { machine: c, booting: true },
+              { _tag: "found", machine: a },
+              { _tag: "booting", machine: b },
+              { _tag: "booting", machine: c },
             ],
           })
         );
@@ -923,8 +976,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           action: "startMachine",
           machine: b,
           machines: [
-            { machine: a, booting: false },
-            { machine: b, booting: true },
+            { _tag: "found", machine: a },
+            { _tag: "booting", machine: b },
           ],
         });
       })
@@ -945,16 +998,16 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const before = mac.spawner.calls.length;
 
         const idle = yield* runtime.capacity([
-          { machine: a, booting: false },
-          { machine: b, booting: false },
+          { _tag: "found", machine: a },
+          { _tag: "found", machine: b },
         ]);
 
         const lists = mac.spawner.calls.slice(before).map(({ args }) => args);
 
         const booting = yield* runtime.capacity([
-          { machine: a, booting: true },
-          { machine: b, booting: false },
-          { machine: c, booting: true },
+          { _tag: "booting", machine: a },
+          { _tag: "found", machine: b },
+          { _tag: "booting", machine: c },
         ]);
 
         expect(lists).toStrictEqual([
@@ -986,7 +1039,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* admitOn(runtime)({
           action: "startMachine",
           machine: target,
-          machines: [{ machine: target, booting: true }],
+          machines: [{ _tag: "booting", machine: target }],
         });
 
         mac.vms.set("operators-other", "running");
@@ -995,7 +1048,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           admitOn(runtime)({
             action: "startMachine",
             machine: target,
-            machines: [{ machine: target, booting: true }],
+            machines: [{ _tag: "booting", machine: target }],
           })
         );
 
@@ -1009,24 +1062,21 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
         const [source, copy] = [machineOn("src"), machineOn("copy")];
-
-        const checkpoint = {
-          name: "snap",
-          instance: "fedcba9876543210fedcba9876543210",
-          port: source.port,
-          cpu: 4,
-          ramMib: 8192,
-          diskGib: 60,
-        };
+        const checkpoint = snapOf();
 
         mac.vms.set(vmOf(source), "running");
 
-        const fork = yield* Effect.flip(runtime.fork(source, copy));
+        const fork = yield* Effect.flip(
+          runtime.make(copy, fromMachine(source), unbound)
+        );
+
         const capture = yield* Effect.flip(runtime.capture(source, checkpoint));
 
         mac.vms.set(vmOf(source), "suspended");
 
-        const paused = yield* Effect.flip(runtime.fork(source, copy));
+        const paused = yield* Effect.flip(
+          runtime.make(copy, fromMachine(source), unbound)
+        );
 
         mac.vms.delete(vmOf(source));
 
@@ -1109,7 +1159,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           });
 
         const created = yield* settingWhileListed(
-          runtime.create(machine, "base")
+          runtime.make(machine, fromImage("base"), unbound)
         );
 
         yield* runtime.stop(machine);
@@ -1144,7 +1194,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         };
 
         const creating = yield* Effect.forkChild(
-          runtime.create(machine, "base")
+          runtime.make(machine, fromImage("base"), unbound)
         );
 
         yield* Deferred.await(kicked);
@@ -1314,12 +1364,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { mac, runtime } = yield* runtimeOn();
         const [source, copy] = [machineOn("src"), machineOn("copy")];
 
-        const forking = {
-          action: "forkMachine" as const,
+        const forking: Activation = {
+          action: "forkMachine",
           machine: copy,
           machines: [
-            { machine: source, booting: false },
-            { machine: copy, booting: true },
+            { _tag: "found", machine: source },
+            { _tag: "booting", machine: copy },
           ],
         };
 
@@ -1347,21 +1397,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           machineOn("restored"),
         ];
 
-        const checkpoint = {
-          name: "snap",
-          instance: "fedcba9876543210fedcba9876543210",
-          port: source.port,
-          cpu: 4,
-          ramMib: 8192,
-          diskGib: 60,
-        };
-
+        const checkpoint = snapOf();
         const snap = checkpointName("mac", checkpoint);
 
         mac.vms.set(vmOf(source), "stopped");
         yield* runtime.capture(source, checkpoint);
-        yield* runtime.fork(source, forked);
-        yield* runtime.restore(checkpoint, restored);
+        yield* runtime.make(forked, fromMachine(source), unbound);
+        yield* runtime.make(restored, fromCheckpoint(checkpoint), unbound);
         yield* runtime.deleteCheckpoint(checkpoint);
         yield* runtime.deleteCheckpoint(checkpoint);
 
@@ -1383,6 +1425,49 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "find answers the handle a make gave its instance, none for another instance of its name, and a captured checkpoint's",
+    () =>
+      Effect.gen(function* () {
+        const { runtime } = yield* runtimeOn();
+        const machine = machineOn("dev");
+        const later = { ...machine, instance: "76543210".repeat(4) };
+        const checkpoint = snapOf();
+
+        const { handle } = yield* runtime.make(
+          machine,
+          fromImage("base"),
+          unbound
+        );
+
+        const uncaptured = yield* runtime.find("checkpoint", checkpoint);
+
+        yield* runtime.stop({ ...machine, handle });
+
+        const captured = yield* runtime.capture(
+          { ...machine, handle },
+          checkpoint
+        );
+
+        expect({
+          machine: yield* runtime.find("machine", machine),
+          later: yield* runtime.find("machine", later),
+          uncaptured,
+          checkpoint: yield* runtime.find("checkpoint", checkpoint),
+          laterCheckpoint: yield* runtime.find("checkpoint", {
+            ...checkpoint,
+            instance: later.instance,
+          }),
+        }).toStrictEqual({
+          machine: handle,
+          later: undefined,
+          uncaptured: undefined,
+          checkpoint: captured,
+          laterCheckpoint: undefined,
+        });
+      })
+  );
+
+  it.effect(
     "a fork or restore sets the copy's sizes that differ from its source's",
     () =>
       Effect.gen(function* () {
@@ -1398,19 +1483,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const restored = { ...machineOn("restored"), cpu: 2, ramMib: 4096 };
 
-        const checkpoint = {
-          name: "snap",
-          instance: "fedcba9876543210fedcba9876543210",
-          port: source.port,
-          cpu: 4,
-          ramMib: 8192,
-          diskGib: 60,
-        };
+        const checkpoint = snapOf();
 
         mac.vms.set(vmOf(source), "stopped");
         mac.vms.set(checkpointName("mac", checkpoint), "stopped");
-        yield* runtime.fork(source, forked);
-        yield* runtime.restore(checkpoint, restored);
+        yield* runtime.make(forked, fromMachine(source), unbound);
+        yield* runtime.make(restored, fromCheckpoint(checkpoint), unbound);
 
         expect(
           calls(mac).filter((line) => line.startsWith("tart set"))
@@ -1429,7 +1507,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const machine = machineOn("dev");
         const vm = vmOf(machine);
 
-        yield* runtime.create(machine, "base");
+        yield* runtime.make(machine, fromImage("base"), unbound);
 
         const before = calls(mac).length;
 
@@ -1470,7 +1548,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const machine = machineOn("dev");
         const vm = vmOf(machine);
 
-        yield* runtime.create(machine, "base");
+        yield* runtime.make(machine, fromImage("base"), unbound);
         mac.hooks.shutdown = () => ({ exitCode: 0, stdout: "Shutdown NOW!\n" });
 
         const stopping = Effect.gen(function* () {
@@ -1506,7 +1584,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const vm = vmOf(machine);
         const shutdown = `tart exec ${vm} sudo -n /sbin/shutdown -h now`;
 
-        yield* runtime.create(machine, "base");
+        yield* runtime.make(machine, fromImage("base"), unbound);
         mac.hooks.shutdown = () => ({ exitCode: 0, stdout: "Shutdown NOW!\n" });
 
         const cutShort = Effect.gen(function* () {
@@ -1550,7 +1628,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const vm = vmOf(machine);
         const dir = jobsDir(mac.settings.stateDir);
 
-        yield* runtime.create(machine, "base");
+        yield* runtime.make(machine, fromImage("base"), unbound);
 
         const before = calls(mac).length;
 
@@ -1598,7 +1676,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const machine = machineOn("dev");
         const vm = vmOf(machine);
 
-        yield* runtime.create(machine, "base");
+        yield* runtime.make(machine, fromImage("base"), unbound);
         yield* runtime.stop(machine);
         mac.hooks.delete = () => ({
           exitCode: 1,
@@ -1763,7 +1841,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const machine = machineOn("dev");
         const vm = vmOf(machine);
 
-        yield* runtime.create(machine, "base");
+        yield* runtime.make(machine, fromImage("base"), unbound);
 
         const before = calls(mac).length;
 
@@ -1787,7 +1865,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const machine = machineOn("dev");
         const vm = vmOf(machine);
 
-        yield* runtime.create(machine, "base");
+        yield* runtime.make(machine, fromImage("base"), unbound);
         mac.programs.set(vm, [
           binary,
           "run",
@@ -1818,7 +1896,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const machine = machineOn("dev");
         const vm = vmOf(machine);
 
-        yield* runtime.create(machine, "base");
+        yield* runtime.make(machine, fromImage("base"), unbound);
         mac.hooks.print = () => ({
           stdout: "gui/501/job = {\n\tstate = running\n}\n",
         });
@@ -1841,7 +1919,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const machine = machineOn("dev");
         const vm = vmOf(machine);
 
-        yield* runtime.create(machine, "base");
+        yield* runtime.make(machine, fromImage("base"), unbound);
         mac.hooks.suspend = (label) => {
           appendFileSync(
             mac.logOf(label),
@@ -1874,7 +1952,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const machine = machineOn("dev");
         const vm = vmOf(machine);
 
-        yield* runtime.create(machine, "base");
+        yield* runtime.make(machine, fromImage("base"), unbound);
         mac.hooks.suspend = (label) => {
           rmSync(mac.logOf(label));
           mac.vms.set(label, "suspended");
@@ -1933,7 +2011,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const machine = machineOn("dev");
       const vm = vmOf(machine);
 
-      yield* runtime.create(machine, "base");
+      yield* runtime.make(machine, fromImage("base"), unbound);
       yield* runtime.pause(machine);
 
       const before = calls(mac).length;
@@ -1958,7 +2036,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { mac, runtime } = yield* runtimeOn();
         const machine = machineOn("dev");
 
-        yield* runtime.create(machine, "base");
+        yield* runtime.make(machine, fromImage("base"), unbound);
         yield* runtime.pause(machine);
         mac.hooks.kickstart = (label) => {
           mac.exited.set(label, 1);
@@ -1988,7 +2066,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const machine = machineOn("dev");
         const vm = vmOf(machine);
 
-        yield* runtime.create(machine, "base");
+        yield* runtime.make(machine, fromImage("base"), unbound);
         yield* runtime.pause(machine);
 
         const before = calls(mac).length;
@@ -1999,6 +2077,126 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(yield* runtime.observe([machine])).toStrictEqual(
           new Map([[machine.name, "stopped"]])
         );
+      })
+  );
+});
+
+const operationsOn = (runtime: Interface) =>
+  Layer.build(
+    Operations.layer({ id: "mac", bases: new Map([["macos", "base"]]) }).pipe(
+      Layer.provide(Reach.layer({ first: 21_900, last: 21_909 })),
+      Layer.provideMerge(Layer.succeed(Runtime, runtime)),
+      Layer.provide(
+        Layer.merge(
+          Layer.succeed(PortProbe, { free: () => Effect.succeed(true) }),
+          Relay.layer
+        )
+      )
+    )
+  ).pipe(Effect.map(Context.get(Operations.Operations)));
+
+layer(NodeServices.layer, { excludeTestServices: true })((it) => {
+  it.effect(
+    "find answers a machine's handle while Tart lists its VM or its job's plist or log is left, and nothing once all are gone",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const machine = machineOn("dev");
+        const vm = vmOf(machine);
+
+        const plistFile = path.join(
+          jobsDir(mac.settings.stateDir),
+          `${vm}.plist`
+        );
+
+        const found = runtime.find("machine", machine);
+
+        yield* runtime.make(machine, fromImage("base"), unbound);
+
+        const listed = yield* found;
+
+        mac.vms.delete(vm);
+
+        const jobLeft = yield* found;
+
+        rmSync(plistFile);
+
+        const logLeft = yield* found;
+
+        yield* runtime.delete(machine);
+
+        expect([listed, jobLeft, logLeft]).toStrictEqual([vm, vm, vm]);
+        expect(yield* found).toBeUndefined();
+        expect([mac.jobs.has(vm), existsSync(mac.logOf(vm))]).toStrictEqual([
+          false,
+          false,
+        ]);
+      })
+  );
+
+  it.effect(
+    "the undo of a make that failed in Tart, sent again with no handle after its host died past tart delete, removes the VM's job, plist and log",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const operations = yield* operationsOn(runtime);
+        const machine = machineOn("dev");
+        const vm = vmOf(machine);
+
+        const plistFile = path.join(
+          jobsDir(mac.settings.stateDir),
+          `${vm}.plist`
+        );
+
+        const identity = { name: machine.name, instance: machine.instance };
+
+        mac.hooks.kickstart = (label) => {
+          mac.exited.set(label, 1);
+        };
+
+        const ended = (id: string, sequence: number, step: Step) =>
+          Effect.andThen(
+            operations.run({
+              id,
+              boot: operations.boot,
+              scope: { resource: "machine", name: "dev" },
+              sequence,
+              step,
+            }),
+            eventually(
+              operations.wait(id),
+              ({ status }) => status !== "running"
+            )
+          );
+
+        const made = yield* ended("make", 1, {
+          _tag: "make",
+          machine: { ...identity, cpu: 4, ramMib: 8192, diskGib: 60 },
+          source: { _tag: "base", base: "macos" },
+          taken: [],
+          machines: [],
+        });
+
+        const left = [mac.jobs.has(vm), existsSync(plistFile)];
+
+        mac.vms.delete(vm);
+
+        const undone = yield* ended("undo", 2, {
+          _tag: "remove",
+          machine: identity,
+        });
+
+        expect([made.status, made.outcome.handle, left]).toStrictEqual([
+          "failed",
+          undefined,
+          [true, true],
+        ]);
+        expect(undone.status).toBe("done");
+        expect([
+          mac.jobs.has(vm),
+          existsSync(plistFile),
+          existsSync(mac.logOf(vm)),
+        ]).toStrictEqual([false, false, false]);
       })
   );
 });

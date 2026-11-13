@@ -4,6 +4,7 @@ import path from "node:path";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import {
   mkdir,
   scratch,
@@ -26,7 +27,7 @@ import type { FakeRuntimeName } from "./fake-runtime.ts";
 import { image as ubuntu, startHost, writeTailscaleStubs } from "./support.ts";
 
 const usage =
-  "usage: serve.ts <run-dir> <host-id> [smolvm|tart] [ram-budget-mib], with CLANKERBOX_FAKE_BUILDS, CLANKERBOX_FAKE_PIN and CLANKERBOX_FAKE_UBUNTU_IMAGE optional";
+  "usage: serve.ts <run-dir> <host-id> [smolvm|tart] [ram-budget-mib], with CLANKERBOX_FAKE_BUILDS, CLANKERBOX_FAKE_FAIL_FIND (names whose search fails), CLANKERBOX_FAKE_PIN and CLANKERBOX_FAKE_UBUNTU_IMAGE optional";
 
 const [runArg, idArg, runtimeArg = "smolvm", budgetArg] = process.argv.slice(2);
 
@@ -59,6 +60,10 @@ const parsed = () => {
 };
 
 const fakeTailnet = process.env["CLANKERBOX_FAKE_TAILNET"] === "1";
+
+const failingFinds = (process.env["CLANKERBOX_FAKE_FAIL_FIND"] ?? "")
+  .split(",")
+  .filter((name) => name !== "");
 
 const slowKey = Effect.as(
   Effect.sleep(Duration.seconds(1)),
@@ -119,6 +124,7 @@ const serve = Effect.gen(function* () {
     runtime: {
       ramBudgetMib,
       pin: process.env["CLANKERBOX_FAKE_PIN"],
+      relayed: runtime === "tart",
       onCall: (call) => {
         appendFileSync(path.join(evidence, "runtime-calls.txt"), `${call}\n`);
       },
@@ -130,6 +136,14 @@ const serve = Effect.gen(function* () {
       Effect.ignore
     )
   );
+
+  for (const name of failingFinds) {
+    host.fake.failFind(
+      name,
+      new Internal({ message: `fake find ${name} failed: database is locked` })
+    );
+  }
+
   process.on("SIGUSR2", () => {
     host.fake.holdNext("capture");
   });

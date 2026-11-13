@@ -4,7 +4,6 @@ import { runInNewContext } from "node:vm";
 
 import type {
   MachineRef,
-  NewMachine,
   Operation,
   Report,
   Source,
@@ -50,7 +49,8 @@ import type { Probe } from "../src/machine-ports.ts";
 import * as Operations from "../src/operations.ts";
 import * as Relay from "../src/platform/relay.ts";
 import * as Reach from "../src/reach.ts";
-import { Runtime } from "../src/runtime.ts";
+import { Handle, Runtime } from "../src/runtime.ts";
+import type { Bind } from "../src/runtime.ts";
 import { Tailnet } from "../src/tailnet.ts";
 import {
   baseResolver,
@@ -128,7 +128,7 @@ const runner = (options?: RunnerOptions) =>
         Layer.provide(
           Layer.merge(
             Layer.succeed(PortProbe, options?.probe ?? allFree),
-            Relay.layer("127.0.0.1")
+            Relay.layer
           )
         ),
         Layer.provide(
@@ -151,11 +151,25 @@ const ref = (name: string, fields?: Partial<MachineRef>): MachineRef => ({
   cpu: 1,
   ramMib: 1024,
   diskGib: 10,
-  port: 11_000,
   ...fields,
 });
 
-const checkpoint = (name: string) => ref(name, { port: 11_001 });
+const checkpoint = (name: string) => ref(name);
+
+const reached = (port: number) => ({
+  endpoint: { host: "127.0.0.1", port },
+});
+
+const portIn = ({ endpoint }: MachineRef) => endpoint?.port ?? 0;
+
+const keptByRuntime = (host: Runner, name: string) => {
+  host.fake.machines.set(name, {
+    state: "running",
+    root: "",
+    instance: `${name}-instance`,
+    handle: Handle.make(`held-${name}`),
+  });
+};
 
 const capturingSnap: Step = {
   _tag: "capture",
@@ -170,29 +184,20 @@ const stored = (host: Runner, name: string, suffix = "") =>
 const ofSnap = (host: Runner) =>
   host.fake.calls.filter((call) => call.endsWith(" snap"));
 
-const fresh = (name: string, fields?: Partial<NewMachine>): NewMachine => ({
-  name,
-  instance: `${name}-instance`,
-  cpu: 1,
-  ramMib: 1024,
-  diskGib: 10,
-  ...fields,
-});
-
 const makes = (
   name: string,
   fields?: {
-    readonly machine?: Partial<NewMachine>;
+    readonly machine?: Partial<MachineRef>;
     readonly source?: Source;
     readonly setup?: Setup;
     readonly authorizedKeys?: string;
     readonly join?: { readonly hostname: string };
-    readonly ports?: readonly number[];
+    readonly taken?: readonly number[];
     readonly machines?: readonly MachineRef[];
   }
 ): Step => ({
   _tag: "make",
-  machine: fresh(name, fields?.machine),
+  machine: ref(name, fields?.machine),
   source: fields?.source ?? {
     _tag: "base",
     base: "ubuntu",
@@ -202,16 +207,16 @@ const makes = (
     ? {}
     : { authorizedKeys: fields.authorizedKeys }),
   ...(fields?.join === undefined ? {} : { join: fields.join }),
-  ports: fields?.ports ?? [],
+  taken: fields?.taken ?? [],
   machines: fields?.machines ?? [],
 });
 
 let delivered = 0;
 
-const scopeOf = (step: Step) =>
+const scopeOf = (step: Step): Operation["scope"] =>
   "checkpoint" in step
-    ? `checkpoint ${step.checkpoint.name}`
-    : `machine ${step.machine.name}`;
+    ? { resource: "checkpoint", name: step.checkpoint.name }
+    : { resource: "machine", name: step.machine.name };
 
 const delivery = (step: Step, sequence = 1): Omit<Operation, "boot"> => {
   delivered += 1;
@@ -271,9 +276,47 @@ const capturing = (lines: string[]) =>
 
 const errorOf = (report: Report) => [report.status, report.error?._tag];
 
-const portOf = (report: Report) => report.outcome.port;
+const portOf = (report: Report) => report.outcome.endpoint?.port;
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
+  it.effect(
+    "a remove with no handle finds the machine by its instance and deletes it, and one that finds none is done touching nothing",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner();
+
+        yield* finished(host, makes("dev"));
+
+        const other = yield* finished(
+          host,
+          {
+            _tag: "remove",
+            machine: { name: "dev", instance: "an-earlier-one" },
+          },
+          2
+        );
+
+        const kept = host.fake.machines.has("dev");
+
+        const removed = yield* finished(
+          host,
+          {
+            _tag: "remove",
+            machine: { name: "dev", instance: "dev-instance" },
+          },
+          3
+        );
+
+        expect([other.status, kept, removed.status]).toStrictEqual([
+          "done",
+          true,
+          "done",
+        ]);
+        expect(host.fake.machines.has("dev")).toBe(false);
+        expect(counted(host.fake.calls, "delete dev")).toBe(1);
+      })
+  );
+
   it.effect("the same ID returns the same report, and runs once", () =>
     Effect.gen(function* () {
       const host = yield* runner();
@@ -635,8 +678,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       const done = yield* ended(host, operation.id);
 
-      expect(report.outcome).toStrictEqual({ port: firstPort });
-      expect(done.outcome).toStrictEqual({ port: firstPort });
+      const endpoint = { host: "127.0.0.1", port: firstPort };
+
+      expect(report.outcome).toStrictEqual({ endpoint });
+      expect(done.outcome).toMatchObject({ endpoint });
     })
   );
 
@@ -650,12 +695,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       const second = yield* deliver(
         host,
-        delivery(makes("two", { ports: [firstPort + 1, firstPort + 3] }))
+        delivery(makes("two", { taken: [firstPort + 1, firstPort + 3] }))
       );
 
       const third = yield* deliver(
         host,
-        delivery(makes("three", { ports: [firstPort + 1, firstPort + 3] }))
+        delivery(makes("three", { taken: [firstPort + 1, firstPort + 3] }))
       );
 
       expect([first, second, third].map(portOf)).toStrictEqual([
@@ -667,23 +712,21 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a make hands the runtime the port it reports, from a base, a checkpoint or a machine",
+    "a make has the runtime bind the port it reports, from a base, a checkpoint or a machine",
     () =>
       Effect.gen(function* () {
-        const given: Array<readonly [string, number]> = [];
-
-        const noted = (machine: MachineRef) =>
-          Effect.sync(() => given.push([machine.name, machine.port]));
+        const given: Array<readonly [string, string, Bind]> = [];
 
         const host = yield* runner({
           runtime: (fake) => ({
             ...fake,
-            create: (machine, base) =>
-              Effect.andThen(noted(machine), fake.create(machine, base)),
-            restore: (from, machine) =>
-              Effect.andThen(noted(machine), fake.restore(from, machine)),
-            fork: (source, machine) =>
-              Effect.andThen(noted(machine), fake.fork(source, machine)),
+            make: (machine, origin, bind) =>
+              Effect.andThen(
+                Effect.sync(() =>
+                  given.push([machine.name, origin._tag, bind])
+                ),
+                fake.make(machine, origin, bind)
+              ),
           }),
         });
 
@@ -715,9 +758,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           firstPort + 2,
         ]);
         expect(given).toStrictEqual([
-          ["dev", firstPort],
-          ["web", firstPort + 1],
-          ["twin", firstPort + 2],
+          ["dev", "image", { _tag: "forward", port: firstPort }],
+          ["web", "checkpoint", { _tag: "forward", port: firstPort + 1 }],
+          ["twin", "machine", { _tag: "forward", port: firstPort + 2 }],
         ]);
       })
   );
@@ -819,7 +862,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const host = yield* runner({ ports: 1 });
-        const operation = delivery(makes("dev", { ports: [firstPort] }));
+        const operation = delivery(makes("dev", { taken: [firstPort] }));
 
         const report = yield* deliver(host, operation);
         const again = yield* host.operations.wait(operation.id);
@@ -867,7 +910,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           2
         );
 
-        const making = delivery(makes("dev", { ports: [firstPort] }), 3);
+        const making = delivery(makes("dev", { taken: [firstPort] }), 3);
 
         yield* deliver(host, stopping);
         yield* entered;
@@ -993,8 +1036,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(
           host.fake.activations[1]?.machines.find(
             ({ machine }) => machine.name === "one"
-          )?.booting
-        ).toBe(true);
+          )?._tag
+        ).toBe("booting");
       })
   );
 
@@ -1003,8 +1046,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const host = yield* runner({ ramBudgetMib: 1024 });
-        const dev = ref("dev", { port: firstPort });
-        const other = ref("other", { port: firstPort + 1 });
+        const dev = ref("dev", reached(firstPort));
+        const other = ref("other", reached(firstPort + 1));
 
         yield* finished(
           host,
@@ -1043,8 +1086,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const host = yield* runner({ ramBudgetMib: 1024 });
-        const dev = ref("dev", { port: firstPort });
-        const other = ref("other", { port: firstPort + 1 });
+        const dev = ref("dev", reached(firstPort));
+        const other = ref("other", reached(firstPort + 1));
 
         yield* finished(host, makes("dev"));
         yield* finished(
@@ -1070,7 +1113,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const host = yield* runner();
-        const dev = ref("dev", { port: firstPort });
+        const dev = ref("dev", reached(firstPort));
 
         yield* finished(host, makes("dev"));
 
@@ -1099,7 +1142,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const host = yield* runner();
-        const dev = ref("dev", { port: firstPort });
+        const dev = ref("dev", reached(firstPort));
 
         yield* finished(host, makes("dev"));
 
@@ -1135,7 +1178,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const host = yield* runner();
-        const dev = ref("dev", { port: firstPort });
+        const dev = ref("dev", reached(firstPort));
 
         yield* finished(host, makes("dev"));
         yield* finished(host, { _tag: "stop", machine: dev, machines: [] }, 2);
@@ -1159,7 +1202,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect("an exec cut short ends its command", () =>
     Effect.gen(function* () {
       const host = yield* runner();
-      const dev = ref("dev", { port: firstPort });
+      const dev = ref("dev", reached(firstPort));
 
       yield* finished(host, makes("dev"));
 
@@ -1814,7 +1857,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const mac = yield* runner({ as: "tart" });
         const dev = ref("dev");
 
-        const parked = ref("paused", { port: firstPort + 1 });
+        const parked = ref("paused", reached(firstPort + 1));
 
         yield* finished(host, makes("dev"));
         yield* finished(host, makes("paused"));
@@ -2009,7 +2052,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       yield* finished(host, makes("dev"));
 
-      const { entered } = host.fake.holdNext("capture");
+      const { entered, release } = host.fake.holdNext("capture", {
+        runsOn: true,
+      });
 
       host.fake.dieNext("deleteCheckpoint", "the cleanup blew up");
 
@@ -2017,7 +2062,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       yield* deliver(host, operation);
       yield* entered;
-      yield* host.operations.cancel(operation.id);
+
+      const cancelling = yield* Effect.forkChild(
+        host.operations.cancel(operation.id)
+      );
+
+      yield* release;
+      yield* Fiber.join(cancelling);
 
       expect(errorOf(yield* ended(host, operation.id))).toStrictEqual([
         "failed",
@@ -2039,6 +2090,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     Effect.gen(function* () {
       const host = yield* runner();
 
+      keptByRuntime(host, "dev");
       host.fake.dieNextObserve();
 
       const error = yield* Effect.flip(host.operations.read([ref("dev")]));
@@ -2943,10 +2995,15 @@ layer(NodeServices.layer)((it) => {
     Effect.gen(function* () {
       const host = yield* runner();
 
+      keptByRuntime(host, "dev");
       host.fake.hangNextObserve();
 
       const reading = yield* Effect.forkChild(
-        Effect.flip(host.operations.read([ref("dev")]))
+        Effect.flip(
+          host.operations.read([
+            ref("dev", { handle: Handle.make("held-dev") }),
+          ])
+        )
       );
 
       yield* TestClock.adjust(readTimeout);
@@ -2957,14 +3014,11 @@ layer(NodeServices.layer)((it) => {
 });
 
 const refusedListen = (port: number) =>
-  new RegExp(
-    `^the forwarder couldn't listen on 127\\.0\\.0\\.1:${port}: `,
-    "u"
-  );
+  new RegExp(`^the relay couldn't listen on 127\\.0\\.0\\.1:${port}: `, "u");
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
-    "a make on a relayed runtime listens on its port before anything native, and one whose port is held fails before the runtime is called",
+    "a make on a relayed runtime listens on its port once the runtime's make has answered, and one whose port is held fails with the listen error and the handle of what it made, which its remove deletes",
     () =>
       Effect.gen(function* () {
         const host = yield* runner({ relayed: true });
@@ -2973,9 +3027,28 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           Effect.andThen(holding(relayPorts), finished(host, makes("dev")))
         );
 
+        const { handle } = refused.outcome;
+
+        const removed = yield* finished(
+          host,
+          {
+            _tag: "remove",
+            machine: {
+              ...ref("dev"),
+              ...(handle === undefined ? {} : { handle }),
+            },
+          },
+          2
+        );
+
         expect(errorOf(refused)).toStrictEqual(["failed", "Internal"]);
         expect(refused.error?.message).toMatch(refusedListen(relayPorts));
-        expect(host.fake.calls).not.toContain("create dev");
+        expect(handle).toBeDefined();
+        expect([
+          counted(host.fake.calls, "create dev"),
+          removed.status,
+          host.fake.machines.has("dev"),
+        ]).toStrictEqual([1, "done", false]);
 
         const { release, entered } = host.fake.holdNext("create");
         const making = delivery(makes("app"));
@@ -2983,22 +3056,26 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* deliver(host, making);
         yield* entered;
 
-        const listening = yield* accepts(relayPorts);
+        const early = yield* accepts(relayPorts);
 
         yield* release;
 
         const made = yield* ended(host, making.id);
 
-        expect([listening, made.status, portOf(made)]).toStrictEqual([
-          true,
-          "done",
-          relayPorts,
-        ]);
+        expect([
+          early,
+          made.status,
+          portOf(made),
+          yield* accepts(relayPorts),
+        ]).toStrictEqual([false, "done", relayPorts, true]);
+        expect(
+          host.fake.calls.filter((call) => call.startsWith("relay"))
+        ).toStrictEqual(["relay app"]);
       })
   );
 
   it.effect(
-    "a relay stays through a failed make, a stop and a failed delete, and ends once the delete is done",
+    "a make that fails natively opens no relay, and a made machine's relay stays through a stop and a failed delete, and ends once the delete is done",
     () =>
       Effect.gen(function* () {
         const host = yield* runner({ relayed: true });
@@ -3009,19 +3086,19 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const made = yield* finished(
           host,
-          makes("app", { ports: [relayPorts] })
+          makes("app", { taken: [relayPorts] })
         );
 
-        const app = ref("app", { port: portOf(made) ?? 0 });
+        const app = ref("app", reached(portOf(made) ?? 0));
 
         yield* finished(host, { _tag: "stop", machine: app, machines: [] }, 2);
 
-        const stopped = yield* accepts(app.port);
+        const stopped = yield* accepts(portIn(app));
 
         host.fake.failNext("delete", new Internal({ message: "EBUSY" }));
 
         const kept = yield* finished(host, { _tag: "remove", machine: app }, 3);
-        const keptListening = yield* accepts(app.port);
+        const keptListening = yield* accepts(portIn(app));
 
         const removed = yield* finished(
           host,
@@ -3036,8 +3113,16 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           kept.status,
           keptListening,
           removed.status,
-          yield* accepts(app.port),
-        ]).toStrictEqual(["failed", true, true, "failed", true, "done", false]);
+          yield* accepts(portIn(app)),
+        ]).toStrictEqual([
+          "failed",
+          false,
+          true,
+          "failed",
+          true,
+          "done",
+          false,
+        ]);
       })
   );
 
@@ -3049,17 +3134,17 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* finished(host, makes("dev"));
 
-        const blocked = ref("dev", { port: relayPorts + 5 });
+        const blocked = ref("dev", reached(relayPorts + 5));
 
         const refused = yield* Effect.scoped(
           Effect.andThen(
-            holding(blocked.port),
+            holding(portIn(blocked)),
             finished(host, { _tag: "start", machine: blocked, machines: [] }, 2)
           )
         );
 
         expect(errorOf(refused)).toStrictEqual(["failed", "Internal"]);
-        expect(refused.error?.message).toMatch(refusedListen(blocked.port));
+        expect(refused.error?.message).toMatch(refusedListen(portIn(blocked)));
         expect(host.fake.calls).not.toContain("start dev");
 
         const { release, entered } = host.fake.holdNext("start");
@@ -3072,7 +3157,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* deliver(host, opening);
         yield* entered;
 
-        const listening = yield* accepts(blocked.port);
+        const listening = yield* accepts(portIn(blocked));
 
         yield* release;
 
@@ -3088,7 +3173,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const host = yield* runner({ relayed: true });
-        const ghost = ref("ghost", { port: relayPorts + 6 });
+        const ghost = ref("ghost", reached(relayPorts + 6));
 
         const refused = yield* finished(host, {
           _tag: "start",
@@ -3097,17 +3182,25 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         });
 
         expect(errorOf(refused)).toStrictEqual(["failed", "Missing"]);
-        expect(yield* accepts(ghost.port)).toBe(false);
+        expect(yield* accepts(portIn(ghost))).toBe(false);
       })
   );
 
   it.effect(
-    "a fork or a restore whose port is held fails with the listen error before the runtime is called, a fork the runtime would refuse for its running source included",
+    "a fork or a restore whose port is held fails with the listen error once the runtime has made it, and reports what it made",
     () =>
       Effect.gen(function* () {
         const host = yield* runner({ relayed: true, as: "tart" });
+        const src = ref("src", reached(relayPorts));
 
         yield* finished(host, makes("src"));
+        yield* finished(host, { _tag: "stop", machine: src, machines: [] }, 2);
+
+        const snap = yield* finished(host, {
+          _tag: "capture",
+          machine: src,
+          checkpoint: checkpoint("snap"),
+        });
 
         const refused = yield* Effect.scoped(
           Effect.andThen(
@@ -3115,16 +3208,20 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             Effect.forEach(
               [
                 makes("twin", {
-                  source: {
-                    _tag: "machine",
-                    machine: ref("src", { port: relayPorts }),
-                  },
+                  source: { _tag: "machine", machine: src },
+                  taken: [relayPorts],
                 }),
                 makes("copy", {
                   source: {
                     _tag: "checkpoint",
-                    checkpoint: checkpoint("snap"),
+                    checkpoint: {
+                      ...checkpoint("snap"),
+                      ...(snap.outcome.handle === undefined
+                        ? {}
+                        : { handle: snap.outcome.handle }),
+                    },
                   },
+                  taken: [relayPorts],
                 }),
               ],
               (step) => finished(host, step)
@@ -3132,34 +3229,34 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           )
         );
 
-        expect(
-          refused.map((report) => [...errorOf(report), report.error?.message])
-        ).toStrictEqual([
-          [
+        expect(snap.status).toBe("done");
+
+        for (const report of refused) {
+          expect([
+            ...errorOf(report),
+            report.error?.message,
+            report.outcome.handle !== undefined,
+          ]).toStrictEqual([
             "failed",
             "Internal",
             expect.stringMatching(refusedListen(relayPorts + 1)),
-          ],
-          [
-            "failed",
-            "Internal",
-            expect.stringMatching(refusedListen(relayPorts + 1)),
-          ],
-        ]);
-        expect(
-          host.fake.calls.filter(
-            (call) => call.startsWith("fork") || call.startsWith("restore")
-          )
-        ).toStrictEqual([]);
+            true,
+          ]);
+        }
+
+        expect([
+          counted(host.fake.calls, "fork twin"),
+          counted(host.fake.calls, "restore copy"),
+        ]).toStrictEqual([1, 1]);
       })
   );
 
   it.effect(
-    "a fork the runtime refuses for its source's state, and a fork or a restore refused for the pin, leave their relays open until the remove that follows",
+    "a fork the runtime refuses for its source's state, and a fork or a restore refused for the pin, open no relay, and their removes are done",
     () =>
       Effect.gen(function* () {
         const host = yield* runner({ relayed: true, as: "tart" });
-        const src = ref("src", { port: relayPorts });
+        const src = ref("src", reached(relayPorts));
 
         yield* finished(host, makes("src"));
 
@@ -3172,7 +3269,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           host,
           makes("pinned", {
             source: { _tag: "machine", machine: src, pin: "fake 0" },
-            ports: [relayPorts + 1],
+            taken: [relayPorts + 1],
           })
         );
 
@@ -3184,7 +3281,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
               checkpoint: checkpoint("snap"),
               pin: "fake 0",
             },
-            ports: [relayPorts + 1, relayPorts + 2],
+            taken: [relayPorts + 1, relayPorts + 2],
           })
         );
 
@@ -3198,19 +3295,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           accepts(portOf(report) ?? 0)
         );
 
-        const removed = yield* Effect.forEach(refused, ({ name, report }) =>
-          finished(
-            host,
-            {
-              _tag: "remove",
-              machine: ref(name, { port: portOf(report) ?? 0 }),
-            },
-            2
-          )
-        );
-
-        const closed = yield* Effect.forEach(refused, ({ report }) =>
-          accepts(portOf(report) ?? 0)
+        const removed = yield* Effect.forEach(refused, ({ name }) =>
+          finished(host, { _tag: "remove", machine: ref(name) }, 2)
         );
 
         expect(refused.map(({ report }) => errorOf(report))).toStrictEqual([
@@ -3223,15 +3309,234 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           relayPorts + 2,
           relayPorts + 3,
         ]);
-        expect([
-          open,
-          removed.map(({ status }) => status),
-          closed,
-        ]).toStrictEqual([
-          [true, true, true],
-          ["done", "done", "done"],
+        expect([open, removed.map(({ status }) => status)]).toStrictEqual([
           [false, false, false],
+          ["done", "done", "done"],
         ]);
+        expect(
+          host.fake.calls.filter((call) => call.startsWith("delete"))
+        ).toStrictEqual([]);
+      })
+  );
+});
+
+const locked = new Internal({
+  message: "smolvm machine status broken failed: database is locked",
+});
+
+layer(NodeServices.layer, { excludeTestServices: true })((it) => {
+  it.effect(
+    "a machine whose search fails reads unknown, and every other machine on its host reads as it is",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner();
+
+        keptByRuntime(host, "ok");
+        keptByRuntime(host, "broken");
+        host.fake.failFind("broken", locked);
+
+        const states = yield* host.operations.read([
+          ref("ok"),
+          ref("broken"),
+          ref("gone"),
+        ]);
+
+        expect(Object.fromEntries(states)).toStrictEqual({
+          ok: "running",
+          broken: "unknown",
+          gone: "missing",
+        });
+      })
+  );
+
+  it.effect(
+    "capacity names a machine whose search fails as unread, as it names one the runtime couldn't read, counts the others, and leaves out one its search finds nothing of",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner({ ramBudgetMib: 4096 });
+        const ok = ref("ok", { handle: Handle.make("held-ok") });
+
+        keptByRuntime(host, "ok");
+        keptByRuntime(host, "broken");
+        host.fake.failFind("broken", locked);
+
+        const unfound = yield* host.operations.capacity([
+          ok,
+          ref("broken"),
+          ref("gone"),
+        ]);
+
+        const found = yield* host.operations.capacity([
+          ok,
+          ref("broken", { handle: Handle.make("held-broken") }),
+          ref("gone"),
+        ]);
+
+        expect(unfound).toStrictEqual([
+          { resource: "cpu", unread: ["broken"] },
+          { resource: "ramMib", unread: ["broken"], limit: 4096 },
+        ]);
+        expect(found).toStrictEqual([
+          { resource: "cpu", used: 2 },
+          { resource: "ramMib", used: 2048, limit: 4096 },
+        ]);
+      })
+  );
+
+  it.effect(
+    "a make, a start and a resize of another machine go on while one machine's search fails, and admission counts that one at its whole RAM and none its search finds nothing of",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner({ ramBudgetMib: 3072 });
+        const broken = ref("broken");
+        const gone = ref("gone");
+
+        keptByRuntime(host, "broken");
+        host.fake.failFind("broken", locked);
+
+        const made = yield* finished(
+          host,
+          makes("dev", { machines: [broken, gone] })
+        );
+
+        const dev = ref("dev");
+
+        const stopped = yield* finished(
+          host,
+          { _tag: "stop", machine: dev, machines: [broken, gone] },
+          2
+        );
+
+        const started = yield* finished(
+          host,
+          {
+            _tag: "start",
+            machine: dev,
+            pin: "fake 1",
+            machines: [broken, gone],
+          },
+          3
+        );
+
+        const resized = yield* finished(
+          host,
+          {
+            _tag: "resize",
+            machine: dev,
+            to: { ramMib: 2048 },
+            machines: [broken, gone],
+          },
+          4
+        );
+
+        const refused = yield* finished(
+          host,
+          makes("big", {
+            machine: { ramMib: 1024 },
+            machines: [broken, gone, { ...dev, ramMib: 2048 }],
+          })
+        );
+
+        expect(
+          [made, stopped, started, resized, refused].map(errorOf)
+        ).toStrictEqual([
+          ["done", undefined],
+          ["done", undefined],
+          ["done", undefined],
+          ["done", undefined],
+          ["failed", "Capacity"],
+        ]);
+        expect(counted(host.fake.calls, "create dev")).toBe(1);
+      })
+  );
+
+  it.effect(
+    "a step on the machine whose search fails fails, and its remove is not done",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner();
+
+        keptByRuntime(host, "broken");
+        host.fake.failFind("broken", locked);
+
+        const started = yield* finished(host, {
+          _tag: "start",
+          machine: ref("broken"),
+          pin: "fake 1",
+          machines: [],
+        });
+
+        const removed = yield* finished(
+          host,
+          {
+            _tag: "remove",
+            machine: { name: "broken", instance: "broken-instance" },
+          },
+          2
+        );
+
+        expect([started, removed].map(errorOf)).toStrictEqual([
+          ["failed", "Internal"],
+          ["failed", "Internal"],
+        ]);
+        expect(removed.error?.message).toContain("database is locked");
+        expect(host.fake.machines.has("broken")).toBe(true);
+      })
+  );
+
+  it.effect(
+    "an adopt answers the handle and endpoint of each machine it resolved, names the one whose search failed, reopens every relay it can, and resolves that one once its search answers",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner({ relayed: true });
+
+        keptByRuntime(host, "ok");
+        keptByRuntime(host, "broken");
+        host.fake.failFind("broken", locked);
+
+        const ok = ref("ok", { endpoint: { port: relayPorts + 1 } });
+        const broken = ref("broken", { endpoint: { port: relayPorts + 2 } });
+        const first = yield* host.operations.adopt([ok, broken]);
+
+        yield* pause;
+
+        const reachedFirst = [
+          yield* accepts(relayPorts + 1),
+          yield* accepts(relayPorts + 2),
+        ];
+
+        host.fake.mendFind("broken");
+
+        const again = yield* host.operations.adopt([
+          { ...ok, handle: Handle.make("held-ok") },
+          broken,
+        ]);
+
+        yield* pause;
+
+        expect(first).toStrictEqual({
+          adopted: [
+            {
+              name: "ok",
+              instance: "ok-instance",
+              handle: Handle.make("held-ok"),
+              endpoint: { host: "127.0.0.1", port: relayPorts + 1 },
+            },
+          ],
+          unresolved: ["broken"],
+        });
+        expect(reachedFirst).toStrictEqual([true, false]);
+        expect(again.unresolved).toStrictEqual([]);
+        expect(
+          again.adopted.map(({ name, handle }) => [name, handle])
+        ).toStrictEqual([
+          ["ok", Handle.make("held-ok")],
+          ["broken", Handle.make("held-broken")],
+        ]);
+        expect(yield* accepts(relayPorts + 2)).toBe(true);
+        expect(
+          host.fake.calls.filter((call) => call.startsWith("relay"))
+        ).toStrictEqual(["relay ok", "relay broken"]);
       })
   );
 });

@@ -50,7 +50,7 @@ const connection = (
     (chunk) => write(socket, chunk)
   ).pipe(
     Effect.catch((error) =>
-      Effect.logWarning(`forwarder ${address}:${port}: ${error.message}`)
+      Effect.logWarning(`relay ${address}:${port}: ${error.message}`)
     ),
     Effect.ensuring(
       Effect.sync(() => {
@@ -59,9 +59,7 @@ const connection = (
     )
   );
 
-export const make = (
-  address: string
-): Effect.Effect<RelaysInterface, never, Scope.Scope> =>
+export const make: Effect.Effect<RelaysInterface, never, Scope.Scope> =
   Effect.gen(function* () {
     const run = yield* FiberSet.makeRuntime<never, unknown, never>();
     const listeners = new Map<number, Server>();
@@ -76,7 +74,11 @@ export const make = (
       Effect.forEach([...listeners.keys()], close, { discard: true })
     );
 
-    const listen = (port: number, dial: Dial): Effect.Effect<void, Internal> =>
+    const listen = (
+      address: string,
+      port: number,
+      dialer: () => Dial
+    ): Effect.Effect<void, Internal> =>
       Effect.callback((resume) => {
         if (listeners.has(port)) {
           resume(Effect.void);
@@ -84,16 +86,13 @@ export const make = (
           return;
         }
 
-        const server = createServer({ allowHalfOpen: true }, (socket) => {
-          socket.on("error", Function.constVoid);
-          run(connection(address, socket, port, dial));
-        });
+        const server = createServer({ allowHalfOpen: true });
 
         const refused = (error: Error) => {
           resume(
             Effect.fail(
               new Internal({
-                message: `the forwarder couldn't listen on ${address}:${port}: ${error.message}`,
+                message: `the relay couldn't listen on ${address}:${port}: ${error.message}`,
               })
             )
           );
@@ -102,12 +101,16 @@ export const make = (
         server.once("error", refused);
 
         server.listen({ host: address, port, exclusive: true }, () => {
+          const dial = dialer();
+
+          server.on("connection", (socket) => {
+            socket.on("error", Function.constVoid);
+            run(connection(address, socket, port, dial));
+          });
           server.off("error", refused);
           server.on("error", (error) => {
             run(
-              Effect.logWarning(
-                `forwarder ${address}:${port}: ${error.message}`
-              )
+              Effect.logWarning(`relay ${address}:${port}: ${error.message}`)
             );
           });
           listeners.set(port, server);
@@ -124,5 +127,4 @@ export const make = (
     return { listen, close };
   });
 
-export const layer = (address: string): Layer.Layer<Relays> =>
-  Layer.effect(Relays, make(address));
+export const layer: Layer.Layer<Relays> = Layer.effect(Relays, make);

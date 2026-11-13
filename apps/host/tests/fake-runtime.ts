@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -25,21 +25,21 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { traits as smolvm } from "../src/platform/smolvm/traits.ts";
 import { traits as tart } from "../src/platform/tart/traits.ts";
-import { missing, Runtime } from "../src/runtime.ts";
+import { Handle, missing, Runtime } from "../src/runtime.ts";
 import type {
   Activation,
   Admission,
   CheckpointFiles,
-  CheckpointRef,
   Held,
-  MachineRef,
+  Identity,
   MachineState,
-  Native,
+  Made,
   Observed,
   Interface,
   RuntimeError,
   Sizes,
   StateError,
+  Target,
 } from "../src/runtime.ts";
 import { allotted, checkRamBudget, inUse } from "../src/usage.ts";
 
@@ -272,7 +272,12 @@ export const writeTailscaleStubs = (bin: string): void => {
 interface FakeMachine {
   state: MachineState;
   readonly root: string;
+  readonly instance: string;
+  readonly handle: Handle;
 }
+
+const minted = (prefix: string): Handle =>
+  Handle.make(`${prefix}-${randomUUID().slice(0, 13)}`);
 
 const sizesOf = ({ cpu, ramMib, diskGib }: Sizes): Sizes => ({
   cpu,
@@ -294,7 +299,8 @@ type Injections = { readonly [O in Operation]: Array<Injection<O>> };
 
 type Calls = Omit<Interface, "admission" | "files"> &
   Admission &
-  CheckpointFiles;
+  CheckpointFiles &
+  Record<"create" | "restore" | "fork", Interface["make"]>;
 
 type FailureOf<O extends Operation> = Calls[O] extends (
   ...args: never
@@ -353,6 +359,7 @@ export const fakeRuntime = (options: FakeOptions) => {
   };
 
   const observeFailures: Array<RuntimeError | "hang" | "die"> = [];
+  const findFailures = new Map<string, RuntimeError>();
   const partialResizes: RuntimeError[] = [];
   const sizableRefusals: Unsizable[] = [];
   const sized: Array<readonly [string, Sizes, Sizes, boolean]> = [];
@@ -383,7 +390,8 @@ export const fakeRuntime = (options: FakeOptions) => {
   const call = <O extends Operation, A, E, R>(
     operation: O,
     resource: { readonly name: string },
-    body: Effect.Effect<A, E, R>
+    body: Effect.Effect<A, E, R>,
+    leftByFailure?: () => void
   ): Effect.Effect<A, E | FailureOf<O>, R> =>
     Effect.uninterruptibleMask((restore) =>
       Effect.suspend((): Effect.Effect<A, E | FailureOf<O>, R> => {
@@ -411,23 +419,31 @@ export const fakeRuntime = (options: FakeOptions) => {
           return Effect.die(new Error(injection.message));
         }
 
+        leftByFailure?.();
+
         return Effect.fail(injection.error);
       })
     );
 
-  const states = (refs: readonly Native[]): Effect.Effect<Observed> =>
+  const machineOf = (target: Target): FakeMachine | undefined => {
+    const found = machines.get(target.name);
+
+    return found?.handle === target.handle ? found : undefined;
+  };
+
+  const states = (refs: readonly Target[]): Effect.Effect<Observed> =>
     Effect.sync(() => {
       observed.push(refs.map(({ name }) => name));
 
       return new Map(
         refs.map((machine) => [
           machine.name,
-          machines.get(machine.name)?.state ?? "missing",
+          machineOf(machine)?.state ?? "missing",
         ])
       );
     });
 
-  const observe = (refs: readonly Native[]) =>
+  const observe = (refs: readonly Target[]) =>
     Effect.suspend(() => {
       const held = observeHolds.shift();
 
@@ -464,10 +480,69 @@ export const fakeRuntime = (options: FakeOptions) => {
       )
     );
 
-  const checkpointRoot = (checkpoint: CheckpointRef) =>
-    path.join(options.dir, "checkpoints", checkpoint.instance);
+  const checkpoints = new Map<Handle, string>();
 
-  const copyInto = (from: string, machine: MachineRef) =>
+  const kept = (
+    what: Parameters<Interface["find"]>[0],
+    ref: Identity
+  ): Handle | undefined => {
+    if (what === "checkpoint") {
+      return [...checkpoints].find(
+        ([, instance]) => instance === ref.instance
+      )?.[0];
+    }
+
+    const held = machines.get(ref.name);
+
+    return held?.instance === ref.instance ? held.handle : undefined;
+  };
+
+  const checkpointRoot = ({ instance }: Identity) =>
+    path.join(options.dir, "checkpoints", instance);
+
+  const heldCheckpoint = (checkpoint: Target) => {
+    const instance = checkpoints.get(checkpoint.handle);
+
+    return instance === undefined
+      ? path.join(options.dir, "checkpoints", `none-${checkpoint.handle}`)
+      : checkpointRoot({ name: checkpoint.name, instance });
+  };
+
+  const keptCheckpoint = (checkpoint: Identity): Handle => {
+    const handle = minted("ckpt");
+
+    checkpoints.set(handle, checkpoint.instance);
+
+    return handle;
+  };
+
+  const madeOf = (
+    machine: Identity & Sizes,
+    root: string,
+    state: MachineState = "running"
+  ): Made => {
+    const handle = minted("mach");
+
+    machines.set(machine.name, {
+      state,
+      root,
+      instance: machine.instance,
+      handle,
+    });
+    sizes.set(machine.name, sizesOf(machine));
+
+    return { handle, sizes: sizesOf(machine) };
+  };
+
+  const leftOf = (machine: Identity & Sizes) => () => {
+    madeOf(
+      machine,
+      path.join(options.dir, "roots", machine.instance),
+      "stopped"
+    );
+  };
+
+  const copyInto = (from: string, machine: Identity & Sizes) =>
     Effect.uninterruptible(
       Effect.tryPromise({
         try: async () => {
@@ -475,8 +550,8 @@ export const fakeRuntime = (options: FakeOptions) => {
 
           await access(from);
           await cp(from, root, { recursive: true });
-          machines.set(machine.name, { state: "running", root });
-          sizes.set(machine.name, sizesOf(machine));
+
+          return madeOf(machine, root);
         },
         catch: (cause) =>
           new Internal({
@@ -485,8 +560,8 @@ export const fakeRuntime = (options: FakeOptions) => {
       })
     );
 
-  const copyable = (machine: MachineRef) => {
-    const state = machines.get(machine.name)?.state ?? "missing";
+  const copyable = (machine: Target) => {
+    const state = machineOf(machine)?.state ?? "missing";
 
     if (state === traits.captureFrom) {
       return Effect.void;
@@ -503,8 +578,8 @@ export const fakeRuntime = (options: FakeOptions) => {
     );
   };
 
-  const rootOf = (machine: MachineRef) => {
-    const found = machines.get(machine.name);
+  const rootOf = (machine: Target) => {
+    const found = machineOf(machine);
 
     return found === undefined
       ? Effect.fail(new Internal({ message: `no machine ${machine.name}` }))
@@ -516,7 +591,7 @@ export const fakeRuntime = (options: FakeOptions) => {
     Set<ChildProcessSpawner.ChildProcessHandle>
   >();
 
-  const endCommands = (machine: Native) =>
+  const endCommands = (machine: Target) =>
     Effect.forEach(
       commands.get(machine.name) ?? [],
       (handle) => Effect.ignore(handle.kill()),
@@ -533,6 +608,32 @@ export const fakeRuntime = (options: FakeOptions) => {
 
       stubs = bin;
 
+      const created = (machine: Identity & Sizes, image: string) =>
+        call(
+          "create",
+          machine,
+          uninterruptibleWrite(async () => {
+            images.set(machine.name, image);
+            const root = path.join(options.dir, "roots", machine.instance);
+
+            await mkdir(path.join(root, "dev"), { recursive: true });
+            await mkdir(path.join(root, "etc"), { recursive: true });
+            await writeFile(
+              path.join(root, "etc", "resolv.conf"),
+              `nameserver ${baseResolver}\n`
+            );
+            furnish(root, bin);
+
+            if (runtime === "tart") {
+              await mkdir(path.join(root, "etc"), { recursive: true });
+              await writeFile(path.join(root, "etc", "passwd"), macLogin);
+            }
+
+            return madeOf(machine, root);
+          }),
+          leftOf(machine)
+        );
+
       return Runtime.of({
         version: "fake",
         pin: options.pin ?? (runtime === "smolvm" ? "fake 1" : undefined),
@@ -541,7 +642,11 @@ export const fakeRuntime = (options: FakeOptions) => {
             ? {
                 _tag: "relayed",
                 address: "127.0.0.1",
-                dial: () => (input) => input,
+                dial: (machine) => {
+                  record(`relay ${machine.name}`);
+
+                  return (input) => input;
+                },
               }
             : { _tag: "published", address: "127.0.0.1" },
         admission: {
@@ -561,7 +666,7 @@ export const fakeRuntime = (options: FakeOptions) => {
         files: {
           checkpointFiles: (checkpoint) =>
             Effect.promise(async () => {
-              const root = checkpointRoot(checkpoint);
+              const root = heldCheckpoint(checkpoint);
               const found = await filesIn(root);
 
               return await Promise.all(
@@ -598,6 +703,8 @@ export const fakeRuntime = (options: FakeOptions) => {
                 await rename(staged, root);
                 await mkdir(path.join(root, "dev"), { recursive: true });
                 furnish(root, bin);
+
+                return keptCheckpoint(checkpoint);
               })
             ),
         },
@@ -613,43 +720,54 @@ export const fakeRuntime = (options: FakeOptions) => {
         startup: Effect.sync(() => {
           record("startup");
         }),
-        adopt: (refs) =>
-          Effect.sync(() => {
-            record(`adopt ${refs.map(({ name }) => name).join(" ")}`);
+        find: (what, ref) =>
+          Effect.suspend(() => {
+            const failure = findFailures.get(ref.name);
+
+            return failure === undefined
+              ? Effect.succeed(kept(what, ref))
+              : Effect.fail(failure);
           }),
         observe,
         capacity,
-        create: (machine, image) =>
-          call(
-            "create",
-            machine,
-            uninterruptibleWrite(async () => {
-              images.set(machine.name, image);
-              const root = path.join(options.dir, "roots", machine.instance);
+        make: (machine, origin) => {
+          switch (origin._tag) {
+            case "image": {
+              return created(machine, origin.image);
+            }
 
-              await mkdir(path.join(root, "dev"), { recursive: true });
-              await mkdir(path.join(root, "etc"), { recursive: true });
-              await writeFile(
-                path.join(root, "etc", "resolv.conf"),
-                `nameserver ${baseResolver}\n`
+            case "checkpoint": {
+              return call(
+                "restore",
+                machine,
+                copyInto(heldCheckpoint(origin.checkpoint), machine),
+                leftOf(machine)
               );
-              furnish(root, bin);
+            }
 
-              if (runtime === "tart") {
-                await mkdir(path.join(root, "etc"), { recursive: true });
-                await writeFile(path.join(root, "etc", "passwd"), macLogin);
-              }
+            case "machine": {
+              const source = origin.machine;
 
-              machines.set(machine.name, { state: "running", root });
-              sizes.set(machine.name, sizesOf(machine));
-            })
-          ),
+              return call(
+                "fork",
+                machine,
+                Effect.andThen(
+                  copyable(source),
+                  Effect.flatMap(rootOf(source), (root) =>
+                    copyInto(root, machine)
+                  )
+                ),
+                leftOf(machine)
+              );
+            }
+          }
+        },
         start: (machine) =>
           call(
             "start",
             machine,
             Effect.suspend(() => {
-              const found = machines.get(machine.name);
+              const found = machineOf(machine);
 
               if (found === undefined) {
                 return Effect.fail(missing(traits.runtime, machine));
@@ -667,7 +785,7 @@ export const fakeRuntime = (options: FakeOptions) => {
             Effect.andThen(
               endCommands(machine),
               Effect.sync(() => {
-                const found = machines.get(machine.name);
+                const found = machineOf(machine);
 
                 if (found !== undefined) {
                   found.state = "stopped";
@@ -680,7 +798,7 @@ export const fakeRuntime = (options: FakeOptions) => {
             "pause",
             machine,
             Effect.suspend((): Effect.Effect<void, StateError> => {
-              const found = machines.get(machine.name);
+              const found = machineOf(machine);
 
               if (found === undefined) {
                 return Effect.fail(missing(traits.runtime, machine));
@@ -708,7 +826,7 @@ export const fakeRuntime = (options: FakeOptions) => {
             Effect.suspend(() => {
               const had = sizes.get(machine.name);
 
-              if (had === undefined) {
+              if (had === undefined || machineOf(machine) === undefined) {
                 return Effect.fail(
                   new Internal({ message: `no machine ${machine.name}` })
                 );
@@ -740,7 +858,7 @@ export const fakeRuntime = (options: FakeOptions) => {
             Effect.suspend(() => {
               const held = sizes.get(machine.name);
 
-              return held === undefined
+              return held === undefined || machineOf(machine) === undefined
                 ? Effect.fail(
                     new Internal({ message: `no machine ${machine.name}` })
                   )
@@ -754,8 +872,10 @@ export const fakeRuntime = (options: FakeOptions) => {
             Effect.andThen(
               endCommands(machine),
               Effect.sync(() => {
-                machines.delete(machine.name);
-                sizes.delete(machine.name);
+                if (machineOf(machine) !== undefined) {
+                  machines.delete(machine.name);
+                  sizes.delete(machine.name);
+                }
               })
             )
           ),
@@ -770,34 +890,24 @@ export const fakeRuntime = (options: FakeOptions) => {
                   await cp(root, checkpointRoot(checkpoint), {
                     recursive: true,
                   });
+
+                  return keptCheckpoint(checkpoint);
                 })
               )
-            )
-          ),
-        restore: (checkpoint, machine) =>
-          call(
-            "restore",
-            machine,
-            copyInto(checkpointRoot(checkpoint), machine)
-          ),
-        fork: (source, machine) =>
-          call(
-            "fork",
-            machine,
-            Effect.andThen(
-              copyable(source),
-              Effect.flatMap(rootOf(source), (root) => copyInto(root, machine))
-            )
+            ),
+            () => {
+              keptCheckpoint(checkpoint);
+            }
           ),
         deleteCheckpoint: (checkpoint) =>
           call(
             "deleteCheckpoint",
             checkpoint,
             uninterruptibleWrite(async () => {
-              await rm(checkpointRoot(checkpoint), {
-                recursive: true,
-                force: true,
-              });
+              const root = heldCheckpoint(checkpoint);
+
+              checkpoints.delete(checkpoint.handle);
+              await rm(root, { recursive: true, force: true });
             })
           ),
         exec: (machine, command) =>
@@ -805,7 +915,7 @@ export const fakeRuntime = (options: FakeOptions) => {
             "exec",
             machine,
             Effect.gen(function* () {
-              const found = machines.get(machine.name);
+              const found = machineOf(machine);
 
               if (found?.state !== "running" && found?.state !== "unknown") {
                 return {
@@ -885,6 +995,12 @@ export const fakeRuntime = (options: FakeOptions) => {
     },
     refuseNextSizes: (error: Unsizable) => {
       sizableRefusals.push(error);
+    },
+    failFind: (name: string, error: RuntimeError) => {
+      findFailures.set(name, error);
+    },
+    mendFind: (name: string) => {
+      findFailures.delete(name);
     },
     failNextObserve: (error: RuntimeError) => {
       observeFailures.push(error);

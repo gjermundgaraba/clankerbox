@@ -27,13 +27,26 @@ type HostError = NonNullable<Facts["error"]>;
 
 type Sizing = NonNullable<Facts["resize"]>;
 
+type Handle = NonNullable<Facts["handle"]>;
+
+type Endpoint = NonNullable<Facts["endpoint"]>;
+
 /** What a step leaves that only its host can tell. */
 export interface Outcome {
-  readonly port?: number;
+  readonly handle?: Handle;
+  readonly endpoint?: Endpoint;
   readonly hostKey?: string;
   readonly sizes?: Pick<Facts, "cpu" | "ramMib" | "diskGib">;
   readonly prepared?: true;
 }
+
+export type Reach = Pick<Outcome, "handle" | "endpoint">;
+
+export const toldNewReach = (row: Facts, told: Reach): boolean =>
+  (told.handle !== undefined && told.handle !== row.handle) ||
+  (told.endpoint !== undefined &&
+    (told.endpoint.host !== row.endpoint?.host ||
+      told.endpoint.port !== row.endpoint?.port));
 
 /** Where a failed create goes next, past a host that hadn't the capacity. */
 export type Move = Pick<Facts, "host" | "traits" | "pin" | "source">;
@@ -68,7 +81,8 @@ const events = {
   delete: types<object>(),
   read: types<Read>(),
   refused: types<{ readonly error: HostError }>(),
-  ran: types<{ readonly port: number }>(),
+  ran: types<Reach>(),
+  adopted: types<Reach & { readonly instance: string }>(),
   reported: types<Done | NotDone>(),
   lost: types<{ readonly error: HostError }>(),
   sized: types<{ readonly sizing: Sizing }>(),
@@ -124,8 +138,13 @@ const owed = ({ event }: On<"resize">) => ({
   error: undefined,
 });
 
+const reached = (context: Facts, outcome: Reach) => ({
+  handle: outcome.handle ?? context.handle,
+  endpoint: outcome.endpoint ?? context.endpoint,
+});
+
 const told = (context: Facts, { outcome }: On<"reported">["event"]) => ({
-  port: outcome.port ?? context.port,
+  ...reached(context, outcome),
   hostKey: outcome.hostKey ?? context.hostKey,
   ...outcome.sizes,
 });
@@ -218,6 +237,10 @@ export const machine = setup({
         diskGib: event.sizing.diskGib ?? context.diskGib,
       },
     }),
+    adopted: ({ context, event }) =>
+      event.instance === context.instance
+        ? { context: reached(context, event) }
+        : undefined,
   },
   states: {
     making: {
@@ -243,7 +266,7 @@ export const machine = setup({
         sent: {
           meta: { phase: "creating", step: "make", activity: "follow" },
           on: {
-            ran: ({ event }) => ({ context: { port: event.port } }),
+            ran: ({ context, event }) => ({ context: reached(context, event) }),
             reported: ({ context, event }) =>
               event.status === "done"
                 ? {
@@ -374,7 +397,12 @@ export const machine = setup({
           ? ({ target: "#machine.undone", context: { undoneAt: at } } as const)
           : ({
               target: "#machine.making.due",
-              context: { ...move, error: undefined, port: undefined },
+              context: {
+                ...move,
+                error: undefined,
+                handle: undefined,
+                endpoint: undefined,
+              },
             } as const)
     ),
     undone: {
@@ -386,7 +414,9 @@ export const machine = setup({
       "remove",
       { due: "observing", held: "failed" },
       {
-        ran: ({ event }: On<"ran">) => ({ context: { port: event.port } }),
+        ran: ({ context, event }: On<"ran">) => ({
+          context: reached(context, event),
+        }),
         reported: ({ context, event }: On<"reported">) =>
           ({ target: "due", context: told(context, event) }) as const,
       }

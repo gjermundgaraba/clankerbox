@@ -3,25 +3,32 @@ import { Machine as MachineResource } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Exit, Schema } from "effect";
 import { expect } from "vite-plus/test";
 
-import type { Held, MachineRef, MachineState } from "../src/runtime.ts";
+import { Handle } from "../src/runtime.ts";
+import type { Held, MachineState, Sized, Target } from "../src/runtime.ts";
 import { checkRamBudget } from "../src/usage.ts";
 
 const Machine = Schema.Struct({
   ramMib: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_536 })),
-  booting: Schema.Boolean,
+  held: Schema.Literals(["found", "unread", "booting"]),
   state: MachineResource.fields.state,
 });
 
-const ref = (index: number, ramMib: number): MachineRef => ({
+const ref = (index: number, ramMib: number): Sized => ({
   name: `m${index}`,
   instance: index.toString(16).padStart(32, "0"),
+  handle: Handle.make(`m${index}-vm`),
   cpu: 1,
   ramMib,
   diskGib: 10,
-  port: 10_000 + index,
 });
 
 type Placed = Held & { readonly state: MachineState };
+
+const placed = (
+  held: Held["_tag"],
+  machine: Sized,
+  state: MachineState
+): Placed => ({ _tag: held, machine, state });
 
 const admits = (
   target: number,
@@ -33,16 +40,15 @@ const admits = (
     const machine = ref(0, target);
 
     const machines: readonly Placed[] = [
-      { machine, booting: true, state: "stopped" },
-      ...others.map((other, index) => ({
-        ...other,
-        machine: ref(index + 1, other.ramMib),
-      })),
+      placed("booting", machine, "stopped"),
+      ...others.map((other, index) =>
+        placed(other.held, ref(index + 1, other.ramMib), other.state)
+      ),
     ];
 
-    const asked: Array<readonly MachineRef[]> = [];
+    const asked: Array<readonly Target[]> = [];
 
-    const observe = (refs: readonly MachineRef[]) =>
+    const observe = (refs: readonly Target[]) =>
       Effect.sync(() => {
         asked.push(refs);
 
@@ -65,7 +71,7 @@ const admits = (
     );
 
     expect(asked).toStrictEqual([
-      machines.flatMap((held) => (held.booting ? [] : [held.machine])),
+      machines.flatMap((held) => (held._tag === "found" ? [held.machine] : [])),
     ]);
 
     if (Exit.isSuccess(checked)) {
@@ -96,7 +102,7 @@ it.effect.prop(
 );
 
 it.effect.prop(
-  "another machine that boots, runs or can't be read adds its RAM; one stopped, paused or missing adds none",
+  "another machine that boots, runs, can't be read or has no handle to read it by adds its RAM; one stopped, paused or missing adds none",
   {
     target: Ram,
     others: Schema.Array(Machine),
@@ -106,7 +112,9 @@ it.effect.prop(
   ({ target, others, extra, budget }) =>
     Effect.gen(function* () {
       const counts =
-        extra.booting || extra.state === "running" || extra.state === "unknown";
+        extra.held !== "found" ||
+        extra.state === "running" ||
+        extra.state === "unknown";
 
       const before = yield* admits(target, others, budget);
 

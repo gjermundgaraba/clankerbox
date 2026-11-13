@@ -42,6 +42,7 @@ import {
   writeStubs,
   writeTailscaleStubs,
 } from "./fake-runtime.ts";
+import type { FakeRuntimeName } from "./fake-runtime.ts";
 import { image } from "./support.ts";
 
 const seedOf = () => globalThis.crypto.getRandomValues(new Uint8Array(64));
@@ -261,28 +262,37 @@ const joinedWithDns = (uname: string) =>
     return { where, node };
   });
 
-const machine = {
+const dev = {
   name: "dev",
   instance: "0f3a9c1e",
   cpu: 1,
   ramMib: 512,
   diskGib: 10,
-  port: 2222,
 };
 
-const based = Effect.gen(function* () {
-  const dir = yield* scratch;
-  const fake = fakeRuntime({ dir });
-  const runtime = Context.get(yield* Layer.build(fake.layer), Runtime);
+const madeOn = (as: FakeRuntimeName) =>
+  Effect.gen(function* () {
+    const dir = yield* scratch;
+    const fake = fakeRuntime({ dir, as });
+    const runtime = Context.get(yield* Layer.build(fake.layer), Runtime);
 
-  yield* runtime.create(machine, image);
+    const { handle } = yield* runtime.make(
+      dev,
+      { _tag: "image", image },
+      { _tag: "forward", port: 2222 }
+    );
 
-  return { runtime, fake, bin: path.join(dir, "bin") };
-});
+    return {
+      runtime,
+      fake,
+      bin: path.join(dir, "bin"),
+      machine: { ...dev, handle },
+    };
+  });
 
-const running = Effect.map(based, ({ runtime }) => runtime);
+const based = madeOn("smolvm");
 
-const preparedForSetup = Effect.tap(running, (runtime) =>
+const preparedForSetup = Effect.tap(based, ({ runtime, machine }) =>
   prepareBase(runtime, machine, false)
 );
 
@@ -306,7 +316,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a setup that exits non-zero fails with its output's tail, never its text, and leaves no copy of it",
     () =>
       Effect.gen(function* () {
-        const runtime = yield* preparedForSetup;
+        const { runtime, machine } = yield* preparedForSetup;
         const secret = "token-4f1e9a";
 
         const script = [
@@ -345,7 +355,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a command runs as the user named, root by default, with its env and stdin, and answers its exit code and output",
     () =>
       Effect.gen(function* () {
-        const runtime = yield* running;
+        const { runtime, machine } = yield* based;
 
         const argv = [
           "/bin/sh",
@@ -380,7 +390,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a command that runs past its timeout is ended, and answers 124 with the output it had",
     () =>
       Effect.gen(function* () {
-        const runtime = yield* running;
+        const { runtime, machine } = yield* based;
 
         const executed = yield* runCommand(runtime, {
           machine,
@@ -400,7 +410,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a command's output keeps its last outputLimit characters, and says when it was cut",
     () =>
       Effect.gen(function* () {
-        const runtime = yield* running;
+        const { runtime, machine } = yield* based;
 
         const executed = yield* runCommand(runtime, {
           machine,
@@ -422,7 +432,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a prepared base has the login user with passwordless sudo and sshd refusing root, however often it is prepared",
     () =>
       Effect.gen(function* () {
-        const { runtime, fake } = yield* based;
+        const { runtime, fake, machine } = yield* based;
         const root = fake.root(machine.name) ?? "";
 
         yield* prepareBase(runtime, machine, false);
@@ -456,7 +466,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a linux base without apt-get is refused, naming what clankerbox prepares",
     () =>
       Effect.gen(function* () {
-        const { runtime, bin } = yield* based;
+        const { runtime, bin, machine } = yield* based;
 
         yield* remove(path.join(bin, "apt-get"));
 
@@ -474,7 +484,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a setup runs as the login user, in its home, with the step's keys already installed",
     () =>
       Effect.gen(function* () {
-        const { runtime, fake } = yield* based;
+        const { runtime, fake, machine } = yield* based;
         const root = fake.root(machine.name) ?? "";
 
         yield* prepareBase(runtime, machine, false);
@@ -504,11 +514,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a mac base names public resolvers and installs tailscale with brew only where the host joins and it lacks it",
     () =>
       Effect.gen(function* () {
-        const dir = yield* scratch;
-        const fake = fakeRuntime({ dir, as: "tart" });
-        const runtime = Context.get(yield* Layer.build(fake.layer), Runtime);
+        const { runtime, fake, machine } = yield* madeOn("tart");
 
-        yield* runtime.create(machine, image);
         yield* prepareBase(runtime, machine, false);
 
         const made = yield* calls(fake.root(machine.name) ?? "");
@@ -524,7 +531,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a setup that runs past its timeout is cut off, saying so with the output it had",
     () =>
       Effect.gen(function* () {
-        const runtime = yield* preparedForSetup;
+        const { runtime, machine } = yield* preparedForSetup;
 
         const error = yield* Effect.flip(
           runSetup(

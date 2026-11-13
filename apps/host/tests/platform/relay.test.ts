@@ -9,13 +9,13 @@ import { setTimeout as delay } from "node:timers/promises";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { Effect, Fiber } from "effect";
+import { Effect, Fiber, Function } from "effect";
 import { expect } from "vite-plus/test";
 
 import { cliIn } from "../../src/platform/process.ts";
-import { make } from "../../src/platform/relay.ts";
+import { make as relaying } from "../../src/platform/relay.ts";
 
-const relaying = make("127.0.0.1");
+const address = "127.0.0.1";
 
 const echo = (marker: string) =>
   Effect.map(cliIn({}), ({ dial }) =>
@@ -36,7 +36,7 @@ const ownPort = () => {
 };
 
 const connected = async (port: number): Promise<Socket> => {
-  const socket = connect({ host: "127.0.0.1", port });
+  const socket = connect({ host: address, port });
 
   await once(socket, "connect");
 
@@ -99,7 +99,11 @@ layer(NodeServices.layer)((it) => {
         const port = ownPort();
         const payload = randomBytes(4 * 1024 * 1024);
 
-        yield* (yield* relaying).listen(port, yield* echo(marker));
+        yield* (yield* relaying).listen(
+          address,
+          port,
+          Function.constant(yield* echo(marker))
+        );
 
         expect(
           (yield* Effect.promise(
@@ -117,7 +121,11 @@ layer(NodeServices.layer)((it) => {
         const marker = path.join(yield* scratch, "marker");
         const port = ownPort();
 
-        yield* (yield* relaying).listen(port, yield* echo(marker));
+        yield* (yield* relaying).listen(
+          address,
+          port,
+          Function.constant(yield* echo(marker))
+        );
 
         const socket = yield* Effect.promise(async () => await connected(port));
 
@@ -139,7 +147,11 @@ layer(NodeServices.layer)((it) => {
           randomBytes(64 * 1024)
         );
 
-        yield* (yield* relaying).listen(port, yield* echo(marker));
+        yield* (yield* relaying).listen(
+          address,
+          port,
+          Function.constant(yield* echo(marker))
+        );
 
         const echoed = yield* Effect.promise(
           async () =>
@@ -167,8 +179,16 @@ layer(NodeServices.layer)((it) => {
         const port = ownPort();
         const relays = yield* relaying;
 
-        yield* relays.listen(port, yield* echo(marker));
-        yield* relays.listen(port, yield* echo(marker));
+        yield* relays.listen(
+          address,
+          port,
+          Function.constant(yield* echo(marker))
+        );
+        yield* relays.listen(
+          address,
+          port,
+          Function.constant(yield* echo(marker))
+        );
 
         const open = yield* Effect.promise(async () => await connected(port));
         const chunks: Buffer[] = [];
@@ -206,7 +226,7 @@ layer(NodeServices.layer)((it) => {
 
       yield* Effect.acquireRelease(
         Effect.callback<undefined>((resume) => {
-          holder.listen({ host: "127.0.0.1", port }, () => {
+          holder.listen({ host: address, port }, () => {
             resume(Effect.undefined);
           });
         }),
@@ -219,11 +239,15 @@ layer(NodeServices.layer)((it) => {
       );
 
       const error = yield* Effect.flip(
-        (yield* relaying).listen(port, yield* echo(marker))
+        (yield* relaying).listen(
+          address,
+          port,
+          Function.constant(yield* echo(marker))
+        )
       );
 
       expect(error._tag).toBe("Internal");
-      expect(error.message).toContain(`127.0.0.1:${port}`);
+      expect(error.message).toContain(`${address}:${port}`);
     })
   );
 
@@ -236,7 +260,7 @@ layer(NodeServices.layer)((it) => {
         const relays = yield* relaying;
 
         const fiber = yield* Effect.forkChild(
-          relays.listen(port, yield* echo(marker)),
+          relays.listen(address, port, Function.constant(yield* echo(marker))),
           {
             startImmediately: true,
           }
@@ -246,7 +270,11 @@ layer(NodeServices.layer)((it) => {
 
         expect(yield* refusal(port)).toHaveProperty("code", "ECONNREFUSED");
 
-        yield* relays.listen(port, yield* echo(marker));
+        yield* relays.listen(
+          address,
+          port,
+          Function.constant(yield* echo(marker))
+        );
 
         expect(
           (yield* Effect.promise(

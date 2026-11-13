@@ -7,15 +7,19 @@ import type { CheckpointFacts, Lease, Operation, ShownPhase } from "./store.ts";
 
 type HostError = NonNullable<CheckpointFacts["error"]>;
 
+type Handle = NonNullable<CheckpointFacts["handle"]>;
+
 export interface Done {
   readonly status: "done";
   readonly at: NonNullable<CheckpointFacts["failedAt"]>;
+  readonly handle?: Handle;
 }
 
 export interface NotDone {
   readonly status: "failed" | "cancelled";
   readonly error: HostError;
   readonly at: Done["at"];
+  readonly handle?: Handle;
   /** A failed capture left nothing on its host, so a delete would find nothing. */
   readonly cleared: boolean;
 }
@@ -44,9 +48,20 @@ const makingRegion = <const Step extends "capture" | "fetch">(step: Step) =>
       sent: {
         meta: { phase: "capturing", step, activity: "follow" },
         on: {
-          reported: ({ event }: { readonly event: Done | NotDone }) => {
+          reported: ({
+            context,
+            event,
+          }: {
+            readonly context: CheckpointFacts;
+            readonly event: Done | NotDone;
+          }) => {
+            const handle = event.handle ?? context.handle;
+
             if (event.status === "done") {
-              return { target: "#checkpoint.ready" } as const;
+              return {
+                target: "#checkpoint.ready",
+                context: { handle },
+              } as const;
             }
 
             const { error, at, cleared } = event;
@@ -58,7 +73,7 @@ const makingRegion = <const Step extends "capture" | "fetch">(step: Step) =>
                 } as const)
               : ({
                   target: "#checkpoint.discarding.due",
-                  context: { error },
+                  context: { error, handle },
                 } as const);
           },
           lost: ({
@@ -140,7 +155,19 @@ export const checkpoint = setup({
       "checkpoint",
       "deleteCheckpoint",
       { due: "deleting", held: "deleting" },
-      { reported: { target: "due" } }
+      {
+        reported: ({
+          context,
+          event,
+        }: {
+          readonly context: CheckpointFacts;
+          readonly event: Done | NotDone;
+        }) =>
+          ({
+            target: "due",
+            context: { handle: event.handle ?? context.handle },
+          }) as const,
+      }
     ),
     failed: {
       meta: { phase: "failed", activity: "none" },

@@ -24,6 +24,7 @@ import {
   templates,
 } from "../src/platform/smolvm/smolvm.ts";
 import { Runtime } from "../src/runtime.ts";
+import type { Identity } from "../src/runtime.ts";
 import type { FakeRuntimeName } from "./fake-runtime.ts";
 import { fakeRuntime } from "./fake-runtime.ts";
 import { scripted } from "./scripted.ts";
@@ -88,8 +89,24 @@ const checkpointRef = (instance: string) => ({
   cpu: 1,
   ramMib: 1024,
   diskGib: 10,
-  port: 2222,
 });
+
+const planted = (
+  runtime: Runtime["Service"],
+  checkpoint: Identity,
+  contents: ReadonlyMap<string, string | Uint8Array>
+) =>
+  Effect.gen(function* () {
+    const files = yield* Effect.fromNullishOr(runtime.files);
+    const staged = files.staging(checkpoint);
+
+    for (const [name, content] of contents) {
+      mkdirSync(path.dirname(path.join(staged, name)), { recursive: true });
+      writeFileSync(path.join(staged, name), content);
+    }
+
+    return { ...checkpoint, handle: yield* files.install(checkpoint, staged) };
+  });
 
 const tree = (root: string) =>
   readdirSync(root, { recursive: true, encoding: "utf8" }).toSorted();
@@ -106,19 +123,13 @@ const published = (
 ) =>
   Effect.gen(function* () {
     const root = yield* scratch;
-    const from = path.join(root, "from");
-    const built = path.join(from, "checkpoints", "built");
+    const from = yield* runtimeIn(path.join(root, "from"), faked);
     const memory = memoryBuildStore();
-
-    for (const [name, content] of contents) {
-      mkdirSync(path.dirname(path.join(built, name)), { recursive: true });
-      writeFileSync(path.join(built, name), content);
-    }
 
     yield* publish(
       memory.store,
-      yield* runtimeIn(from, faked),
-      checkpointRef("built")
+      from,
+      yield* planted(from, checkpointRef("built"), contents)
     );
 
     const to = path.join(root, "to");
@@ -398,7 +409,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           writeFileSync(target, content);
         }
 
-        yield* publish(memory.store, yield* smolvmIn(from), built);
+        yield* publish(memory.store, yield* smolvmIn(from), {
+          ...built,
+          handle: nativeName(built),
+        });
 
         const to = path.join(root, "to");
 

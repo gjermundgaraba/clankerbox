@@ -85,7 +85,8 @@ the whole CLI span domains on purpose.
   each delivery.
 - `copies.ts`: a copy's spec, and why its source refuses it.
 - `fleet.ts`: capacity, and what a recheck does beyond each loop: tells a
-  restarted host its machines, and ends old failures.
+  restarted host its machines, again until it finds each, and stores the handle
+  and endpoint it answers in each row; and ends old failures.
 - `machine-view.ts`: what a client reads of a machine, and `waiting`, which a
   read tells.
 - `operations.ts`: plain functions of a step on its host. `poll` sends it when
@@ -113,15 +114,22 @@ or `composition/`.
 - `settings.ts`: what a host runs on.
 - `builds.ts`: `publish`, `fetch` and `unpublish` of a checkpoint through the
   `BuildStore` port, objects by key and a manifest per build, written last.
-- `reach.ts`: the `Reaches` service. It picks a make's port, and opens, closes
-  and on adopt reopens the relays of a `relayed` runtime.
+- `reach.ts`: the `Reaches` service. It picks a make's port, answers the
+  endpoint a client reaches it at, has a `published` runtime bind it, and opens,
+  closes and on adopt reopens the relays of a `relayed` runtime.
 - Ports: `Runtime` (`runtime.ts`), with its `traits`, its `guest` (`debian` or
   `macos`, which picks the base `guest.ts` prepares), its `reach` (`published` or `relayed`)
   and the facets `admission` and `files`, each present or absent as a whole,
   `PortProbe` (`machine-ports.ts`), `Relays` (`reach.ts`), `Tailnet`
   (`tailnet.ts`), which mints a machine's tailnet key, provided only on a host
   that joins a tailnet, and `BuildStore` (`builds.ts`), provided only on a host
-  with a `builds` setting.
+  with a `builds` setting. Each `Runtime` method that acts on a machine or
+  checkpoint already made takes a `Target`, the runtime's own opaque `Handle`
+  beside the name and instance. `find` answers the handle for an instance while
+  the runtime keeps anything of it, also of one a delete removed only part way.
+  `make`, the one create, restore or fork, answers the handle it made, and
+  `capture` and `install` the handle of the checkpoint they make. `Operations`
+  resolves each target from its row's handle, else by `find`.
 
 Adapters live in `platform/`: `bind-probe.ts` (`PortProbe`), `relay.ts`
 (`Relays`, a TCP listener that carries each connection through a runtime's
@@ -218,7 +226,8 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
   the control plane, keeps what was asked (`desired`), its chart's leaf (`state`),
   which holds how far it is and the `phase` a client waits on, and the progress no
   runtime can tell again (`prepared`, the host key, the runtime pin its VM booted
-  under). A delete is the `deleting` region, so the wire's `desired` of `deleted`
+  under), with the runtime's `handle` for its VM and the `endpoint` its host gave
+  it, which a client's `ssh` reads. A delete is the `deleting` region, so the wire's `desired` of `deleted`
   comes from the leaf. What the VM is doing is read from its host, never stored,
   and so is `waiting`, which a read that finds the VM unknown shows. One loop per
   machine moves it toward what was asked a whole step at a time, and a later
@@ -239,7 +248,10 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
   process and carried by the step, tells a restart from a delivery that hasn't
   come: a step its host no
   longer holds is decided afresh, and a make is undone. A step's report is stored
-  before its host forgets it. A runtime's stop, and Tart's pause, mask
+  before its host forgets it. A step acts on its row's handle, or on what the
+  runtime finds of the row's instance, never on a VM by its name alone, and a
+  remove or a delete of a checkpoint that finds nothing is done, while one whose
+  search fails fails. A runtime's stop, and Tart's pause, mask
   interruption from the command that halts a running VM until it has, so a step
   cut short reports `cancelled` only once the VM is where that command takes it.
 - **Leases are rows.** They are the `operations` table: what changes a resource

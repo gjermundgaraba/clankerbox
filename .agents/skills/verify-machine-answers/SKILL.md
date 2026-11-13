@@ -93,7 +93,7 @@ A pass covers this scope, and only it:
 - **The table holds what the model holds of a row**: its leaf, wish, `prepared`
   and whether it has an error, and a make's report that it prepared the
   machine. A key it lacks is an event the chart leaves unhandled. `resize`,
-  `sized`, `refused`, `ran`, a report's `move` and the rest of what a report
+  `sized`, `refused`, `ran`, `adopted`, a report's `move` and the rest of what a report
   tells rest on `machine-chart.test.ts`.
 - **`MachineAnswers.cfg`**: one client beside the creator, with one of each
   fault: a step or read that fails, a control plane crash, a partition, a host

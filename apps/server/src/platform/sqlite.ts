@@ -195,6 +195,43 @@ export const migrations: readonly string[] = [
   DROP TABLE kind_traits;
   ALTER TABLE machines DROP COLUMN kind;
   ALTER TABLE checkpoints DROP COLUMN kind`,
+  `CREATE TABLE reached (
+    name TEXT PRIMARY KEY,
+    instance TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    base TEXT NOT NULL,
+    cpu INTEGER NOT NULL,
+    ram_mib INTEGER NOT NULL,
+    disk_gib INTEGER NOT NULL,
+    host TEXT NOT NULL,
+    handle TEXT,
+    endpoint TEXT,
+    desired TEXT NOT NULL,
+    state TEXT NOT NULL,
+    prepared INTEGER NOT NULL,
+    error TEXT,
+    resize TEXT,
+    ephemeral INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    host_key TEXT,
+    pin TEXT,
+    undone_at TEXT,
+    labels TEXT,
+    after TEXT,
+    template TEXT,
+    traits TEXT NOT NULL
+  ) STRICT;
+  INSERT INTO reached
+    SELECT name, instance, created_at, base, cpu, ram_mib, disk_gib, host, NULL,
+      CASE WHEN port IS NULL THEN NULL ELSE json_object('port', port) END,
+      desired, state, prepared, error, resize, ephemeral, source, host_key, pin, undone_at,
+      labels, after, template, traits
+    FROM machines;
+  DROP TABLE machines;
+  ALTER TABLE reached RENAME TO machines;
+  ALTER TABLE checkpoints DROP COLUMN port;
+  ALTER TABLE checkpoints ADD COLUMN handle TEXT;
+  DELETE FROM hosts`,
 ];
 
 const isSqliteError = (

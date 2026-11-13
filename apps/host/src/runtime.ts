@@ -1,8 +1,9 @@
 import type {
-  CheckpointRef,
+  Handle,
   MachineRef,
   MachineState,
-  Native,
+  Ref,
+  Scope as Resource,
 } from "@clankerbox/host-contract";
 import { Missing, readTimeout } from "@gjermundgaraba/clankerbox-sdk";
 import type {
@@ -18,12 +19,9 @@ import type {
 import { Context, Duration, Effect, Schema } from "effect";
 import type { Scope, Stream } from "effect";
 
-export type {
-  CheckpointRef,
-  MachineRef,
-  MachineState,
-  Native,
-} from "@clankerbox/host-contract";
+export { Handle } from "@clankerbox/host-contract";
+
+export type { MachineRef, MachineState } from "@clankerbox/host-contract";
 
 export class CannotStart extends Schema.TaggedError<
   CannotStart,
@@ -54,6 +52,8 @@ export const stateIn = (
 
 export type Sizes = Pick<MachineRef, "cpu" | "ramMib" | "diskGib">;
 
+export type Identity = Pick<Ref, "name" | "instance">;
+
 export const sizedBy = (from: Sizes, sizing: Sizing | undefined): Sizes => ({
   cpu: sizing?.cpu ?? from.cpu,
   ramMib: sizing?.ramMib ?? from.ramMib,
@@ -79,9 +79,32 @@ export const timeoutFail =
       orElse: () => Effect.fail(error()),
     });
 
-export interface Held {
-  readonly machine: MachineRef;
-  readonly booting: boolean;
+export interface Target {
+  readonly name: string;
+  readonly instance: string;
+  readonly handle: Handle;
+}
+
+export type Sized = Target & Sizes;
+
+/** A machine as admission and capacity count it: found, unread because its search failed, or booting on this host. */
+export type Held =
+  | { readonly _tag: "found"; readonly machine: Sized }
+  | { readonly _tag: "unread"; readonly machine: MachineRef }
+  | { readonly _tag: "booting"; readonly machine: MachineRef };
+
+export type Origin =
+  | { readonly _tag: "image"; readonly image: string }
+  | { readonly _tag: "checkpoint"; readonly checkpoint: Sized }
+  | { readonly _tag: "machine"; readonly machine: Sized };
+
+export type Bind =
+  | { readonly _tag: "forward"; readonly port: number }
+  | { readonly _tag: "none" };
+
+export interface Made {
+  readonly handle: Handle;
+  readonly sizes: Sizes;
 }
 
 export type Booting =
@@ -138,7 +161,7 @@ export type Reach =
   | {
       readonly _tag: "relayed";
       readonly address: string;
-      readonly dial: (machine: Native) => Dial;
+      readonly dial: (machine: Target) => Dial;
     };
 
 export interface Admission {
@@ -148,17 +171,17 @@ export interface Admission {
 
 export interface CheckpointFiles {
   readonly checkpointFiles: (
-    checkpoint: CheckpointRef
+    checkpoint: Target
   ) => Effect.Effect<readonly CheckpointFile[], RuntimeError>;
   /** Where a file of `key` lies on this host, in any of its checkpoints, if one does. */
   readonly held: (key: string) => Effect.Effect<string | undefined>;
   /** Where a copy of `checkpoint` is put together, on the filesystem it will lie on. */
-  readonly staging: (checkpoint: CheckpointRef) => string;
+  readonly staging: (checkpoint: Identity) => string;
   /** Makes `checkpoint` of the files put together in `staged`, which it takes. */
   readonly install: (
-    checkpoint: CheckpointRef,
+    checkpoint: Identity,
     staged: string
-  ) => Effect.Effect<void, RuntimeError>;
+  ) => Effect.Effect<Handle, RuntimeError>;
 }
 
 export interface Interface {
@@ -176,50 +199,44 @@ export interface Interface {
     live: boolean
   ) => Effect.Effect<void, Unsizable>;
   readonly startup: Effect.Effect<void, RuntimeError>;
-  readonly adopt: (
-    machines: readonly MachineRef[]
-  ) => Effect.Effect<void, RuntimeError>;
+  readonly find: (
+    what: Resource["resource"],
+    ref: Identity
+  ) => Effect.Effect<Handle | undefined, RuntimeError>;
   readonly observe: (
-    machines: readonly Native[]
+    machines: readonly Target[]
   ) => Effect.Effect<Observed, RuntimeError>;
   readonly capacity: (
     machines: readonly Held[]
   ) => Effect.Effect<readonly Reading[], RuntimeError>;
-  readonly create: (
-    machine: MachineRef,
-    image: string
-  ) => Effect.Effect<void, RoomError | Unsizable>;
+  readonly make: (
+    machine: Identity & Sizes,
+    origin: Origin,
+    bind: Bind
+  ) => Effect.Effect<Made, RoomError | StateError | Unsizable>;
   readonly start: (
-    machine: MachineRef
+    machine: Target
   ) => Effect.Effect<void, RoomError | StateError>;
-  readonly stop: (machine: MachineRef) => Effect.Effect<void, RuntimeError>;
+  readonly stop: (machine: Target) => Effect.Effect<void, RuntimeError>;
   readonly pause: (
-    machine: MachineRef
+    machine: Target
   ) => Effect.Effect<void, RuntimeError | StateError>;
-  readonly delete: (machine: Native) => Effect.Effect<void, RuntimeError>;
+  readonly delete: (machine: Target) => Effect.Effect<void, RuntimeError>;
   readonly capture: (
-    machine: MachineRef,
-    checkpoint: CheckpointRef
-  ) => Effect.Effect<void, RoomError | StateError>;
-  readonly restore: (
-    checkpoint: CheckpointRef,
-    machine: MachineRef
-  ) => Effect.Effect<void, RoomError | Unsizable>;
-  readonly fork: (
-    source: MachineRef,
-    machine: MachineRef
-  ) => Effect.Effect<void, RoomError | StateError | Unsizable>;
+    machine: Target,
+    checkpoint: Identity
+  ) => Effect.Effect<Handle, RoomError | StateError>;
   readonly resize: (
-    machine: MachineRef,
+    machine: Sized,
     to: Sizing,
     running: boolean
   ) => Effect.Effect<void, RuntimeError | Unsizable>;
-  readonly sizes: (machine: MachineRef) => Effect.Effect<Sizing, RuntimeError>;
+  readonly sizes: (machine: Target) => Effect.Effect<Sizing, RuntimeError>;
   readonly deleteCheckpoint: (
-    checkpoint: CheckpointRef
+    checkpoint: Target
   ) => Effect.Effect<void, RuntimeError>;
   readonly exec: (
-    machine: Native,
+    machine: Target,
     command: Command
   ) => Effect.Effect<Execution, RuntimeError, Scope.Scope>;
 }

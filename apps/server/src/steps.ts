@@ -1,59 +1,73 @@
-import type { MachineRef, Step } from "@clankerbox/host-contract";
+import type {
+  CheckpointRef,
+  Endpoint,
+  MachineRef,
+  Ref,
+  Step,
+} from "@clankerbox/host-contract";
 import type { Internal, Setup } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Option } from "effect";
 
 import { isPublished } from "./checkpoint-chart.ts";
 import type { CheckpointRow } from "./checkpoint-chart.ts";
+import { stageOf } from "./machine-chart.ts";
 import type { MachineRow } from "./machine-chart.ts";
 import type { Operation, Interface as Store } from "./store.ts";
 
-export const refOf = (row: MachineRow): MachineRef | undefined =>
-  row.port === undefined
-    ? undefined
-    : {
-        name: row.name,
-        instance: row.instance,
-        cpu: row.cpu,
-        ramMib: row.ramMib,
-        diskGib: row.diskGib,
-        port: row.port,
-      };
+export const identityOf = ({
+  name,
+  instance,
+  handle,
+}: MachineRow | CheckpointRow): Ref => ({
+  name,
+  instance,
+  ...(handle === undefined ? {} : { handle }),
+});
 
-const checkpointRefOf = (record: CheckpointRow) => ({
-  name: record.name,
-  instance: record.instance,
+export const refOf = (row: MachineRow): MachineRef => ({
+  ...identityOf(row),
+  cpu: row.cpu,
+  ramMib: row.ramMib,
+  diskGib: row.diskGib,
+  ...(row.endpoint === undefined ? {} : { endpoint: row.endpoint }),
+});
+
+const checkpointRefOf = (record: CheckpointRow): CheckpointRef => ({
+  ...identityOf(record),
   cpu: record.cpu,
   ramMib: record.ramMib,
   diskGib: record.diskGib,
-  port: record.port,
 });
+
+export const hasEndpoint = (
+  row: MachineRow
+): row is MachineRow & { readonly endpoint: Endpoint } =>
+  row.endpoint !== undefined;
+
+/** Whether a row's VM may be on its host, so its host counts it: a make reached it, and no undo has ended it. */
+export const mayHoldVm = (row: MachineRow): boolean =>
+  hasEndpoint(row) && stageOf(row.state) !== "undone";
 
 const pinned = (pin: string | undefined) => (pin === undefined ? {} : { pin });
 
 const copyOf = (found: Option.Option<MachineRow>) =>
   Option.getOrUndefined(
-    Option.flatMapNullishOr(found, (from) => {
-      const machine = refOf(from);
-
-      return machine === undefined
-        ? undefined
-        : { machine, ...pinned(from.pin) };
-    })
+    Option.map(Option.filter(found, hasEndpoint), (from) => ({
+      machine: refOf(from),
+      ...pinned(from.pin),
+    }))
   );
 
 const others = (store: Store, found: MachineRow) =>
   Effect.map(store.machines, (rows) => {
     const onHost = rows.filter(
-      ({ host, name }) => host === found.host && name !== found.name
+      (row): row is MachineRow & { readonly endpoint: Endpoint } =>
+        row.host === found.host && row.name !== found.name && hasEndpoint(row)
     );
 
     return {
-      machines: onHost.flatMap((other) => {
-        const ref = refOf(other);
-
-        return ref === undefined ? [] : [ref];
-      }),
-      ports: onHost.flatMap(({ port }) => (port === undefined ? [] : [port])),
+      machines: onHost.filter(mayHoldVm).map(refOf),
+      taken: onHost.map(({ endpoint }) => endpoint.port),
     };
   });
 
@@ -113,13 +127,13 @@ export const machineStep = (
 ): Effect.Effect<Step | undefined, Internal> =>
   Effect.gen(function* () {
     const ref = refOf(found);
-    const { name, instance } = found;
-    const { machines, ports } = yield* others(store, found);
+    const { name } = found;
+    const { machines, taken } = yield* others(store, found);
 
     if (op.kind === "remove") {
       return {
         _tag: "remove",
-        machine: { name, instance },
+        machine: identityOf(found),
         ...hooked(found, hookTimeoutSeconds),
       };
     }
@@ -131,13 +145,7 @@ export const machineStep = (
         ? undefined
         : {
             _tag: "make",
-            machine: {
-              name,
-              instance,
-              cpu: found.cpu,
-              ramMib: found.ramMib,
-              diskGib: found.diskGib,
-            },
+            machine: ref,
             source,
             ...(found.ephemeral || found.template !== undefined
               ? { authorizedKeys }
@@ -145,13 +153,9 @@ export const machineStep = (
             ...(found.ephemeral && joins
               ? { join: { hostname: `cbx-${name}` } }
               : {}),
-            ports,
+            taken,
             machines,
           };
-    }
-
-    if (ref === undefined) {
-      return undefined;
     }
 
     switch (op.kind) {
@@ -216,7 +220,7 @@ export const checkpointStep = (
     if (op.kind === "deleteCheckpoint") {
       return {
         _tag: "deleteCheckpoint",
-        checkpoint,
+        checkpoint: identityOf(record),
         ...(isPublished(record) ? { unpublish: true } : {}),
       };
     }

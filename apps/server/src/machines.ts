@@ -50,6 +50,7 @@ import {
   desiredOf,
   machineChart,
   phaseOf,
+  toldNewReach,
   stageOf,
   wants,
 } from "./machine-chart.ts";
@@ -174,7 +175,7 @@ const readyBuild = (
     new NotBuilt({
       message: `template ${template} has no ready build${number === undefined ? "" : ` ${buildId(template, number)}`}: ${
         kept.length === 0
-          ? `run clankerbox template build ${template} to make one`
+          ? `run clankerbox template build on ${template}'s template file to make one`
           : `its ready builds are ${kept.join(", ")}`
       }`,
       template,
@@ -225,10 +226,7 @@ export const make = (
       );
 
     const shown = (found: MachineRow, seen?: MachineState) =>
-      machineOf(found, seen, {
-        address: hosts.known(found.host)?.publishAddress,
-        tailnet: tailnets.get(found.name)?.status,
-      });
+      machineOf(found, seen, tailnets.get(found.name)?.status);
 
     const movedPastCapacity = (found: MachineRow): Move | undefined => {
       const [candidate] = creates.get(found.name)?.untried ?? [];
@@ -325,10 +323,15 @@ export const make = (
 
         switch (heard.at) {
           case "running": {
-            const { port } = heard.report.outcome;
+            const { handle, endpoint } = heard.report.outcome;
 
-            if (port !== undefined && found.port !== port) {
-              yield* applying(name, { type: "ran", port });
+            const reach = {
+              ...(handle === undefined ? {} : { handle }),
+              ...(endpoint === undefined ? {} : { endpoint }),
+            };
+
+            if (toldNewReach(found, reach)) {
+              yield* applying(name, { type: "ran", ...reach });
             }
 
             return;
@@ -488,7 +491,8 @@ export const make = (
           diskGib: spec.diskGib,
           labels,
           host: placed.host,
-          port: undefined,
+          handle: undefined,
+          endpoint: undefined,
           desired: "running",
           state: "making.due",
           prepared: false,

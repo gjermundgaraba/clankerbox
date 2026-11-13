@@ -9,9 +9,10 @@ import type {
   MachineRef,
   MachineState,
   Observed,
+  Target,
 } from "./runtime.ts";
 
-type Observe = (machines: readonly MachineRef[]) => Effect.Effect<Observed>;
+type Observe = (machines: readonly Target[]) => Effect.Effect<Observed>;
 
 interface InUse {
   readonly running: readonly MachineRef[];
@@ -23,23 +24,21 @@ export const inUse = (
   observe: Observe
 ): Effect.Effect<InUse> =>
   Effect.gen(function* () {
-    const booting = machines.filter((held) => held.booting);
-
-    const others = machines.flatMap((held) =>
-      held.booting ? [] : [held.machine]
+    const found = machines.flatMap((held) =>
+      held._tag === "found" ? [held.machine] : []
     );
 
-    const read = yield* observe(others);
+    const read = yield* observe(found);
 
     const inState = (state: MachineState) =>
-      others.filter((machine) => stateIn(read, machine) === state);
+      found.filter((machine) => stateIn(read, machine) === state);
+
+    const told = (tag: Exclude<Held["_tag"], "found">) =>
+      machines.flatMap((held) => (held._tag === tag ? [held.machine] : []));
 
     return {
-      running: [
-        ...booting.map(({ machine }) => machine),
-        ...inState("running"),
-      ],
-      unread: inState("unknown"),
+      running: [...told("booting"), ...inState("running")],
+      unread: [...told("unread"), ...inState("unknown")],
     };
   });
 

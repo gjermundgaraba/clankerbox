@@ -246,7 +246,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ...dev,
           name: "copy",
           instance: "unsent",
-          port: undefined,
+          handle: undefined,
+          endpoint: undefined,
           state: "making.due",
           prepared: false,
           hostKey: undefined,
@@ -388,7 +389,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         });
         expect(isBuildCopy(copy?.name ?? "")).toBe(true);
         expect(copy?.machine).toMatch(/^building-[0-9a-f]{16}$/u);
-        expect(opsOf(host).slice(2)).toStrictEqual([
+        expect(opsOf(host).slice(1)).toStrictEqual([
           "admit",
           "create",
           "exec",

@@ -27,20 +27,21 @@ import {
   atLeast,
   CannotStart,
   changes,
+  Handle,
   missing,
   Runtime,
   sizedBy,
   timeoutFail,
 } from "../../runtime.ts";
 import type {
-  CheckpointRef,
   Held,
+  Identity,
   Interface,
-  MachineRef,
-  Native,
+  Origin,
   MachineState,
   Observed,
   Sizes,
+  Target,
 } from "../../runtime.ts";
 import type { HostSettings } from "../../settings.ts";
 import { allotted, inUse } from "../../usage.ts";
@@ -105,16 +106,13 @@ export const environment = (settings: Pick<Settings, "tartHome">) => ({
   TART_HOME: settings.tartHome,
 });
 
-export const machineName = (
-  host: string,
-  machine: Pick<MachineRef, "name" | "instance">
-): string => `cbx-${host}-m-${machine.name}-${machine.instance.slice(0, 8)}`;
+export const machineName = (host: string, machine: Identity): Handle =>
+  Handle.make(`cbx-${host}-m-${machine.name}-${machine.instance.slice(0, 8)}`);
 
-export const checkpointName = (
-  host: string,
-  checkpoint: Pick<CheckpointRef, "name" | "instance">
-): string =>
-  `cbx-${host}-c-${checkpoint.name}-${checkpoint.instance.slice(0, 8)}`;
+export const checkpointName = (host: string, checkpoint: Identity): Handle =>
+  Handle.make(
+    `cbx-${host}-c-${checkpoint.name}-${checkpoint.instance.slice(0, 8)}`
+  );
 
 const tartHome = (settings: Pick<Settings, "tartHome">): string =>
   settings.tartHome ?? path.join(homedir(), ".tart");
@@ -234,6 +232,17 @@ const printedArguments = (output: string): readonly string[] | undefined =>
     .filter((line) => line !== "")
     .map((line) => line.slice(2));
 
+const observedIn = (
+  vms: ReadonlyMap<string, MachineState>,
+  machines: readonly Target[]
+): Observed =>
+  new Map(
+    machines.map((machine) => [
+      machine.name,
+      vms.get(machine.handle) ?? "missing",
+    ])
+  );
+
 export const make = (
   settings: Settings
 ): Effect.Effect<
@@ -254,9 +263,9 @@ export const make = (
     }
 
     const domain = `gui/${settings.uid}`;
-    const vmOf = (machine: Native) => machineName(settings.hostId, machine);
+    const vmOf = (machine: Identity) => machineName(settings.hostId, machine);
 
-    const checkpointVm = (checkpoint: CheckpointRef) =>
+    const checkpointVm = (checkpoint: Identity) =>
       checkpointName(settings.hostId, checkpoint);
 
     const tart = (args: readonly string[], what: string) =>
@@ -328,25 +337,14 @@ export const make = (
         }
       }
 
-      for (const { machine, booting } of machines) {
-        if (booting) {
-          counted.add(vmOf(machine));
+      for (const held of machines) {
+        if (held._tag === "booting") {
+          counted.add(held.machine.handle ?? vmOf(held.machine));
         }
       }
 
       return counted;
     };
-
-    const observedIn = (
-      vms: ReadonlyMap<string, MachineState>,
-      machines: readonly Native[]
-    ): Observed =>
-      new Map(
-        machines.map((machine) => [
-          machine.name,
-          vms.get(vmOf(machine)) ?? "missing",
-        ])
-      );
 
     const job = (vm: string) => ({
       target: `${domain}/${vm}`,
@@ -375,8 +373,8 @@ export const make = (
     const logOf = (vm: string) =>
       fs.readFileString(job(vm).log).pipe(Effect.orElseSucceed(() => ""));
 
-    const ready = (machine: MachineRef) => {
-      const vm = vmOf(machine);
+    const ready = (machine: Target) => {
+      const vm = machine.handle;
       const { target } = job(vm);
 
       const probe = Effect.gen(function* () {
@@ -468,9 +466,9 @@ export const make = (
     };
 
     // https://github.com/openai/tart/blob/2.41.1/Sources/tart/Commands/Run.swift#L589
-    const launch = (machine: MachineRef) =>
+    const launch = (machine: Target) =>
       Effect.gen(function* () {
-        const vm = vmOf(machine);
+        const vm = machine.handle;
         const { target, plist: file, log } = job(vm);
 
         yield* files(
@@ -505,12 +503,12 @@ export const make = (
         yield* started(vm, since);
       });
 
-    const boot = (machine: MachineRef) =>
+    const boot = (machine: Target) =>
       Effect.andThen(disks.opening(launch(machine)), ready(machine));
 
-    const stop = (machine: MachineRef) =>
+    const stop = (machine: Target) =>
       Effect.gen(function* () {
-        const vm = vmOf(machine);
+        const vm = machine.handle;
         const observed = yield* state(vm);
 
         if (observed === "paused") {
@@ -562,9 +560,9 @@ export const make = (
         }
       });
 
-    const set = (machine: MachineRef, sizes: Sizes, flags: readonly string[]) =>
+    const set = (machine: Target, sizes: Sizes, flags: readonly string[]) =>
       Effect.gen(function* () {
-        const vm = vmOf(machine);
+        const vm = machine.handle;
         const ran = yield* tart(["set", vm, ...flags], `set ${vm}`);
 
         if (ran.exitCode !== 0 && ran.stderr.includes(shrinkRefusal)) {
@@ -584,25 +582,30 @@ export const make = (
 
     const cloneInto = (
       from: string,
-      machine: MachineRef,
+      machine: Identity & Sizes,
       sizes: readonly string[]
     ) => {
-      const vm = vmOf(machine);
+      const made = { ...machine, handle: vmOf(machine) };
 
       return Effect.gen(function* () {
-        yield* call(["clone", from, vm], `clone ${from} ${vm}`);
+        yield* call(
+          ["clone", from, made.handle],
+          `clone ${from} ${made.handle}`
+        );
         yield* disks.opening(
           Effect.andThen(
-            set(machine, machine, ["--random-serial", ...sizes]),
-            launch(machine)
+            set(made, machine, ["--random-serial", ...sizes]),
+            launch(made)
           )
         );
-        yield* ready(machine);
+        yield* ready(made);
+
+        return made.handle;
       });
     };
 
-    const copyable = (what: string, machine: MachineRef) =>
-      Effect.flatMap(state(vmOf(machine)), (observed) => {
+    const copyable = (what: string, machine: Target) =>
+      Effect.flatMap(state(machine.handle), (observed) => {
         if (observed === "stopped") {
           return Effect.void;
         }
@@ -618,7 +621,7 @@ export const make = (
         );
       });
 
-    const resume = (machine: MachineRef) =>
+    const resume = (machine: Target) =>
       boot(machine).pipe(
         Effect.catchTag("Internal", (error) =>
           Effect.fail(
@@ -629,9 +632,9 @@ export const make = (
         )
       );
 
-    const suspend = (machine: MachineRef) =>
+    const suspend = (machine: Target) =>
       Effect.gen(function* () {
-        const vm = vmOf(machine);
+        const vm = machine.handle;
         const { target, log } = job(vm);
         const observed = yield* state(vm);
 
@@ -695,6 +698,37 @@ export const make = (
         );
       });
 
+    const made = (machine: Identity & Sizes, origin: Origin) => {
+      switch (origin._tag) {
+        case "image": {
+          return cloneInto(origin.image, machine, sizeFlags(machine));
+        }
+
+        case "checkpoint": {
+          const { checkpoint } = origin;
+
+          return cloneInto(
+            checkpoint.handle,
+            machine,
+            sizeFlags(changes(checkpoint, machine))
+          );
+        }
+
+        case "machine": {
+          const source = origin.machine;
+
+          return Effect.andThen(
+            copyable("fork", source),
+            cloneInto(
+              source.handle,
+              machine,
+              sizeFlags(changes(source, machine))
+            )
+          );
+        }
+      }
+    };
+
     return {
       version: reported,
       pin: undefined,
@@ -705,7 +739,7 @@ export const make = (
           dial(settings.binary, [
             "exec",
             "-i",
-            vmOf(machine),
+            machine.handle,
             "nc",
             "127.0.0.1",
             "22",
@@ -727,7 +761,7 @@ export const make = (
       },
       files: {
         checkpointFiles: Effect.fn("Tart.checkpointFiles")((checkpoint) => {
-          const dir = path.join(vmsDir(settings), checkpointVm(checkpoint));
+          const dir = path.join(vmsDir(settings), checkpoint.handle);
 
           return Effect.map(regularFiles(fs, dir), (found) =>
             found.map((file) => ({ path: file, file: path.join(dir, file) }))
@@ -736,18 +770,17 @@ export const make = (
         held: () => Effect.undefined,
         staging: (checkpoint) =>
           path.join(fetchingDir(settings), checkpointVm(checkpoint)),
-        install: Effect.fn("Tart.install")((checkpoint, staged) =>
-          files(
+        install: Effect.fn("Tart.install")((checkpoint, staged) => {
+          const handle = checkpointVm(checkpoint);
+
+          return files(
             `couldn't install checkpoint ${checkpoint.name}`,
             Effect.andThen(
               fs.makeDirectory(vmsDir(settings), { recursive: true }),
-              fs.rename(
-                staged,
-                path.join(vmsDir(settings), checkpointVm(checkpoint))
-              )
+              fs.rename(staged, path.join(vmsDir(settings), handle))
             )
-          )
-        ),
+          ).pipe(Effect.as(handle));
+        }),
       },
       traits,
       guest: "macos",
@@ -761,7 +794,27 @@ export const make = (
           fs.remove(fetchingDir(settings), { recursive: true, force: true })
         )
       ),
-      adopt: () => Effect.void,
+      find: Effect.fn("Tart.find")(function* (what, ref) {
+        const handle = what === "machine" ? vmOf(ref) : checkpointVm(ref);
+
+        if ((yield* list).has(handle)) {
+          return handle;
+        }
+
+        if (what === "checkpoint") {
+          return undefined;
+        }
+
+        const { plist: file, log } = job(handle);
+
+        for (const leftover of [file, log]) {
+          if (yield* files(`couldn't check ${leftover}`, fs.exists(leftover))) {
+            return handle;
+          }
+        }
+
+        return undefined;
+      }),
       observe: Effect.fn("Tart.observe")((machines) =>
         Effect.map(list, (vms) => observedIn(vms, machines))
       ),
@@ -783,12 +836,19 @@ export const make = (
           ];
         })
       ),
-      create: Effect.fn("Tart.create")((machine, image) =>
-        cloneInto(image, machine, sizeFlags(machine))
+      make: Effect.fn("Tart.make")((machine, origin) =>
+        Effect.map(made(machine, origin), (handle) => ({
+          handle,
+          sizes: {
+            cpu: machine.cpu,
+            ramMib: machine.ramMib,
+            diskGib: machine.diskGib,
+          },
+        }))
       ),
       start: Effect.fn("Tart.start")((machine) =>
         Effect.gen(function* () {
-          const observed = yield* state(vmOf(machine));
+          const observed = yield* state(machine.handle);
 
           if (observed === "missing") {
             return yield* missing(traits.runtime, machine);
@@ -807,7 +867,7 @@ export const make = (
       pause: Effect.fn("Tart.pause")(suspend),
       delete: Effect.fn("Tart.delete")((machine) =>
         Effect.gen(function* () {
-          const vm = vmOf(machine);
+          const vm = machine.handle;
           const { target, plist: file, log } = job(vm);
 
           yield* deleteVm(vm);
@@ -822,28 +882,16 @@ export const make = (
           }
         })
       ),
-      capture: Effect.fn("Tart.capture")((machine, checkpoint) =>
-        Effect.andThen(
-          copyable("checkpoint", machine),
-          call(
-            ["clone", vmOf(machine), checkpointVm(checkpoint)],
-            `clone ${checkpointVm(checkpoint)}`
-          )
-        )
-      ),
-      restore: Effect.fn("Tart.restore")((checkpoint, machine) =>
-        cloneInto(
-          checkpointVm(checkpoint),
-          machine,
-          sizeFlags(changes(checkpoint, machine))
-        )
-      ),
-      fork: Effect.fn("Tart.fork")((source, machine) =>
-        Effect.andThen(
-          copyable("fork", source),
-          cloneInto(vmOf(source), machine, sizeFlags(changes(source, machine)))
-        )
-      ),
+      capture: Effect.fn("Tart.capture")((machine, checkpoint) => {
+        const handle = checkpointVm(checkpoint);
+
+        return copyable("checkpoint", machine).pipe(
+          Effect.andThen(
+            call(["clone", machine.handle, handle], `clone ${handle}`)
+          ),
+          Effect.as(handle)
+        );
+      }),
       sizable: (machine, _from, to) => {
         if (to.cpu > maximumFlag || diskGb(to.diskGib) > maximumFlag) {
           return Effect.fail(
@@ -865,7 +913,7 @@ export const make = (
         })
       ),
       sizes: Effect.fn("Tart.sizes")((machine) => {
-        const vm = vmOf(machine);
+        const vm = machine.handle;
 
         return Effect.flatMap(
           disks.reading(call(["get", vm, "--format", "json"], `get ${vm}`)),
@@ -888,14 +936,14 @@ export const make = (
       deleteCheckpoint: Effect.fn("Tart.deleteCheckpoint")((checkpoint) =>
         Effect.asVoid(
           call(
-            ["delete", checkpointVm(checkpoint)],
-            `delete ${checkpointVm(checkpoint)}`,
+            ["delete", checkpoint.handle],
+            `delete ${checkpoint.handle}`,
             [0, 2]
           )
         )
       ),
       exec: Effect.fn("Tart.exec")((machine, { argv, stdin, user }) => {
-        const vm = vmOf(machine);
+        const vm = machine.handle;
         const as = user === undefined ? [] : ["-u", user, "-H"];
 
         return exec(

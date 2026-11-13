@@ -1,10 +1,12 @@
+import type { Adopted } from "@clankerbox/host-contract";
 import type { Internal, Usage } from "@gjermundgaraba/clankerbox-sdk";
 import { Cause, DateTime, Effect, Option } from "effect";
 import type { Duration } from "effect";
 
+import { applied } from "./chart.ts";
 import type { Interface as Hosts } from "./hosts.ts";
-import { stageOf } from "./machine-chart.ts";
-import { refOf } from "./steps.ts";
+import { machineChart, stageOf } from "./machine-chart.ts";
+import { mayHoldVm, refOf } from "./steps.ts";
 import type { Interface as Store } from "./store.ts";
 
 export interface CapacityRead {
@@ -28,11 +30,9 @@ export const capacity = (
         hosts
           .call(member.id, (api) =>
             api.readCapacity({
-              machines: rows.flatMap((found) => {
-                const ref = found.host === member.id ? refOf(found) : undefined;
-
-                return ref === undefined ? [] : [ref];
-              }),
+              machines: rows
+                .filter((found) => found.host === member.id && mayHoldVm(found))
+                .map(refOf),
             })
           )
           .pipe(
@@ -56,6 +56,11 @@ export const capacity = (
     return { usage: usage.flat(), unreachable };
   });
 
+const holding = (store: Store, { name, ...reach }: Adopted) =>
+  store.advance("machine", name, (found, op) =>
+    applied(machineChart, found, { type: "adopted", ...reach }, op)
+  );
+
 const adopted = (store: Store, hosts: Hosts, host: string, boot: string) =>
   Effect.gen(function* () {
     const known = yield* store.hostBoot(host);
@@ -69,18 +74,27 @@ const adopted = (store: Store, hosts: Hosts, host: string, boot: string) =>
     const told = yield* hosts
       .call(host, (api) =>
         api.adoptMachines({
-          machines: rows.flatMap((found) => {
-            const ref =
-              found.host === host && stageOf(found.state) === "made"
-                ? refOf(found)
-                : undefined;
-
-            return ref === undefined ? [] : [ref];
-          }),
+          machines: rows
+            .filter(
+              (found) => found.host === host && stageOf(found.state) === "made"
+            )
+            .map(refOf),
         })
       )
       .pipe(
-        Effect.as(true),
+        Effect.tap(({ adopted: held }) =>
+          Effect.forEach(held, (each) => holding(store, each))
+        ),
+        Effect.flatMap(({ unresolved }) =>
+          unresolved.length === 0
+            ? Effect.succeed(true)
+            : Effect.as(
+                Effect.logWarning(
+                  `host ${host} couldn't find ${unresolved.join(", ")}, so the next recheck gives it its machines again`
+                ),
+                false
+              )
+        ),
         Effect.catch(({ message }) =>
           Effect.as(
             Effect.logWarning(

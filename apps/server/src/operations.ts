@@ -15,8 +15,6 @@ export type Polled =
   | { readonly at: "lost"; readonly why: string }
   | { readonly at: "unreachable" };
 
-const scopeOf = (op: Operation) => `${op.resource} ${op.name}`;
-
 export const cutShort = ({ kind, name }: Operation) =>
   new Internal({ message: `the ${kind} of ${name} ended on its host` });
 
@@ -76,7 +74,7 @@ export const poll = (
         api.runOperation({
           id: op.id,
           boot: op.boot,
-          scope: scopeOf(op),
+          scope: { resource: op.resource, name: op.name },
           sequence: op.sequence,
           step: built,
         })

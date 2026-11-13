@@ -1,3 +1,4 @@
+import { Handle } from "@clankerbox/host-contract";
 import { describe, expect, it } from "@effect/vitest";
 import { Internal, Name } from "@gjermundgaraba/clankerbox-sdk";
 import { Schema } from "effect";
@@ -438,6 +439,22 @@ describe("a delete", () => {
         finish: true,
       }))
     );
+  });
+
+  it("during a capture keeps the handle the capture reported, so the delete removes what it made", () => {
+    const handle = Handle.make("ckpt-made");
+
+    expect(
+      applied(
+        checkpointChart,
+        rowAt("deleting.draining"),
+        { ...done, handle },
+        inFlight("capture")
+      )
+    ).toStrictEqual({
+      next: rowAt("deleting.due", { handle }),
+      finish: true,
+    });
   });
 
   it("while a discard's delete runs takes that delete as its own, and drops the capture's error", () => {

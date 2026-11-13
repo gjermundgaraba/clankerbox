@@ -41,7 +41,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* first.operations.run({
           id: "op-1",
           boot: first.operations.boot,
-          scope: "machine dev",
+          scope: { resource: "machine", name: "dev" },
           sequence: 1,
           step: {
             _tag: "remove",

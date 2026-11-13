@@ -113,16 +113,20 @@ const reportedBy = (
   op: Operation,
   { status, outcome, error }: Report,
   at: DateTime.Utc
-): CheckpointEvent =>
-  status === "failed" || status === "cancelled"
+): CheckpointEvent => {
+  const made = outcome.handle === undefined ? {} : { handle: outcome.handle };
+
+  return status === "failed" || status === "cancelled"
     ? {
         type: "reported",
         status,
         error: error ?? cutShort(op),
         at,
         cleared: outcome.cleared === true,
+        ...made,
       }
-    : { type: "reported", status: "done", at };
+    : { type: "reported", status: "done", at, ...made };
+};
 
 export const make = (settings: {
   readonly recheck: Duration.Duration;
@@ -204,7 +208,7 @@ export const make = (settings: {
 
         const machine = present.value;
 
-        if (stageOf(machine.state) !== "made" || machine.port === undefined) {
+        if (stageOf(machine.state) !== "made") {
           return yield* unmade(machine);
         }
 
@@ -216,7 +220,7 @@ export const make = (settings: {
           host: machine.host,
           traits: machine.traits,
           pin: machine.pin,
-          port: machine.port,
+          handle: undefined,
           base: machine.base,
           cpu: machine.cpu,
           ramMib: machine.ramMib,
@@ -315,8 +319,10 @@ export const make = (settings: {
         }
 
         if (seen !== "running") {
+          const from = found.traits.captureFrom;
+
           return yield* new WrongState({
-            message: `machine ${id} is ${seen}, and a pause captures only a running machine: capture it instead`,
+            message: `machine ${id} is ${seen}, and a pause captures only a running machine. Its traits capture a ${from} machine: ${seen === from ? "capture it instead" : `${from === "running" ? "start" : "stop"} it, then capture it`}`,
             machine: id,
             state: seen,
           });
@@ -396,6 +402,7 @@ export const make = (settings: {
             instance: newId(),
             createdAt: yield* DateTime.now,
             host,
+            handle: undefined,
             state: "fetching.due",
             error: undefined,
             failedAt: undefined,

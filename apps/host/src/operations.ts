@@ -1,11 +1,13 @@
 import type {
+  Adoption,
   ExecCommand,
   MachineRef,
   MachineState,
-  Native,
   Operation,
   Outcome,
+  Ref,
   Report,
+  Scope as Resource,
   Source,
   Step,
 } from "@clankerbox/host-contract";
@@ -68,7 +70,16 @@ import {
   stateReadWait,
   timeoutFail,
 } from "./runtime.ts";
-import type { Booting, Held, Observed } from "./runtime.ts";
+import type {
+  Booting,
+  Handle,
+  Held,
+  Identity,
+  Observed,
+  Origin,
+  Sized,
+  Target,
+} from "./runtime.ts";
 import type { HostSettings } from "./settings.ts";
 import { Tailnet } from "./tailnet.ts";
 
@@ -79,11 +90,15 @@ export interface Interface {
   readonly cancel: (id: string) => Effect.Effect<void>;
   readonly collect: (id: string) => Effect.Effect<void>;
   readonly read: (
-    machines: readonly Native[]
+    machines: readonly Ref[]
   ) => Effect.Effect<Observed, Internal>;
+  readonly sizes: (
+    machine: MachineRef
+  ) => Effect.Effect<Sizing, Missing | Internal>;
   readonly capacity: (
     machines: readonly MachineRef[]
   ) => ReturnType<Runtime["Service"]["capacity"]>;
+  readonly adopt: (machines: readonly MachineRef[]) => Effect.Effect<Adoption>;
   readonly exec: (
     command: ExecCommand
   ) => Effect.Effect<Executed, Missing | WrongState | Internal>;
@@ -130,6 +145,31 @@ const statusOf = (report: TailnetReport | undefined): TailnetStatus => {
 const sourceSizes = (source: Exclude<Source, { _tag: "base" }>) =>
   source._tag === "checkpoint" ? source.checkpoint : source.machine;
 
+const keyOf = ({ resource, name }: Resource) => `${resource} ${name}`;
+
+const heldAs = (machine: Ref, handle: Handle | undefined): string => {
+  if (machine.handle !== undefined) {
+    return `reached by its row's handle ${machine.handle}`;
+  }
+
+  return handle === undefined
+    ? "the runtime holds no machine of its instance"
+    : `the runtime found it as ${handle}`;
+};
+
+const targetOf = ({ name, instance }: Identity, handle: Handle): Target => ({
+  name,
+  instance,
+  handle,
+});
+
+const sizedOf = (machine: MachineRef, handle: Handle): Sized => ({
+  ...targetOf(machine, handle),
+  cpu: machine.cpu,
+  ramMib: machine.ramMib,
+  diskGib: machine.diskGib,
+});
+
 const inTime = (what: string) =>
   timeoutFail(
     stateReadWait,
@@ -156,7 +196,7 @@ interface Progress {
 }
 
 interface Entry {
-  readonly scope: string;
+  readonly scope: Resource;
   readonly fiber: Fiber.Fiber<void, HostError>;
   readonly progress: Progress;
 }
@@ -220,7 +260,7 @@ export const make = (
     const { traits } = runtime;
     const tailnet = yield* Effect.serviceOption(Tailnet);
 
-    const pauseOrStop = (machine: MachineRef, pin: string | undefined) => {
+    const pauseOrStop = (machine: Target, pin: string | undefined) => {
       if (traits.pause === "stops") {
         return runtime.stop(machine);
       }
@@ -257,19 +297,72 @@ export const make = (
     const scopes = new Map<string, { sequence: number; id: string }>();
     const booting = new Map<string, MachineRef>();
 
-    const heldBy = (machines: readonly MachineRef[]): readonly Held[] => [
-      ...machines.map((machine) => {
-        const boots = booting.get(machine.name);
+    const found = (what: Resource["resource"], ref: Ref) =>
+      ref.handle === undefined
+        ? runtime
+            .find(what, ref)
+            .pipe(
+              inTime(
+                `the ${traits.runtime} runtime's search for ${what} ${ref.name}`
+              )
+            )
+        : Effect.succeed(ref.handle);
 
-        return boots === undefined
-          ? { machine, booting: false }
-          : { machine: boots, booting: true };
-      }),
-      ...booting
-        .values()
-        .filter(({ name }) => !machines.some((known) => known.name === name))
-        .map((machine) => ({ machine, booting: true })),
-    ];
+    const ifFound = <E>(
+      what: Resource["resource"],
+      ref: Ref,
+      act: (target: Target) => Effect.Effect<void, E>
+    ) =>
+      Effect.flatMap(found(what, ref), (handle) =>
+        handle === undefined ? Effect.void : act(targetOf(ref, handle))
+      );
+
+    const machineTarget = (machine: MachineRef) =>
+      Effect.flatMap(found("machine", machine), (handle) =>
+        handle === undefined
+          ? Effect.fail(missing(traits.runtime, machine))
+          : Effect.succeed(sizedOf(machine, handle))
+      );
+
+    const checkpointTarget = (checkpoint: Ref) =>
+      Effect.flatMap(found("checkpoint", checkpoint), (handle) =>
+        handle === undefined
+          ? Effect.fail(
+              new Internal({
+                message: `checkpoint ${checkpoint.name} is missing from the ${traits.runtime} runtime; delete it`,
+              })
+            )
+          : Effect.succeed(targetOf(checkpoint, handle))
+      );
+
+    const heldOf = (machine: MachineRef) =>
+      found("machine", machine).pipe(
+        Effect.map((handle): Held[] =>
+          handle === undefined
+            ? []
+            : [{ _tag: "found", machine: sizedOf(machine, handle) }]
+        ),
+        Effect.orElseSucceed((): Held[] => [{ _tag: "unread", machine }])
+      );
+
+    const heldBy = (machines: readonly MachineRef[]) =>
+      Effect.suspend(() => {
+        const boots = new Map(booting);
+
+        return Effect.map(
+          Effect.forEach(
+            machines.filter(({ name }) => !boots.has(name)),
+            heldOf,
+            { concurrency: "unbounded" }
+          ),
+          (held): readonly Held[] => [
+            ...held.flat(),
+            ...boots
+              .values()
+              .map((machine): Held => ({ _tag: "booting", machine })),
+          ]
+        );
+      });
 
     const admitted = (
       action: Booting,
@@ -278,23 +371,27 @@ export const make = (
     ) =>
       admitting.withPermits(1)(
         Effect.gen(function* () {
-          if (runtime.admission !== undefined) {
-            yield* runtime.admission
-              .admit({
-                action,
-                machine,
-                machines: [
-                  ...heldBy(machines).filter(
-                    (held) => held.machine.name !== machine.name
-                  ),
-                  { machine, booting: true },
-                ],
-              })
-              .pipe(
-                inTime(
-                  `${action} ${machine.name}: the ${traits.runtime} runtime's admission check`
-                )
-              );
+          const { admission } = runtime;
+
+          if (admission !== undefined) {
+            yield* Effect.flatMap(
+              heldBy(machines.filter(({ name }) => name !== machine.name)),
+              (held) =>
+                admission.admit({
+                  action,
+                  machine,
+                  machines: [
+                    ...held.filter(
+                      (other) => other.machine.name !== machine.name
+                    ),
+                    { _tag: "booting", machine },
+                  ],
+                })
+            ).pipe(
+              inTime(
+                `${action} ${machine.name}: the ${traits.runtime} runtime's admission check`
+              )
+            );
           }
 
           yield* Effect.acquireRelease(
@@ -331,27 +428,37 @@ export const make = (
             })
           );
 
-    const copied = (source: Source, machine: MachineRef) =>
+    const originOf = (source: Source): Effect.Effect<Origin, HostError> =>
       Effect.gen(function* () {
         if (source._tag === "base") {
-          return yield* runtime.create(
-            machine,
-            config.bases.get(source.base) ?? source.base
-          );
+          return {
+            _tag: "image",
+            image: config.bases.get(source.base) ?? source.base,
+          } as const;
         }
 
         if (source._tag === "checkpoint") {
-          yield* restorable(source.checkpoint.name, source.pin);
+          const { checkpoint, pin } = source;
 
-          return yield* runtime.restore(source.checkpoint, machine);
+          yield* restorable(checkpoint.name, pin);
+
+          const { handle } = yield* checkpointTarget(checkpoint);
+
+          return {
+            _tag: "checkpoint",
+            checkpoint: sizedOf(checkpoint, handle),
+          } as const;
         }
 
         yield* copyable(source.machine.name, source.pin);
 
-        return yield* runtime.fork(source.machine, machine);
+        return {
+          _tag: "machine",
+          machine: yield* machineTarget(source.machine),
+        } as const;
       });
 
-    const stateNow = (machine: Native, what: string) =>
+    const stateNow = (machine: Target, what: string) =>
       Effect.gen(function* () {
         const seen = stateIn(
           yield* runtime
@@ -379,20 +486,21 @@ export const make = (
 
     const resized = (
       progress: Progress,
-      machine: MachineRef,
+      ref: MachineRef,
       request: Sizing,
       machines: readonly MachineRef[]
     ) =>
       Effect.gen(function* () {
-        const { name } = machine;
-        const to = sizedBy(machine, request);
+        const { name } = ref;
+        const to = sizedBy(ref, request);
 
-        if (to.diskGib < machine.diskGib) {
+        if (to.diskGib < ref.diskGib) {
           return yield* new Unsizable({
-            message: `machine ${name}'s disk is ${formatGib(machine.diskGib)}, and a disk only grows`,
+            message: `machine ${name}'s disk is ${formatGib(ref.diskGib)}, and a disk only grows`,
           });
         }
 
+        const machine = yield* machineTarget(ref);
         const seen = yield* stateNow(machine, "resized");
 
         if (seen === "missing") {
@@ -419,7 +527,7 @@ export const make = (
         yield* runtime.sizable(machine, machine, to, live);
 
         if (live && to.ramMib > machine.ramMib) {
-          yield* admitted("resizeMachine", { ...machine, ...to }, machines);
+          yield* admitted("resizeMachine", { ...ref, ...to }, machines);
         }
 
         const result = yield* Effect.exit(
@@ -449,7 +557,7 @@ export const make = (
 
     const joined = (
       mint: Tailnet["Service"]["mint"],
-      machine: MachineRef,
+      machine: Target,
       hostname: string
     ) =>
       surviving(
@@ -486,7 +594,7 @@ export const make = (
         )
       );
 
-    const readied = (progress: Progress, machine: MachineRef) =>
+    const readied = (progress: Progress, machine: Target) =>
       Effect.gen(function* () {
         yield* identify(runtime, machine);
 
@@ -499,7 +607,7 @@ export const make = (
       });
 
     const beforeLeaving = (
-      machine: Native,
+      machine: Target,
       leaving: Leaving,
       hook: { readonly timeoutSeconds: number } | undefined,
       seen: Effect.Effect<MachineState, HostError>
@@ -543,7 +651,7 @@ export const make = (
             )
           );
 
-    const scrubbed = (machine: MachineRef) =>
+    const scrubbed = (machine: Target) =>
       Effect.flatMap(scrubNode(runtime, machine), (notes) =>
         Effect.forEach(
           notes,
@@ -553,7 +661,7 @@ export const make = (
       );
 
     const onTailnet = (
-      machine: MachineRef,
+      machine: Target,
       join: Make["join"],
       setup: Effect.Effect<void, HostError>
     ): Effect.Effect<void, HostError> => {
@@ -599,27 +707,35 @@ export const make = (
 
     const made = (
       progress: Progress,
-      { machine, source, authorizedKeys, join, machines }: Make,
+      step: Make,
       port: number
     ): Effect.Effect<void, HostError> =>
       Effect.gen(function* () {
-        const ref: MachineRef = { ...machine, port };
+        const { machine, source, machines, authorizedKeys, join } = step;
 
         yield* source._tag === "base"
-          ? runtime.sizable(ref, machine, machine, false)
+          ? runtime.sizable(machine, machine, machine, false)
           : runtime.sizable(
-              ref,
+              machine,
               sourceSizes(source),
               machine,
               traits.checkpoint === "ram"
             );
 
-        yield* Effect.scoped(
+        const origin = yield* originOf(source);
+
+        const { handle, sizes } = yield* Effect.scoped(
           Effect.andThen(
-            admitted(booted[source._tag], ref, machines),
-            Effect.andThen(reaches.open(ref), copied(source, ref))
+            admitted(booted[source._tag], machine, machines),
+            runtime.make(machine, origin, reaches.bind(port))
           )
         );
+
+        const ref = targetOf(machine, handle);
+
+        progress.outcome = { ...progress.outcome, handle, sizes };
+
+        yield* reaches.open(ref, port);
 
         if (source._tag === "base" && source.setup !== undefined) {
           yield* prepareBase(runtime, ref, Option.isSome(tailnet));
@@ -664,9 +780,10 @@ export const make = (
 
       switch (step._tag) {
         case "start": {
-          const { machine, pin, machines } = step;
+          const { pin, machines } = step;
 
           return Effect.gen(function* () {
+            const machine = yield* machineTarget(step.machine);
             const seen = yield* stateNow(machine, "started");
 
             if (seen === "missing") {
@@ -677,42 +794,57 @@ export const make = (
               yield* resumable(machine.name, pin);
             }
 
+            const { endpoint } = step.machine;
+
             const started = Effect.andThen(
-              reaches.open(machine),
+              endpoint === undefined
+                ? Effect.void
+                : reaches.open(machine, endpoint.port),
               runtime.start(machine)
             );
 
             yield* seen === "running"
               ? started
-              : withRoom("startMachine", machine, machines, started);
+              : withRoom(
+                  "startMachine",
+                  { ...step.machine, handle: machine.handle },
+                  machines,
+                  started
+                );
 
             yield* readied(progress, machine);
           });
         }
 
         case "stop": {
-          const { machine, pin, machines, hook } = step;
-          const stopped = runtime.stop(machine);
+          const { pin, machines, hook } = step;
 
-          if (runtime.admission?.stopBoots !== true) {
-            return Effect.andThen(
-              beforeLeaving(
+          return Effect.gen(function* () {
+            const machine = yield* machineTarget(step.machine);
+            const stopped = runtime.stop(machine);
+
+            if (runtime.admission?.stopBoots !== true) {
+              yield* beforeLeaving(
                 machine,
                 "stop",
                 hook,
                 stateNow(machine, "given its stop hook")
-              ),
-              stopped
-            );
-          }
+              );
 
-          return Effect.gen(function* () {
+              return yield* stopped;
+            }
+
             const seen = yield* stateNow(machine, "stopped");
 
             if (seen === "paused") {
               yield* resumable(machine.name, pin);
 
-              return yield* withRoom("stopMachine", machine, machines, stopped);
+              return yield* withRoom(
+                "stopMachine",
+                { ...step.machine, handle: machine.handle },
+                machines,
+                stopped
+              );
             }
 
             yield* beforeLeaving(machine, "stop", hook, Effect.succeed(seen));
@@ -721,30 +853,37 @@ export const make = (
         }
 
         case "pause": {
-          const { machine, pin, hook } = step;
+          const { pin, hook } = step;
 
-          return Effect.andThen(
-            beforeLeaving(
+          return Effect.gen(function* () {
+            const machine = yield* machineTarget(step.machine);
+
+            yield* beforeLeaving(
               machine,
               "pause",
               hook,
               stateNow(machine, "given its pause hook")
-            ),
-            pauseOrStop(machine, pin)
-          );
+            );
+            yield* pauseOrStop(machine, pin);
+          });
         }
 
         case "remove": {
-          const { machine, hook } = step;
+          const { hook } = step;
 
           return Effect.andThen(
-            beforeLeaving(
-              machine,
-              "delete",
-              hook,
-              stateNow(machine, "given its delete hook")
+            ifFound("machine", step.machine, (machine) =>
+              Effect.andThen(
+                beforeLeaving(
+                  machine,
+                  "delete",
+                  hook,
+                  stateNow(machine, "given its delete hook")
+                ),
+                runtime.delete(machine)
+              )
             ),
-            Effect.andThen(runtime.delete(machine), reaches.close(machine))
+            reaches.close(step.machine.name)
           );
         }
 
@@ -755,22 +894,32 @@ export const make = (
         }
 
         case "capture": {
-          const { machine, checkpoint, pin } = step;
+          const { checkpoint, pin } = step;
 
-          return Effect.andThen(
-            Effect.tapError(copyable(machine.name, pin), () => cleared),
-            runtime
+          const discarded = Effect.andThen(
+            ifFound("checkpoint", checkpoint, runtime.deleteCheckpoint),
+            cleared
+          ).pipe(Effect.ignore);
+
+          return Effect.gen(function* () {
+            const machine = yield* Effect.tapError(
+              Effect.andThen(
+                copyable(step.machine.name, pin),
+                machineTarget(step.machine)
+              ),
+              () => cleared
+            );
+
+            const handle = yield* runtime
               .capture(machine, checkpoint)
               .pipe(
                 Effect.onExit((exit) =>
-                  Exit.isSuccess(exit)
-                    ? Effect.void
-                    : runtime
-                        .deleteCheckpoint(checkpoint)
-                        .pipe(Effect.andThen(cleared), Effect.ignore)
+                  Exit.isSuccess(exit) ? Effect.void : discarded
                 )
-              )
-          );
+              );
+
+            progress.outcome = { ...progress.outcome, handle };
+          });
         }
 
         case "deleteCheckpoint": {
@@ -789,7 +938,7 @@ export const make = (
 
           return Effect.andThen(
             unpublished,
-            runtime.deleteCheckpoint(checkpoint)
+            ifFound("checkpoint", checkpoint, runtime.deleteCheckpoint)
           );
         }
 
@@ -797,18 +946,22 @@ export const make = (
           return Option.match(tailnet, {
             onNone: () => Effect.void,
             onSome: (joining) =>
-              Effect.map(
-                joined(joining.mint, step.machine, step.hostname),
-                (status) => {
-                  progress.outcome = { ...progress.outcome, tailnet: status };
-                }
-              ),
+              Effect.gen(function* () {
+                const machine = yield* machineTarget(step.machine);
+
+                progress.outcome = {
+                  ...progress.outcome,
+                  tailnet: yield* joined(joining.mint, machine, step.hostname),
+                };
+              }),
           });
         }
 
         case "publish": {
           return withBuilds(`publish ${step.checkpoint.name}`, (store) =>
-            publish(store, runtime, step.checkpoint)
+            Effect.flatMap(checkpointTarget(step.checkpoint), (checkpoint) =>
+              publish(store, runtime, checkpoint)
+            )
           );
         }
 
@@ -817,7 +970,12 @@ export const make = (
 
           return Effect.tapError(
             withBuilds(`fetch build ${build}`, (store) =>
-              fetch(store, runtime, checkpoint, from, build)
+              Effect.map(
+                fetch(store, runtime, checkpoint, from, build),
+                (handle) => {
+                  progress.outcome = { ...progress.outcome, handle };
+                }
+              )
             ),
             () => cleared
           );
@@ -839,17 +997,17 @@ export const make = (
     const heldPorts = () =>
       [...entries.values()].flatMap(({ progress: { status, outcome } }) =>
         (status === "running" || status === "done") &&
-        outcome.port !== undefined
-          ? [outcome.port]
+        outcome.endpoint !== undefined
+          ? [outcome.endpoint.port]
           : []
       );
 
     const picking = (progress: Progress, step: Make) =>
-      Effect.match(reaches.pick(new Set([...step.ports, ...heldPorts()])), {
+      Effect.match(reaches.pick(new Set([...step.taken, ...heldPorts()])), {
         onFailure: (error): Effect.Effect<void, HostError> =>
           Effect.fail(error),
         onSuccess: (port) => {
-          progress.outcome = { port };
+          progress.outcome = { endpoint: reaches.endpoint(port) };
 
           return made(progress, step, port);
         },
@@ -870,7 +1028,7 @@ export const make = (
     const accept = (operation: Operation, before: string | undefined) =>
       Effect.gen(function* () {
         const { id, step, scope, sequence } = operation;
-        const name = `${step._tag} ${scope}`;
+        const name = `${step._tag} ${keyOf(scope)}`;
 
         const progress: Progress = {
           status: "running",
@@ -899,7 +1057,7 @@ export const make = (
             );
 
             entries.set(id, { scope, fiber, progress });
-            scopes.set(scope, { sequence, id });
+            scopes.set(keyOf(scope), { sequence, id });
 
             return reported(id, progress);
           })
@@ -921,11 +1079,11 @@ export const make = (
             });
           }
 
-          const at = scopes.get(operation.scope);
+          const at = scopes.get(keyOf(operation.scope));
 
           if (at !== undefined && operation.sequence <= at.sequence) {
             return yield* new Conflict({
-              message: `operation ${operation.id} is number ${operation.sequence} on ${operation.scope}, and this host has seen ${at.sequence}`,
+              message: `operation ${operation.id} is number ${operation.sequence} on ${keyOf(operation.scope)}, and this host has seen ${at.sequence}`,
             });
           }
 
@@ -961,9 +1119,9 @@ export const make = (
         }
       });
 
-    const stepEnded = (machine: MachineRef) =>
+    const stepEnded = ({ name }: MachineRef) =>
       Effect.suspend(() => {
-        const held = scopes.get(`machine ${machine.name}`);
+        const held = scopes.get(keyOf({ resource: "machine", name }));
         const entry = held === undefined ? undefined : entries.get(held.id);
 
         return entry === undefined || entry.progress.status !== "running"
@@ -975,10 +1133,9 @@ export const make = (
       surviving(
         `exec in ${command.machine.name}`,
         Effect.gen(function* () {
-          const { machine } = command;
+          yield* stepEnded(command.machine);
 
-          yield* stepEnded(machine);
-
+          const machine = yield* machineTarget(command.machine);
           const seen = yield* stateNow(machine, "given the command");
 
           if (seen === "missing") {
@@ -993,9 +1150,119 @@ export const make = (
             });
           }
 
-          return yield* runCommand(runtime, command);
+          return yield* runCommand(runtime, { ...command, machine });
         })
       );
+
+    const observed = (targets: readonly Target[]) =>
+      targets.length === 0
+        ? Effect.succeed<Observed>(new Map())
+        : runtime
+            .observe(targets)
+            .pipe(inTime(`the ${traits.runtime} runtime`));
+
+    const readAlone = (machine: Ref) =>
+      Effect.flatMap(found("machine", machine), (handle) =>
+        handle === undefined
+          ? Effect.succeed<MachineState>("missing")
+          : Effect.map(observed([targetOf(machine, handle)]), (seen) =>
+              stateIn(seen, machine)
+            )
+      ).pipe(
+        inTime(`the ${traits.runtime} runtime's read of ${machine.name}`),
+        Effect.catch((error) =>
+          Effect.as(
+            Effect.logWarning(`read ${machine.name}: ${error.message}`),
+            "unknown" as const
+          )
+        ),
+        Effect.map((state) => [machine.name, state] as const)
+      );
+
+    const reading: Interface["read"] = (machines) =>
+      surviving(
+        `the ${traits.runtime} runtime's read`,
+        Effect.gen(function* () {
+          const [seen, alone] = yield* Effect.all(
+            [
+              observed(
+                machines.flatMap((machine) =>
+                  machine.handle === undefined
+                    ? []
+                    : [targetOf(machine, machine.handle)]
+                )
+              ),
+              Effect.forEach(
+                machines.filter(({ handle }) => handle === undefined),
+                readAlone,
+                { concurrency: "unbounded" }
+              ),
+            ],
+            { concurrency: "unbounded" }
+          );
+
+          const resolved = new Map(alone);
+
+          return new Map(
+            machines.map(({ name }) => [
+              name,
+              resolved.get(name) ?? stateIn(seen, { name }),
+            ])
+          );
+        })
+      );
+
+    const adopt: Interface["adopt"] = (machines) =>
+      Effect.gen(function* () {
+        const [adopted, unresolved] = yield* Effect.partition(
+          machines,
+          (machine) =>
+            found("machine", machine).pipe(
+              Effect.tap((handle) =>
+                Effect.logInfo(
+                  `adopt ${machine.name}: ${heldAs(machine, handle)}`
+                )
+              ),
+              Effect.map((handle) => ({ machine, handle })),
+              Effect.mapError((error) => ({ machine, error }))
+            ),
+          { concurrency: "unbounded" }
+        );
+
+        yield* Effect.forEach(
+          unresolved,
+          ({ machine, error }) =>
+            Effect.logWarning(
+              `adopt ${machine.name}: couldn't find it, so the next adopt tries again: ${error.message}`
+            ),
+          { discard: true }
+        );
+
+        yield* reaches.adopt(
+          adopted.flatMap(({ machine, handle }) =>
+            handle === undefined || machine.endpoint === undefined
+              ? []
+              : [
+                  {
+                    machine: targetOf(machine, handle),
+                    port: machine.endpoint.port,
+                  },
+                ]
+          )
+        );
+
+        return {
+          adopted: adopted.map(({ machine, handle }) => ({
+            name: machine.name,
+            instance: machine.instance,
+            ...(handle === undefined ? {} : { handle }),
+            ...(machine.endpoint === undefined
+              ? {}
+              : { endpoint: reaches.endpoint(machine.endpoint.port) }),
+          })),
+          unresolved: unresolved.map(({ machine }) => machine.name),
+        };
+      });
 
     return {
       boot,
@@ -1003,17 +1270,16 @@ export const make = (
       wait,
       cancel,
       collect,
-      read: (machines) =>
-        machines.length === 0
-          ? Effect.succeed(new Map())
-          : surviving(
-              `the ${traits.runtime} runtime's read`,
-              runtime.observe(machines)
-            ).pipe(inTime(`the ${traits.runtime} runtime`)),
+      read: reading,
+      sizes: (machine) =>
+        Effect.flatMap(machineTarget(machine), (target) =>
+          Effect.map(runtime.sizes(target), (read) => sizedBy(machine, read))
+        ),
       capacity: (machines) =>
-        runtime
-          .capacity(heldBy(machines))
-          .pipe(inTime(`the ${traits.runtime} runtime`)),
+        Effect.flatMap(heldBy(machines), runtime.capacity).pipe(
+          inTime(`the ${traits.runtime} runtime`)
+        ),
+      adopt,
       exec: Effect.fn("Operations.exec")(exec),
     } satisfies Interface;
   });

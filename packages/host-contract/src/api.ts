@@ -14,6 +14,7 @@ import {
   Reading,
   Setup,
   Sizing,
+  SshEndpoint,
   TailnetStatus,
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -25,35 +26,50 @@ const Size = Schema.Int.check(Schema.isGreaterThan(0));
 
 const sizes = { cpu: Size, ramMib: Size, diskGib: Size };
 
-/** A machine as a runtime knows it. `instance` tells it from an earlier machine of its name. */
-export const MachineRef = Schema.Struct({
+/** A runtime's own ID for a machine or a checkpoint, which the control plane keeps and sends back. */
+export const Handle = Schema.String.check(Schema.isMinLength(1)).pipe(
+  Schema.brand("Handle")
+);
+
+export type Handle = typeof Handle.Type;
+
+const identity = {
   name: Name,
   instance: Schema.String,
-  ...sizes,
+  handle: Schema.optionalKey(Handle),
+};
+
+/**
+ * A machine or checkpoint as a runtime knows it. `instance` tells it from an earlier one of its
+ * name. `handle` is absent until a report that carries it is stored, and the host then finds it by
+ * `instance`.
+ */
+export const Ref = Schema.Struct(identity);
+
+export type Ref = typeof Ref.Type;
+
+/**
+ * Where a client reaches a machine's sshd: a port of its host, at the address its host answers. A
+ * row from a store that kept only the port has no `host` until its host's next adopt answers it.
+ */
+export const Endpoint = Schema.Struct({
+  host: Schema.optionalKey(Schema.String),
   port: Port,
+});
+
+export type Endpoint = typeof Endpoint.Type;
+
+export const MachineRef = Schema.Struct({
+  ...identity,
+  ...sizes,
+  endpoint: Schema.optionalKey(Endpoint),
 });
 
 export type MachineRef = typeof MachineRef.Type;
 
-/** A machine still to be made: the host gives it its port. */
-export const NewMachine = Schema.Struct({
-  name: Name,
-  instance: Schema.String,
-  ...sizes,
-});
+export const CheckpointRef = Schema.Struct({ ...identity, ...sizes });
 
-export type NewMachine = typeof NewMachine.Type;
-
-export const Native = Schema.Struct({
-  name: Name,
-  instance: Schema.String,
-});
-
-export type Native = typeof Native.Type;
-
-export const CheckpointRef = MachineRef;
-
-export type CheckpointRef = MachineRef;
+export type CheckpointRef = typeof CheckpointRef.Type;
 
 export const MachineState = Machine.fields.state;
 
@@ -81,6 +97,10 @@ const hooked = {
 /**
  * What a host runs. `pin` is the runtime pin a VM booted under, compared with the host's own, and
  * `machines` the host's other machines, which admission counts beside the one a step boots. A step
+ * acts on the machine or checkpoint its ref's `handle` names, or the one the runtime finds by its
+ * `instance`; a remove or a delete of a checkpoint that finds none is done. A make that finds its
+ * instance made answers that machine, keeps an endpoint its ref has, and gives a new one a port off
+ * `taken`, every port the host's other machines hold. A step
  * that acts by what its VM is doing reads it from the runtime as it begins. A make's
  * `authorizedKeys` go to the login user once the machine is made, after its setup if it has one,
  * beside the keys already there. A make's `join` puts the machine on the tailnet as `hostname` for
@@ -94,11 +114,11 @@ const hooked = {
  */
 export const Step = Schema.Union([
   Schema.TaggedStruct("make", {
-    machine: NewMachine,
+    machine: MachineRef,
     source: Source,
     authorizedKeys: Schema.optionalKey(PublicKeys),
     join: Schema.optionalKey(Schema.Struct({ hostname: Schema.String })),
-    ports: Schema.Array(Port),
+    taken: Schema.Array(Port),
     ...others,
   }),
   Schema.TaggedStruct("start", {
@@ -113,7 +133,7 @@ export const Step = Schema.Union([
     ...hooked,
   }),
   Schema.TaggedStruct("pause", { machine: MachineRef, ...pinned, ...hooked }),
-  Schema.TaggedStruct("remove", { machine: Native, ...hooked }),
+  Schema.TaggedStruct("remove", { machine: Ref, ...hooked }),
   Schema.TaggedStruct("resize", {
     machine: MachineRef,
     to: Sizing,
@@ -125,7 +145,7 @@ export const Step = Schema.Union([
     ...pinned,
   }),
   Schema.TaggedStruct("deleteCheckpoint", {
-    checkpoint: CheckpointRef,
+    checkpoint: Ref,
     unpublish: Schema.optionalKey(Schema.Literal(true)),
   }),
   Schema.TaggedStruct("join", {
@@ -142,8 +162,15 @@ export const Step = Schema.Union([
 
 export type Step = typeof Step.Type;
 
+export const Scope = Schema.Struct({
+  resource: Schema.Literals(["machine", "checkpoint"]),
+  name: Schema.String,
+});
+
+export type Scope = typeof Scope.Type;
+
 /**
- * One whole step for a host to run to its end, whether or not the caller stays. `scope` names the
+ * One whole step for a host to run to its end, whether or not the caller stays. `scope` is the
  * resource it changes. Delivering an `id` again returns that operation, a lower or equal `sequence`
  * in the scope is refused, and a higher one cuts short what still runs there, and forgets the one
  * before once it ended, collected or not. `boot` is the host process it was meant for: another
@@ -153,15 +180,21 @@ export type Step = typeof Step.Type;
 export const Operation = Schema.Struct({
   id: Schema.String,
   boot: Schema.String,
-  scope: Schema.String,
+  scope: Scope,
   sequence: Schema.Int,
   step: Step,
 });
 
 export type Operation = typeof Operation.Type;
 
+/**
+ * What a step leaves that only its host can tell. A make answers its machine's `handle`, the
+ * `endpoint` it gave it as soon as it has one, and the `sizes` the runtime gave it; a capture and a
+ * fetch answer their checkpoint's `handle`.
+ */
 export const Outcome = Schema.Struct({
-  port: Schema.optionalKey(Port),
+  handle: Schema.optionalKey(Handle),
+  endpoint: Schema.optionalKey(SshEndpoint),
   hostKey: Schema.optionalKey(Schema.String),
   sizes: Schema.optionalKey(Schema.Struct(sizes)),
   tailnet: Schema.optionalKey(TailnetStatus),
@@ -202,7 +235,6 @@ export const HostInfo = Schema.Struct({
   images: Schema.Record(Schema.String, Schema.String),
   boot: Schema.String,
   pin: Schema.optionalKey(Schema.String),
-  publishAddress: Schema.String,
   joins: Schema.Boolean,
   builds: Schema.Boolean,
 }).annotate({ identifier: "HostInfo" });
@@ -212,6 +244,22 @@ export type HostInfo = typeof HostInfo.Type;
 const ById = Schema.Struct({ id: Schema.String });
 
 const Machines = Schema.Struct({ machines: Schema.Array(MachineRef) });
+
+/** What a restarted host holds of a machine it was given: the handle it was given, or else the one the runtime finds by instance, and its endpoint. */
+export const Adopted = Schema.Struct({
+  ...identity,
+  endpoint: Schema.optionalKey(SshEndpoint),
+});
+
+export type Adopted = typeof Adopted.Type;
+
+/** What an adopt answers: each machine it resolved, and those whose search failed, which a later adopt tries again. */
+export const Adoption = Schema.Struct({
+  adopted: Schema.Array(Adopted),
+  unresolved: Schema.Array(Name),
+});
+
+export type Adoption = typeof Adoption.Type;
 
 const { id: _machine, ...command } = ExecRequest.fields;
 
@@ -236,12 +284,12 @@ export const HostHttp = ActionHttp.make(
       error: [Invalid, Internal] as const,
       description:
         "Read each machine's state from the runtime. A machine it couldn't read is unknown.",
-      input: Schema.Struct({ machines: Schema.Array(Native) }),
+      input: Schema.Struct({ machines: Schema.Array(Ref) }),
       success: Schema.Array(Schema.Struct({ name: Name, state: MachineState })),
     }),
     Action.make("readSizes", {
       ...read,
-      error: [Invalid, Internal] as const,
+      error: [Invalid, Missing, Internal] as const,
       description: "Read back the sizes the runtime holds for a machine.",
       input: Schema.Struct({ machine: MachineRef }),
       success: Sizing,
@@ -258,8 +306,9 @@ export const HostHttp = ActionHttp.make(
       ...write,
       error: [Invalid, Internal] as const,
       description:
-        "Give a host that started the machines it holds, for what its runtime keeps beside each VM.",
+        "Give a host that started the machines it holds, so it reaches each again, and answer what it holds of each it could resolve.",
       input: Machines,
+      success: Adoption,
     }),
     Action.make("runOperation", {
       ...write,

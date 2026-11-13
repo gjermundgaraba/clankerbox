@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 
-import { MachineState } from "@clankerbox/host-contract";
+import { Handle, MachineState } from "@clankerbox/host-contract";
 import type { Report } from "@clankerbox/host-contract";
 import { describe, expect, it } from "@effect/vitest";
 import { runtimeTraits } from "@gjermundgaraba/clankerbox-host/testing";
@@ -51,6 +51,17 @@ const earlier = new Internal({ message: "an earlier failure" });
 const cut = new Internal({ message: "the make of dev ended on its host" });
 
 const sizes = { cpu: 2, ramMib: 2048, diskGib: 20 };
+
+const handle = Handle.make("mach-1");
+
+const endpoint = { host: "127.0.0.1", port: 2222 };
+
+const reach = { handle, endpoint };
+
+const elsewhere = {
+  handle: Handle.make("mach-2"),
+  endpoint: { host: "10.0.0.9", port: 3333 },
+};
 
 const rowAt = (state: Leaf, fields?: Partial<Facts>): MachineRow => ({
   ...facts(fields),
@@ -613,28 +624,40 @@ describe("a report", () => {
     ]);
   });
 
-  it("a make's port stays on every report, so another VM can't take it", () => {
-    const told = { port: 2222 };
-
+  it("a make's handle and endpoint stay on every report, so a later step acts on its VM and another can't take its port", () => {
     expect(
       (["done", "failed", "cancelled"] as const).flatMap((status) =>
-        (["making.sent", "deleting.draining"] as const).map(
-          (state) => after(rowAt(state), report(status, told), "make").port
-        )
+        (["making.sent", "deleting.draining"] as const).map((state) => {
+          const told = after(rowAt(state), report(status, reach), "make");
+
+          return { handle: told.handle, endpoint: told.endpoint };
+        })
       )
-    ).toStrictEqual([2222, 2222, 2222, 2222, 2222, 2222]);
+    ).toStrictEqual(Array.from({ length: 6 }, () => reach));
   });
 
-  it("a port a running make told stays when a delete drains it", () => {
-    const told = after(rowAt("making.sent"), { type: "ran", port: 2222 });
+  it("a handle and endpoint a running make told stay when a delete drains it", () => {
+    const told = after(rowAt("making.sent"), { type: "ran", ...reach });
     const deleted = after(told, removal);
+    const moved = { host: "127.0.0.1", port: 3333 };
 
     expect([
       deleted.state,
-      after(deleted, { type: "ran", port: 3333 }, "make").port,
-      after(deleted, cancelled, "make").port,
-      after(deleted, gone, "make").port,
-    ]).toStrictEqual(["deleting.draining", 3333, 2222, 2222]);
+      after(deleted, { type: "ran", endpoint: moved }, "make").endpoint,
+      after(deleted, cancelled, "make").endpoint,
+      after(deleted, gone, "make").handle,
+    ]).toStrictEqual(["deleting.draining", moved, endpoint, handle]);
+  });
+
+  it("what a restarted host holds of a machine fills its row only while the row is that instance", () => {
+    const row = rowAt("made.settled", {
+      endpoint: { port: endpoint.port },
+    });
+
+    expect([
+      after(row, { type: "adopted", instance: row.instance, ...reach }),
+      after(row, { type: "adopted", instance: "other", ...reach }),
+    ]).toStrictEqual([{ ...row, ...reach }, row]);
   });
 });
 
@@ -840,7 +863,7 @@ const edgesEvents = [
   ["resize", resizing],
   ["delete", removal],
   ["refused", { type: "refused", error }],
-  ["ran", { type: "ran", port: 2222 }],
+  ["ran", { type: "ran", ...reach }],
   ["done", done],
   ["failed", failed],
   ["cancelled", cancelled],
@@ -962,7 +985,7 @@ const fixtures = leaves.flatMap((state) =>
               prepared,
               error: erred ? earlier : undefined,
               resize: owing ? { cpu: 3 } : undefined,
-              port: 2000,
+              ...reach,
             }),
             op: kind === undefined ? undefined : flight(kind),
           }))
@@ -984,16 +1007,16 @@ const prepared = { prepared: true };
 
 const factsWritten: readonly Write[] = [
   [
-    "a make done tells its port, and its machine is still to prepare",
+    "a make done tells its handle and endpoint, and its machine is still to prepare",
     rowAt("making.sent", prepared),
-    report("done", { port: 2222 }),
-    { state: "made.observing", prepared: false, port: 2222 },
+    report("done", reach),
+    { state: "made.observing", prepared: false, ...reach },
   ],
   [
     "a make done prepared tells its host key, and its machine needs no start",
     rowAt("making.sent"),
-    report("done", { port: 2222, hostKey: "key", prepared: true }),
-    { state: "made.observing", prepared: true, port: 2222, hostKey: "key" },
+    report("done", { ...reach, hostKey: "key", prepared: true }),
+    { state: "made.observing", prepared: true, ...reach, hostKey: "key" },
   ],
   [
     "a start done prepares its machine and tells its host key",
@@ -1026,10 +1049,10 @@ const factsWritten: readonly Write[] = [
     { state: "made.settled" },
   ],
   [
-    "a make that fails says why, and keeps the port it told",
+    "a make that fails says why, and keeps the handle and endpoint it told",
     rowAt("making.sent"),
-    report("failed", { port: 2222 }),
-    { state: "undoing.due", error, port: 2222 },
+    report("failed", reach),
+    { state: "undoing.due", error, ...reach },
   ],
   [
     "a make cut short says it was",
@@ -1158,7 +1181,12 @@ const representatives: readonly MachineEvent[] = [
   resizing,
   ...seens.flatMap((seen) => flags.map((joins) => read(seen, joins))),
   { type: "refused", error },
-  { type: "ran", port: 2222 },
+  { type: "ran", ...reach },
+  ...["1", "other"].map((instance): MachineEvent => ({
+    type: "adopted",
+    instance,
+    ...elsewhere,
+  })),
   done,
   toldPrepared,
   failed,
@@ -1227,6 +1255,32 @@ describe("the chart", () => {
     expect(
       steps.filter(({ same, next, row }) => same !== (next === row))
     ).toStrictEqual([]);
+  });
+
+  it("takes what a restarted host holds from every leaf, with and without an operation, moving no leaf, beginning and finishing nothing, and writing only its own instance's handle and endpoint", () => {
+    const wrong = fixtures.flatMap(({ row, op }) =>
+      [row.instance, "other"].flatMap((instance) => {
+        const decided = applied(
+          machineChart,
+          row,
+          { type: "adopted", instance, ...elsewhere },
+          op
+        );
+
+        const expected =
+          instance === row.instance ? { ...row, ...elsewhere } : row;
+
+        return decided.next !== "removed" &&
+          !decided.finish &&
+          !("begin" in decided && decided.begin !== undefined) &&
+          JSON.stringify(decided.next) === JSON.stringify(expected)
+          ? []
+          : [[row.state, instance]];
+      })
+    );
+
+    expect(fixtures.length).toBeGreaterThan(100);
+    expect(wrong).toStrictEqual([]);
   });
 
   it("takes every event from every leaf where its table says, and writes nothing for one the table doesn't name", () => {
@@ -1315,7 +1369,7 @@ describe("the chart", () => {
   it("past a host's capacity, a create takes the next host, and a remove with none to go to rests undone", () => {
     const row = rowAt("undoing.sent", {
       error: earlier,
-      port: 2000,
+      ...reach,
       prepared: true,
     });
 
@@ -1333,7 +1387,8 @@ describe("the chart", () => {
       ...move,
       state: "making.due",
       error: undefined,
-      port: undefined,
+      handle: undefined,
+      endpoint: undefined,
     });
     expect(after(row, done)).toStrictEqual({
       ...row,

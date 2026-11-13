@@ -209,7 +209,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           Object.fromEntries(
             (host.fake.activations.at(-1)?.machines ?? []).map((activated) => [
               activated.machine.name,
-              activated.booting,
+              activated._tag === "booting",
             ])
           );
 
@@ -428,7 +428,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a capture of a running machine is ram, with the source's spec and the runtime's pin",
+    "a capture of a running machine is ram, with the source's spec, the runtime's pin and the handle its host's capture answered",
     () =>
       Effect.gen(function* () {
         const { client, store } = yield* withSource();
@@ -451,15 +451,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ramMib: 1024,
           diskGib: 10,
         });
-        expect(rows.map(({ name, pin }) => [name, pin])).toStrictEqual([
-          ["hot", "fake 1"],
-        ]);
+        expect(
+          rows.map(({ name, pin, handle }) => [name, pin, handle])
+        ).toStrictEqual([["hot", "fake 1", expect.stringMatching(/^ckpt-/u)]]);
         expect(yield* client.listCheckpoints()).toStrictEqual([ram]);
       })
   );
 
   it.effect(
-    "a capture of a stopped machine on a ram runtime is WrongState, and leaves a failed row no list shows",
+    "a capture of a stopped machine on a ram runtime is WrongState, leaves nothing on its host, and leaves a failed row no list shows",
     () =>
       Effect.gen(function* () {
         const served = yield* withSource();
@@ -481,7 +481,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           error: { _tag: "WrongState" },
         });
         expect(yield* checkpointIds(client)).toStrictEqual([]);
-        expect(host.fake.calls).toContain("deleteCheckpoint cold");
+        expect(host.fake.calls).not.toContain("deleteCheckpoint cold");
       })
   );
 
@@ -621,7 +621,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a capture refused is deleted once, by its host, with no step of the control plane's",
+    "a capture refused leaves nothing for its host or the control plane to delete",
     () =>
       Effect.gen(function* () {
         const refused = yield* Effect.forEach(
@@ -663,7 +663,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             tag: "WrongState",
             state: "failed",
             failed: true,
-            calls: ["capture snap", "deleteCheckpoint snap"],
+            calls: ["capture snap"],
             freed: true,
           }))
         );
@@ -846,6 +846,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(taken._tag).toBe("Conflict");
         expect(stopped).toMatchObject({ _tag: "WrongState", state: "stopped" });
+        expect(stopped.message).toBe(
+          "machine dev is stopped, and a pause captures only a running machine. Its traits capture a running machine: start it, then capture it"
+        );
         expect(dev.desired).toBe("stopped");
         expect(host.fake.calls).toStrictEqual(["exec dev", "stop dev"]);
         expect(yield* checkpointIds(client)).toStrictEqual(["snap"]);
@@ -1323,7 +1326,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a capture cut short by its host's restart clears what it began, and fails with why",
+    "a capture cut short by its host's restart, before it made anything, fails with why and has nothing to delete",
     () =>
       Effect.gen(function* () {
         const served = yield* withSource({ recheck: Duration.millis(50) });
@@ -1343,7 +1346,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(row.error?.message).toContain(
           "ended before its host reported it"
         );
-        expect(host.fake.calls.at(-1)).toBe("deleteCheckpoint snap");
+        expect(host.fake.calls).not.toContain("deleteCheckpoint snap");
       })
   );
 

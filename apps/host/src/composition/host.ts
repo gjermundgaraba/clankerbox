@@ -63,13 +63,7 @@ export const hostLayer = <E, R>(
     ),
     Layer.provideMerge(Operations.layer(config)),
     Layer.provideMerge(Reach.layer(config.machinePorts)),
-    Layer.provide(
-      Layer.mergeAll(
-        BindProbe.layer,
-        Relay.layer(config.listen.address),
-        startedUp
-      )
-    ),
+    Layer.provide(Layer.mergeAll(BindProbe.layer, Relay.layer, startedUp)),
     Layer.provideMerge(runtime),
     Layer.provide(
       config.tailnet === undefined

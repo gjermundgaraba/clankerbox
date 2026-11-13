@@ -18,7 +18,6 @@ const info = (id: string, bases: readonly string[]): HostInfo => ({
   bases,
   images: Object.fromEntries(bases.map((base) => [base, `image/${base}`])),
   boot: "boot",
-  publishAddress: "127.0.0.1",
   joins: false,
   builds: false,
 });
@@ -530,7 +529,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a create a host has no room for moves to the next, once the first's VM is gone",
+    "a create a host has no room for moves to the next, once the first holds no VM of it",
     () =>
       Effect.gen(function* () {
         const served = yield* running({ hosts: [{ id: "a" }, { id: "b" }] });
@@ -546,10 +545,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           undefined,
         ]);
         expect(yield* hostOf(served, "dev")).toStrictEqual(Option.some("b"));
-        expect(first?.fake.calls.slice(-2)).toStrictEqual([
-          "admit dev",
-          "delete dev",
-        ]);
+        expect(first?.fake.calls.at(-1)).toBe("admit dev");
+        expect(first?.fake.machines.has("dev")).toBe(false);
         expect(second?.fake.calls).toContain("create dev");
       })
   );
