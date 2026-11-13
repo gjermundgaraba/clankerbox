@@ -368,9 +368,15 @@ importers:
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.1.3(effect@4.1.3)(vitest@5.1.0)
+      '@gjermundgaraba/clankerbox-host':
+        specifier: workspace:*
+        version: link:../../apps/host
       '@gjermundgaraba/clankerbox-sdk':
         specifier: workspace:*
         version: link:../sdk
+      '@gjermundgaraba/clankerbox-server':
+        specifier: workspace:*
+        version: link:../../apps/server
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.6
@@ -427,6 +433,15 @@ importers:
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.1.3(effect@4.1.3)(redis@6.3.0)
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.1.3(effect@4.1.3)(vitest@5.1.0)
+      '@gjermundgaraba/clankerbox-host':
+        specifier: workspace:*
+        version: link:../../apps/host
+      '@gjermundgaraba/clankerbox-server':
+        specifier: workspace:*
+        version: link:../../apps/server
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
         version: 0.31.0(effect@4.1.3)

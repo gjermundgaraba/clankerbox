@@ -29,7 +29,9 @@
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "@gjermundgaraba/clankerbox-host": "workspace:*",
     "@gjermundgaraba/clankerbox-sdk": "workspace:*",
+    "@gjermundgaraba/clankerbox-server": "workspace:*",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",

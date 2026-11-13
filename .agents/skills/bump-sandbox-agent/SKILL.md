@@ -172,8 +172,9 @@ publish, change production hosts, or commit unless asked.
 ## Verify
 
 - `pnpm install` after the catalog change, then `vp run --no-cache ready`. The
-  package's tests run the real SDK against the provider, over a stub host and
-  a stand-in ssh that serves a stand-in agent.
+  package's tests run the real SDK against the provider, over a stub host, a
+  test control plane over hosts on smol cloud's and boat's fakes, and a
+  stand-in ssh that serves a stand-in agent.
 - Each recipe's downloads against their pins: run `recipes/ubuntu/setup.sh` in
   a throwaway `linux/amd64` `ubuntu:24.04` container. It needs no keys: the
   host installs the operator's after a setup.

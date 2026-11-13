@@ -508,7 +508,7 @@ await sdk.destroySandbox();
 
 ## Amp orb provider
 
-`@gjermundgaraba/clankerbox-amp-orbs` is the dispatch program for [Amp's self-hosted orbs](https://ampcode.com/docs/orbs/self-hosted): `amp orb provider` runs it once per job, with the job in its environment, and each orb is a clankerbox machine on a smolvm host.
+`@gjermundgaraba/clankerbox-amp-orbs` is the dispatch program for [Amp's self-hosted orbs](https://ampcode.com/docs/orbs/self-hosted): `amp orb provider` runs it once per job, with the job in its environment, and each orb is a clankerbox machine on a host whose runtime boots an image reference, smolvm or smol cloud. boat, which boots only its own named images, refuses an orb's spawn.
 
 ```sh
 npm install --global @gjermundgaraba/clankerbox-amp-orbs
@@ -528,7 +528,7 @@ amp orb provider "$(command -v clankerbox-amp-orbs-dispatch)"   # a one-line scr
 
 - `sizes` has an entry per orb type Amp's settings define, and `default` for a thread that picks none; a type the settings don't know gets `default` too. `user` is the image's login user, `user` as in Amp's image. `snapshotExpiry` is how long a saved project snapshot is kept, 14 days unless given.
 - A spawn makes the orb's machine run, `client.ensure` with the machine named after `ORB_ID`: started or resumed when it exists, else restored from the project snapshot `ORB_SNAPSHOT_ID` names when that checkpoint is ready, at the snapshot's sizes, else created from `ORB_IMAGE` at the orb type's sizes, with no setup. Amp's image carries what bootstrap needs, so nothing is installed, and a create from a base needs no `admin`, `sudo` or key. Then `execMachine` starts `amp orb bootstrap` as the login user, detached, with `ORB_TOKEN` and `AMP_URL` in its environment, after ending one still running: a resumed or restored machine keeps the processes it paused with, and that bootstrap holds the previous job's token. Bootstrap logs to `~/.amp-orb-bootstrap.log` in the orb.
-- A pause with a snapshot of a running machine deletes the checkpoint of that snapshot's name, then `pauseMachine` with `capture` makes the new one, labelled `amp-orb` and `amp-snapshot` and expiring after `snapshotExpiry`, and the pause begins once the capture has. A machine that isn't running is paused without a snapshot, and a pause of an orb with no machine does nothing. A smolvm checkpoint holds RAM, so a restore resumes where the pause left off.
+- A pause with a snapshot of a running machine deletes the checkpoint of that snapshot's name, then `pauseMachine` with `capture` makes the new one, labelled `amp-orb` and `amp-snapshot` and expiring after `snapshotExpiry`, and the pause begins once the capture has. A machine that isn't running is paused without a snapshot, and a pause of an orb with no machine does nothing. A smolvm or smol cloud checkpoint holds RAM, so a restore resumes where the pause left off.
 - A delete deletes the machine; one already gone is done. Snapshots are a project's, not an orb's, so they stay until they expire or a pause replaces them.
 - An Amp ID that is a clankerbox name, as `amp-<thread id>` is, names the machine; another gets its letters and digits with a digest of it, and the machine carries the ID as its `amp-orb` label either way, `amp-orb-type` the orb type.
 - Each job is safe to repeat and fails after 4½ minutes, within the five Amp gives, saying that the control plane still acts on what was asked. Its output goes to the provider's log, and a spawn's to the thread's setup log too.

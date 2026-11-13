@@ -37,6 +37,9 @@
   },
   "devDependencies": {
     "@effect/platform-node": "catalog:",
+    "@effect/vitest": "catalog:",
+    "@gjermundgaraba/clankerbox-host": "workspace:*",
+    "@gjermundgaraba/clankerbox-server": "workspace:*",
     "@gjermundgaraba/effect-actions": "catalog:",
     "@types/node": "catalog:",
     "effect": "catalog:",
