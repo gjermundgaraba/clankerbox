@@ -197,12 +197,32 @@ describe("the boat runtime over fake boat", () => {
   );
 
   it.live(
+    "a make whose answer is lost before boat lists its sandbox waits for the listing, and sends the create once",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          yield* boat.faults.dropAnswer("make");
+          yield* boat.listsLag(2);
+
+          const machine = yield* made(runtime, "dev");
+
+          expect(posts(boat, "/sandboxes")).toStrictEqual([
+            "POST /sandboxes 202 start dropped",
+          ]);
+          expect([...boat.sandboxes.keys()]).toStrictEqual([machine.handle]);
+          expect(boat.starts()).toBe(1);
+        })
+      ),
+    30_000
+  );
+
+  it.live(
     "a make whose resend boat holds in progress waits for its sandbox to be listed, and sends no third",
     () =>
       onBoat(({ boat, runtime }) =>
         Effect.gen(function* () {
           yield* boat.faults.dropAnswer("make");
-          yield* boat.listsLag(1);
+          yield* boat.listsLag(14);
 
           const machine = yield* made(runtime, "dev");
 

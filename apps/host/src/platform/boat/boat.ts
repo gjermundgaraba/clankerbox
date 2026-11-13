@@ -13,6 +13,7 @@ import {
   Duration,
   Effect,
   Layer,
+  Option,
   Schedule,
   Schema,
   Stream,
@@ -156,7 +157,7 @@ const pollEvery = Duration.millis(500);
 
 const pollFor = Duration.minutes(10);
 
-const listedWithin = Duration.minutes(1);
+const listedWithin = Duration.seconds(5);
 
 const internal =
   (what: string) =>
@@ -449,17 +450,14 @@ export const make = (
         );
       });
 
-    const awaited = (machine: Identity, inProgress: Api.Refused) =>
+    const listed = (machine: Identity) =>
       searched(machine).pipe(
         Effect.repeat({
           until: (found) => found !== undefined,
           schedule: Schedule.spaced(pollEvery),
         }),
-        timeoutFail(listedWithin, () => inProgress),
-        Effect.filterOrFail(
-          (found): found is Sandbox => found !== undefined,
-          () => inProgress
-        )
+        Effect.timeoutOption(listedWithin),
+        Effect.map(Option.getOrUndefined)
       );
 
     const landed = (
@@ -469,7 +467,7 @@ export const make = (
     ): Effect.Effect<Sandbox, ApiError> =>
       sent.pipe(
         Effect.catchTag("Unanswered", (lost) =>
-          searched(machine).pipe(
+          listed(machine).pipe(
             Effect.filterOrElse(
               (found): found is Sandbox => found !== undefined,
               () =>
@@ -481,7 +479,13 @@ export const make = (
           (error): error is Api.Refused =>
             error._tag === "Refused" &&
             error.code === "idempotency_in_progress",
-          (inProgress) => awaited(machine, inProgress)
+          (inProgress) =>
+            listed(machine).pipe(
+              Effect.filterOrFail(
+                (found): found is Sandbox => found !== undefined,
+                () => inProgress
+              )
+            )
         )
       );
 
