@@ -2,6 +2,7 @@ import type { HostInfo } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, layer } from "@effect/vitest";
 import { presets } from "@gjermundgaraba/clankerbox-host/testing";
+import { traits as smolCloud } from "@gjermundgaraba/clankerbox-host/testing/smol-cloud";
 import { Capacity, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Option, Result } from "effect";
 
@@ -209,6 +210,40 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             message:
               "no host offers base ubuntu: the control plane knows no host nope",
           });
+        })
+    );
+
+    it.effect(
+      "a fleet of a smolvm host and a smol cloud host offers both in config order, for a base, an image reference and any sizes",
+      () =>
+        Effect.sync(() => {
+          const local = up("local");
+          const cloud = up("cloud");
+
+          const fleet = [
+            local,
+            {
+              ...cloud,
+              info:
+                cloud.info === undefined
+                  ? undefined
+                  : { ...cloud.info, traits: smolCloud },
+            },
+          ];
+
+          expect(placed(fleet)).toStrictEqual(["local", "cloud"]);
+          expect(placed(fleet, "docker.io/library/ubuntu:24.04")).toStrictEqual(
+            ["local", "cloud"]
+          );
+          expect(
+            placed(fleet, "ubuntu", {
+              ...asked,
+              sizes: { cpu: 3, ramMib: 3000, diskGib: 33 },
+            })
+          ).toStrictEqual(["local", "cloud"]);
+          expect(
+            placed(fleet, "ubuntu", { ...asked, host: "cloud" })
+          ).toStrictEqual(["cloud"]);
         })
     );
 

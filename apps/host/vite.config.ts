@@ -8,4 +8,12 @@ export default defineConfig({
     dts: false,
   },
   test: { include: ["tests/**/*.test.ts"] },
+  run: {
+    tasks: {
+      "test:live": {
+        command: "CLANKERBOX_LIVE=1 vp test tests/live",
+        cache: false,
+      },
+    },
+  },
 });

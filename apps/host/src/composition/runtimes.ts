@@ -3,6 +3,7 @@ import type { FileSystem, Layer, Schema } from "effect";
 import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 
+import * as SmolCloud from "../platform/smol-cloud/smol-cloud.ts";
 import * as Smolvm from "../platform/smolvm/smolvm.ts";
 import * as Tart from "../platform/tart/tart.ts";
 import type { CannotStart, Runtime } from "../runtime.ts";
@@ -19,6 +20,10 @@ type RuntimeLayer = Layer.Layer<
 export const runtimes = {
   smolvm: { settings: Smolvm.SmolvmSettings, layer: Smolvm.layer },
   tart: { settings: Tart.TartSettings, layer: Tart.layer },
+  "smol-cloud": {
+    settings: SmolCloud.SmolCloudSettings,
+    layer: SmolCloud.layer,
+  },
 };
 
 export type RuntimeKey = keyof typeof runtimes;

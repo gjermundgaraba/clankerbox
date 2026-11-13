@@ -1,0 +1,840 @@
+import * as NodeSocket from "@effect/platform-node/NodeSocket";
+import {
+  Capacity,
+  Conflict,
+  Internal,
+  Unsizable,
+  WrongState,
+} from "@gjermundgaraba/clankerbox-sdk";
+import type {
+  HostError,
+  Reading,
+  Sizing,
+} from "@gjermundgaraba/clankerbox-sdk";
+import {
+  Deferred,
+  Duration,
+  Effect,
+  FileSystem,
+  Layer,
+  Redacted,
+  Schedule,
+  Schema,
+  Stream,
+} from "effect";
+import type { Scope } from "effect";
+import { Hex } from "effect/encoding";
+import type { HttpClient } from "effect/http";
+import type { ChildProcessSpawner } from "effect/process";
+import { Socket } from "effect/socket";
+
+import { CannotStart, missing, Runtime, timeoutFail } from "../../runtime.ts";
+import type {
+  Command,
+  Execution,
+  Handle,
+  Identity,
+  Interface,
+  MachineState,
+  Observed,
+  Origin,
+  Sizes,
+  Target,
+} from "../../runtime.ts";
+import type { HostSettings } from "../../settings.ts";
+import * as Api from "./api.ts";
+import type { ApiError, MachineRecord, Refused } from "./api.ts";
+import { traits } from "./traits.ts";
+import { tunnel } from "./tunnel.ts";
+
+export const defaultApi = "https://api.smolmachines.com";
+
+const loopback = /^(?:localhost|\[::1\]|127(?:\.\d{1,3}){3})$/u;
+
+const ApiUrl = Schema.String.check(
+  Schema.makeFilter((text: string) => {
+    const url = URL.parse(text);
+
+    return (
+      url?.protocol === "https:" ||
+      (url?.protocol === "http:" && loopback.test(url.hostname)) ||
+      "an https URL, or an http one to a loopback address, as the key rides on every request"
+    );
+  })
+);
+
+export const SmolCloudSettings = Schema.Struct({
+  apiKeyFile: Schema.String.check(Schema.isNonEmpty()),
+  api: Schema.optionalKey(ApiUrl),
+  ttlSeconds: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
+});
+
+export type SmolCloudSettings = typeof SmolCloudSettings.Type;
+
+/** The provider caps a name at 63 characters, which `cbx-`, a host ID of this length and an instance fill. */
+export const longestHostId = 26;
+
+const idleStopSeconds = 86_400;
+
+const stdinLimit = 512 * 1024;
+
+const unstageTimeout = Duration.seconds(30);
+
+const stepTimeout = Duration.minutes(10);
+
+const poll = Duration.seconds(1);
+
+const instancePattern = /^[0-9a-f]{32}$/u;
+
+type Goal = "running" | "stopped" | "paused" | "gone";
+
+type Move = Api.Verb | "delete" | "wait" | "done" | "stuck";
+
+const moves: Readonly<Record<Goal, Readonly<Record<string, Move>>>> = {
+  running: {
+    started: "done",
+    running: "done",
+    stopped: "start",
+    created: "start",
+    paused: "resume",
+  },
+  stopped: {
+    started: "stop",
+    running: "stop",
+    stopped: "done",
+    created: "done",
+    paused: "resume",
+    missing: "done",
+  },
+  paused: {
+    started: "pause",
+    running: "pause",
+    stopped: "done",
+    created: "done",
+    paused: "done",
+  },
+  gone: { missing: "done" },
+};
+
+const transitional = new Set(["creating", "pausing", "starting", "stopping"]);
+
+const moveOf = (goal: Goal, state: string): Move => {
+  const move = moves[goal][state];
+
+  if (move !== undefined) {
+    return move;
+  }
+
+  if (goal === "gone") {
+    return "delete";
+  }
+
+  return transitional.has(state) ? "wait" : "stuck";
+};
+
+const stateOf = (record: MachineRecord | undefined): MachineState => {
+  switch (record?.state) {
+    case undefined:
+    case "deleted": {
+      return "missing";
+    }
+
+    case "started":
+    case "running": {
+      return "running";
+    }
+
+    case "stopped":
+    case "created": {
+      return "stopped";
+    }
+
+    case "paused": {
+      return "paused";
+    }
+
+    default: {
+      return "unknown";
+    }
+  }
+};
+
+const unknownOutcome = (error: ApiError) =>
+  error._tag === "Unanswered" || error.retryable;
+
+const isGone = (error: ApiError) =>
+  error._tag === "Refused" && error.status === 404;
+
+const isConflict = (error: ApiError): error is Refused =>
+  error._tag === "Refused" && error.status === 409;
+
+const quota = /limit|quota|concurrent|maximum|exceed/iu;
+
+const refusedRoom = (error: ApiError) =>
+  error._tag === "Refused" &&
+  (error.status === 402 ||
+    error.code === "insufficient_capacity" ||
+    (error.status === 422 && quota.test(error.detail)));
+
+const internal = (what: string) => (error: ApiError) =>
+  new Internal({ message: `${what}: ${error.message}` });
+
+const failure = (what: string) => (error: ApiError) =>
+  refusedRoom(error)
+    ? new Capacity({ message: `${what}: ${error.message}` })
+    : internal(what)(error);
+
+const waited = (error: ApiError) =>
+  Effect.sleep(
+    error._tag === "Refused" ? Duration.seconds(error.retryAfterSeconds) : poll
+  );
+
+const bounded =
+  (what: string) =>
+  <A, E>(step: Effect.Effect<A, E>): Effect.Effect<A, E | Internal> =>
+    step.pipe(
+      timeoutFail(
+        stepTimeout,
+        () =>
+          new Internal({
+            message: `${what} didn't end at smol cloud within ${Duration.format(stepTimeout)}`,
+          })
+      ),
+      Effect.uninterruptible
+    );
+
+const read = <A>(
+  what: string,
+  call: Effect.Effect<A, ApiError>
+): Effect.Effect<A, Internal> =>
+  call.pipe(
+    Effect.retry({
+      while: unknownOutcome,
+      times: 3,
+      schedule: Schedule.spaced(poll),
+    }),
+    Effect.mapError(internal(what))
+  );
+
+const targetOf = (machine: Identity, handle: Handle): Target => ({
+  name: machine.name,
+  instance: machine.instance,
+  handle,
+});
+
+const sizesOf = (record: MachineRecord, asked: Sizes): Sizes => ({
+  cpu: record.resources.cpus,
+  ramMib: record.resources.memoryMb,
+  diskGib: record.resources.diskGb ?? asked.diskGib,
+});
+
+const encoder = new TextEncoder();
+
+const decoder = new TextDecoder();
+
+const continuesCharacter = (byte: number | undefined) =>
+  byte !== undefined && (byte & 0xc0) === 0x80;
+
+const wholeCharacterChunks = (bytes: Uint8Array): readonly string[] => {
+  const chunks: string[] = [];
+  let at = 0;
+
+  while (at < bytes.length) {
+    let end = Math.min(at + stdinLimit, bytes.length);
+
+    while (continuesCharacter(bytes[end])) {
+      end -= 1;
+    }
+
+    chunks.push(decoder.decode(bytes.subarray(at, end)));
+    at = end;
+  }
+
+  return chunks;
+};
+
+const stagedStdin = () =>
+  `/dev/shm/clankerbox-stdin-${Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(8)))}`;
+
+export const make = (
+  settings: SmolCloudSettings,
+  host: Pick<HostSettings, "id" | "listen">,
+  api: Api.Api,
+  sockets: Socket.WebSocketConstructor["Service"]
+): Effect.Effect<Interface> =>
+  Effect.gen(function* () {
+    const prefix = `cbx-${host.id}-`;
+    const nameOf = (instance: string) => `${prefix}${instance}`;
+
+    const instanceOf = (name: string | null | undefined) => {
+      const rest =
+        name?.startsWith(prefix) === true ? name.slice(prefix.length) : "";
+
+      return instancePattern.test(rest) ? rest : undefined;
+    };
+
+    const record = (handle: Handle) =>
+      api.machine(handle).pipe(Effect.catchIf(isGone, () => Effect.undefined));
+
+    const autoStopSeconds = yield* Effect.cached(
+      Effect.map(api.account, (account) =>
+        account.plan.allowAlwaysOn ? 0 : idleStopSeconds
+      )
+    );
+
+    const settle = (
+      machine: Target,
+      goal: Goal
+    ): Effect.Effect<void, ApiError | WrongState> =>
+      Effect.gen(function* () {
+        const found = yield* record(machine.handle);
+        const state = found?.state ?? "missing";
+        const move = moveOf(goal, state);
+
+        if (move === "done") {
+          return;
+        }
+
+        if (move === "stuck") {
+          return yield* new WrongState({
+            message: `${machine.name} is ${state} at smol cloud, and can't be brought ${goal} from there`,
+            machine: machine.name,
+            state,
+          });
+        }
+
+        yield* move === "wait"
+          ? Effect.sleep(poll)
+          : (move === "delete"
+              ? api.deleteMachine(machine.handle)
+              : api.act(machine.handle, move)
+            ).pipe(
+              Effect.catchIf(
+                (error) =>
+                  unknownOutcome(error) || isConflict(error) || isGone(error),
+                (error) => (isGone(error) ? Effect.void : waited(error))
+              )
+            );
+
+        return yield* settle(machine, goal);
+      });
+
+    const toward = (machine: Target, goal: Goal) =>
+      Effect.mapError(
+        settle(machine, goal),
+        (error): Capacity | Internal | WrongState => {
+          if (error._tag === "WrongState") {
+            return error;
+          }
+
+          return isConflict(error)
+            ? new WrongState({
+                message: error.message,
+                machine: machine.name,
+                state: error.code,
+              })
+            : failure(`${goal === "gone" ? "delete" : goal} ${machine.name}`)(
+                error
+              );
+        }
+      );
+
+    const settled = (machine: Target, goal: Goal) =>
+      bounded(`bringing ${machine.name} ${goal}`)(toward(machine, goal));
+
+    const byName = (name: string) =>
+      Effect.map(
+        api.machines,
+        (all) => all.find((found) => found.name === name)?.id
+      );
+
+    const made = (machine: Identity & Sizes, origin: Origin) => {
+      const name = nameOf(machine.instance);
+
+      switch (origin._tag) {
+        case "image": {
+          return Effect.flatMap(autoStopSeconds, (autoStop) =>
+            api.create({
+              name,
+              image: origin.image,
+              sizes: {
+                cpus: machine.cpu,
+                memoryMb: machine.ramMib,
+                diskGb: machine.diskGib,
+              },
+              ttlSeconds: settings.ttlSeconds,
+              autoStopSeconds: autoStop,
+            })
+          );
+        }
+
+        case "checkpoint": {
+          return Effect.flatMap(autoStopSeconds, (autoStop) =>
+            api.restore(origin.checkpoint.handle, name, autoStop)
+          );
+        }
+
+        case "machine": {
+          return api.branch(origin.machine.handle, name);
+        }
+      }
+    };
+
+    const created = (
+      machine: Identity & Sizes,
+      origin: Origin,
+      tries = 5
+    ): Effect.Effect<Handle, ApiError> =>
+      Effect.flatMap(Effect.result(made(machine, origin)), (answered) => {
+        if (answered._tag === "Success") {
+          return Effect.succeed(answered.success.id);
+        }
+
+        const error = answered.failure;
+
+        if (!unknownOutcome(error) && !isConflict(error)) {
+          return Effect.fail(error);
+        }
+
+        return Effect.andThen(
+          waited(error),
+          Effect.flatMap(byName(nameOf(machine.instance)), (handle) =>
+            Effect.fromNullishOr(handle).pipe(
+              Effect.catch(() =>
+                tries > 1 && unknownOutcome(error)
+                  ? created(machine, origin, tries - 1)
+                  : Effect.fail(error)
+              )
+            )
+          )
+        );
+      });
+
+    const pruned = (machine: Target, checkpoint: Handle) =>
+      api.deleteCheckpoint(checkpoint).pipe(
+        Effect.catchIf(isGone, () => Effect.void),
+        Effect.catchIf(isConflict, (error) =>
+          Effect.logWarning(
+            `smol cloud keeps checkpoint ${checkpoint} of ${machine.name}, which no row keeps, as it refused its delete: ${error.detail}`
+          )
+        ),
+        Effect.mapError(
+          internal(
+            `delete checkpoint ${checkpoint} of ${machine.name}, which no row keeps`
+          )
+        )
+      );
+
+    const unkept = (machine: Target, keep: ReadonlySet<Handle>) =>
+      Effect.flatMap(
+        read(`the checkpoints of ${machine.name}`, api.checkpoints),
+        (all) =>
+          Effect.forEach(
+            all.filter(
+              (checkpoint) =>
+                checkpoint.machineId === machine.handle &&
+                !keep.has(checkpoint.id)
+            ),
+            (checkpoint) => pruned(machine, checkpoint.id),
+            { discard: true }
+          )
+      );
+
+    const available = (machine: Target, checkpoint: Handle) =>
+      api.checkpoint(checkpoint).pipe(
+        Effect.flatMap(({ status }) =>
+          status === "available" || status === "failed"
+            ? Effect.succeed(status === "available")
+            : Effect.fail(
+                new Api.Unanswered({
+                  message: `checkpoint ${checkpoint} is ${status}`,
+                })
+              )
+        ),
+        Effect.retry({
+          while: unknownOutcome,
+          schedule: Schedule.spaced(poll),
+          times: 600,
+        }),
+        Effect.mapError(internal(`capture ${machine.name}`))
+      );
+
+    const streamed = (
+      machine: Target,
+      body: Api.ExecBody
+    ): Effect.Effect<Execution, Internal, Scope.Scope> =>
+      Effect.gen(function* () {
+        const what = `exec in ${machine.name}`;
+
+        const frames = yield* Effect.mapError(
+          api.exec(machine.handle, body),
+          internal(what)
+        );
+
+        const exit = yield* Deferred.make<number, Internal>();
+
+        const output = frames.pipe(
+          Stream.mapError(internal(what)),
+          Stream.mapEffect((frame) => {
+            switch (frame._tag) {
+              case "output": {
+                return Effect.succeed([encoder.encode(frame.data)]);
+              }
+
+              case "exit": {
+                return Effect.as(Deferred.succeed(exit, frame.exitCode), []);
+              }
+
+              case "error": {
+                return Effect.fail(
+                  new Internal({ message: `${what}: ${frame.data}` })
+                );
+              }
+            }
+          }),
+          Stream.flattenIterable,
+          Stream.onExit((ended) =>
+            ended._tag === "Failure"
+              ? Deferred.failCause(exit, ended.cause)
+              : Deferred.fail(
+                  exit,
+                  new Internal({ message: `${what} ended with no exit code` })
+                )
+          )
+        );
+
+        return { output, exitCode: Deferred.await(exit) };
+      });
+
+    const exitOf = (machine: Target, body: Api.ExecBody) =>
+      Effect.scoped(
+        Effect.flatMap(streamed(machine, body), ({ output, exitCode }) =>
+          Effect.andThen(Stream.runDrain(output), exitCode)
+        )
+      );
+
+    const staging = (
+      machine: Target,
+      file: string,
+      user: string | undefined,
+      stdin: Uint8Array
+    ) =>
+      Effect.forEach(
+        wholeCharacterChunks(stdin),
+        (chunk) =>
+          Effect.flatMap(
+            exitOf(machine, {
+              command: ["sh", "-c", 'umask 077 && cat >>"$1"', "sh", file],
+              user,
+              stdin: chunk,
+            }),
+            (code) =>
+              code === 0
+                ? Effect.void
+                : Effect.fail(
+                    new Internal({
+                      message: `couldn't stage stdin for a command in ${machine.name}: cat exited ${code}`,
+                    })
+                  )
+          ),
+        { discard: true }
+      );
+
+    const unstaged = (
+      machine: Target,
+      file: string,
+      user: string | undefined
+    ) =>
+      exitOf(machine, { command: ["rm", "-f", file], user }).pipe(
+        Effect.timeout(unstageTimeout),
+        Effect.ignore
+      );
+
+    const exec = (machine: Target, command: Command) => {
+      const stdin = encoder.encode(command.stdin ?? "");
+
+      if (stdin.length <= stdinLimit) {
+        return streamed(machine, {
+          command: command.argv,
+          user: command.user,
+          stdin: command.stdin,
+        });
+      }
+
+      const file = stagedStdin();
+
+      return Effect.gen(function* () {
+        yield* Effect.addFinalizer(() => unstaged(machine, file, command.user));
+        yield* staging(machine, file, command.user, stdin);
+
+        return yield* streamed(machine, {
+          command: [
+            "sh",
+            "-c",
+            'f=$1; shift; exec <"$f"; rm -f "$f"; exec "$@"',
+            "sh",
+            file,
+            ...command.argv,
+          ],
+          user: command.user,
+        });
+      });
+    };
+
+    const capacity = Effect.gen(function* () {
+      const [account, inUse, all] = yield* Effect.all(
+        [api.account, api.inUse, api.machines],
+        { concurrency: "unbounded" }
+      );
+
+      const cpus = all
+        .filter((found) => stateOf(found) === "running")
+        .reduce((sum, found) => sum + found.resources.cpus, 0);
+
+      const readings: readonly Reading[] = [
+        {
+          resource: "runningMachines",
+          used: inUse.startedMachines,
+          limit: account.effectiveMaxConcurrentMachines,
+        },
+        { resource: "cpu", used: cpus, limit: account.effectiveMaxCpus },
+        { resource: "ramMib", used: inUse.startedMemoryMb },
+      ];
+
+      return readings;
+    });
+
+    const marked = Effect.gen(function* () {
+      const [machines, checkpoints] = yield* Effect.all(
+        [api.machines, api.checkpoints],
+        { concurrency: 2 }
+      );
+
+      return machines.flatMap((found) => {
+        const instance = instanceOf(found.name);
+
+        return instance === undefined
+          ? []
+          : [
+              {
+                instance,
+                handle: found.id,
+                checkpoints: checkpoints
+                  .filter(({ machineId }) => machineId === found.id)
+                  .map(({ id }) => id),
+              },
+            ];
+      });
+    });
+
+    const observe = (machines: readonly Target[]) => {
+      const [only] = machines;
+
+      if (machines.length === 1 && only !== undefined) {
+        return Effect.map(
+          record(only.handle),
+          (found): Observed => new Map([[only.name, stateOf(found)]])
+        );
+      }
+
+      return Effect.map(api.machines, (all): Observed => {
+        const byHandle = new Map(all.map((found) => [found.id, found]));
+
+        return new Map(
+          machines.map(({ name, handle }) => [
+            name,
+            stateOf(byHandle.get(handle)),
+          ])
+        );
+      });
+    };
+
+    const runtime: Interface = {
+      traits,
+      guest: "debian",
+      version: "v1",
+      pin: undefined,
+      prepares: "always",
+      reach: {
+        _tag: "relayed",
+        address: host.listen.address,
+        dial: tunnel(api, sockets),
+      },
+      admission: undefined,
+      files: undefined,
+      owned: {
+        machines: read("the machines this host made", marked),
+        checkpoints: Effect.succeed([]),
+      },
+      sizable: () => Effect.void,
+      startup: Effect.void,
+      find: (what, ref) =>
+        what === "machine"
+          ? read(
+              `the search for machine ${ref.name}`,
+              byName(nameOf(ref.instance))
+            )
+          : Effect.undefined,
+      observe: (machines) => read("the machines' states", observe(machines)),
+      capacity: () => read("the account's capacity", capacity),
+      make: (machine, origin) =>
+        Effect.gen(function* () {
+          const handle = yield* Effect.mapError(
+            created(machine, origin),
+            failure(`make ${machine.name}`)
+          );
+
+          yield* toward(targetOf(machine, handle), "running");
+
+          const found = yield* read(
+            `the read of ${machine.name}`,
+            record(handle)
+          );
+
+          if (found === undefined) {
+            return yield* missing(traits.runtime, machine);
+          }
+
+          return { handle, sizes: sizesOf(found, machine) };
+        }).pipe(bounded(`make ${machine.name}`)),
+      start: (machine, keep) =>
+        Effect.andThen(
+          toward(machine, "running"),
+          unkept(machine, keep).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning(
+                `${error.message}, so the machine's next start or remove prunes it`
+              )
+            )
+          )
+        ).pipe(bounded(`start ${machine.name}`)),
+      stop: (machine) =>
+        Effect.mapError(
+          settled(machine, "stopped"),
+          (error) => new Internal({ message: error.message })
+        ),
+      pause: (machine) =>
+        Effect.catchTag(settled(machine, "paused"), "Capacity", (error) =>
+          Effect.fail(new Internal({ message: error.message }))
+        ),
+      delete: (machine, keep) =>
+        Effect.andThen(toward(machine, "gone"), unkept(machine, keep)).pipe(
+          bounded(`delete ${machine.name}`),
+          Effect.mapError((error) => new Internal({ message: error.message }))
+        ),
+      capture: (machine) =>
+        Effect.gen(function* () {
+          const checkpoint = yield* api.capture(machine.handle).pipe(
+            Effect.mapError((error) =>
+              isConflict(error)
+                ? new WrongState({
+                    message: `capture ${machine.name}: ${error.message}`,
+                    machine: machine.name,
+                    state: error.code,
+                  })
+                : failure(`capture ${machine.name}`)(error)
+            )
+          );
+
+          if (!(yield* available(machine, checkpoint.id))) {
+            yield* Effect.ignore(api.deleteCheckpoint(checkpoint.id));
+
+            return yield* new Internal({
+              message: `capture ${machine.name}: smol cloud's checkpoint ${checkpoint.id} failed`,
+            });
+          }
+
+          return checkpoint.id;
+        }).pipe(bounded(`capture ${machine.name}`)),
+      resize: (machine, to) =>
+        api
+          .resize(machine.handle, {
+            cpus: to.cpu,
+            memoryMb: to.ramMib,
+            diskGb: to.diskGib,
+          })
+          .pipe(
+            Effect.mapError((error) =>
+              error._tag === "Refused" &&
+              (error.status === 400 || error.status === 422) &&
+              !refusedRoom(error)
+                ? new Unsizable({
+                    message: `resize ${machine.name}: ${error.detail}`,
+                  })
+                : internal(`resize ${machine.name}`)(error)
+            ),
+            bounded(`resize ${machine.name}`)
+          ),
+      sizes: (machine) =>
+        Effect.map(
+          read(`the read of ${machine.name}`, api.machine(machine.handle)),
+          (found): Sizing => ({
+            cpu: found.resources.cpus,
+            ramMib: found.resources.memoryMb,
+            diskGib: found.resources.diskGb ?? undefined,
+          })
+        ),
+      deleteCheckpoint: (checkpoint) =>
+        api.deleteCheckpoint(checkpoint.handle).pipe(
+          Effect.catchIf(isGone, () => Effect.void),
+          Effect.retry({
+            while: unknownOutcome,
+            schedule: Schedule.spaced(poll),
+            times: 5,
+          }),
+          Effect.mapError((error) =>
+            isConflict(error)
+              ? new Conflict({
+                  message: `smol cloud keeps checkpoint ${checkpoint.name}: ${error.detail}`,
+                })
+              : internal(`delete checkpoint ${checkpoint.name}`)(error)
+          ),
+          bounded(`delete checkpoint ${checkpoint.name}`)
+        ),
+      exec,
+    };
+
+    return runtime;
+  });
+
+export const layer = (
+  settings: SmolCloudSettings,
+  host: HostSettings
+): Layer.Layer<
+  Runtime,
+  HostError | CannotStart,
+  | ChildProcessSpawner.ChildProcessSpawner
+  | FileSystem.FileSystem
+  | HttpClient.HttpClient
+> =>
+  Layer.effect(
+    Runtime,
+    Effect.gen(function* () {
+      if (host.id.length > longestHostId) {
+        return yield* new CannotStart({
+          message: `a smol cloud host's ID is at most ${longestHostId} characters, as the provider caps a machine's name at 63, and ${host.id} has ${host.id.length}`,
+        });
+      }
+
+      const fs = yield* FileSystem.FileSystem;
+
+      const key = yield* fs.readFileString(settings.apiKeyFile).pipe(
+        Effect.map((text) => Redacted.make(text.trim())),
+        Effect.mapError(
+          () =>
+            new CannotStart({
+              message: `couldn't read the smol cloud API key from ${settings.apiKeyFile}`,
+            })
+        )
+      );
+
+      const api = yield* Api.make(settings.api ?? defaultApi, key);
+
+      return yield* make(
+        settings,
+        host,
+        api,
+        yield* Socket.WebSocketConstructor
+      );
+    }).pipe(Effect.provide(NodeSocket.layerWebSocketConstructor))
+  );

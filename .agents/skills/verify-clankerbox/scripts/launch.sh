@@ -3,7 +3,7 @@ set -eu
 . "$(dirname "$0")/common.sh"
 
 usage() {
-  echo "usage: launch.sh [runtime | runtime:hosts[,runtime:hosts...]] [ram-budget-mib] [hosts], each runtime smolvm, tart or fixed" >&2
+  echo "usage: launch.sh [runtime | runtime:hosts[,runtime:hosts...]] [ram-budget-mib] [hosts], each runtime smolvm, tart, fixed or smol-cloud" >&2
   exit 2
 }
 
@@ -18,7 +18,7 @@ set -f
 IFS=,
 for entry in $fleet; do
   case $entry in
-    smolvm:* | tart:* | fixed:*) ;;
+    smolvm:* | tart:* | fixed:* | smol-cloud:*) ;;
     *) usage ;;
   esac
   case ${entry#*:} in

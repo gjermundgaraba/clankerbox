@@ -39,7 +39,7 @@ release. Add a tool name to select part of the graph. For example, run
 | `packages/sdk/`                 | The client contract, its schemas and errors, the client                |
 | `packages/host-contract/`       | The host contract, private: shared by the server and the host alone    |
 | `apps/server/`                  | The control plane: rows, charts, leases, the loops, placement          |
-| `apps/host/`                    | A host: runs operations on the two runtimes, and keeps no database     |
+| `apps/host/`                    | A host: runs operations on one of the runtimes, and keeps no database  |
 | `apps/cli/`                     | The CLI: its commands, over the SDK                                    |
 | `packages/rivet-sandbox-agent/` | The Sandbox Agent provider and its recipes                             |
 | `packages/amp-orbs/`            | The Amp orb provider: the dispatch program `amp orb provider` runs     |
@@ -140,14 +140,20 @@ or `composition/`.
   the suite each runtime passes over its own fake provider: the fake runtime's
   three presets, `smolvm`, `tart` and `fixed`, which is neither and has size
   classes, a pause that stops, machines that stop on their own and the `owned`
-  facet, and the two adapters over `tests/smolvm-model.ts` and
-  `tests/scripted-mac.ts`.
+  facet, and the three adapters over `tests/smolvm-model.ts`,
+  `tests/scripted-mac.ts` and `tests/fake-smol-cloud.ts`.
 
 Adapters live in `platform/`: `bind-probe.ts` (`PortProbe`), `relay.ts`
 (`Relays`, a TCP listener that carries each connection through a runtime's
 dial), `tailscale.ts` (`Tailnet`, over Tailscale's API), `s3.ts` (`BuildStore`,
-over S3, path-style and signed), the runtimes `smolvm/` and `tart/`, each with
-its `RuntimeTraits` in its `traits.ts`, and what they share, `process.ts`. A domain file never imports `platform/` or `composition/`.
+over S3, path-style and signed), the runtimes `smolvm/`, `tart/` and
+`smol-cloud/` (smol cloud's API in `api.ts`, the SSH tunnel in `tunnel.ts`),
+each with its `RuntimeTraits` in its `traits.ts`, and what they share,
+`process.ts`. `tests/fake-smol-cloud.ts` serves smol cloud's API over loopback
+for the adapter's tests and `tests/smol-cloud/serve.ts`, and
+`tests/live/smol-cloud.test.ts`, run by `vp run test:live` in `apps/host` with
+`SMOL_MACHINES_API_KEY` and `TAILSCALE_AUTHKEY` set and never in CI, checks the
+real account. A domain file never imports `platform/` or `composition/`.
 
 `composition/` assembles the host: `config.ts` reads the config file,
 `runtimes.ts` is the registry of runtimes, one entry each under the name a host
@@ -219,7 +225,8 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
   `main.ts` and the provider's `provider.ts`, in the provider's tests that
   drive its Promise API or a child program, in the Amp orb provider's `main.ts`,
   and in `tests/serve.ts` of the server
-  and the host, the programs that serve them over the fake runtime for the
+  and the host and the host's `tests/smol-cloud/serve.ts`, the programs that
+  serve them over the fake runtime or the fake smol cloud API for the
   `verify-clankerbox` skill.
 - **Property and model tests** cover IDs, units, the RAM budget, recipe
   packing, the rules of runtime traits, and the store's `advance` and leases, as models checked against

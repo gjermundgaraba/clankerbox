@@ -50,7 +50,16 @@ fleet's order and are named `<runtime>-<n>`, numbered per runtime: `fixed-1`,
   `default` 2, 4G, 20G; `large` 4, 8G, 40G), a pause that stops, disk
   checkpoints, machines that stop unasked, and machines that carry the host's
   mark, so that at each recheck the host deletes what it marked whose instance
-  the control plane retired and no step it holds names. Its base is `ubuntu`.
+  the control plane retired and no step it holds names. Its base is `ubuntu`;
+- `smol-cloud`, which is no fake runtime: the real adapter over
+  `fake-smol-cloud.ts`, a fake of smol cloud's API that runs as its own process
+  so it outlives a host `fault.sh` kills, shared by every `smol-cloud` host of
+  the run. It logs each call it answers, `METHOD /path STATUS` with no body, to
+  `evidence/smol-cloud-calls.txt`. Its base is `ubuntu`, it takes no budget,
+  and `drift` is refused, as a smol cloud host isn't told a machine's instance
+  by its name. Set `CLANKERBOX_FAKE_TAILNET=1` for `fault.sh start-host` too, or
+  the restarted host joins nothing. A host runs `apps/host/tests/<runtime>/serve.ts`
+  where its runtime has one, and `apps/host/tests/serve.ts` otherwise.
 
 The budget applies to each host. A `fixed` host's fake has no admission, so no
 start there is checked against it; it shows only as the limit its `capacity`

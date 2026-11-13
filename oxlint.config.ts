@@ -2,7 +2,7 @@ import { config } from "@clanker-stuff/oxlint-config";
 
 const adapterPackages = [
   "^node:(?!sqlite)",
-  "^effect(/(encoding|http|process))?$",
+  "^effect(/(encoding|http|process|socket))?$",
   "^@effect/platform-node/",
   "^@gjermundgaraba/clankerbox-sdk$",
 ];
@@ -27,6 +27,7 @@ export default config({
         "apps/cli/src/main.ts",
         "apps/host/src/main.ts",
         "apps/host/tests/serve.ts",
+        "apps/host/tests/smol-cloud/serve.ts",
         "apps/server/src/main.ts",
         "apps/server/tests/serve.ts",
         "packages/amp-orbs/src/main.ts",
