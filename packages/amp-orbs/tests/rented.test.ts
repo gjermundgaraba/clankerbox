@@ -47,7 +47,7 @@ const stub = (bin: string, name: string, body: string) => {
   chmodSync(file, 0o755);
 };
 
-const furnishAmpImageForLogin = (host: RentedHost) => {
+const furnishImageForLogin = (host: RentedHost, amp: boolean) => {
   const bin = path.join(host.apiDir, "bin");
 
   stub(
@@ -64,11 +64,14 @@ const furnishAmpImageForLogin = (host: RentedHost) => {
       'echo "$CLANKERBOX_USER:x:1000:1000::$home:/bin/sh"',
     ].join("\n")
   );
-  stub(
-    bin,
-    "amp",
-    'printf "%s\\n" "$*" "user=$(id -un)" "ORB_TOKEN=$ORB_TOKEN" "AMP_URL=$AMP_URL" >"$HOME/amp-ran"'
-  );
+
+  if (amp) {
+    stub(
+      bin,
+      "amp",
+      'printf "%s\\n" "$*" "user=$(id -un)" "ORB_TOKEN=$ORB_TOKEN" "AMP_URL=$AMP_URL" >"$HOME/amp-ran"'
+    );
+  }
 };
 
 const ran = (host: RentedHost) => {
@@ -95,6 +98,20 @@ const eventually = <A>(read: () => A, expected: A) =>
     await expect.poll(read, { timeout: 10_000 }).toStrictEqual(expected);
   });
 
+const hostPathWithoutAmp = Effect.acquireRelease(
+  Effect.sync(() => {
+    const kept = process.env["PATH"];
+
+    process.env["PATH"] = "/usr/bin:/bin";
+
+    return kept;
+  }),
+  (kept) =>
+    Effect.sync(() => {
+      process.env["PATH"] = kept;
+    })
+);
+
 const restoredFrom = (host: RentedHost) =>
   host.api.runtime === "smol-cloud"
     ? [...host.api.fake.machines.values()].filter(
@@ -102,7 +119,10 @@ const restoredFrom = (host: RentedHost) =>
       )
     : [];
 
-const orbsOn = Effect.fn("orbsOn")(function* (runtime: RentedRuntime) {
+const orbsOn = Effect.fn("orbsOn")(function* (
+  runtime: RentedRuntime,
+  { amp = true }: { readonly amp?: boolean } = {}
+) {
   const dir = yield* scratch;
 
   const host = yield* startRentedHost(path.join(dir, "host"), {
@@ -111,7 +131,7 @@ const orbsOn = Effect.fn("orbsOn")(function* (runtime: RentedRuntime) {
     ports: portsOn[runtime],
   });
 
-  furnishAmpImageForLogin(host);
+  furnishImageForLogin(host, amp);
 
   const plane = yield* running({
     hosts: [],
@@ -237,6 +257,24 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         }
 
         expect(yield* client.listMachines()).toStrictEqual([]);
+      }),
+    60_000
+  );
+
+  it.effect(
+    "a spawn into an image whose login user has no amp fails, saying so",
+    () =>
+      Effect.gen(function* () {
+        yield* hostPathWithoutAmp;
+
+        const { dispatched } = yield* orbsOn("smol-cloud", { amp: false });
+
+        const spawned = yield* dispatched(spawnEnv);
+
+        expect(spawned.code).toBe(1);
+        expect(spawned.stderr).toContain(
+          `starting amp orb bootstrap in ${orb} exited 127: amp isn't on ${login}'s PATH`
+        );
       }),
     60_000
   );

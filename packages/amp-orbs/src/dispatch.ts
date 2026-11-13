@@ -25,7 +25,8 @@ export class BootstrapFailed extends Schema.TaggedError<
 
 /**
  * Starts `amp orb bootstrap` as the login user, detached from the command so it runs for the life
- * of the orb, with `ORB_TOKEN` and `AMP_URL` as the command's environment gave them. One already
+ * of the orb, with `ORB_TOKEN` and `AMP_URL` as the command's environment gave them. It fails at
+ * once when the login user has no `amp`, which the detached start would only log. One already
  * running is ended first: a resumed or restored machine keeps the processes it paused with, and
  * that bootstrap holds the previous job's token. The script goes to the shell on stdin, so no
  * command line carries its text for the pattern to match, and the bracket keeps the pattern from
@@ -36,6 +37,7 @@ export const bootstrapScript = [
   'HOME=$(getent passwd "$(id -un)" | cut -d: -f6)',
   "export HOME",
   'cd "$HOME"',
+  `command -v amp >/dev/null || { echo "amp isn't on $(id -un)'s PATH: $PATH"; exit 127; }`,
   'pkill -u "$(id -un)" -f "amp orb bootstra[p]" || true',
   'setsid amp orb bootstrap </dev/null >>"$HOME/.amp-orb-bootstrap.log" 2>&1 &',
   'echo "amp orb bootstrap started as $(id -un) in $HOME, logging to .amp-orb-bootstrap.log"',
