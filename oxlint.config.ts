@@ -309,6 +309,46 @@ export default config({
       },
     },
     {
+      files: [
+        "packages/rivet-sandbox-agent/src/fetch.ts",
+        "packages/rivet-sandbox-agent/src/index.ts",
+        "packages/rivet-sandbox-agent/src/tunnel.ts",
+      ],
+      rules: {
+        "fence/allowed-imports": [
+          "error",
+          {
+            allow: [
+              "^\\./[a-z-]+\\.ts$",
+              "^effect$",
+              "^@effect/platform-node/[A-Za-z]+$",
+              "^@gjermundgaraba/clankerbox-sdk(/node)?$",
+              "^node:[a-z_/]+$",
+            ],
+            because:
+              "the provider's Node files take Node, @effect/platform-node and the SDK, never the server or the host its tests take",
+          },
+        ],
+      },
+    },
+    {
+      files: ["packages/amp-orbs/src/main.ts"],
+      rules: {
+        "fence/allowed-imports": [
+          "error",
+          {
+            allow: [
+              "^\\./[a-z-]+\\.ts$",
+              "^effect$",
+              "^@effect/platform-node/[A-Za-z]+$",
+            ],
+            because:
+              "the Amp orb provider's main.ts takes Node's Layers from @effect/platform-node, never the server or the host its tests take",
+          },
+        ],
+      },
+    },
+    {
       excludeFiles: ["packages/sdk/src/node.ts"],
       files: ["packages/sdk/src/**/*.ts"],
       rules: {

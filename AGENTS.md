@@ -54,8 +54,8 @@ URL, and hosts only as the operator's views `hosts` and `capacity`. Each
 package's `package.json` dependencies hold that boundary, since pnpm resolves
 nothing else. Its dev dependencies resolve in `src` as well, so the lint fence
 keeps an app's `src` off the apps its tests take. Tests are the one place apps
-meet: the server's take the host's `./testing`, and the CLI's the server's,
-each as a dev dependency.
+meet: the server's take the host's `./testing`, the CLI's the server's, and
+each provider's the server's and the host's, each as a dev dependency.
 
 ## Layout
 
@@ -402,7 +402,9 @@ the server's and the CLI's tests each run to claim a slot for the run.
   and its siblings, so a client can't reach the host contract; the provider takes
   Node and `@effect/platform-node` only in `index.ts`, `tunnel.ts` and
   `fetch.ts`, and the
-  Amp orb provider only in `main.ts`, but for `node:crypto`'s hash; the SDK's
+  Amp orb provider only in `main.ts`, but for `node:crypto`'s hash, and those
+  files take nothing more, so no provider's `src` reaches the server or the
+  host its tests take; the SDK's
   `.` entry imports no Node and uses no `Buffer` or `process`; and
   `fence/no-manual-run` keeps hand-run Effect to the files above.
 
