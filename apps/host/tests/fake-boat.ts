@@ -35,6 +35,7 @@ export interface FakeBoatOptions {
   readonly dir: string;
   readonly id?: string | undefined;
   readonly keepsStoppedFor?: Duration.Input | undefined;
+  readonly pageSize?: number | undefined;
   readonly onCall?: ((call: string, request: FakeRequest) => void) | undefined;
 }
 
@@ -78,12 +79,23 @@ interface Answer {
   readonly status: number;
   readonly body: object;
   readonly start?: boolean | undefined;
+  readonly lands?: "late" | undefined;
 }
 
 interface Landing {
   readonly due: number;
-  readonly key: string | undefined;
+  readonly key: Keyed | undefined;
   readonly land: () => Promise<FakeSandbox>;
+}
+
+interface Keyed {
+  readonly key: string;
+  readonly body: string;
+}
+
+interface Minted {
+  readonly id: string;
+  readonly body: string;
 }
 
 const Offered = Schema.Literals(["small", "default", "large"]);
@@ -251,7 +263,7 @@ const header = (request: IncomingMessage, name: string) => {
   return isText(value) ? value : undefined;
 };
 
-export type BoatCall = Dropped | "save" | "unsave";
+export type BoatCall = Dropped | "save" | "unsave" | "resume";
 
 const callOf = (
   method: string,
@@ -260,6 +272,10 @@ const callOf = (
   const [collection, , action] = parts;
 
   if (method === "POST" && collection === "sandboxes") {
+    if (action === "resume") {
+      return "resume";
+    }
+
     return parts.length === 1 || action === "fork" ? "make" : undefined;
   }
 
@@ -489,10 +505,19 @@ export const fakeBoat = (
     const sandboxes = new Map<string, FakeSandbox>();
     const deletions = new Map<string, { id: string; status: string }>();
     const snapshots = new Map<string, FakeSnapshot>();
-    const idempotent = new Map<string, string>();
+    const idempotent = new Map<string, Minted>();
+    const pendingSaves: Array<() => Promise<void>> = [];
     const calls: string[] = [];
     const requests: FakeRequest[] = [];
     const dropping = new Set<BoatCall>();
+    const losing = new Set<BoatCall>();
+    const pageSize = options.pageSize ?? 200;
+    let savingLate = false;
+    let listsLagging = 0;
+
+    const malformed: Array<{ readonly name: string; readonly status: null }> =
+      [];
+
     const refusing = new Set<BoatCall>();
     const lateBy: number[] = [];
     const landings: Landing[] = [];
@@ -514,21 +539,22 @@ export const fakeBoat = (
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(apiKeyFile, `${apiKey}\n`, { mode: 0o600 });
 
+    const answeredJson = (sandbox: FakeSandbox) => ({
+      id: sandbox.id,
+      name: sandbox.name,
+      state: sandbox.inPassing ?? (sandbox.running ? "ready" : "archived"),
+      type: sandbox.type,
+      labels: sandbox.labels,
+      createdAt: sandbox.createdAt,
+      dataExpiredAt: null,
+    });
+
     const sandboxJson = (sandbox: FakeSandbox) => {
-      const state =
-        sandbox.inPassing ?? (sandbox.running ? "ready" : "archived");
+      const json = answeredJson(sandbox);
 
       sandbox.inPassing = undefined;
 
-      return {
-        id: sandbox.id,
-        name: sandbox.name,
-        state,
-        type: sandbox.type,
-        labels: sandbox.labels,
-        createdAt: sandbox.createdAt,
-        dataExpiredAt: null,
-      };
+      return json;
     };
 
     const snapshotJson = (snapshot: FakeSnapshot) => ({
@@ -603,23 +629,49 @@ export const fakeBoat = (
 
         const landed = await landing.land();
 
-        if (landing.key !== undefined && !idempotent.has(landing.key)) {
-          idempotent.set(landing.key, landed.id);
+        if (landing.key !== undefined && !idempotent.has(landing.key.key)) {
+          idempotent.set(landing.key.key, {
+            id: landed.id,
+            body: landing.key.body,
+          });
         }
       }
     };
 
     const created = (sandbox: FakeSandbox): Answer => ({
       status: 202,
-      body: { type: "sandbox.created", sandbox: sandboxJson(sandbox) },
+      body: { type: "sandbox.created", sandbox: answeredJson(sandbox) },
     });
 
     const make = async (
-      key: string | undefined,
+      key: Keyed | undefined,
       land: () => Promise<FakeSandbox>
     ): Promise<Answer> => {
-      const known = key === undefined ? undefined : idempotent.get(key);
-      const replayed = known === undefined ? undefined : sandboxes.get(known);
+      const known = key === undefined ? undefined : idempotent.get(key.key);
+
+      if (known !== undefined && known.body !== key?.body) {
+        return refused(
+          409,
+          "idempotency_key_reused",
+          "This Idempotency-Key was already used with a different request body."
+        );
+      }
+
+      const replayed =
+        known === undefined ? undefined : sandboxes.get(known.id);
+
+      if (replayed?.inPassing === "provisioning") {
+        starts += 1;
+
+        return {
+          ...refused(
+            409,
+            "idempotency_in_progress",
+            "A sandbox for this Idempotency-Key is still being created. Retry shortly with the same key."
+          ),
+          start: true,
+        };
+      }
 
       if (replayed !== undefined) {
         return created(replayed);
@@ -640,7 +692,10 @@ export const fakeBoat = (
       const landed = await land();
 
       if (key !== undefined) {
-        idempotent.set(key, landed.id);
+        idempotent.set(key.key, {
+          id: landed.id,
+          body: key.body,
+        });
       }
 
       return { ...created(landed), start: true };
@@ -648,7 +703,7 @@ export const fakeBoat = (
 
     const create = async (
       body: MakeBody,
-      key: string | undefined
+      key: Keyed | undefined
     ): Promise<Answer> => {
       const snapshot =
         body.from === undefined ? undefined : snapshots.get(body.from);
@@ -678,7 +733,7 @@ export const fakeBoat = (
     const fork = async (
       source: FakeSandbox,
       body: MakeBody,
-      key: string | undefined
+      key: Keyed | undefined
     ): Promise<Answer> => {
       const type = typeIn(body.type, source.type);
 
@@ -839,6 +894,10 @@ export const fakeBoat = (
         };
       }
 
+      for (const late of pendingSaves.splice(0)) {
+        await late();
+      }
+
       const operation = { id: minted("bdop"), status: "completed" };
 
       deletions.set(id, operation);
@@ -887,6 +946,22 @@ export const fakeBoat = (
         status: "saving",
       };
 
+      if (savingLate) {
+        savingLate = false;
+        pendingSaves.push(async () => {
+          snapshots.set(name, snapshot);
+        });
+
+        return {
+          status: 202,
+          body: {
+            type: "snapshot.saved.saving",
+            snapshot: snapshotJson(snapshot),
+          },
+          lands: "late",
+        };
+      }
+
       snapshots.set(name, snapshot);
 
       return {
@@ -921,15 +996,30 @@ export const fakeBoat = (
         return [pair.slice(0, at), pair.slice(at + 1)] as const;
       });
 
+      const limit = Math.min(
+        Number(url.searchParams.get("limit") ?? "100"),
+        pageSize
+      );
+
+      const from = Number(url.searchParams.get("cursor") ?? "0");
+
+      const lags = listsLagging > 0;
+
+      listsLagging = Math.max(0, listsLagging - 1);
+
+      const matching = [...sandboxes.values()].filter(
+        (sandbox) =>
+          !(lags && sandbox.inPassing === "provisioning") &&
+          wanted.every(([name, value]) => sandbox.labels[name] === value)
+      );
+
+      const next = from + limit < matching.length ? String(from + limit) : null;
+
       return {
         status: 200,
         body: {
-          sandboxes: [...sandboxes.values()].flatMap((sandbox) =>
-            wanted.every(([name, value]) => sandbox.labels[name] === value)
-              ? [sandboxJson(sandbox)]
-              : []
-          ),
-          pageInfo: { nextCursor: null },
+          sandboxes: matching.slice(from, from + limit).map(sandboxJson),
+          pageInfo: { nextCursor: next, hasMore: next !== null, limit },
         },
       };
     };
@@ -964,8 +1054,38 @@ export const fakeBoat = (
       },
     });
 
+    const savedList = (url: URL): Answer => {
+      const unknown = [...url.searchParams.keys()].find(
+        (param) => !["name", "namePrefix", "org"].includes(param)
+      );
+
+      if (unknown !== undefined) {
+        return refused(
+          400,
+          "invalid_query",
+          `Unknown query parameter "${unknown}". This list accepts: name, namePrefix, org.`
+        );
+      }
+
+      const prefix = url.searchParams.get("namePrefix") ?? "";
+
+      return {
+        status: 200,
+        body: {
+          snapshots: [
+            ...[...snapshots.values()].flatMap((snapshot) =>
+              snapshot.name.startsWith(prefix) ? [snapshotRead(snapshot)] : []
+            ),
+            ...malformed.filter(({ name }) => name.startsWith(prefix)),
+          ],
+          allowance: { included: 10, used: snapshots.size },
+        },
+      };
+    };
+
     const savedRoute = async (
       method: string,
+      url: URL,
       name: string | undefined,
       raw: string
     ): Promise<Answer> => {
@@ -975,13 +1095,7 @@ export const fakeBoat = (
               saveBody(raw),
               async (body) => await save(body.sandboxId, body.name)
             )
-          : {
-              status: 200,
-              body: {
-                snapshots: [...snapshots.values()].map(snapshotRead),
-                allowance: { included: 10, used: snapshots.size },
-              },
-            };
+          : savedList(url);
       }
 
       if (method === "DELETE") {
@@ -1001,7 +1115,13 @@ export const fakeBoat = (
       raw: string
     ): Promise<Answer> => {
       const method = request.method ?? "GET";
-      const key = header(request, "idempotency-key");
+      const idempotencyKey = header(request, "idempotency-key");
+
+      const key =
+        idempotencyKey === undefined
+          ? undefined
+          : { key: idempotencyKey, body: raw };
+
       const [, id, action] = url.pathname.split("/").filter(Boolean);
 
       if (id === undefined) {
@@ -1076,7 +1196,7 @@ export const fakeBoat = (
       }
 
       if (collection === "saved-snapshots") {
-        return await savedRoute(method, name, raw);
+        return await savedRoute(method, url, name, raw);
       }
 
       return collection === "sandboxes"
@@ -1105,12 +1225,24 @@ export const fakeBoat = (
 
       const call = callOf(method, url.pathname.split("/").filter(Boolean));
 
+      if (call !== undefined && losing.delete(call)) {
+        const lost = `${method} ${url.pathname} lost`;
+
+        calls.push(lost);
+        options.onCall?.(lost, logged);
+        request.socket.destroy();
+
+        return;
+      }
+
       const answer =
         call !== undefined && refusing.delete(call)
           ? refused(500, "internal_error", `fake boat refused this ${call}`)
           : await route(request, url, raw);
 
-      const drops = call !== undefined && dropping.delete(call);
+      const drops =
+        answer.lands === "late" ||
+        (call !== undefined && dropping.delete(call));
 
       const line = [
         method,
@@ -1249,20 +1381,20 @@ export const fakeBoat = (
       dropAnswer,
     };
 
+    const layerOf = (id: string) =>
+      Boat.layer(
+        { api: url, apiKeyFile },
+        { id, stateDir, listen: { address: "127.0.0.1", port: 0 } }
+      ).pipe(Layer.provide(fakeBoatSsh(url, apiKey)));
+
     return {
       url,
       apiKey,
-      layer: Boat.layer(
-        { api: url, apiKeyFile },
-        {
-          id: options.id ?? "boat",
-          stateDir,
-          listen: { address: "127.0.0.1", port: 0 },
-        }
-      ).pipe(Layer.provide(fakeBoatSsh(url, apiKey))),
+      layer: layerOf(options.id ?? "boat"),
+      layerOf,
       faults,
       unmarked: Effect.promise(async () => {
-        const instance = `other-${randomBytes(4).toString("hex")}`;
+        const instance = randomBytes(16).toString("hex");
 
         const theirs = await born({
           type: "small",
@@ -1283,6 +1415,25 @@ export const fakeBoat = (
         await save(theirs.id, `cbx-${instance}`);
       }),
       dropAnswer,
+      loseRequest: (call: BoatCall) =>
+        Effect.sync(() => {
+          losing.add(call);
+        }),
+      landSaveDuringDelete: Effect.sync(() => {
+        savingLate = true;
+      }),
+      saveAs: (sandboxId: string, name: string) =>
+        Effect.promise(async () => {
+          await save(sandboxId, name);
+        }),
+      malformedSnapshot: (name: string) =>
+        Effect.sync(() => {
+          malformed.push({ name, status: null });
+        }),
+      listsLag: (times: number) =>
+        Effect.sync(() => {
+          listsLagging = times;
+        }),
       refuseOnce: (call: BoatCall) =>
         Effect.sync(() => {
           refusing.add(call);
@@ -1303,9 +1454,15 @@ export interface FakeBoat {
   readonly url: string;
   readonly apiKey: string;
   readonly layer: ReturnType<typeof Boat.layer>;
+  readonly layerOf: (id: string) => ReturnType<typeof Boat.layer>;
   readonly faults: Faults;
   readonly unmarked: Effect.Effect<void>;
   readonly dropAnswer: (call: BoatCall) => Effect.Effect<void>;
+  readonly loseRequest: (call: BoatCall) => Effect.Effect<void>;
+  readonly landSaveDuringDelete: Effect.Effect<void>;
+  readonly listsLag: (times: number) => Effect.Effect<void>;
+  readonly malformedSnapshot: (name: string) => Effect.Effect<void>;
+  readonly saveAs: (sandboxId: string, name: string) => Effect.Effect<void>;
   readonly refuseOnce: (call: BoatCall) => Effect.Effect<void>;
   readonly calls: readonly string[];
   readonly requests: readonly FakeRequest[];

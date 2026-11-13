@@ -40,6 +40,7 @@ import type {
 } from "../../runtime.ts";
 import { KeyedApiUrl } from "../../settings.ts";
 import type { HostSettings } from "../../settings.ts";
+import { answerWithin } from "../process.ts";
 import * as Api from "./api.ts";
 import type { ApiError, Sandbox, SavedSnapshot, SshKey } from "./api.ts";
 import * as Ssh from "./ssh.ts";
@@ -63,6 +64,8 @@ export const instanceLabel = "cbx-instance";
 
 const snapshotPrefix = "cbx-";
 
+const snapshotMark = /^cbx-[0-9a-f]{32}$/u;
+
 const snapshotName = (checkpoint: Pick<Identity, "instance">): string =>
   `${snapshotPrefix}${checkpoint.instance}`;
 
@@ -71,15 +74,27 @@ const heldBy = (
   sandbox: string
 ): Handle[] =>
   snapshots.flatMap(({ name, sourceSandboxId }) =>
-    sourceSandboxId === sandbox && name.startsWith(snapshotPrefix)
+    sourceSandboxId === sandbox && snapshotMark.test(name)
       ? [Handle.make(name)]
       : []
   );
 
 const running = new Set(["ready", "idle", "running"]);
 
+const passing = new Set([
+  "init",
+  "provisioning",
+  "provisioned",
+  "cloning",
+  "archiving",
+]);
+
 const stateOf = (sandbox: Sandbox | undefined): MachineState => {
-  if (sandbox === undefined || (sandbox.dataExpiredAt ?? null) !== null) {
+  if (
+    sandbox === undefined ||
+    sandbox.state === "cancelled" ||
+    (sandbox.dataExpiredAt ?? null) !== null
+  ) {
     return "missing";
   }
 
@@ -106,6 +121,8 @@ const isType = Schema.is(Api.BoatType);
 const pollEvery = Duration.millis(500);
 
 const pollFor = Duration.minutes(10);
+
+const triesAfterLoss = 3;
 
 const internal =
   (what: string) =>
@@ -314,9 +331,18 @@ export const make = (
             )
       );
 
+    const snapshots = api.savedSnapshots(snapshotPrefix, (name) =>
+      snapshotMark.test(name)
+    );
+
+    const searched = (machine: Identity) =>
+      Effect.map(api.sandboxes(labelsOf(machine)), (found) =>
+        found.find(({ state }) => state !== "cancelled")
+      );
+
     const markedMachines = Effect.gen(function* () {
       const sandboxes = yield* api.sandboxes(mark);
-      const snapshots = yield* api.savedSnapshots;
+      const saved = yield* snapshots;
 
       return sandboxes.flatMap((sandbox): MarkedMachine[] => {
         const instance = sandbox.labels?.[instanceLabel];
@@ -327,7 +353,7 @@ export const make = (
               {
                 instance,
                 handle: Handle.make(sandbox.id),
-                checkpoints: heldBy(snapshots, sandbox.id),
+                checkpoints: heldBy(saved, sandbox.id),
               },
             ];
       });
@@ -335,14 +361,12 @@ export const make = (
 
     const prune = (machine: Target, keep: ReadonlySet<Handle>) =>
       Effect.gen(function* () {
-        const snapshots = yield* api.savedSnapshots.pipe(
+        const saved = yield* snapshots.pipe(
           Effect.mapError(internal("couldn't list saved snapshots"))
         );
 
         yield* Effect.forEach(
-          heldBy(snapshots, machine.handle).filter(
-            (handle) => !keep.has(handle)
-          ),
+          heldBy(saved, machine.handle).filter((handle) => !keep.has(handle)),
           (handle) =>
             api
               .unsave(handle)
@@ -351,6 +375,85 @@ export const make = (
               ),
           { discard: true }
         );
+      });
+
+    const awaited = (machine: Identity, inProgress: Api.Refused) =>
+      searched(machine).pipe(
+        Effect.repeat({
+          until: (found) => found !== undefined,
+          schedule: Schedule.spaced(pollEvery),
+        }),
+        timeoutFail(answerWithin.change, () => inProgress),
+        Effect.filterOrFail(
+          (found): found is Sandbox => found !== undefined,
+          () => inProgress
+        )
+      );
+
+    const landed = (
+      machine: Identity,
+      sent: Effect.Effect<Sandbox, ApiError>,
+      tries: number
+    ): Effect.Effect<Sandbox, ApiError> =>
+      sent.pipe(
+        Effect.catchTag("Unanswered", (lost) =>
+          searched(machine).pipe(
+            Effect.filterOrElse(
+              (found): found is Sandbox => found !== undefined,
+              () =>
+                tries > 1 ? landed(machine, sent, tries - 1) : Effect.fail(lost)
+            )
+          )
+        ),
+        Effect.catchIf(
+          (error): error is Api.Refused =>
+            error._tag === "Refused" &&
+            error.code === "idempotency_in_progress",
+          (inProgress) => awaited(machine, inProgress)
+        )
+      );
+
+    const retyped = (
+      machine: Target,
+      type: Api.BoatType
+    ): Effect.Effect<void, Internal | Unsizable> =>
+      Effect.gen(function* () {
+        const sandbox = yield* read(machine);
+        const state = sandbox?.state ?? "missing";
+
+        if (state === "archived" && sandbox?.type === type) {
+          return;
+        }
+
+        if (state === "archived") {
+          yield* api.retype(machine.handle, type).pipe(
+            Effect.catchTag("Unanswered", () => Effect.sleep(pollEvery)),
+            Effect.catchIf(
+              (error) =>
+                error._tag === "Refused" &&
+                error.code === "sandbox_running_stop_first",
+              () => Effect.void
+            ),
+            Effect.mapError((error) =>
+              error._tag === "Refused" && error.code === "type_too_small"
+                ? new Unsizable({
+                    message: `boat keeps ${machine.name} off ${type}: ${error.message}`,
+                  })
+                : internal(`couldn't resize ${machine.name}`)(error)
+            )
+          );
+          pins.delete(machine.handle);
+        } else if (running.has(state)) {
+          yield* stopped(machine);
+        } else if (passing.has(state)) {
+          yield* Effect.sleep(pollEvery);
+        } else {
+          return yield* new Internal({
+            message: `boat holds machine ${machine.name} ${state}, and can't resize it from there`,
+          });
+        }
+
+        return yield* retyped(machine, type);
       });
 
     return {
@@ -372,12 +475,9 @@ export const make = (
       sizable: (machine, _from, to) => Effect.asVoid(typeFor(to, machine.name)),
       find: (what, ref) =>
         what === "machine"
-          ? api.sandboxes(labelsOf(ref)).pipe(
-              Effect.map(
-                (found) => found.find(({ state }) => state !== "cancelled")?.id
-              ),
-              Effect.map((id) =>
-                id === undefined ? undefined : Handle.make(id)
+          ? searched(ref).pipe(
+              Effect.map((sandbox) =>
+                sandbox === undefined ? undefined : Handle.make(sandbox.id)
               ),
               Effect.mapError(internal(`couldn't search for ${ref.name}`))
             )
@@ -422,30 +522,23 @@ export const make = (
           const type = yield* typeFor(machine, machine.name);
           const labels = labelsOf(machine);
 
-          const made = failure(`make ${machine.name}`);
+          const key = `${snapshotPrefix}${host.id}-${machine.instance}`;
 
-          const sandbox = yield* origin._tag === "machine"
-            ? Effect.andThen(
-                sourceStopped(origin.machine),
-                api
-                  .fork(
-                    origin.machine.handle,
-                    { type, labels },
-                    machine.instance
-                  )
-                  .pipe(Effect.mapError(made))
-              )
-            : api
-                .create(
-                  {
-                    type,
-                    labels,
-                    name: machine.name,
-                    ...createdFrom(origin),
-                  },
-                  machine.instance
-                )
-                .pipe(Effect.mapError(made));
+          if (origin._tag === "machine") {
+            yield* sourceStopped(origin.machine);
+          }
+
+          const sent =
+            origin._tag === "machine"
+              ? api.fork(origin.machine.handle, { type, labels }, key)
+              : api.create(
+                  { type, labels, name: machine.name, ...createdFrom(origin) },
+                  key
+                );
+
+          const sandbox = yield* landed(machine, sent, triesAfterLoss).pipe(
+            Effect.mapError(failure(`make ${machine.name}`))
+          );
 
           const handle = Handle.make(sandbox.id);
 
@@ -496,6 +589,7 @@ export const make = (
             .remove(machine.handle)
             .pipe(Effect.mapError(internal(`couldn't delete ${machine.name}`)));
           yield* until(machine, (sandbox) => sandbox === undefined, "delete");
+          yield* prune(machine, keep);
           pins.delete(machine.handle);
         }).pipe(Effect.uninterruptible),
       capture: (machine, checkpoint) =>
@@ -553,16 +647,15 @@ export const make = (
             machine.name
           );
 
-          yield* api
-            .resume(machine.handle, type)
-            .pipe(Effect.mapError(internal(`couldn't resize ${machine.name}`)));
-          yield* until(
-            machine,
-            (sandbox) => sandbox === undefined || running.has(sandbox.state),
-            "resize"
+          yield* retyped(machine, type).pipe(
+            timeoutFail(
+              pollFor,
+              () =>
+                new Internal({
+                  message: `boat didn't resize machine ${machine.name} within ${Duration.format(pollFor)}`,
+                })
+            )
           );
-          pins.delete(machine.handle);
-          yield* stopped(machine);
         }).pipe(Effect.uninterruptible),
       sizes: (machine) =>
         Effect.flatMap(read(machine), (sandbox) =>

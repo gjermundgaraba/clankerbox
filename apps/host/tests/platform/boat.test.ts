@@ -1,11 +1,31 @@
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it } from "@effect/vitest";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { Context, Effect, Exit, Layer, Option, Schema, Stream } from "effect";
+import type { Scope } from "effect";
+import {
+  Cause,
+  Context,
+  Effect,
+  Exit,
+  Layer,
+  Option,
+  Schema,
+  Stream,
+} from "effect";
+import { HttpClient, HttpClientResponse } from "effect/http";
+import { TestClock } from "effect/testing";
 import { expect } from "vite-plus/test";
 
 import {
@@ -15,12 +35,12 @@ import {
   runCommand,
   runSetup,
 } from "../../src/guest.ts";
-import { BoatSettings, image } from "../../src/platform/boat/boat.ts";
+import { BoatSettings, image, make } from "../../src/platform/boat/boat.ts";
 import { types } from "../../src/platform/boat/traits.ts";
 import { Runtime } from "../../src/runtime.ts";
 import type { Interface } from "../../src/runtime.ts";
 import { fakeBoat } from "../fake-boat.ts";
-import type { FakeBoat } from "../fake-boat.ts";
+import type { FakeBoat, FakeBoatOptions } from "../fake-boat.ts";
 import { runtimeContract } from "../runtime-contract.ts";
 
 const services = Layer.mergeAll(
@@ -28,13 +48,16 @@ const services = Layer.mergeAll(
   NodeHttpClient.layerNodeHttp
 );
 
-const onFakeBoat = Effect.gen(function* () {
-  const dir = yield* scratch;
-  const boat = yield* fakeBoat({ dir });
-  const context = yield* Layer.build(Layer.provide(boat.layer, services));
+const onFakeBoatWith = (options: Omit<FakeBoatOptions, "dir">) =>
+  Effect.gen(function* () {
+    const dir = yield* scratch;
+    const boat = yield* fakeBoat({ ...options, dir });
+    const context = yield* Layer.build(Layer.provide(boat.layer, services));
 
-  return { boat, runtime: Context.get(context, Runtime) };
-}).pipe(Effect.provide(NodeServices.layer), Effect.orDie);
+    return { boat, dir, runtime: Context.get(context, Runtime) };
+  }).pipe(Effect.provide(NodeServices.layer), Effect.orDie);
+
+const onFakeBoat = onFakeBoatWith({});
 
 runtimeContract({
   name: "boat",
@@ -47,9 +70,12 @@ runtimeContract({
   })),
 });
 
+const instanceOf = (seed: string) =>
+  createHash("sha256").update(seed).digest("hex").slice(0, 32);
+
 const made = (runtime: Interface, name: string) =>
   Effect.gen(function* () {
-    const machine = { name, instance: `${name}-1`, ...types.small };
+    const machine = { name, instance: instanceOf(name), ...types.small };
 
     const { handle } = yield* runtime.make(
       machine,
@@ -79,9 +105,21 @@ const startsSince = (boat: FakeBoat, from: number) =>
 const onBoat = <A, E>(
   body: (fake: {
     readonly boat: FakeBoat;
+    readonly dir: string;
     readonly runtime: Interface;
-  }) => Effect.Effect<A, E>
-) => Effect.scoped(Effect.flatMap(onFakeBoat, body));
+  }) => Effect.Effect<A, E, Scope.Scope>,
+  options: Omit<FakeBoatOptions, "dir"> = {}
+) => Effect.scoped(Effect.flatMap(onFakeBoatWith(options), body));
+
+const ownedBy = (runtime: Interface) =>
+  runtime.owned === undefined
+    ? Effect.die("the boat runtime lists the machines it owns")
+    : runtime.owned.machines;
+
+const keyOf = (instance: string) => `cbx-boat-${instance}`;
+
+const posts = (boat: FakeBoat, route: string) =>
+  boat.calls.filter((line) => line.startsWith(`POST ${route} `));
 
 describe("the boat runtime over fake boat", () => {
   it.live(
@@ -117,7 +155,7 @@ describe("the boat runtime over fake boat", () => {
   );
 
   it.live(
-    "a make whose answer was lost asks again under the same Idempotency-Key and makes one sandbox",
+    "a make whose answer was lost finds its sandbox by its labels, sends the create once, and spends one start",
     () =>
       onBoat(({ boat, runtime }) =>
         Effect.gen(function* () {
@@ -125,15 +163,82 @@ describe("the boat runtime over fake boat", () => {
 
           const machine = yield* made(runtime, "dev");
 
-          const creates = boat.requests.filter(
-            ({ method, path: at }) => method === "POST" && at === "/sandboxes"
-          );
-
           expect(
-            creates.map(({ idempotencyKey }) => idempotencyKey)
-          ).toStrictEqual([machine.instance, machine.instance]);
+            boat.requests.flatMap(({ method, path: at, idempotencyKey }) =>
+              method === "POST" && at === "/sandboxes" ? [idempotencyKey] : []
+            )
+          ).toStrictEqual([keyOf(machine.instance)]);
           expect([...boat.sandboxes.keys()]).toStrictEqual([machine.handle]);
           expect(startsSince(boat, 0)).toBe(1);
+        })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a make whose request was lost sends it again under the same key, and spends one start",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          yield* boat.loseRequest("make");
+
+          const machine = yield* made(runtime, "dev");
+
+          expect(posts(boat, "/sandboxes")).toStrictEqual([
+            "POST /sandboxes lost",
+            "POST /sandboxes 202 start",
+          ]);
+          expect([...boat.sandboxes.keys()]).toStrictEqual([machine.handle]);
+          expect(startsSince(boat, 0)).toBe(1);
+        })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a make whose resend boat holds in progress waits for its sandbox to be listed, and sends no third",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          yield* boat.faults.dropAnswer("make");
+          yield* boat.listsLag(1);
+
+          const machine = yield* made(runtime, "dev");
+
+          expect(posts(boat, "/sandboxes")).toStrictEqual([
+            "POST /sandboxes 202 start dropped",
+            "POST /sandboxes 409 start",
+          ]);
+          expect([...boat.sandboxes.keys()]).toStrictEqual([machine.handle]);
+        })
+      ),
+    30_000
+  );
+
+  it.live(
+    "two hosts that make one instance make a sandbox each, under keys of their own",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          const other = Context.get(
+            yield* Layer.build(
+              Layer.provide(boat.layerOf("other-host"), services)
+            ),
+            Runtime
+          );
+
+          const ours = yield* made(runtime, "dev");
+          const theirs = yield* made(other, "dev");
+
+          expect(theirs.handle).not.toBe(ours.handle);
+          expect(
+            boat.requests.flatMap(({ method, path: at, idempotencyKey }) =>
+              method === "POST" && at === "/sandboxes" ? [idempotencyKey] : []
+            )
+          ).toStrictEqual([
+            keyOf(ours.instance),
+            `cbx-other-host-${ours.instance}`,
+          ]);
         })
       ),
     30_000
@@ -278,7 +383,7 @@ describe("the boat runtime over fake boat", () => {
           yield* boat.faults.quota(false);
           yield* boat.faults.landLate("200 millis");
 
-          const late = { name: "late", instance: "late-1" };
+          const late = { name: "late", instance: instanceOf("late") };
 
           expect((yield* Effect.flip(made(runtime, "late")))._tag).toBe(
             "Capacity"
@@ -295,7 +400,7 @@ describe("the boat runtime over fake boat", () => {
 
           const checkpoint = yield* runtime.capture(machine, {
             name: "snap",
-            instance: "snap-1",
+            instance: instanceOf("snap"),
           });
 
           expect(boat.snapshots.get(checkpoint)?.status).toBe("ready");
@@ -323,7 +428,7 @@ describe("the boat runtime over fake boat", () => {
 
           const checkpoint = yield* runtime.capture(machine, {
             name: "snap",
-            instance: "snap-1",
+            instance: instanceOf("snap"),
           });
 
           expect(boat.snapshots.get(checkpoint)?.status).toBe("ready");
@@ -348,7 +453,7 @@ describe("the boat runtime over fake boat", () => {
 
           const checkpoint = yield* runtime.capture(machine, {
             name: "snap",
-            instance: "snap-1",
+            instance: instanceOf("snap"),
           });
 
           yield* boat.refuseOnce("unsave");
@@ -377,7 +482,7 @@ describe("the boat runtime over fake boat", () => {
 
           const checkpoint = yield* runtime.capture(machine, {
             name: "snap",
-            instance: "snap-1",
+            instance: instanceOf("snap"),
           });
 
           yield* boat.refuseOnce("unsave");
@@ -415,7 +520,7 @@ describe("the boat runtime over fake boat", () => {
 
           const handle = yield* runtime.capture(source, {
             name: "snap",
-            instance: "snap-1",
+            instance: instanceOf("snap"),
           });
 
           const copies = [
@@ -428,7 +533,13 @@ describe("the boat runtime over fake boat", () => {
 
           for (const { name, origin } of copies) {
             const from = boat.calls.length;
-            const machine = { name, instance: `${name}-1`, ...types.small };
+
+            const machine = {
+              name,
+              instance: instanceOf(name),
+              ...types.small,
+            };
+
             const copy = yield* runtime.make(machine, origin, { _tag: "none" });
 
             expect(startsSince(boat, from)).toBe(1);
@@ -443,6 +554,308 @@ describe("the boat runtime over fake boat", () => {
             );
           }
         })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a resize whose answer was lost finishes from what boat holds, and leaves the machine stopped at its new type",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          const machine = yield* made(runtime, "dev");
+
+          yield* runtime.stop(machine);
+          yield* boat.dropAnswer("resume");
+          yield* runtime.resize(machine, types.default, false);
+
+          expect(boat.sandboxes.get(machine.handle)).toMatchObject({
+            type: "default",
+            running: false,
+          });
+          expect(yield* runtime.sizes(machine)).toStrictEqual(types.default);
+        })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a resize whose request was lost sends it again at boat's next poll, not at once",
+    () => {
+      const resumes: Array<readonly [string, number]> = [];
+
+      return onBoat(
+        ({ boat, runtime }) =>
+          Effect.gen(function* () {
+            const machine = yield* made(runtime, "dev");
+
+            yield* runtime.stop(machine);
+            yield* boat.loseRequest("resume");
+            yield* runtime.resize(machine, types.default, false);
+
+            expect(resumes.map(([line]) => line)).toStrictEqual([
+              `POST /sandboxes/${machine.handle}/resume lost`,
+              `POST /sandboxes/${machine.handle}/resume 202 start`,
+            ]);
+            expect(
+              (resumes[1]?.[1] ?? 0) - (resumes[0]?.[1] ?? 0)
+            ).toBeGreaterThanOrEqual(450);
+            expect(boat.sandboxes.get(machine.handle)?.type).toBe("default");
+          }),
+        {
+          onCall: (line) => {
+            if (line.includes("/resume")) {
+              resumes.push([line, Date.now()]);
+            }
+          },
+        }
+      );
+    },
+    30_000
+  );
+
+  it.live(
+    "a save that lands while its sandbox is deleted is deleted with it",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          const machine = yield* made(runtime, "dev");
+
+          yield* runtime.stop(machine);
+          yield* boat.landSaveDuringDelete;
+          yield* Effect.flip(
+            runtime.capture(machine, {
+              name: "snap",
+              instance: instanceOf("snap"),
+            })
+          );
+
+          expect(boat.snapshots.size).toBe(0);
+
+          yield* runtime.delete(machine, new Set());
+
+          expect(boat.sandboxes.has(machine.handle)).toBe(false);
+          expect([...boat.snapshots.keys()]).toStrictEqual([]);
+        })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a delete whose last prune is refused fails, and the next delete clears the snapshot",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          const machine = yield* made(runtime, "dev");
+
+          yield* runtime.stop(machine);
+          yield* boat.landSaveDuringDelete;
+          yield* Effect.flip(
+            runtime.capture(machine, {
+              name: "snap",
+              instance: instanceOf("snap"),
+            })
+          );
+          yield* boat.refuseOnce("unsave");
+          yield* Effect.flip(runtime.delete(machine, new Set()));
+
+          expect(boat.sandboxes.has(machine.handle)).toBe(false);
+          expect(boat.snapshots.size).toBe(1);
+
+          yield* runtime.delete(machine, new Set());
+
+          expect(boat.snapshots.size).toBe(0);
+        })
+      ),
+    30_000
+  );
+
+  it.live(
+    "lists every page of the sandboxes this host marked",
+    () =>
+      onBoat(
+        ({ runtime }) =>
+          Effect.gen(function* () {
+            const machines = yield* Effect.forEach(["a", "b", "c"], (name) =>
+              made(runtime, name)
+            );
+
+            const owned = yield* ownedBy(runtime);
+
+            expect(owned.map(({ handle }) => handle).toSorted()).toStrictEqual(
+              machines.map(({ handle }) => handle).toSorted()
+            );
+          }),
+        { pageSize: 1 }
+      ),
+    30_000
+  );
+
+  it.live(
+    "spares a snapshot named cbx- by hand, and asks for saved snapshots by name prefix alone",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          const machine = yield* made(runtime, "dev");
+
+          yield* runtime.stop(machine);
+          yield* boat.saveAs(machine.handle, "cbx-before-upgrade");
+          yield* runtime.delete(machine, new Set());
+
+          expect([...boat.snapshots.keys()]).toStrictEqual([
+            "cbx-before-upgrade",
+          ]);
+          expect(
+            new Set(
+              boat.requests.flatMap(({ method, path: at }) =>
+                method === "GET" && at.startsWith("/saved-snapshots?")
+                  ? [at]
+                  : []
+              )
+            )
+          ).toStrictEqual(new Set(["/saved-snapshots?namePrefix=cbx-"]));
+        })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a saved snapshot it can't read fails a list only when its name carries the mark",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          const machine = yield* made(runtime, "dev");
+
+          yield* boat.malformedSnapshot("cbx-by-hand");
+          expect(yield* ownedBy(runtime)).toHaveLength(1);
+
+          yield* boat.malformedSnapshot(`cbx-${instanceOf("broken")}`);
+
+          const failed = yield* Effect.flip(ownedBy(runtime));
+
+          expect(failed.message).toContain(`cbx-${instanceOf("broken")}`);
+          expect(boat.sandboxes.has(machine.handle)).toBe(true);
+        })
+      ),
+    30_000
+  );
+});
+
+const stalled = (stalls: string) =>
+  HttpClient.make((request, url) => {
+    const route = `${request.method} ${url.pathname}`;
+
+    const reply = (body: unknown) =>
+      Effect.succeed(
+        HttpClientResponse.fromWeb(
+          request,
+          Response.json(body, { status: 200 })
+        )
+      );
+
+    if (route === stalls) {
+      return Effect.never;
+    }
+
+    if (route === "GET /api/v1/limits") {
+      return reply({
+        activeSandboxes: 0,
+        maxActiveSandboxes: 4,
+        machineTypes: [{ type: "small", available: true }],
+      });
+    }
+
+    return reply({ sandboxes: [], pageInfo: { nextCursor: null } });
+  });
+
+describe("a boat request's bound", () => {
+  it.effect(
+    "ends a make whose create boat never answers, inside its step, failed",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const dir = yield* scratch;
+          const apiKeyFile = path.join(dir, "key");
+
+          writeFileSync(apiKeyFile, "fake\n", { mode: 0o600 });
+
+          const runtime = yield* make(
+            { apiKeyFile, api: "https://boat.test/api/v1" },
+            {
+              id: "boat",
+              stateDir: dir,
+              listen: { address: "127.0.0.1", port: 0 },
+            }
+          ).pipe(
+            Effect.provideService(
+              HttpClient.HttpClient,
+              stalled("POST /api/v1/sandboxes")
+            )
+          );
+
+          const making = yield* Effect.forkChild(made(runtime, "dev"));
+
+          yield* TestClock.adjust("10 minutes");
+
+          const ended = making.pollUnsafe();
+
+          expect(ended, "ended within 10 minutes").toBeDefined();
+          expect(
+            ended !== undefined &&
+              Exit.isFailure(ended) &&
+              Cause.squash(ended.cause)
+          ).toMatchObject({ _tag: "Internal" });
+        }).pipe(Effect.provide(NodeServices.layer))
+      )
+  );
+});
+
+describe("the host's boat key", () => {
+  it.live(
+    "is made readable by its owner alone, in a directory only its owner can enter",
+    () =>
+      onBoat(({ dir }) =>
+        Effect.sync(() => {
+          const keys = path.join(dir, "state", "boat");
+
+          expect(statSync(keys).mode & 0o777).toBe(0o700);
+          expect(statSync(path.join(keys, "id_ed25519")).mode & 0o777).toBe(
+            0o600
+          );
+        })
+      ),
+    30_000
+  );
+
+  it.live(
+    "found readable by others, stops the host from starting and says how to mend it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const dir = yield* scratch;
+          const boat = yield* fakeBoat({ dir });
+          const keys = path.join(dir, "state", "boat");
+
+          mkdirSync(keys, { recursive: true, mode: 0o700 });
+          execFileSync("ssh-keygen", [
+            "-q",
+            "-t",
+            "ed25519",
+            "-N",
+            "",
+            "-f",
+            path.join(keys, "id_ed25519"),
+          ]);
+          chmodSync(path.join(keys, "id_ed25519"), 0o644);
+
+          const refused = yield* Effect.flip(
+            Layer.build(Layer.provide(boat.layer, services))
+          );
+
+          expect(refused).toMatchObject({ _tag: "CannotStart" });
+          expect(refused.message).toContain("mode 644");
+          expect(refused.message).toContain("chmod 600");
+        }).pipe(Effect.provide(NodeServices.layer))
       ),
     30_000
   );

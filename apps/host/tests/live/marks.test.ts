@@ -3,12 +3,10 @@ import { HostId } from "@gjermundgaraba/clankerbox-sdk";
 import { Schema } from "effect";
 import { expect } from "vite-plus/test";
 
-import { leftOver, liveHostId } from "./marks.ts";
+import { liveHostId, liveRun } from "./marks.ts";
 
-const instance = "0123456789abcdef".repeat(2);
-
-describe("the live suite's leftovers", () => {
-  it("are its run host's and its own machines, and no real host's", () => {
+describe("the live suites' run marks", () => {
+  it("are their runs' host IDs, and no real host's", () => {
     const host = liveHostId("a1b2c3");
 
     for (const end of host.split("").keys()) {
@@ -17,8 +15,7 @@ describe("the live suite's leftovers", () => {
       expect(Schema.is(HostId)(prefix), prefix).toBe(false);
     }
 
-    expect(leftOver(`cbx-${host}-${instance}`)).toBe(true);
-    expect(leftOver(`cbx-${host}-a`)).toBe(true);
+    expect(liveRun(host)).toBe(true);
 
     for (const id of [
       "live",
@@ -28,7 +25,7 @@ describe("the live suite's leftovers", () => {
       "prod",
     ]) {
       expect(Schema.is(HostId)(id), id).toBe(true);
-      expect(leftOver(`cbx-${id}-${instance}`), id).toBe(false);
+      expect(liveRun(id), id).toBe(false);
     }
   });
 });

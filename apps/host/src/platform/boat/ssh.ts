@@ -2,6 +2,7 @@ import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, FileSystem, Scope, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
+import { CannotStart } from "../../runtime.ts";
 import type { Command, Execution } from "../../runtime.ts";
 import { expect, files } from "../process.ts";
 
@@ -50,7 +51,15 @@ export const make = (dir: string) =>
     const identity = `${dir}/id_ed25519`;
     const env = { PATH: process.env["PATH"], HOME: process.env["HOME"] };
 
-    if (!(yield* files(`read ${identity}`, fs.exists(identity)))) {
+    if (yield* files(`read ${identity}`, fs.exists(identity))) {
+      const { mode } = yield* files(`read ${identity}`, fs.stat(identity));
+
+      if ((mode & 0o077) !== 0) {
+        return yield* new CannotStart({
+          message: `the host's boat key ${identity} has mode ${(mode & 0o777).toString(8)}, and OpenSSH takes no private key others can read: chmod 600 it, or delete it and ${identity}.pub for a new one`,
+        });
+      }
+    } else {
       yield* files(
         `make ${dir}`,
         fs.makeDirectory(dir, { recursive: true, mode: 0o700 })

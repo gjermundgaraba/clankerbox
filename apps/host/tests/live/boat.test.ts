@@ -24,11 +24,28 @@ import {
 } from "../../src/guest.ts";
 import type { TailnetReport } from "../../src/guest.ts";
 import * as Api from "../../src/platform/boat/api.ts";
-import type { BoatType, Sandbox, SshKey } from "../../src/platform/boat/api.ts";
+import type {
+  BoatType,
+  Sandbox,
+  SavedSnapshot,
+  SshKey,
+} from "../../src/platform/boat/api.ts";
 import * as Boat from "../../src/platform/boat/boat.ts";
 import { types } from "../../src/platform/boat/traits.ts";
 import { Runtime } from "../../src/runtime.ts";
 import type { Target } from "../../src/runtime.ts";
+import {
+  ledgerOf,
+  listOnly,
+  liveLedgers,
+  namedOver,
+  over,
+  retired,
+  retiredOver,
+  sweepRead,
+  thisHost,
+} from "./sweep.ts";
+import type { Found } from "./sweep.ts";
 
 const key = process.env["BOAT_API_KEY"];
 
@@ -43,6 +60,21 @@ const minted = (prefix: string) =>
 
 const host = minted("0live");
 
+const suite = "boat";
+
+const ledger = ledgerOf(liveLedgers, suite, host);
+
+const note = (kind: "sandbox" | "snapshot", id: string) => {
+  if (kind === "sandbox") {
+    ledger.source(id);
+  } else {
+    ledger.copy(id);
+  }
+};
+
+const liveInstance = () =>
+  Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(16)));
+
 const finding = (text: string) =>
   Effect.sync(() => {
     const line = `${new Date().toISOString()} ${text}\n`;
@@ -55,6 +87,12 @@ const finding = (text: string) =>
   });
 
 const ofTheRun = (sandbox: Sandbox) => sandbox.labels?.["cbx-host"] === host;
+
+const runOf = (sandbox: Sandbox) => {
+  const run = sandbox.labels?.["cbx-host"];
+
+  return run?.startsWith("0live-") === true ? run : undefined;
+};
 
 const labels = (instance: string) => ({
   "cbx-host": host,
@@ -77,6 +115,87 @@ const client = Effect.gen(function* () {
 
   return { api: yield* Api.make({ api, apiKeyFile: file }), dir };
 });
+
+const leftovers = (boat: Api.Api) =>
+  sweepRead(
+    ledger.ledgers,
+    Effect.map(
+      Effect.all([
+        boat.sandboxes({}),
+        boat.savedSnapshots("cbx-", () => false),
+      ]),
+      ([machines, copies]) => ({ machines, copies })
+    ),
+    {
+      run: host,
+      over: (each) => over(each, thisHost),
+      named: namedOver,
+      runOf,
+      idOf: ({ id }) => id,
+      keyOf: ({ name }) => name,
+      sourceOf: ({ sourceSandboxId }) => sourceSandboxId,
+    }
+  );
+
+const described = ({ machines, copies }: Found<Sandbox, SavedSnapshot>) =>
+  [
+    ...machines.map(
+      ({ labels: marks }) =>
+        `sandbox ${marks?.["cbx-host"] ?? ""}/${marks?.["cbx-instance"] ?? ""}`
+    ),
+    ...copies.map(({ name }) => `snapshot ${name}`),
+  ].join(", ") || "nothing";
+
+const emptied = (found: Found<Sandbox, SavedSnapshot>) =>
+  found.machines.length === 0 && found.copies.length === 0;
+
+const swept = (boat: Api.Api) =>
+  Effect.gen(function* () {
+    const before = yield* leftovers(boat);
+
+    yield* finding(
+      `the sweep selects ${described(before.swept)}${listOnly ? ", and deletes none of it, as CLANKERBOX_LIVE_LIST_ONLY asks" : ""}; it lists, of other live runs, ${described(before.listed)}`
+    );
+
+    if (listOnly) {
+      return before;
+    }
+
+    for (let pass = 0; pass < 5; pass += 1) {
+      const now = yield* leftovers(boat);
+
+      if (emptied(now.swept)) {
+        break;
+      }
+
+      yield* Effect.forEach(
+        now.swept.copies,
+        ({ name }) => Effect.ignore(boat.unsave(name)),
+        { discard: true }
+      );
+      yield* Effect.forEach(
+        now.swept.machines,
+        ({ id }) => Effect.ignore(boat.remove(id)),
+        { discard: true }
+      );
+
+      for (let tries = 0; tries < 240; tries += 1) {
+        if ((yield* leftovers(boat)).swept.machines.length === 0) {
+          break;
+        }
+
+        yield* Effect.sleep(Duration.millis(500));
+      }
+    }
+
+    const after = yield* leftovers(boat);
+
+    yield* Effect.sync(() => {
+      retiredOver(liveLedgers, suite, after);
+    });
+
+    return after;
+  });
 
 const sshKeyOf = (dir: string) =>
   Effect.gen(function* () {
@@ -171,19 +290,14 @@ describe.runIf(live)("boat, against the real account", () => {
         const saved: string[] = [];
 
         yield* finding(`host ${host}: the run's mark on every sandbox`);
+        yield* swept(boat);
 
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
-            yield* Effect.forEach(made, (id) => Effect.ignore(boat.remove(id)));
-            yield* Effect.forEach(saved, (name) =>
-              Effect.ignore(boat.unsave(name))
-            );
-
-            const left = yield* boat.sandboxes({ "cbx-host": host });
-            const snapshots = yield* boat.savedSnapshots;
+            const left = yield* swept(boat);
 
             yield* finding(
-              `left at the end: ${left.length} sandboxes labelled cbx-host=${host}, ${snapshots.filter(({ name }) => saved.includes(name)).length} of the run's saved snapshots`
+              `left at the end: ${left.swept.machines.length} sandboxes and ${left.swept.copies.length} saved snapshots of this run or one over, of ${made.length} sandboxes and ${saved.length} snapshots this test made`
             );
           }).pipe(Effect.orDie)
         );
@@ -230,6 +344,7 @@ describe.runIf(live)("boat, against the real account", () => {
         );
 
         made.push(first.id);
+        note("sandbox", first.id);
 
         const listed = yield* boat.sandboxes(labels(a));
 
@@ -292,7 +407,10 @@ describe.runIf(live)("boat, against the real account", () => {
         const resumed = (id: string, type?: BoatType) =>
           Effect.gen(function* () {
             const starts = yield* startsUsed;
-            const answer = yield* boat.resume(id, type);
+
+            const answer = yield* type === undefined
+              ? boat.resume(id)
+              : boat.retype(id, type);
 
             yield* until(id, running);
 
@@ -328,9 +446,10 @@ describe.runIf(live)("boat, against the real account", () => {
 
         yield* stopped(first.id);
 
-        const snapshot = `cbx-${minted("live")}`;
+        const snapshot = `cbx-${host}-snap`;
 
         saved.push(snapshot);
+        note("snapshot", snapshot);
         yield* boat.save(first.id, snapshot);
 
         for (let tries = 0; tries < 240; tries += 1) {
@@ -356,6 +475,7 @@ describe.runIf(live)("boat, against the real account", () => {
         );
 
         made.push(restored.id);
+        note("sandbox", restored.id);
         yield* until(restored.id, running);
         yield* boat.unsave(snapshot);
 
@@ -411,31 +531,15 @@ describe.runIf(live)("boat, against the real account", () => {
         const tailnetKey = process.env["TAILSCALE_AUTHKEY"];
 
         yield* finding(`host ${host}: the runtime run's mark`);
+        yield* swept(boat);
 
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
             const listed = yield* boat.sandboxes({ "cbx-host": host });
-
-            const left = listed.filter(ofTheRun);
-
-            yield* Effect.forEach(left, ({ id }) =>
-              Effect.ignore(boat.remove(id))
-            );
-
-            const snapshots = yield* boat.savedSnapshots;
-
-            const ours = snapshots.filter(({ sourceSandboxId }) =>
-              left.some(({ id }) => id === sourceSandboxId)
-            );
-
-            yield* Effect.forEach(ours, ({ name }) =>
-              Effect.ignore(boat.unsave(name))
-            );
-
-            const after = yield* boat.sandboxes({ "cbx-host": host });
+            const left = yield* swept(boat);
 
             yield* finding(
-              `left at the end: ${after.filter(ofTheRun).length} sandboxes labelled cbx-host=${host}, of ${after.length} the filter listed; the finalizer deleted ${left.length} sandboxes and ${ours.length} snapshots`
+              `left at the end: ${left.swept.machines.length} sandboxes and ${left.swept.copies.length} saved snapshots of this run or one over; the run had ${listed.filter(ofTheRun).length} sandboxes labelled cbx-host=${host} when it ended`
             );
           }).pipe(Effect.orDie)
         );
@@ -479,7 +583,7 @@ describe.runIf(live)("boat, against the real account", () => {
               : { key: Redacted.make(authKey), rejoin: false }
           );
 
-        const source = { name: "ci", instance: minted("live"), ...types.small };
+        const source = { name: "ci", instance: liveInstance(), ...types.small };
 
         const made = yield* runtime.make(
           source,
@@ -488,6 +592,8 @@ describe.runIf(live)("boat, against the real account", () => {
         );
 
         const ci: Target = { ...source, handle: made.handle };
+
+        note("sandbox", made.handle);
 
         yield* prepareBase(runtime, ci, true);
         yield* identify(runtime, ci);
@@ -522,7 +628,7 @@ describe.runIf(live)("boat, against the real account", () => {
 
         yield* runtime.stop(ci);
 
-        const twin = { name: "twin", instance: minted("live"), ...types.small };
+        const twin = { name: "twin", instance: liveInstance(), ...types.small };
 
         const forked = yield* runtime.make(
           twin,
@@ -531,6 +637,8 @@ describe.runIf(live)("boat, against the real account", () => {
         );
 
         const copy: Target = { ...twin, handle: forked.handle };
+
+        note("sandbox", forked.handle);
 
         yield* identify(runtime, copy);
 
@@ -567,9 +675,13 @@ describe.runIf(live)("boat, against the real account", () => {
         yield* scrubNode(runtime, ci);
         yield* runtime.stop(ci);
 
+        const snapInstance = liveInstance();
+
+        note("snapshot", `cbx-${snapInstance}`);
+
         const snapshot = yield* runtime.capture(ci, {
           name: "snap",
-          instance: minted("live"),
+          instance: snapInstance,
         });
 
         yield* finding(`a capture of the stopped machine saved ${snapshot}`);
@@ -592,5 +704,23 @@ describe.runIf(live)("boat, against the real account", () => {
         expect(snapshotGone).toBeUndefined();
       }).pipe(Effect.scoped, Effect.provide(services)),
     { timeout: 30 * 60 * 1000 }
+  );
+
+  it.live(
+    "leaves nothing of its run behind, and lists what other live runs hold",
+    () =>
+      Effect.gen(function* () {
+        const { api: boat } = yield* client;
+        const left = yield* swept(boat);
+
+        yield* finding(
+          `the final listing: of this run and any over, ${described(left.swept)}; of other live runs, ${described(left.listed)}`
+        );
+        expect(left.swept).toStrictEqual({ machines: [], copies: [] });
+        yield* Effect.sync(() => {
+          retired(liveLedgers, suite, host);
+        });
+      }).pipe(Effect.scoped, Effect.provide(services)),
+    { timeout: 5 * 60 * 1000 }
   );
 });

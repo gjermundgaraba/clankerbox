@@ -5,13 +5,15 @@ import {
   FileSystem,
   Option,
   Redacted,
+  Result,
   Schedule,
   Schema,
 } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 import type { HttpClientResponse } from "effect/http";
 
-import { describe } from "../process.ts";
+import { timeoutFail } from "../../runtime.ts";
+import { answerWithin, describe } from "../process.ts";
 
 export const BoatType = Schema.Literals([
   "small",
@@ -85,7 +87,9 @@ const Listed = Schema.Struct({
   ),
 });
 
-const SavedList = Schema.Struct({ snapshots: Schema.Array(SavedSnapshot) });
+const SavedList = Schema.Struct({ snapshots: Schema.Array(Schema.Unknown) });
+
+const Named = Schema.Struct({ name: Schema.String });
 
 const SavedOne = Schema.Struct({ snapshot: SavedSnapshot });
 
@@ -127,9 +131,9 @@ export type ApiError = Refused | Unanswered | Busy;
 
 const waitedOut = new Set([
   "IP_RATE_LIMIT_EXCEEDED",
-  "idempotency_in_progress",
   "sandbox_starting",
   "sandbox_stopping",
+  "save_in_progress",
   "ssh_host_key_unavailable",
 ]);
 
@@ -163,27 +167,20 @@ export interface Settings {
   readonly apiKeyFile: string;
 }
 
-const refusal = (response: HttpClientResponse.HttpClientResponse) =>
-  Effect.flatMap(
-    response.json.pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(Envelope)),
-      Effect.option
-    ),
-    (envelope) => {
-      const body = Option.getOrUndefined(envelope);
-
-      return Effect.succeed(
-        new Refused({
-          status: response.status,
-          code: body?.error?.code ?? body?.code ?? `http_${response.status}`,
-          message:
-            body?.error?.message ??
-            body?.message ??
-            `boat answered HTTP ${response.status}`,
-        })
-      );
-    }
+const refusalOf = (status: number, body: unknown) => {
+  const envelope = Option.getOrUndefined(
+    Schema.decodeUnknownOption(Envelope)(body)
   );
+
+  return new Refused({
+    status,
+    code: envelope?.error?.code ?? envelope?.code ?? `http_${status}`,
+    message:
+      envelope?.error?.message ??
+      envelope?.message ??
+      `boat answered HTTP ${status}`,
+  });
+};
 
 const retryAfter = (response: HttpClientResponse.HttpClientResponse) => {
   const seconds = Number(response.headers["retry-after"] ?? "1");
@@ -200,6 +197,23 @@ const keyed = (path: string, body: Body, idempotencyKey: string) =>
     HttpClientRequest.bodyJsonUnsafe({ ...body, ...sealed })
   );
 
+const resumed = ({ status }: { readonly status: number }) =>
+  status === 200 ? "kept" : "started";
+
+const resumeOf = (id: string, type: BoatType | undefined) =>
+  HttpClientRequest.post(`/sandboxes/${id}/resume`).pipe(
+    HttpClientRequest.bodyJsonUnsafe(
+      type === undefined ? { ttlSeconds: null } : { ttlSeconds: null, type }
+    )
+  );
+
+/**
+ * boat's API, the routes the adapter uses. A call asks again after a refusal whose code says it
+ * passes once waited out, and after a lost answer, but for a create, a fork, a resume onto another
+ * type and a save, whose callers read what boat holds before they send one again. The saved-snapshot
+ * list keeps each record it can read; one it can't fails the list only if `ours` claims its name,
+ * and is skipped otherwise, logged the first time.
+ */
 export const make = (settings: Settings) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -215,49 +229,75 @@ export const make = (settings: Settings) =>
       )
     );
 
+    const exchange = (request: HttpClientRequest.HttpClientRequest) => {
+      const what = `${request.method} ${request.url}`;
+      const within = answerWithin[request.method === "GET" ? "read" : "change"];
+
+      return http
+        .execute(
+          request.pipe(
+            HttpClientRequest.prependUrl(settings.api),
+            HttpClientRequest.bearerToken(key),
+            HttpClientRequest.acceptJson
+          )
+        )
+        .pipe(
+          Effect.flatMap((response) =>
+            Effect.map(Effect.result(response.json), (body) => ({
+              response,
+              body,
+            }))
+          ),
+          Effect.mapError(
+            (error) => new Unanswered({ message: `${what}: ${error.message}` })
+          ),
+          timeoutFail(
+            within,
+            () =>
+              new Unanswered({
+                message: `${what}: no answer within ${Duration.format(within)}`,
+              })
+          )
+        );
+    };
+
     const once = <A>(
       request: HttpClientRequest.HttpClientRequest,
       decode: Schema.Decoder<A>
     ): Effect.Effect<Answer<A>, ApiError> =>
       Effect.gen(function* () {
-        const response = yield* http
-          .execute(
-            request.pipe(
-              HttpClientRequest.prependUrl(settings.api),
-              HttpClientRequest.bearerToken(key),
-              HttpClientRequest.acceptJson
-            )
-          )
-          .pipe(
-            Effect.mapError(
-              (error) =>
-                new Unanswered({
-                  message: `${request.method} ${request.url}: ${error.message}`,
-                })
-            )
-          );
+        const what = `${request.method} ${request.url}`;
+        const { response, body } = yield* exchange(request);
 
         if (response.status >= 400) {
-          const refused = yield* refusal(response);
+          const refused = refusalOf(
+            response.status,
+            Result.getOrUndefined(body)
+          );
 
           if (waitedOut.has(refused.code)) {
             yield* Effect.sleep(retryAfter(response));
 
             return yield* new Busy({
-              message: `${request.method} ${request.url}: ${refused.code}, waited out`,
+              message: `${what}: ${refused.code}, waited out`,
             });
           }
 
           return yield* refused;
         }
 
-        return yield* response.json.pipe(
-          Effect.flatMap(Schema.decodeUnknownEffect(decode)),
-          Effect.map((body) => ({ status: response.status, body })),
+        if (Result.isFailure(body)) {
+          return yield* new Unanswered({
+            message: `${what}: an answer it couldn't read: ${body.failure.message}`,
+          });
+        }
+
+        return yield* Schema.decodeEffect(decode)(body.success).pipe(
+          Effect.map((decoded) => ({ status: response.status, body: decoded })),
           Effect.mapError(
             (error) =>
               new Unanswered({
-                message: `${request.method} ${request.url}: an answer it couldn't read: ${error.message}`,
+                message: `${what}: an answer it couldn't read: ${error.message}`,
               })
           )
         );
@@ -278,8 +318,9 @@ export const make = (settings: Settings) =>
 
     const done = <A>(
       request: HttpClientRequest.HttpClientRequest,
-      decode: Schema.Decoder<A>
-    ) => Effect.map(call(request, decode), ({ body }) => body);
+      decode: Schema.Decoder<A>,
+      askedAgain: ReadonlySet<ApiError["_tag"]> = lostOrBusy
+    ) => Effect.map(call(request, decode, askedAgain), ({ body }) => body);
 
     const found = <A>(
       request: HttpClientRequest.HttpClientRequest,
@@ -291,6 +332,45 @@ export const make = (settings: Settings) =>
           () => Effect.undefined
         )
       );
+
+    const skipped = new Set<string>();
+
+    const readSnapshot = (
+      record: unknown,
+      ours: (name: string) => boolean
+    ): Effect.Effect<readonly SavedSnapshot[], Unanswered> => {
+      const read = Schema.decodeUnknownOption(SavedSnapshot)(record);
+
+      if (Option.isSome(read)) {
+        return Effect.succeed([read.value]);
+      }
+
+      const name = Option.match(Schema.decodeUnknownOption(Named)(record), {
+        onNone: () => JSON.stringify(record),
+        onSome: (named) => named.name,
+      });
+
+      if (ours(name)) {
+        return Effect.fail(
+          new Unanswered({
+            message: `GET /saved-snapshots answered snapshot ${name}, which carries this adapter's mark and couldn't be read`,
+          })
+        );
+      }
+
+      if (skipped.has(name)) {
+        return Effect.succeed([]);
+      }
+
+      skipped.add(name);
+
+      return Effect.as(
+        Effect.logWarning(
+          `boat's saved snapshot ${name} couldn't be read, and isn't this adapter's, so its lists skip it`
+        ),
+        []
+      );
+    };
 
     const list = (labels: Readonly<Record<string, string>>) =>
       Effect.gen(function* () {
@@ -322,14 +402,15 @@ export const make = (settings: Settings) =>
       limits: done(HttpClientRequest.get("/limits"), Limits),
       create: (body: Body, idempotencyKey: string) =>
         Effect.map(
-          done(keyed("/sandboxes", body, idempotencyKey), Created),
+          done(keyed("/sandboxes", body, idempotencyKey), Created, busy),
           ({ sandbox }) => sandbox
         ),
       fork: (source: string, body: Body, idempotencyKey: string) =>
         Effect.map(
           done(
             keyed(`/sandboxes/${source}/fork`, body, idempotencyKey),
-            Created
+            Created,
+            busy
           ),
           ({ sandbox }) => sandbox
         ),
@@ -340,19 +421,10 @@ export const make = (settings: Settings) =>
             answer?.sandbox.state === "cancelled" ? undefined : answer?.sandbox
         ),
       sandboxes: list,
-      resume: (id: string, type?: BoatType) =>
-        Effect.map(
-          call(
-            HttpClientRequest.post(`/sandboxes/${id}/resume`).pipe(
-              HttpClientRequest.bodyJsonUnsafe({
-                ttlSeconds: null,
-                ...(type === undefined ? {} : { type }),
-              })
-            ),
-            Schema.Unknown
-          ),
-          ({ status }) => (status === 200 ? "kept" : "started")
-        ),
+      resume: (id: string) =>
+        Effect.map(call(resumeOf(id, undefined), Schema.Unknown), resumed),
+      retype: (id: string, type: BoatType) =>
+        Effect.map(call(resumeOf(id, type), Schema.Unknown, busy), resumed),
       stop: (id: string) =>
         Effect.asVoid(
           done(
@@ -380,7 +452,7 @@ export const make = (settings: Settings) =>
         ),
       save: (id: string, name: string) =>
         Effect.asVoid(
-          call(
+          done(
             HttpClientRequest.post("/saved-snapshots").pipe(
               HttpClientRequest.bodyJsonUnsafe({ sandboxId: id, name })
             ),
@@ -393,10 +465,20 @@ export const make = (settings: Settings) =>
           found(HttpClientRequest.get(`/saved-snapshots/${name}`), SavedOne),
           (answer) => answer?.snapshot
         ),
-      savedSnapshots: Effect.map(
-        done(HttpClientRequest.get("/saved-snapshots"), SavedList),
-        ({ snapshots }) => snapshots
-      ),
+      savedSnapshots: (namePrefix: string, ours: (name: string) => boolean) =>
+        Effect.flatMap(
+          done(
+            HttpClientRequest.get("/saved-snapshots").pipe(
+              HttpClientRequest.setUrlParam("namePrefix", namePrefix)
+            ),
+            SavedList
+          ),
+          ({ snapshots }) =>
+            Effect.map(
+              Effect.forEach(snapshots, (record) => readSnapshot(record, ours)),
+              (read) => read.flat()
+            )
+        ),
       unsave: (name: string) =>
         Effect.asVoid(
           found(
