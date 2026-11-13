@@ -38,7 +38,6 @@ import {
   machineName,
   make,
   plist,
-  stateOf,
   supported,
 } from "../../../src/platform/tart/tart.ts";
 import type { Settings } from "../../../src/platform/tart/tart.ts";
@@ -47,6 +46,7 @@ import { Runtime } from "../../../src/runtime.ts";
 import type {
   Activation,
   Bind,
+  Held,
   Identity,
   Interface,
   Origin,
@@ -102,9 +102,15 @@ const snapOf = () =>
     diskGib: 60,
   });
 
-const runtimeOn = (options?: { readonly settings?: Partial<Settings> }) =>
+const runtimeOn = (options?: {
+  readonly settings?: Partial<Settings>;
+  readonly binary?: string;
+}) =>
   Effect.gen(function* () {
-    const mac = scriptedMac(path.join(yield* scratch, "state"));
+    const mac = scriptedMac(
+      path.join(yield* scratch, "state"),
+      options?.binary
+    );
 
     const runtime: Interface = yield* make({
       ...mac.settings,
@@ -121,11 +127,16 @@ const calls = (mac: ScriptedMac) =>
     .slice(1)
     .map((call) =>
       [
-        call.file === binary ? "tart" : path.basename(call.file),
+        call.file === mac.settings.binary ? "tart" : path.basename(call.file),
         ...call.args,
       ].join(" ")
     )
-    .filter((line) => !line.startsWith("tart list"));
+    .filter(
+      (line) =>
+        !line.startsWith("launchctl print") &&
+        !line.startsWith("ps ") &&
+        !line.startsWith("perl ")
+    );
 
 const vmOf = (machine: Identity) => machineName("mac", machine);
 
@@ -138,11 +149,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     expect([diskGb(1), diskGb(46), diskGb(47), diskGb(50)]).toStrictEqual([
       2, 50, 51, 54,
     ]);
-    expect([
-      stateOf("running"),
-      stateOf("suspended"),
-      stateOf("stopped"),
-    ]).toStrictEqual(["running", "paused", "stopped"]);
   });
 
   it.effect(
@@ -218,7 +224,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(calls(mac)).toStrictEqual([
           `tart clone ${image} ${vm}`,
           `tart set ${vm} --random-serial --cpu 4 --memory 8192 --disk-size 65`,
-          `launchctl print gui/501/${vm}`,
           `launchctl bootstrap gui/501 ${path.join(jobsDir(mac.settings.stateDir), `${vm}.plist`)}`,
           `launchctl kickstart gui/501/${vm}`,
           `tart exec ${vm} true`,
@@ -327,10 +332,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* runtime.start(machine, new Set());
 
         expect(calls(mac).slice(before)).toStrictEqual([
-          `launchctl print gui/501/${vm}`,
           `launchctl kickstart gui/501/${vm}`,
           `tart exec ${vm} true`,
-          `launchctl print gui/501/${vm}`,
           `tart exec ${vm} true`,
         ]);
       })
@@ -389,7 +392,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* runtime.start(machine, new Set());
 
         expect(calls(mac).slice(before)).toStrictEqual([
-          `launchctl print gui/501/${vm}`,
           `launchctl bootstrap gui/501 ${path.join(jobsDir(mac.settings.stateDir), `${vm}.plist`)}`,
           `launchctl kickstart gui/501/${vm}`,
           `tart exec ${vm} true`,
@@ -422,6 +424,42 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(error.message).toBe(
           "Apple's limit of 2 running macOS VMs per Mac refused third: The number of VMs exceeds the system limit (other running VMs: a1, a2)"
         );
+      })
+  );
+
+  it.effect(
+    "a start that meets a hand run begun after its read ends with the machine running under it, its job's run refused by Tart's lock",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const machine = machineOn("dev");
+        const vm = vmOf(machine);
+
+        yield* runtime.make(machine, fromImage("base"), unbound);
+        yield* runtime.stop(machine);
+        mac.hooks.print = () => {
+          if (!mac.runs.has(vm)) {
+            mac.runByHand(vm);
+          }
+
+          return undefined;
+        };
+
+        yield* runtime.start(machine, new Set());
+
+        expect({
+          run: mac.runs.get(vm)?.job,
+          jobExit: mac.exited.get(vm),
+          log: yield* read(
+            path.join(jobsDir(mac.settings.stateDir), `${vm}.log`)
+          ),
+          state: (yield* runtime.observe([machine])).get(machine.name),
+        }).toStrictEqual({
+          run: false,
+          jobExit: 2,
+          log: `VM "${vm}" is already running!\n`,
+          state: "running",
+        });
       })
   );
 
@@ -598,12 +636,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(ran).toStrictEqual([
           [
-            `launchctl print gui/501/${vmOf(current)}`,
             `launchctl kickstart gui/501/${vmOf(current)}`,
             `tart exec ${vmOf(current)} true`,
           ],
           [
-            `launchctl print gui/501/${vmOf(older)}`,
             `launchctl bootout gui/501/${vmOf(older)}`,
             `launchctl bootstrap gui/501 ${plistOf(vmOf(older))}`,
             `launchctl kickstart gui/501/${vmOf(older)}`,
@@ -645,7 +681,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(refused._tag).toBe("Capacity");
         expect(refused.message).toBe(
-          `startMachine b would run 3 macOS VMs on this Mac, and Apple allows 2: ${[vmOf(a), vmOf(b), "operators-own"].toSorted().join(", ")}`
+          `startMachine b would run 3 macOS VMs on this Mac, and Apple allows 2: ${[vmOf(a), vmOf(b), "tart run pid 5001"].toSorted().join(", ")}`
         );
 
         mac.vms.delete("operators-own");
@@ -687,14 +723,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         mac.vms.set(vmOf(a), "running");
         mac.vms.set(vmOf(b), "stopped");
 
-        const before = mac.spawner.calls.length;
-
         const idle = yield* runtime.capacity([
           { _tag: "found", machine: a },
           { _tag: "found", machine: b },
         ]);
-
-        const lists = mac.spawner.calls.slice(before).map(({ args }) => args);
 
         const booting = yield* runtime.capacity([
           { _tag: "booting", machine: a },
@@ -702,9 +734,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           { _tag: "booting", machine: c },
         ]);
 
-        expect(lists).toStrictEqual([
-          ["list", "--source", "local", "--format", "json"],
-        ]);
         expect(idle).toStrictEqual([
           { resource: "runningVms", limit: 2, used: 2 },
           { resource: "cpu", used: 4 },
@@ -798,133 +827,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             path.join(jobsDir(mac.settings.stateDir), `${vmOf(copy)}.plist`)
           )
         ).toBe(false);
-      })
-  );
-
-  it.effect(
-    "a create's tart set waits for a tart list under way, and so does a resize's, as the list opens every VM's disk",
-    () =>
-      Effect.gen(function* () {
-        const { mac, runtime } = yield* runtimeOn();
-        const machine = machineOn("dev");
-        const vm = vmOf(machine);
-
-        const listHeld = () =>
-          Effect.gen(function* () {
-            const release = yield* Deferred.make<undefined>();
-            const listed = yield* Deferred.make<undefined>();
-
-            mac.hooks.list = () => {
-              delete mac.hooks.list;
-              Deferred.doneUnsafe(listed, Exit.succeed(undefined));
-
-              return { stdout: "[]", until: Deferred.await(release) };
-            };
-
-            const reading = yield* Effect.forkChild(runtime.observe([machine]));
-
-            yield* Deferred.await(listed);
-
-            return {
-              reading,
-              release: Deferred.succeed(release, undefined),
-            };
-          });
-
-        const settingWhileListed = (work: Effect.Effect<unknown, HostError>) =>
-          Effect.gen(function* () {
-            const { reading, release } = yield* listHeld();
-            const before = calls(mac).length;
-            const working = yield* Effect.forkChild(work);
-
-            yield* Effect.sleep(Duration.millis(300));
-
-            const during = calls(mac)
-              .slice(before)
-              .filter((line) => line.startsWith("tart set"));
-
-            yield* release;
-            yield* Fiber.join(reading);
-            yield* Fiber.join(working);
-
-            return during;
-          });
-
-        const created = yield* settingWhileListed(
-          runtime.make(machine, fromImage("base"), unbound)
-        );
-
-        yield* runtime.stop(machine);
-
-        const resized = yield* settingWhileListed(
-          runtime.resize(machine, { diskGib: 100 }, false)
-        );
-
-        expect(created).toStrictEqual([]);
-        expect(resized).toStrictEqual([]);
-        expect(
-          calls(mac).filter((line) => line.startsWith("tart set"))
-        ).toStrictEqual([
-          `tart set ${vm} --random-serial --cpu 4 --memory 8192 --disk-size ${diskGb(60)}`,
-          `tart set ${vm} --disk-size ${diskGb(100)}`,
-        ]);
-      })
-  );
-
-  it.effect(
-    "a tart list and a tart get wait while a VM boots, until its run has started it or exited",
-    () =>
-      Effect.gen(function* () {
-        const { mac, runtime } = yield* runtimeOn();
-        const machine = machineOn("dev");
-        const vm = vmOf(machine);
-        const kicked = yield* Deferred.make<undefined>();
-
-        mac.hooks.kickstart = (label) => {
-          mac.vms.set(label, "running");
-          Deferred.doneUnsafe(kicked, Exit.succeed(undefined));
-        };
-
-        const creating = yield* Effect.forkChild(
-          runtime.make(machine, fromImage("base"), unbound)
-        );
-
-        yield* Deferred.await(kicked);
-
-        const listsBefore = mac.spawner.calls.length;
-
-        const reading = yield* Effect.forkChild(
-          Effect.all([runtime.observe([machine]), runtime.sizes(machine)], {
-            concurrency: "unbounded",
-          })
-        );
-
-        yield* Effect.sleep(Duration.millis(300));
-
-        const during = mac.spawner.calls
-          .slice(listsBefore)
-          .map(({ args }) => args[0])
-          .filter((command) => command === "list" || command === "get");
-
-        mac.startVm(vm);
-
-        const [observed] = yield* Fiber.join(reading);
-
-        yield* Fiber.join(creating);
-
-        mac.hooks.kickstart = (label) => {
-          mac.exited.set(label, 1);
-        };
-
-        mac.vms.set(vm, "stopped");
-
-        const failed = yield* Effect.flip(runtime.start(machine, new Set()));
-        const afterExit = yield* runtime.observe([machine]);
-
-        expect(during).toStrictEqual([]);
-        expect(observed).toStrictEqual(new Map([["dev", "running"]]));
-        expect(failed._tag).toBe("Internal");
-        expect(afterExit).toStrictEqual(new Map([["dev", "stopped"]]));
       })
   );
 
@@ -1221,14 +1123,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         mac.vms.set(vmOf(stopped), "stopped");
 
-        const before = mac.spawner.calls.length;
-
         yield* runtime.stop(stopped);
         yield* runtime.stop(gone);
 
-        expect(
-          mac.spawner.calls.slice(before).map(({ args }) => args[0])
-        ).toStrictEqual(["list", "list"]);
+        expect(calls(mac)).toStrictEqual([]);
       })
   );
 
@@ -1525,33 +1423,35 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     })
   );
 
-  it.effect("observe reads every machine's state with one tart list", () =>
-    Effect.gen(function* () {
-      const { mac, runtime } = yield* runtimeOn();
+  it.effect(
+    "observe reads each machine's state from its VM's directory and its job, running no tart",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
 
-      const [up, paused, gone] = [
-        machineOn("up"),
-        machineOn("paused"),
-        machineOn("gone"),
-      ];
+        const [up, paused, gone] = [
+          machineOn("up"),
+          machineOn("paused"),
+          machineOn("gone"),
+        ];
 
-      mac.vms.set(vmOf(up), "running");
-      mac.vms.set(vmOf(paused), "suspended");
+        mac.vms.set(vmOf(up), "running");
+        mac.vms.set(vmOf(paused), "suspended");
 
-      const before = mac.spawner.calls.length;
-      const observed = yield* runtime.observe([up, paused, gone]);
+        const before = mac.spawner.calls.length;
+        const observed = yield* runtime.observe([up, paused, gone]);
 
-      expect(observed).toStrictEqual(
-        new Map([
-          [up.name, "running"],
-          [paused.name, "paused"],
-          [gone.name, "missing"],
-        ])
-      );
-      expect(
-        mac.spawner.calls.slice(before).map(({ args }) => args)
-      ).toStrictEqual([["list", "--source", "local", "--format", "json"]]);
-    })
+        expect(observed).toStrictEqual(
+          new Map([
+            [up.name, "running"],
+            [paused.name, "paused"],
+            [gone.name, "missing"],
+          ])
+        );
+        expect(
+          mac.spawner.calls.slice(before).filter(({ file }) => file === binary)
+        ).toStrictEqual([]);
+      })
   );
 
   it.effect(
@@ -1568,10 +1468,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* runtime.pause(machine);
 
-        expect(calls(mac).slice(before)).toStrictEqual([
-          `launchctl print gui/501/${vm}`,
-          `tart suspend ${vm}`,
-        ]);
+        expect(calls(mac).slice(before)).toStrictEqual([`tart suspend ${vm}`]);
         expect(yield* runtime.observe([machine])).toStrictEqual(
           new Map([[machine.name, "paused"]])
         );
@@ -1600,7 +1497,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* runtime.pause(machine);
 
         expect(calls(mac).slice(before)).toStrictEqual([
-          `launchctl print gui/501/${vm}`,
           `tart exec ${vm} sudo -n /sbin/shutdown -h now`,
         ]);
         expect(yield* runtime.observe([machine])).toStrictEqual(
@@ -1610,7 +1506,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "pause refuses, signalling nothing, when launchctl print's arguments can't be read",
+    "a launchctl print without the job's state or arguments fails a read, a stop and a pause of a VM whose lock no run holds as Internal, naming what it printed, and signals nothing",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -1618,17 +1514,38 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const vm = vmOf(machine);
 
         yield* runtime.make(machine, fromImage("base"), unbound);
-        mac.hooks.print = () => ({
-          stdout: "gui/501/job = {\n\tstate = running\n}\n",
-        });
+        mac.vms.set(vm, "stopped");
 
-        const error = yield* Effect.flip(runtime.pause(machine));
+        const before = calls(mac).length;
 
-        expect(failure(error)[0]).toBe("Internal");
-        expect(failure(error)[1]).toContain(
-          "couldn't read the arguments in launchctl print"
+        const unreadable = [
+          "gui/501/job = {\n\tstate = running\n}\n",
+          "gui/501/job = {\n\tprogram = /opt/tart\n\targuments = {\n\t\t/opt/tart\n\t}\n}\n",
+        ];
+
+        const failures = [];
+
+        for (const stdout of unreadable) {
+          mac.hooks.print = () => ({ stdout });
+
+          failures.push(
+            ...[
+              yield* Effect.flip(runtime.observe([machine])),
+              yield* Effect.flip(runtime.stop(machine)),
+              yield* Effect.flip(runtime.pause(machine)),
+            ].map(failure)
+          );
+        }
+
+        expect(failures).toStrictEqual(
+          unreadable.flatMap((stdout) =>
+            Array.from({ length: 3 }, () => [
+              "Internal",
+              `launchctl print gui/501/${vm} printed no state or arguments this host reads: ${stdout.trimEnd()}`,
+            ])
+          )
         );
-        expect(calls(mac)).not.toContain(`tart suspend ${vm}`);
+        expect(calls(mac).slice(before)).toStrictEqual([]);
       })
   );
 
@@ -1740,7 +1657,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       yield* runtime.start(machine, new Set());
 
       expect(calls(mac).slice(before)).toStrictEqual([
-        `launchctl print gui/501/${vm}`,
         `launchctl kickstart gui/501/${vm}`,
         `tart exec ${vm} true`,
       ]);
@@ -1776,6 +1692,486 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(yield* runtime.observe([machine])).toStrictEqual(
           new Map([[machine.name, "paused"]])
         );
+      })
+  );
+
+  it.effect(
+    "a read answers while a create's tart set grows the new VM's disk",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const [growing, other] = [machineOn("growing"), machineOn("other")];
+        const release = yield* Deferred.make<undefined>();
+        const setting = yield* Deferred.make<undefined>();
+
+        mac.vms.set(vmOf(other), "running");
+        mac.hooks.set = () => {
+          Deferred.doneUnsafe(setting, Exit.succeed(undefined));
+
+          return { until: Deferred.await(release) };
+        };
+
+        const creating = yield* Effect.forkChild(
+          runtime.make(growing, fromImage("base"), unbound)
+        );
+
+        yield* Deferred.await(setting);
+
+        const reads = yield* Effect.all([
+          runtime.observe([growing, other]),
+          runtime.find("machine", growing),
+        ]).pipe(Effect.timeoutOption(Duration.seconds(2)));
+
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(creating);
+
+        expect(reads._tag === "Some" ? reads.value : "hung").toStrictEqual([
+          new Map([
+            ["growing", "stopped"],
+            ["other", "running"],
+          ]),
+          vmOf(growing),
+        ]);
+      })
+  );
+
+  it.effect(
+    "Apple's two-VM count takes every tart run on the Mac, in any Tart home, and nothing else",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const [a, b] = [machineOn("a"), machineOn("b")];
+
+        mac.vms.set(vmOf(a), "running");
+        mac.vms.set(vmOf(b), "stopped");
+        mac.elsewhere.add({
+          name: "tart",
+          args: "/Applications/Tart App/tart.app/Contents/MacOS/tart run --no-graphics operators-vm",
+        });
+
+        const held: readonly Held[] = [
+          { _tag: "found", machine: a },
+          { _tag: "found", machine: b },
+        ];
+
+        const used = yield* runtime.capacity(held);
+
+        const refused = yield* admitOn(runtime)({
+          action: "startMachine",
+          machine: b,
+          machines: [
+            { _tag: "found", machine: a },
+            { _tag: "booting", machine: b },
+          ],
+        }).pipe(
+          Effect.match({ onFailure: failure, onSuccess: () => "admitted" })
+        );
+
+        mac.elsewhere.clear();
+
+        yield* admitOn(runtime)({
+          action: "startMachine",
+          machine: b,
+          machines: [
+            { _tag: "found", machine: a },
+            { _tag: "booting", machine: b },
+          ],
+        });
+
+        expect(used[0]).toStrictEqual({
+          resource: "runningVms",
+          limit: 2,
+          used: 2,
+        });
+        expect(refused).toStrictEqual([
+          "Capacity",
+          `startMachine b would run 3 macOS VMs on this Mac, and Apple allows 2: ${[vmOf(a), vmOf(b), "tart run pid 6000"].toSorted().join(", ")}`,
+        ]);
+      })
+  );
+
+  it.effect(
+    "a VM a tart run outside its job runs reads running, however that run's executable is named: a start boots nothing, a capture or fork is refused, capacity counts it, and a stop shuts it down and waits for that run to end",
+    () =>
+      Effect.gen(function* () {
+        for (const executable of [
+          "tart",
+          "/usr/local/bin/tart-2.41.1",
+          "/opt/tart builds/tart",
+        ]) {
+          const { mac, runtime } = yield* runtimeOn();
+          const [machine, copy] = [machineOn("dev"), machineOn("copy")];
+          const vm = vmOf(machine);
+
+          yield* runtime.make(machine, fromImage("base"), unbound);
+          yield* runtime.stop(machine);
+          mac.runByHand(vm, [executable, "run", "--no-graphics", vm]);
+
+          const before = calls(mac).length;
+          const observed = yield* runtime.observe([machine]);
+
+          yield* runtime.start(machine, new Set());
+
+          const refused = [
+            yield* Effect.flip(runtime.capture(machine, snapOf())),
+            yield* Effect.flip(
+              runtime.make(copy, fromMachine(machine), unbound)
+            ),
+          ].map(failure);
+
+          const used = yield* runtime.capacity([{ _tag: "found", machine }]);
+
+          yield* runtime.stop(machine);
+
+          expect([executable, observed]).toStrictEqual([
+            executable,
+            new Map([[machine.name, "running"]]),
+          ]);
+          expect(refused).toStrictEqual([
+            [
+              "WrongState",
+              "a Tart checkpoint copies a stopped machine's disk, and dev is running: stop it first",
+            ],
+            [
+              "WrongState",
+              "a Tart fork copies a stopped machine's disk, and dev is running: stop it first",
+            ],
+          ]);
+          expect(used[0]).toStrictEqual({
+            resource: "runningVms",
+            limit: 2,
+            used: 1,
+          });
+          expect(calls(mac).slice(before)).toStrictEqual([
+            `tart exec ${vm} sudo -n /sbin/shutdown -h now`,
+          ]);
+          expect(yield* runtime.observe([machine])).toStrictEqual(
+            new Map([[machine.name, "stopped"]])
+          );
+        }
+      })
+  );
+
+  it.effect(
+    "a lock read that fails, or answers short, fails a read, a start, a stop, a pause, a capture and a fork as Internal, and signals or copies nothing",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const [machine, copy] = [machineOn("dev"), machineOn("copy")];
+        const vm = vmOf(machine);
+
+        const config = path.join(
+          mac.settings.tartHome ?? "",
+          "vms",
+          vm,
+          "config.json"
+        );
+
+        yield* runtime.make(machine, fromImage("base"), unbound);
+
+        const before = calls(mac).length;
+
+        const answers = [
+          {
+            reply: { exitCode: 255, stderr: "perl: not found\n" },
+            message:
+              "/usr/bin/perl reading the VMs' locks exited 255: perl: not found",
+          },
+          {
+            reply: { stdout: `5001\t${config}\n` },
+            message:
+              "/usr/bin/perl reading the VMs' locks: it answered 1 lines for 1 paths, with no end",
+          },
+          {
+            reply: { stdout: `error Permission denied\t${config}\nend\n` },
+            message: `/usr/bin/perl reading the VMs' locks: ${config}: error Permission denied`,
+          },
+        ];
+
+        for (const { reply, message } of answers) {
+          mac.hooks.locks = () => reply;
+
+          expect(
+            [
+              yield* Effect.flip(runtime.observe([machine])),
+              yield* Effect.flip(runtime.start(machine, new Set())),
+              yield* Effect.flip(runtime.stop(machine)),
+              yield* Effect.flip(runtime.pause(machine)),
+              yield* Effect.flip(runtime.capture(machine, snapOf())),
+              yield* Effect.flip(
+                runtime.make(copy, fromMachine(machine), unbound)
+              ),
+            ].map(failure)
+          ).toStrictEqual(
+            Array.from({ length: 6 }, () => ["Internal", message])
+          );
+        }
+
+        expect(calls(mac).slice(before)).toStrictEqual([]);
+      })
+  );
+
+  it.effect(
+    "a ps that fails fails capacity and a boot's admission as Internal",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const machine = machineOn("dev");
+
+        mac.hooks.ps = () => ({ exitCode: 1, stderr: "ps: fault\n" });
+
+        expect(
+          [
+            yield* Effect.flip(runtime.capacity([{ _tag: "found", machine }])),
+            yield* Effect.flip(
+              runtime.admission?.admit({
+                action: "createMachine",
+                machine,
+                machines: [{ _tag: "booting", machine }],
+              }) ?? Effect.void
+            ),
+          ].map(failure)
+        ).toStrictEqual(
+          Array.from({ length: 2 }, () => [
+            "Internal",
+            "ps exited 1: ps: fault",
+          ])
+        );
+      })
+  );
+
+  it.effect(
+    "a VM whose directory is gone reads missing, though its job still runs",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const machine = machineOn("dev");
+        const vm = vmOf(machine);
+
+        yield* runtime.make(machine, fromImage("base"), unbound);
+        rmSync(path.join(mac.settings.tartHome ?? "", "vms", vm), {
+          recursive: true,
+        });
+
+        expect(yield* runtime.observe([machine])).toStrictEqual(
+          new Map([[machine.name, "missing"]])
+        );
+      })
+  );
+
+  it.effect(
+    "capacity counts a tart run of another home's VM whose name holds this host's VM's apart from it",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const machine = machineOn("dev");
+        const vm = vmOf(machine);
+
+        yield* runtime.make(machine, fromImage("base"), unbound);
+        mac.elsewhere.add({
+          name: "tart",
+          args: `/opt/other/tart run --no-graphics ${vm}-copy`,
+        });
+
+        const [runs] = yield* runtime.capacity([{ _tag: "found", machine }]);
+
+        expect(runs).toStrictEqual({
+          resource: "runningVms",
+          limit: 2,
+          used: 2,
+        });
+      })
+  );
+
+  it.effect(
+    "a VM whose job launchd is starting reads running before its tart run begins",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const machine = machineOn("dev");
+
+        yield* runtime.make(machine, fromImage("base"), unbound);
+        yield* runtime.stop(machine);
+        mac.starting.add(vmOf(machine));
+
+        expect(yield* runtime.observe([machine])).toStrictEqual(
+          new Map([[machine.name, "running"]])
+        );
+      })
+  );
+
+  it.effect(
+    "delete of a VM a tart run outside its job runs forces that run off, then removes the VM",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const machine = machineOn("dev");
+        const vm = vmOf(machine);
+
+        yield* runtime.make(machine, fromImage("base"), unbound);
+        yield* runtime.stop(machine);
+        mac.runByHand(vm);
+
+        const before = calls(mac).length;
+
+        yield* runtime.delete(machine, new Set());
+
+        expect(calls(mac).slice(before)).toStrictEqual([
+          `tart delete ${vm}`,
+          `tart stop --timeout 0 ${vm}`,
+          `tart delete ${vm}`,
+          `launchctl bootout gui/501/${vm}`,
+        ]);
+        expect([mac.vms.has(vm), mac.runs.has(vm)]).toStrictEqual([
+          false,
+          false,
+        ]);
+      })
+  );
+
+  it.effect(
+    "pause of a VM a tart run outside its job runs stops it instead, as the host can't read that run's output for Tart's save",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const machine = machineOn("dev");
+        const vm = vmOf(machine);
+
+        yield* runtime.make(machine, fromImage("base"), unbound);
+        yield* runtime.stop(machine);
+        mac.runByHand(vm, ["tart", "run", "--suspendable", vm]);
+
+        const before = calls(mac).length;
+
+        yield* runtime.pause(machine);
+
+        expect(calls(mac).slice(before)).toStrictEqual([
+          `tart exec ${vm} sudo -n /sbin/shutdown -h now`,
+        ]);
+        expect(yield* runtime.observe([machine])).toStrictEqual(
+          new Map([[machine.name, "stopped"]])
+        );
+      })
+  );
+
+  it.effect(
+    "a forced stop waits for the tart run to end after tart stop returns, and fails, deleting nothing, when it never ends",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const [lingering, stuck] = [machineOn("lingering"), machineOn("stuck")];
+
+        yield* runtime.make(lingering, fromImage("base"), unbound);
+        yield* runtime.make(stuck, fromImage("base"), unbound);
+        mac.hooks.stop = () => ({ exitCode: 0 });
+
+        const deleting = (machine: Sized, ends: boolean) =>
+          Effect.gen(function* () {
+            const before = calls(mac).length;
+
+            const fiber = yield* Effect.forkChild(
+              Effect.exit(runtime.delete(machine, new Set()))
+            );
+
+            yield* TestClock.adjust(Duration.seconds(5));
+            yield* Effect.yieldNow;
+
+            const waited = fiber.pollUnsafe() === undefined;
+
+            if (ends) {
+              mac.vms.set(vmOf(machine), "stopped");
+            }
+
+            while (fiber.pollUnsafe() === undefined) {
+              yield* TestClock.adjust(Duration.millis(500));
+            }
+
+            const exit = yield* Fiber.join(fiber);
+
+            return {
+              waited,
+              failed: Exit.isFailure(exit)
+                ? exit.cause
+                    .toString()
+                    .includes(
+                      `${vmOf(machine)} still runs 10s after tart stop --timeout 0`
+                    )
+                : false,
+              calls: calls(mac).slice(before),
+              held: mac.vms.has(vmOf(machine)),
+            };
+          });
+
+        const ended = yield* deleting(lingering, true).pipe(
+          Effect.provide(TestClock.layer())
+        );
+
+        const never = yield* deleting(stuck, false).pipe(
+          Effect.provide(TestClock.layer())
+        );
+
+        expect([ended, never]).toStrictEqual([
+          {
+            waited: true,
+            failed: false,
+            calls: [
+              `tart delete ${vmOf(lingering)}`,
+              `tart stop --timeout 0 ${vmOf(lingering)}`,
+              `tart delete ${vmOf(lingering)}`,
+              `launchctl bootout gui/501/${vmOf(lingering)}`,
+            ],
+            held: false,
+          },
+          {
+            waited: true,
+            failed: true,
+            calls: [
+              `tart delete ${vmOf(stuck)}`,
+              `tart stop --timeout 0 ${vmOf(stuck)}`,
+            ],
+            held: true,
+          },
+        ]);
+      })
+  );
+
+  it.effect(
+    "capacity and admission count the host's own VMs by the binary it runs, whatever its file is named",
+    () =>
+      Effect.gen(function* () {
+        const { runtime } = yield* runtimeOn({
+          binary: "/opt/tart/2.41.1/bin/tart-2.41.1",
+        });
+
+        const [a, b, c] = [machineOn("a"), machineOn("b"), machineOn("c")];
+
+        yield* runtime.make(a, fromImage("base"), unbound);
+        yield* runtime.make(b, fromImage("base"), unbound);
+
+        const held: readonly Held[] = [
+          { _tag: "found", machine: a },
+          { _tag: "found", machine: b },
+        ];
+
+        const used = yield* runtime.capacity(held);
+
+        const refused = yield* Effect.flip(
+          admitOn(runtime)({
+            action: "createMachine",
+            machine: c,
+            machines: [...held, { _tag: "booting", machine: c }],
+          })
+        );
+
+        expect(used[0]).toStrictEqual({
+          resource: "runningVms",
+          limit: 2,
+          used: 2,
+        });
+        expect(failure(refused)).toStrictEqual([
+          "Capacity",
+          `createMachine c would run 3 macOS VMs on this Mac, and Apple allows 2: ${[vmOf(a), vmOf(b), vmOf(c)].toSorted().join(", ")}`,
+        ]);
       })
   );
 
@@ -1818,7 +2214,7 @@ const operationsOn = (runtime: Interface) =>
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
-    "find answers a machine's handle while Tart lists its VM or its job's plist or log is left, and nothing once all are gone",
+    "find answers a machine's handle while the Tart home holds its VM or its job's plist or log is left, and nothing once all are gone",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -1852,6 +2248,60 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           false,
           false,
         ]);
+      })
+  );
+
+  it.effect(
+    "a make whose admission fails Internal clones nothing and fails with that error, and its undo finds nothing and is done",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const operations = yield* operationsOn(runtime);
+        const machine = machineOn("dev");
+        const identity = { name: machine.name, instance: machine.instance };
+
+        mac.hooks.ps = () => ({ exitCode: 1, stderr: "ps: fault\n" });
+
+        const ended = (id: string, sequence: number, step: Step) =>
+          Effect.andThen(
+            operations.run({
+              id,
+              boot: operations.boot,
+              scope: { resource: "machine", name: "dev" },
+              sequence,
+              step,
+            }),
+            eventually(
+              operations.wait(id),
+              ({ status }) => status !== "running"
+            )
+          );
+
+        const made = yield* ended("make", 1, {
+          _tag: "make",
+          machine: { ...identity, cpu: 4, ramMib: 8192, diskGib: 60 },
+          source: { _tag: "base", base: "macos" },
+          taken: [],
+          machines: [],
+        });
+
+        const undone = yield* ended("undo", 2, {
+          _tag: "remove",
+          machine: identity,
+          keep: [],
+        });
+
+        expect([
+          made.status,
+          made.outcome.handle,
+          made.error === undefined ? undefined : failure(made.error),
+        ]).toStrictEqual([
+          "failed",
+          undefined,
+          ["Internal", "ps exited 1: ps: fault"],
+        ]);
+        expect(undone.status).toBe("done");
+        expect(calls(mac)).toStrictEqual([]);
       })
   );
 

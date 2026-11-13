@@ -1,0 +1,52 @@
+gui/501/rcv-f5x = {
+	active count = 0
+	path = /Users/operator/rcv-f5/jobs/rcv-f5x.plist
+	type = LaunchAgent
+	state = not running
+
+	program = /Users/operator/.local/opt/tart/2.41.1/tart.app/Contents/MacOS/tart
+	arguments = {
+		/Users/operator/.local/opt/tart/2.41.1/tart.app/Contents/MacOS/tart
+		run
+		--no-graphics
+		--net-softnet-block=@host
+		--suspendable
+		rcv-f5x
+	}
+
+	stdout path = /Users/operator/rcv-f5/jobs/rcv-f5x.log
+	stderr path = /Users/operator/rcv-f5/jobs/rcv-f5x.log
+	inherited environment = {
+		SSH_AUTH_SOCK => /var/run/com.apple.launchd.wFqQxLS9Lc/Listeners
+	}
+
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	environment = {
+		OSLogRateLimit => 64
+		PATH => /usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+		TART_HOME => /Users/operator/rcv-f5/tart-home
+		HOME => /Users/operator
+		XPC_SERVICE_NAME => rcv-f5x
+	}
+
+	domain = gui/501 [100016]
+	asid = 100016
+	minimum runtime = 10
+	exit timeout = 5
+	runs = 0
+	last exit code = (never exited)
+
+	spawn type = daemon (3)
+	jetsam priority = 40
+	jetsam memory limit (active) = (unlimited)
+	jetsam memory limit (inactive) = (unlimited)
+	jetsamproperties category = daemon
+	jetsam thread limit = 32
+	cpumon = default
+	sanitizer flags = 0x0
+
+	properties = inferred program
+}

@@ -157,8 +157,10 @@ which reads Linux's `ip_local_port_range`), `relay.ts`
 (`Relays`, a TCP listener that carries each connection through a runtime's
 dial), `tailscale.ts` (`Tailnet`, over Tailscale's API), `s3.ts` (`BuildStore`,
 over S3, path-style and signed), the runtimes `smolvm/` (the lock that keeps
-a box to one smolvm host in `one-per-box.ts`), `tart/`,
-`smol-cloud/` (smol cloud's API in `api.ts`, the SSH tunnel in `tunnel.ts`) and
+a box to one smolvm host in `one-per-box.ts`), `tart/` (the Tart home's VM
+directories in `home.ts`, a VM's lock read through macOS's Perl in `locks.ts`,
+`launchctl print` read in `launchd.ts`, the `tart run` processes `ps` shows in
+`runs.ts`), `smol-cloud/` (smol cloud's API in `api.ts`, the SSH tunnel in `tunnel.ts`) and
 `boat/` (boat's REST API with its retries and headers in `api.ts`, the guest
 channel in `ssh.ts`, OpenSSH from the host pinned to the host key boat answers),
 each with its `RuntimeTraits` in its `traits.ts`, and what they share:

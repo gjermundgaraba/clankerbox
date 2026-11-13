@@ -1,0 +1,63 @@
+gui/501/rcv-f5x-false = {
+	active count = 0
+	path = /Users/operator/rcv-f5/jobs/rcv-f5x-false.plist
+	type = LaunchAgent
+	state = spawn scheduled
+
+	program = /usr/bin/false
+	arguments = {
+		/usr/bin/false
+	}
+
+	stdout path = /Users/operator/rcv-f5/jobs/rcv-f5x-false.log
+	stderr path = /Users/operator/rcv-f5/jobs/rcv-f5x-false.log
+	inherited environment = {
+		SSH_AUTH_SOCK => /var/run/com.apple.launchd.wFqQxLS9Lc/Listeners
+	}
+
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	environment = {
+		OSLogRateLimit => 64
+		PATH => /usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+		TART_HOME => /Users/operator/rcv-f5/tart-home
+		HOME => /Users/operator
+		XPC_SERVICE_NAME => rcv-f5x-false
+	}
+
+	domain = gui/501 [100016]
+	asid = 100016
+	minimum runtime = 10
+	exit timeout = 5
+	runs = 1
+	last exit code = 1
+
+	resource coalition = {
+		ID = 114709
+		type = resource
+		state = active
+		active count = 1
+		name = rcv-f5x-false
+	}
+
+	jetsam coalition = {
+		ID = 114710
+		type = jetsam
+		state = active
+		active count = 1
+		name = rcv-f5x-false
+	}
+
+	spawn type = daemon (3)
+	jetsam priority = 40
+	jetsam memory limit (active) = (unlimited)
+	jetsam memory limit (inactive) = (unlimited)
+	jetsamproperties category = daemon
+	jetsam thread limit = 32
+	cpumon = default
+	sanitizer flags = 0x0
+
+	properties = keepalive | inferred program
+}

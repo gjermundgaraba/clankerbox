@@ -1,0 +1,79 @@
+gui/501/rcv-f5x = {
+	active count = 1
+	path = /Users/operator/rcv-f5/jobs/rcv-f5x.plist
+	type = LaunchAgent
+	state = xpcproxy
+
+	program = /Users/operator/.local/opt/tart/2.41.1/tart.app/Contents/MacOS/tart
+	arguments = {
+		/Users/operator/.local/opt/tart/2.41.1/tart.app/Contents/MacOS/tart
+		run
+		--no-graphics
+		--net-softnet-block=@host
+		--suspendable
+		rcv-f5x
+	}
+
+	stdout path = /Users/operator/rcv-f5/jobs/rcv-f5x.log
+	stderr path = /Users/operator/rcv-f5/jobs/rcv-f5x.log
+	inherited environment = {
+		SSH_AUTH_SOCK => /var/run/com.apple.launchd.wFqQxLS9Lc/Listeners
+	}
+
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	environment = {
+		OSLogRateLimit => 64
+		PATH => /usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+		TART_HOME => /Users/operator/rcv-f5/tart-home
+		HOME => /Users/operator
+		XPC_SERVICE_NAME => rcv-f5x
+	}
+
+	domain = gui/501 [100016]
+	asid = 100016
+	minimum runtime = 10
+	exit timeout = 5
+	runs = 1
+	pid = 88425
+	immediate reason = non-ipc demand
+	forks = 0
+	execs = 0
+	initialized = 0
+	trampolined = 0
+	started suspended = 0
+	proxy started suspended = 0
+	checked allocations = 0 (queried = 0)
+	checked allocations reason = no host
+	checked allocations flags = 0x0
+	last exit code = (never exited)
+
+	resource coalition = {
+		ID = 114864
+		type = resource
+		state = active
+		active count = 1
+		name = rcv-f5x
+	}
+
+	jetsam coalition = {
+		ID = 114865
+		type = jetsam
+		state = active
+		active count = 1
+		name = rcv-f5x
+	}
+
+	spawn type = daemon (3)
+	jetsam priority = 40
+	jetsam memory limit (active) = (unlimited)
+	jetsam memory limit (inactive) = (unlimited)
+	jetsamproperties category = daemon
+	jetsam thread limit = 32
+	cpumon = default
+	sanitizer flags = 0x0
+
+	properties = inferred program
+}

@@ -12,17 +12,19 @@ import type {
   Target,
 } from "./runtime.ts";
 
-type Observe = (machines: readonly Target[]) => Effect.Effect<Observed>;
+type Observe<E = never> = (
+  machines: readonly Target[]
+) => Effect.Effect<Observed, E>;
 
 interface InUse {
   readonly running: readonly MachineRef[];
   readonly unread: readonly MachineRef[];
 }
 
-export const inUse = (
+export const inUse = <E>(
   machines: readonly Held[],
-  observe: Observe
-): Effect.Effect<InUse> =>
+  observe: Observe<E>
+): Effect.Effect<InUse, E> =>
   Effect.gen(function* () {
     const found = machines.flatMap((held) =>
       held._tag === "found" ? [held.machine] : []

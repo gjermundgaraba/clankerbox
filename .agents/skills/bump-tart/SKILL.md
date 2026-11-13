@@ -89,14 +89,11 @@ Each: what Tart does, where, and what of ours depends on it.
 
 **Why the floor is 2.41.1** (`minimumVersion`)
 
-- `tart list` skips a VM deleted between enumerating the Tart home and reading
-  its metadata, where before it failed outright (`isFileNotFound` in
-  `compactMap`, Commands/List.swift; fixed in 2.41.1). Ours: nothing
-  orders a machine's `tart list` (`state`, `halted`, `observe`, `admit`,
-  `capacity`) against another machine's or a checkpoint's `tart delete`, so
-  below 2.41.1 a stop, start, fork or capture racing a delete failed `Internal`
-  and a recheck read every machine `unknown`.
-
+- `tart exec` asks the guest agent for 64 KiB HTTP/2 windows from 2.41.1
+  (`targetWindowSize`, GuestAgentChannel.swift; see "Exec" below). Ours: every
+  exec and the relay's ssh run over it. 2.41.1 also stopped `tart list`
+  failing on a VM deleted while it lists (`isFileNotFound`, Commands/List.swift),
+  which no longer matters here, as the host runs no `tart list` (below).
 - Clone refuses an existing destination unless `--overwrite`
   (`rejectExistingDestination`, Commands/Clone.swift). Ours:
   native names carry the row's instance, so a clone never meets one, and
@@ -107,8 +104,7 @@ Each: what Tart does, where, and what of ours depends on it.
   Ours: delete treats 2 as gone, and on 1 forces the VM off
   (`tart stop --timeout 0`) and deletes again.
 - One control-socket accept error no longer disables `tart exec` until restart
-  (`ControlSocketAcceptErrorHandler`, ControlSocket.swift), and
-  `tart list` no longer fails on running VMs.
+  (`ControlSocketAcceptErrorHandler`, ControlSocket.swift; from 2.40.1).
 
 **Clone, names and sizes**
 
@@ -161,9 +157,9 @@ Each: what Tart does, where, and what of ours depends on it.
   restore's clone those that differ from its source's (`sizeFlags`); `set`
   makes `minimumRefusal` `Unsizable`, for a create too; `sizable` refuses
   vCPUs or a disk in GB past `maximumFlag`; `sizes` and
-  `decodeInfo` read the VM back after every resize and at each host's start,
-  leaving out a null `Disk`, which `sizedBy` fills with the disk the row holds,
-  so a running ASIF VM's read at a host's start keeps the row's disk; and
+  `decodeInfo` read the VM back after every resize, and after a resize its
+  host lost, leaving out a null `Disk`, which `sizedBy` fills with the disk the
+  row holds; and
   `diskGibOf` floors the GB to the GiB `diskGb` rounded up from.
 - The base's `tart-guest-agent --run-daemon`, a launch daemon run at load
   (`data/tart-guest-daemon.plist`, installed by `templates/base.pkr.hcl` in
@@ -180,25 +176,95 @@ Each: what Tart does, where, and what of ours depends on it.
 
 **State, stop and capacity**
 
-- `tart list --format json` gives `Source`, `Name`, `Disk` (can be null),
-  `Size`, `Accessed`, `Running` (deprecated, kept in JSON for compatibility,
-  Formatter/Format.swift) and `State`: `running`, `suspended` or
-  `stopped` (`VMDirectory.State`, VMDirectory.swift), from the VM's lock,
-  which `tart run` holds, then whether `state.vzvmsave` exists (`state`,
-  `stateURL`). It sees one Tart home only. Ours: `VmState`, `decodeList`,
-  `stateOf` (suspended reads paused), the two-VM count, and
-  `observe`'s `tart list`, bounded by the core's `stateReadWait` (9 s), past
-  which every machine reads `unknown`; the two-VM count's `tart list` is
-  bounded by the same, past which the boot fails, writing nothing. With one
-  running ASIF VM and the cached base, `tart list --format json` took 0.9–1.6 s,
-  `diskutil image info` behind each ASIF disk included.
+- `tart list` and `tart get` read each VM's disk size, which for an ASIF disk
+  is a `diskutil image info` (`diskSizeBytes`, VMDirectory.swift; `VMInfo` in
+  Commands/List.swift and Commands/Get.swift), and `tart list` builds every
+  row before it prints, `-q` too. So a list costs about 0.7 s per stopped VM
+  in the home, and a get 0.7 s for one stopped VM. Measured at 2.41.1 on a
+  macOS 27.2 Mac with one running VM and the rest stopped clones of the base,
+  medians of 3 to 5 runs:
+
+  | Read | 3 local VMs | 13 | 23 |
+  | --- | ---: | ---: | ---: |
+  | `tart list --source local --format json` | 1.5 s | 9.4 s | 18.0 s |
+  | `tart list --source local -q` | 1.5 s | 9.5 s | 17.0 s |
+  | `tart get <stopped VM> --format json` | 0.76 s | 0.67 s | 0.83 s |
+  | `tart get <running VM> --format json` | 65 ms | 64 ms | 65 ms |
+  | `diskutil image info --plist <stopped disk>` | 0.65 s | 0.75 s | 0.78 s |
+  | `launchctl print gui/<uid>/<job>` | 4 ms | 5 ms | 5 ms |
+  | `ps -axo pid=,ucomm=,args=` | 19 ms | 21 ms | 20 ms |
+  | a VM directory's entries, read in Node | < 0.1 ms | < 0.1 ms | < 0.1 ms |
+
+  Ours: the host runs no `tart list`, and `tart get` only in `sizes`. It reads
+  a VM as Tart's `state` does (VMDirectory.swift): a VM at all when its
+  directory under the home's `vms/` (`VMStorageLocal`'s `baseURL`) holds the
+  files `initialized` asks for (`layout`), running while a `tart run` holds the
+  lock on its `config.json` (`running`, PIDLock.swift), then paused when
+  `state.vzvmsave` exists (`stateURL`). `Home.look` reads the directory, and
+  `locks.ts` asks who holds each VM's lock with `fcntl(F_GETLK)`, as Tart's
+  `PIDLock.pid` does, through macOS's `/usr/bin/perl`, since Node has no
+  `fcntl`: one Perl for every VM a read asks about, packing `struct flock` as
+  macOS's `sys/fcntl.h` lays it out (`off_t l_start, l_len; pid_t l_pid; short
+  l_type, l_whence`, `pack('q q l s s')`). A read whose Perl fails, or answers
+  for fewer VMs than it asked, fails `Internal`, never reading a VM stopped.
+  Measured on macOS 27.2 with 2.41.1, over a home of 23 VMs and one path that
+  isn't a VM: one read of all 24 paths took 0.01 s, 10 of 10; the lock holder
+  of a running VM was its job's pid; and a VM's lock read free throughout a
+  `tart delete`, a `tart set --cpu`, a 4.75 s `tart set --disk-size` of a
+  standalone disk and a `tart clone` of it, read 1 to 630 times while each ran.
+  A VM runs while any process holds its lock, or while its launchd job starts
+  it, a moment before its `tart run` takes the lock. `tart push`, a stacked
+  export and `tart delete` take the lock on a stopped VM while they work
+  (Commands/Push.swift, VMDirectory+Archive.swift, VMDirectory.swift's
+  `delete`), so the host reads such a VM running for that time. Perl ships
+  with macOS 27.2, `/usr/bin/perl` 5.34, though Apple has said a later macOS
+  will drop it: check it on a macOS upgrade, with the struct's layout. Each
+  read costs the same however many VMs the home holds, inside the core's
+  `stateReadWait` (9 s).
+- `launchctl print gui/<uid>/<label>` is macOS's, not a stable interface: the
+  host reads its tab-indented `state = …` line and its `arguments = { … }`
+  block, and fails `Internal` on a print without them, or with a state not
+  among those captured on macOS 27.2 (`apps/host/tests/platform/tart/launchctl/`),
+  naming it: `not running` before a job's first run and after each, with
+  `last exit code`, a number or `(never exited)`; `xpcproxy` while launchd
+  starts a VM's job; `spawn scheduled` while it waits to respawn a job
+  `KeepAlive` restarts; and `running`. A VM's job kickstarted while a hand run
+  holds the VM's lock exits 2, its log `VM "<vm>" is already running!`
+  (Commands/Run.swift), and goes `spawn scheduled` under the host's
+  `KeepAlive`, measured on macOS 27.2, so it runs again once launchd's throttle
+  passes; the host reads such a VM running, by its lock. A label launchd doesn't hold exits 113,
+  as does a `launchctl kickstart` of it ("Could not find service"). Re-capture
+  them on a macOS upgrade, from a job of a scratch VM and of `/usr/bin/false`
+  under `KeepAlive`, and compare.
+- `ps -axo pid=,ucomm=,args=` pads a process's name, which may hold spaces, to
+  16 characters, and shows another user's arguments: on macOS 27.2 an
+  unprivileged `ps` showed root's and the system users' processes with theirs
+  (no second human user to look at). The host reads it only for the two-VM
+  count. Ours: `tartRuns` takes a process as a `tart run` when its arguments
+  start with the host's binary and `run`, whatever the binary is named, or its
+  name is `tart` and the argument after the first path ending in `tart`, or
+  after the first word, is `run`. A process run through a link to Tart of
+  another name shows the name `tart`: measured on macOS 27.2, `tart-2.41.1 run`
+  through a link showed `ucomm` `tart` and held the VM's lock. So a run of
+  another home through a copy of Tart's executable under another name, or a
+  path with a space after a directory named `tart` or before a link of another
+  name, isn't counted; a VM is one of its arguments, wherever it stands.
+  Re-check on a macOS upgrade.
+- A `diskutil image info` of a VM's disk as its `tart run` starts fails that
+  start, with `VZErrorDomain Code=1 "The virtual machine failed to start."` in
+  the job's log, 3 runs of 3 with a `tart get` loop of the same VM beside the
+  boot; a `tart get` loop of another VM failed neither a start nor a
+  `tart set --disk-size` grow, 3 of 3 each. Ours: no read opens a disk, so
+  reads never wait on a disk opener; `sizes` reads a machine whose step or
+  loop holds it, which no boot of its own runs beside.
 - `tart stop` sends SIGINT to `tart run`, waits up to `--timeout` (default 30 s)
   for the lock to clear, then SIGKILLs it; a stopped VM exits 2 (`stopRunning`,
   Commands/Stop.swift). Its return doesn't mean the VM is gone:
   `tart run` can still be exiting. Ours: stop is
   the guest's `shutdown -h now`, then `tart stop --timeout 0` after
-  `shutdownWait`, and both wait for `tart list` to read it stopped
-  (`forcedStopWait`).
+  `shutdownWait`, and both wait until no process holds the VM's lock and its
+  job doesn't run (`halted`, `forcedStopWait`), failing the step past it; a job
+  read not running 39 ms after a `tart stop --timeout 0` began.
 - `shutdown -h now` on a guest whose agent is still coming up waits for the
   agent, since the exec does. Ours: `shutdownWait`, a minute.
 - Apple allows two running macOS VMs per Mac, system-wide. Tart catches
@@ -206,8 +272,15 @@ Each: what Tart does, where, and what of ours depends on it.
   "The number of VMs exceeds the system limit" (`VirtualMachineLimitExceeded`,
   VMStorageHelper.swift) and exits 1 (`Foundation.exit(1)` in Run.swift)
   within 0.3–0.6 s; under launchd the job just
-  exits. Its hint lists the same home's VMs only. Ours: `vmLimit`, the count in
-  `admit`, and `limitRefusal` read from the job's log as `Capacity`.
+  exits, its log ending "The number of VMs exceeds the system limit (other
+  running VMs: …)" (`fputs("\(error)\n", stderr)` in Run.swift). Its hint lists
+  the same home's VMs only. Ours: `vmLimit`; `admit` and `capacity` count the
+  machines the host is booting or whose lock a process holds, and every other
+  `tart run` process on the Mac, of any Tart home or user (`tartRuns`, over
+  `ps -axo pid=,ucomm=,args=`), so the operator's own VMs count; a Linux VM a Tart runs counts too, which Apple
+  doesn't, and a macOS VM another program runs doesn't, which the kernel then
+  refuses; `limitRefusal` reads that refusal from the job's log as
+  `Capacity`.
 
 **Suspend and resume**
 
@@ -223,8 +296,8 @@ Each: what Tart does, where, and what of ours depends on it.
   (`suspendable`'s help, Commands/Run.swift). Ours: every job runs
   `--suspendable` (`program`), so every mac VM boots without those devices; a
   pause stops a VM whose loaded job's arguments lack it, as `stop` does, then,
-  without interruption, waits `suspendWait` for `tart list` to read it not
-  running and reads `saved` in the job's log, or runs `tart stop <vm>` to
+  without interruption, waits `suspendWait` for its job to exit and reads
+  `saved` in the job's log, or runs `tart stop <vm>` to
   remove what it left of `state.vzvmsave` and fails; a log it can't read fails
   the pause and keeps the state.
 - `tart run` of a VM with a `state.vzvmsave` turns on `--suspendable` itself,
@@ -361,9 +434,13 @@ times, and the disk's capacity and format)
   answers; then over `tart exec -i <vm> sudo -n /bin/bash -c`, the guest
   agent's version, sshd's host keys, the `/dev/random` and `/dev/urandom`
   writes, `/etc/environment` and `/etc/zshenv`, the application firewall's
-  state and `admin`'s sudoers entry; `tart list` and `tart get` while it runs,
-  for `Disk` and how long they take with `diskutil` behind them; and, stopped,
-  a `tart set --disk-size` a GB above the capacity, read back with `tart get`.
+  state and `admin`'s sudoers entry; `tart get` while it runs, for `Disk`;
+  and, stopped, a `tart set --disk-size` a GB above the capacity, read back
+  with `tart get`.
+- When `VMDirectory.swift`'s `state`, `layout` or `PIDLock` changed, re-time
+  the reads above against a private home padded with stopped clones of the
+  base, and check that `Home.look` and `running` still read what `tart list`
+  does, a VM run by hand outside its job included.
 
 ## After
 

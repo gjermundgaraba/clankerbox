@@ -46,7 +46,10 @@ import type {
 import type { HostSettings } from "../../settings.ts";
 import { allotted, inUse } from "../../usage.ts";
 import { cliIn, expect, files, regularFiles } from "../process.ts";
-import * as DiskGate from "./disk-gate.ts";
+import * as Home from "./home.ts";
+import * as Launchd from "./launchd.ts";
+import * as Locks from "./locks.ts";
+import { names, tartRuns } from "./runs.ts";
 import { traits } from "./traits.ts";
 
 export const TartSettings = Schema.Struct({
@@ -114,15 +117,6 @@ export const checkpointName = (host: string, checkpoint: Identity): Handle =>
     `cbx-${host}-c-${checkpoint.name}-${checkpoint.instance.slice(0, 8)}`
   );
 
-const tartHome = (settings: Pick<Settings, "tartHome">): string =>
-  settings.tartHome ?? path.join(homedir(), ".tart");
-
-const vmsDir = (settings: Pick<Settings, "tartHome">): string =>
-  path.join(tartHome(settings), "vms");
-
-const fetchingDir = (settings: Pick<Settings, "tartHome">): string =>
-  path.join(tartHome(settings), "cbx-fetching");
-
 export const jobsDir = (stateDir: string): string =>
   path.join(stateDir, "launchd");
 
@@ -184,15 +178,6 @@ export const plist = (job: {
     ``,
   ].join("\n");
 
-// https://github.com/openai/tart/blob/2.41.1/Sources/tart/VMDirectory.swift#L6
-const VmState = Schema.Literals(["running", "suspended", "stopped"]);
-
-const decodeList = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(
-    Schema.Array(Schema.Struct({ Name: Schema.String, State: VmState }))
-  )
-);
-
 // https://github.com/openai/tart/blob/2.41.1/Sources/tart/Commands/Get.swift#L4
 const decodeInfo = Schema.decodeUnknownEffect(
   Schema.fromJsonString(
@@ -214,34 +199,30 @@ const sizeFlags = ({ cpu, ramMib, diskGib }: Sizing): readonly string[] => [
   ...(diskGib === undefined ? [] : ["--disk-size", String(diskGb(diskGib))]),
 ];
 
-export const stateOf = (state: typeof VmState.Type): MachineState =>
-  state === "suspended" ? "paused" : state;
-
 /** The oldest Tart a mac host starts under; the `bump-tart` skill owns it. */
 export const minimumVersion = "2.41.1";
 
 export const supported = atLeast(minimumVersion);
 
-const printed = (output: string, key: string): string | undefined =>
-  new RegExp(`^\\t${key} = (.+)$`, "mu").exec(output)?.[1];
+const ended = (job: Launchd.Job | undefined, target: string): string => {
+  if (job === undefined) {
+    return `ended, and launchd no longer holds ${target}`;
+  }
 
-const printedArguments = (output: string): readonly string[] | undefined =>
-  /^\targuments = \{\n(?<lines>(?:\t\t.*\n)*)\t\}$/mu
-    .exec(output)
-    ?.groups?.["lines"]?.split("\n")
-    .filter((line) => line !== "")
-    .map((line) => line.slice(2));
+  return job._tag === "exited" && job.lastExit !== undefined
+    ? `exited ${job.lastExit}`
+    : "ended before launchd recorded its exit";
+};
 
-const observedIn = (
-  vms: ReadonlyMap<string, MachineState>,
-  machines: readonly Target[]
-): Observed =>
-  new Map(
-    machines.map((machine) => [
-      machine.name,
-      vms.get(machine.handle) ?? "missing",
-    ])
-  );
+const whyUnsaveable = (job: Launchd.Job | undefined): string | undefined => {
+  if (job?._tag !== "running") {
+    return "a tart run outside its launchd job runs it, whose output the host can't read for Tart's save";
+  }
+
+  return job.program.includes("--suspendable")
+    ? undefined
+    : "an older host booted it without --suspendable, which Tart can't suspend";
+};
 
 export const make = (
   settings: Settings
@@ -252,6 +233,7 @@ export const make = (
 > =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
+    const home = Home.make(fs, settings.tartHome);
     const env = environment(settings);
     const { run, exec, dial } = yield* cliIn(env);
     const jobs = jobsDir(settings.stateDir);
@@ -289,62 +271,13 @@ export const make = (
         expect(ran, `launchctl ${what}`, ok)
       );
 
-    const printJob = (target: string) =>
-      Effect.map(
-        launchctl(["print", target], `print ${target}`),
-        ({ stdout }) => stdout
-      );
-
     const reported = (yield* call(["--version"], "--version")).stdout.trim();
-    const disks = yield* DiskGate.make;
 
     if (!supported(reported)) {
       return yield* new CannotStart({
         message: `${settings.binary} reports version "${reported}", and this host needs Tart ${minimumVersion} or later`,
       });
     }
-
-    const list = Effect.flatMap(
-      disks.reading(
-        call(["list", "--source", "local", "--format", "json"], "list")
-      ),
-      (ran) =>
-        decodeList(ran.stdout).pipe(
-          Effect.map(
-            (vms) => new Map(vms.map((vm) => [vm.Name, stateOf(vm.State)]))
-          ),
-          Effect.mapError(
-            (error) =>
-              new Internal({
-                message: `tart list answered something unexpected: ${error.message}`,
-              })
-          )
-        )
-    );
-
-    const state = (vm: string) =>
-      Effect.map(list, (vms) => vms.get(vm) ?? "missing");
-
-    const countedIn = (
-      vms: ReadonlyMap<string, MachineState>,
-      machines: readonly Held[]
-    ) => {
-      const counted = new Set<string>();
-
-      for (const [vm, observed] of vms) {
-        if (observed === "running") {
-          counted.add(vm);
-        }
-      }
-
-      for (const held of machines) {
-        if (held._tag === "booting") {
-          counted.add(held.machine.handle ?? vmOf(held.machine));
-        }
-      }
-
-      return counted;
-    };
 
     const job = (vm: string) => ({
       target: `${domain}/${vm}`,
@@ -373,6 +306,129 @@ export const make = (
     const logOf = (vm: string) =>
       fs.readFileString(job(vm).log).pipe(Effect.orElseSucceed(() => ""));
 
+    const jobOf = (vm: string) =>
+      Effect.gen(function* () {
+        const { target } = job(vm);
+
+        const ran = yield* launchctl(
+          ["print", target],
+          `print ${target}`,
+          [0, 113]
+        );
+
+        if (ran.exitCode === 113) {
+          return undefined;
+        }
+
+        return yield* Effect.mapError(
+          Effect.fromResult(Launchd.parse(ran.stdout)),
+          (unread) =>
+            new Internal({
+              message: `launchctl print ${target} printed ${unread}: ${lastLines(ran.stdout)}`,
+            })
+        );
+      });
+
+    const lockFiles = (vms: readonly string[]) =>
+      Effect.gen(function* () {
+        const paths = vms.map((vm) => home.config(vm));
+        const what = `${Locks.reader} reading the VMs' locks`;
+
+        const ran = yield* expect(
+          yield* run(Locks.reader, Locks.readerArguments(paths), what),
+          what
+        );
+
+        const read = yield* Effect.mapError(
+          Effect.fromResult(Locks.holders(paths, ran.stdout)),
+          (why) => new Internal({ message: `${what}: ${why}` })
+        );
+
+        return new Map(vms.map((vm, at) => [vm, read[at] ?? 0]));
+      });
+
+    const onTheMac = Effect.map(
+      Effect.flatMap(
+        run("/bin/ps", ["-axo", "pid=,ucomm=,args="], "ps"),
+        (ran) => expect(ran, "ps")
+      ),
+      ({ stdout }) => tartRuns(stdout, settings.binary)
+    );
+
+    const runsWith = (vm: string, holder: number) =>
+      holder === 0
+        ? Effect.map(jobOf(vm), (read) => read?._tag === "running")
+        : Effect.succeed(true);
+
+    // https://github.com/openai/tart/blob/2.41.1/Sources/tart/VMDirectory.swift#L52
+    const running = (vm: string) =>
+      Effect.flatMap(lockFiles([vm]), (held) =>
+        runsWith(vm, held.get(vm) ?? 0)
+      );
+
+    // https://github.com/openai/tart/blob/2.41.1/Sources/tart/VMDirectory.swift#L65
+    const stateWith = (
+      vm: string,
+      holder: number
+    ): Effect.Effect<MachineState, Internal> =>
+      Effect.gen(function* () {
+        const held = yield* home.look(vm);
+
+        if (held === undefined) {
+          return "missing";
+        }
+
+        if (yield* runsWith(vm, holder)) {
+          return "running";
+        }
+
+        return held.saved ? "paused" : "stopped";
+      });
+
+    const state = (vm: string) =>
+      Effect.flatMap(lockFiles([vm]), (held) =>
+        stateWith(vm, held.get(vm) ?? 0)
+      );
+
+    const states = (machines: readonly Target[]) =>
+      Effect.gen(function* () {
+        const held = yield* lockFiles(machines.map(({ handle }) => handle));
+
+        const seen = yield* Effect.forEach(
+          machines,
+          (machine) =>
+            Effect.map(
+              stateWith(machine.handle, held.get(machine.handle) ?? 0),
+              (read) => [machine.name, read] as const
+            ),
+          { concurrency: "unbounded" }
+        );
+
+        return new Map(seen) satisfies Observed;
+      });
+
+    const counted = (machines: readonly Held[]) =>
+      Effect.gen(function* () {
+        const ours = machines.map((each) => ({
+          booting: each._tag === "booting",
+          vm: each.machine.handle ?? vmOf(each.machine),
+        }));
+
+        const held = yield* lockFiles(ours.map(({ vm }) => vm));
+        const onMac = yield* onTheMac;
+
+        return new Set([
+          ...ours.flatMap(({ booting, vm }) =>
+            booting || (held.get(vm) ?? 0) !== 0 ? [vm] : []
+          ),
+          ...onMac.map(
+            (each) =>
+              ours.find(({ vm }) => names(each, vm))?.vm ??
+              `tart run pid ${each.pid}`
+          ),
+        ]);
+      });
+
     const ready = (machine: Target) => {
       const vm = machine.handle;
       const { target } = job(vm);
@@ -382,9 +438,9 @@ export const make = (
           return true;
         }
 
-        const printedJob = yield* printJob(target);
+        const read = yield* jobOf(vm);
 
-        if (printed(printedJob, "state") !== "not running") {
+        if (read?._tag === "running") {
           return false;
         }
 
@@ -397,7 +453,7 @@ export const make = (
         }
 
         return yield* new Internal({
-          message: `tart run for ${machine.name} exited ${printed(printedJob, "last exit code") ?? "early"}: ${lastLines(output)}`,
+          message: `tart run for ${machine.name} ${ended(read, target)}: ${lastLines(output)}`,
         });
       });
 
@@ -418,9 +474,9 @@ export const make = (
     };
 
     const halted = (vm: string, wait: Duration.Duration) =>
-      state(vm).pipe(
+      running(vm).pipe(
         Effect.repeat({
-          until: (observed) => observed !== "running",
+          until: (runs) => !runs,
           schedule: Schedule.spaced(stopPause),
         }),
         Effect.timeoutOption(wait),
@@ -439,8 +495,7 @@ export const make = (
       });
 
     const started = (vm: string, since: number) => {
-      const socket = path.join(vmsDir(settings), vm, "control.sock");
-      const { target } = job(vm);
+      const socket = path.join(home.directory(vm), "control.sock");
 
       const look = Effect.gen(function* () {
         const info = yield* Effect.option(fs.stat(socket));
@@ -452,8 +507,8 @@ export const make = (
           return true;
         }
 
-        return printed(yield* printJob(target), "state") === "not running";
-      }).pipe(Effect.orElseSucceed(() => false));
+        return (yield* jobOf(vm))?._tag !== "running";
+      });
 
       return look.pipe(
         Effect.repeat({
@@ -477,23 +532,17 @@ export const make = (
         );
         yield* writeJob(vm);
 
-        const loaded = yield* launchctl(
-          ["print", target],
-          `print ${target}`,
-          [0, 113]
-        );
+        const loaded = yield* jobOf(vm);
 
         const stale =
-          loaded.exitCode === 0 &&
-          printed(loaded.stdout, "state") === "not running" &&
-          printedArguments(loaded.stdout)?.join("\n") !==
-            program(settings.binary, vm).join("\n");
+          loaded?._tag === "exited" &&
+          loaded.program.join("\n") !== program(settings.binary, vm).join("\n");
 
         if (stale) {
           yield* launchctl(["bootout", target], `bootout ${vm}`);
         }
 
-        if (stale || loaded.exitCode === 113) {
+        if (stale || loaded === undefined) {
           yield* launchctl(["bootstrap", domain, file], `bootstrap ${vm}`);
         }
 
@@ -504,7 +553,7 @@ export const make = (
       });
 
     const boot = (machine: Target) =>
-      Effect.andThen(disks.opening(launch(machine)), ready(machine));
+      Effect.andThen(launch(machine), ready(machine));
 
     const stop = (machine: Target) =>
       Effect.gen(function* () {
@@ -608,13 +657,8 @@ export const make = (
           ["clone", from, made.handle],
           `clone ${from} ${made.handle}`
         );
-        yield* disks.opening(
-          Effect.andThen(
-            set(made, machine, ["--random-serial", ...sizes]),
-            launch(made)
-          )
-        );
-        yield* ready(made).pipe(
+        yield* set(made, machine, ["--random-serial", ...sizes]);
+        yield* boot(made).pipe(
           Effect.catchTag("Capacity", (refused) =>
             Effect.andThen(removed(made.handle), Effect.fail(refused))
           )
@@ -655,7 +699,7 @@ export const make = (
     const suspend = (machine: Target) =>
       Effect.gen(function* () {
         const vm = machine.handle;
-        const { target, log } = job(vm);
+        const { log } = job(vm);
         const observed = yield* state(vm);
 
         if (observed === "paused") {
@@ -674,17 +718,11 @@ export const make = (
           });
         }
 
-        const loadedArguments = printedArguments(yield* printJob(target));
+        const unsaveable = whyUnsaveable(yield* jobOf(vm));
 
-        if (loadedArguments === undefined) {
-          return yield* new Internal({
-            message: `couldn't read the arguments in launchctl print ${target}, so the pause can't tell whether Tart can suspend ${machine.name}`,
-          });
-        }
-
-        if (!loadedArguments.includes("--suspendable")) {
+        if (unsaveable !== undefined) {
           yield* Effect.logWarning(
-            `pause ${machine.name}: an older host booted it without --suspendable, which Tart can't suspend, so it stops it instead`
+            `pause ${machine.name}: ${unsaveable}, so it stops it instead`
           );
 
           yield* stop(machine);
@@ -770,11 +808,11 @@ export const make = (
       admission: {
         admit: Effect.fn("Tart.admit")(({ action, machine, machines }) =>
           Effect.gen(function* () {
-            const counted = countedIn(yield* list, machines);
+            const runs = yield* counted(machines);
 
-            if (counted.size > vmLimit) {
+            if (runs.size > vmLimit) {
               return yield* new Capacity({
-                message: `${action} ${machine.name} would run ${counted.size} macOS VMs on this Mac, and Apple allows ${vmLimit}: ${[...counted].toSorted().join(", ")}`,
+                message: `${action} ${machine.name} would run ${runs.size} macOS VMs on this Mac, and Apple allows ${vmLimit}: ${[...runs].toSorted().join(", ")}`,
               });
             }
           })
@@ -782,7 +820,7 @@ export const make = (
       },
       files: {
         checkpointFiles: Effect.fn("Tart.checkpointFiles")((checkpoint) => {
-          const dir = path.join(vmsDir(settings), checkpoint.handle);
+          const dir = home.directory(checkpoint.handle);
 
           return Effect.map(regularFiles(fs, dir), (found) =>
             found.map((file) => ({ path: file, file: path.join(dir, file) }))
@@ -790,15 +828,15 @@ export const make = (
         }),
         held: () => Effect.undefined,
         staging: (checkpoint) =>
-          path.join(fetchingDir(settings), checkpointVm(checkpoint)),
+          path.join(home.fetching, checkpointVm(checkpoint)),
         install: Effect.fn("Tart.install")((checkpoint, staged) => {
           const handle = checkpointVm(checkpoint);
 
           return files(
             `couldn't install checkpoint ${checkpoint.name}`,
             Effect.andThen(
-              fs.makeDirectory(vmsDir(settings), { recursive: true }),
-              fs.rename(staged, path.join(vmsDir(settings), handle))
+              fs.makeDirectory(home.vms, { recursive: true }),
+              fs.rename(staged, home.directory(handle))
             )
           ).pipe(Effect.as(handle));
         }),
@@ -811,14 +849,14 @@ export const make = (
           fs.makeDirectory(jobs, { recursive: true, mode: 0o700 })
         ),
         files(
-          `couldn't remove ${fetchingDir(settings)}`,
-          fs.remove(fetchingDir(settings), { recursive: true, force: true })
+          `couldn't remove ${home.fetching}`,
+          fs.remove(home.fetching, { recursive: true, force: true })
         )
       ),
       find: Effect.fn("Tart.find")(function* (what, ref) {
         const handle = what === "machine" ? vmOf(ref) : checkpointVm(ref);
 
-        if ((yield* list).has(handle)) {
+        if ((yield* home.look(handle)) !== undefined) {
           return handle;
         }
 
@@ -836,24 +874,18 @@ export const make = (
 
         return undefined;
       }),
-      observe: Effect.fn("Tart.observe")((machines) =>
-        Effect.map(list, (vms) => observedIn(vms, machines))
-      ),
+      observe: Effect.fn("Tart.observe")(states),
       capacity: Effect.fn("Tart.capacity")((machines) =>
         Effect.gen(function* () {
-          const vms = yield* list;
-
-          const { running, unread } = yield* inUse(machines, (refs) =>
-            Effect.succeed(observedIn(vms, refs))
-          );
+          const used = yield* inUse(machines, states);
 
           return [
             {
               resource: "runningVms" as const,
               limit: vmLimit,
-              used: countedIn(vms, machines).size,
+              used: (yield* counted(machines)).size,
             },
-            ...allotted(running, unread),
+            ...allotted(used.running, used.unread),
           ];
         })
       ),
@@ -913,7 +945,7 @@ export const make = (
           const flags = sizeFlags(to);
 
           if (flags.length > 0) {
-            yield* disks.opening(set(machine, sizedBy(machine, to), flags));
+            yield* set(machine, sizedBy(machine, to), flags);
           }
         })
       ),
@@ -921,7 +953,7 @@ export const make = (
         const vm = machine.handle;
 
         return Effect.flatMap(
-          disks.reading(call(["get", vm, "--format", "json"], `get ${vm}`)),
+          call(["get", vm, "--format", "json"], `get ${vm}`),
           (ran) =>
             decodeInfo(ran.stdout).pipe(
               Effect.map(({ CPU, Memory, Disk }) => ({
