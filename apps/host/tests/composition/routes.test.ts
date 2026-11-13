@@ -15,7 +15,7 @@ import {
 import { Effect, Exit, Fiber, Logger, Schema } from "effect";
 import { expect } from "vite-plus/test";
 
-import { accepts, holding, hostOn, image } from "../support.ts";
+import { accepts, holding, hostOn, image, runtimeTraits } from "../support.ts";
 
 const serve = hostOn({ first: 21_130, last: 21_139 });
 
@@ -111,6 +111,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(decodeHost(answer.body)).toStrictEqual({
           id: "linux",
           kind: "linux",
+          traits: runtimeTraits.smolvm,
           version,
           runtimeVersion: "fake",
           bases: ["ubuntu"],

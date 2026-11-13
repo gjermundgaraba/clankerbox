@@ -10,6 +10,7 @@ import type {
   Internal,
   Kind,
   Reading,
+  RuntimeTraits,
   Sizing,
   Unsizable,
   WrongState,
@@ -161,6 +162,7 @@ export interface CheckpointFiles {
 }
 
 export interface Interface {
+  readonly traits: RuntimeTraits;
   readonly version: string;
   readonly pin: string | undefined;
   readonly reach: Reach;

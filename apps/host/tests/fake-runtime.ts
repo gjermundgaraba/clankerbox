@@ -23,6 +23,8 @@ import type { Kind, Sizing, Unsizable } from "@gjermundgaraba/clankerbox-sdk";
 import { Deferred, Effect, Layer, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
+import { traits as smolvm } from "../src/platform/smolvm/traits.ts";
+import { traits as tart } from "../src/platform/tart/traits.ts";
 import { missing, Runtime } from "../src/runtime.ts";
 import type {
   Activation,
@@ -594,6 +596,7 @@ export const fakeRuntime = (options: FakeOptions) => {
               })
             ),
         },
+        traits: kind === "linux" ? smolvm : tart,
         growsLive: kind === "linux",
         sizable: (machine, from, to, live) => {
           sized.push([machine.name, sizesOf(from), sizesOf(to), live]);

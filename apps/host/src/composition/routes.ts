@@ -28,6 +28,7 @@ const app = (config: Served) =>
           Effect.succeed({
             id: config.id,
             kind: config.kind,
+            traits: runtime.traits,
             version,
             runtimeVersion: runtime.version,
             bases: [...config.bases.keys()],

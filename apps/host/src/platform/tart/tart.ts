@@ -749,6 +749,7 @@ export const make = (
           )
         ),
       },
+      traits,
       growsLive: traits.resize.running !== "none",
       startup: Effect.andThen(
         files(

@@ -126,7 +126,7 @@ Adapters live in `platform/`: `bind-probe.ts` (`PortProbe`), `relay.ts`
 (`Relays`, a TCP listener that carries each connection through a runtime's
 dial), `tailscale.ts` (`Tailnet`, over Tailscale's API), `s3.ts` (`BuildStore`,
 over S3, path-style and signed), the runtimes `smolvm/` (`linux`) and `tart/`
-(`mac`), each with its facts in its `traits.ts`, and what they share,
+(`mac`), each with its `RuntimeTraits` in its `traits.ts`, and what they share,
 `process.ts`. A domain file never imports `platform/` or `composition/`.
 
 `composition/` assembles the host: `config.ts` reads the config file,
@@ -140,7 +140,8 @@ tailnet and build store, if any.
 
 **SDK** (`packages/sdk/src`). A library. Its root modules are the client
 contract and the vocabulary everything else imports: `api.ts`, `resources.ts`,
-`errors.ts`, `ids.ts`, `release.ts` (with `versionCheck`, for a server of either
+`traits.ts` (a runtime's `RuntimeTraits`, and the pure rules each decision about
+a machine goes through), `errors.ts`, `ids.ts`, `release.ts` (with `versionCheck`, for a server of either
 contract), `sizes.ts`, `describe.ts`. The rest are `client.ts`, `setup.ts`
 and `ssh.ts`. The `.` entry loads no Node; `./node` (`node.ts`) holds what
 needs it.

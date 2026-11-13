@@ -1170,6 +1170,7 @@ export const make = (
           })
         ),
       },
+      traits,
       growsLive: traits.resize.running !== "none",
       startup: Effect.gen(function* () {
         yield* removeAll(paths.forks);

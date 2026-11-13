@@ -549,30 +549,6 @@ export const ResizeRequest = Schema.Struct({
 export type ResizeRequest = typeof ResizeRequest.Type;
 
 /**
- * A base holding a `/` is an image reference, such as `registry.example/team/image:tag`, which a
- * linux host boots as smolvm resolves it at the create; a host's own base names hold none.
- */
-export const isImageReference = (base: string): boolean => base.includes("/");
-
-/** Whether `host` creates from `base`: a base it names, or an image reference on linux. */
-export const offers = (
-  host: Pick<Host, "kind" | "bases">,
-  base: string
-): boolean =>
-  host.bases.includes(base) ||
-  (host.kind === "linux" && isImageReference(base));
-
-/** What `host` creates from, as a refusal names it. */
-export const offered = ({
-  kind,
-  bases,
-}: Pick<Host, "kind" | "bases">): string =>
-  [
-    bases.length > 0 ? bases.join(", ") : "no bases",
-    ...(kind === "linux" ? ["and any image reference"] : []),
-  ].join(", ");
-
-/**
  * A build of `template` from `base` at its sizes, with `setup`. Each build gives them all, and a
  * setup without a timeout takes the host's.
  */

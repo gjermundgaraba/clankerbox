@@ -27,6 +27,7 @@ import {
   NotOffered,
   offered,
   offers,
+  RuntimeName,
   templateRef,
   version,
   versionHeader,
@@ -47,6 +48,7 @@ import type {
   Labels,
   Machine,
   Phase,
+  RuntimeTraits,
   Sizing,
   Template,
 } from "../src/index.ts";
@@ -85,6 +87,18 @@ export interface StubServerOptions {
     request: ExecRequest
   ) => Effect.Effect<Executed, Declared<"execMachine">>;
 }
+
+const traitsOf = (kind: Kind): RuntimeTraits => ({
+  runtime: RuntimeName.make(`stub-${kind}`),
+  images: kind === "linux" ? "references" : "named",
+  checkpoint: kind === "linux" ? "ram" : "disk",
+  captureFrom: kind === "linux" ? "running" : "stopped",
+  pause: "saves",
+  copies: kind === "linux" ? "grow" : "any",
+  resize: { running: kind === "linux" ? "grow" : "none", stopped: "any" },
+  sizes: { _tag: "free" },
+  stopsOnItsOwn: false,
+});
 
 export const machine = (id: string, fields?: Partial<Machine>): Machine => ({
   id,
@@ -210,6 +224,7 @@ const noTemplate = (id: string) =>
 export const stubServer = (options: StubServerOptions = {}) => {
   const kind = options.kind ?? "linux";
   const bases = options.bases ?? ["ubuntu"];
+  const offering = { bases, traits: traitsOf(kind) };
   const machines = new Map<string, Machine>();
   const checkpoints = new Map<string, Checkpoint>();
   const templates = new Map<string, Template>();
@@ -459,7 +474,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
 
   const notOffered = (base: string) =>
     new NotOffered({
-      message: `no host offers ${base}: the host offers ${offered({ kind, bases })}`,
+      message: `no host offers ${base}: the host offers ${offered(offering)}`,
       base,
     });
 
@@ -506,7 +521,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
         );
       }
 
-      if (!offers({ kind, bases }, request.base)) {
+      if (!offers(offering, request.base)) {
         return yield* notOffered(request.base);
       }
 

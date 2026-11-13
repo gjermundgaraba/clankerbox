@@ -6,6 +6,7 @@ import {
   Internal,
   Invalid,
   Kind,
+  RuntimeTraits,
   Machine,
   Missing,
   Name,
@@ -196,6 +197,7 @@ export type Report = typeof Report.Type;
 export const HostInfo = Schema.Struct({
   id: Schema.String,
   kind: Kind,
+  traits: RuntimeTraits,
   version: Schema.String,
   runtimeVersion: Schema.String,
   bases: Schema.Array(Schema.String),

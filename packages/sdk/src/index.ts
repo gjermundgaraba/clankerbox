@@ -6,6 +6,8 @@ export * from "./ids.ts";
 
 export * from "./resources.ts";
 
+export * from "./traits.ts";
+
 export * as Client from "./client.ts";
 
 export * from "./release.ts";

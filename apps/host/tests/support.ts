@@ -18,7 +18,9 @@ import type { PortRange } from "../src/machine-ports.ts";
 import { Operations } from "../src/operations.ts";
 import type { Interface as OperationsInterface } from "../src/operations.ts";
 import type { BuildsSettings } from "../src/platform/s3.ts";
+import { traits as smolvm } from "../src/platform/smolvm/traits.ts";
 import type { TailnetSettings } from "../src/platform/tailscale.ts";
+import { traits as tart } from "../src/platform/tart/traits.ts";
 import type {
   Admission,
   Interface as RuntimeInterface,
@@ -29,6 +31,8 @@ import { fakeRuntime } from "./fake-runtime.ts";
 import type { FakeOptions, FakeRuntime } from "./fake-runtime.ts";
 
 export { hostKeySetup, writeTailscaleStubs } from "./fake-runtime.ts";
+
+export const runtimeTraits = { smolvm, tart } as const;
 
 export const image = "registry.example/ubuntu@sha256:00";
 

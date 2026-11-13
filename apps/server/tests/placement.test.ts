@@ -1,6 +1,7 @@
 import type { HostInfo } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, layer } from "@effect/vitest";
+import { runtimeTraits } from "@gjermundgaraba/clankerbox-host/testing";
 import { Capacity, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Option, Result } from "effect";
 
@@ -11,6 +12,7 @@ import { clientOf, request, restartedHost, running } from "./support.ts";
 const info = (id: string, bases: readonly string[]): HostInfo => ({
   id,
   kind: "linux",
+  traits: runtimeTraits.smolvm,
   version: "0",
   runtimeVersion: "fake",
   bases,

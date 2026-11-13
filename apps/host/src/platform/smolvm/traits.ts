@@ -1,5 +1,8 @@
-export const traits = {
-  runtime: "smolvm",
+import { RuntimeName } from "@gjermundgaraba/clankerbox-sdk";
+import type { RuntimeTraits } from "@gjermundgaraba/clankerbox-sdk";
+
+export const traits: RuntimeTraits = {
+  runtime: RuntimeName.make("smolvm"),
   images: "references",
   checkpoint: "ram",
   captureFrom: "running",
