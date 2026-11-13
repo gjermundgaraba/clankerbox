@@ -386,6 +386,14 @@ A host's log holds one info line for each step it ends, done, cancelled or faile
 
 **The control plane** runs in the same kind of unit, as any user that owns its `stateDir`, with `ExecStart=/opt/clankerbox/<version>/bin/clankerbox-server --config /etc/clankerbox/server.json`. It runs no VMs and can share a box with a host, or sit on anything small on the tailnet. Keep a backup of its `stateDir`: with the file gone, the VMs run on with nothing that knows them.
 
+**Leftovers at a provider.** Each recheck has a smol cloud or boat host delete only what its own store retired, so three things leave resources at the provider, billed, that no sweep reaches: a wiped `stateDir`, a second control plane over the same hosts, and a restored backup older than what was made since. Find them by the host's mark. On smol cloud, it names each machine `cbx-<host id>-<instance>`. On boat, it labels each sandbox `cbx-host=<host id>` and `cbx-instance=<instance>`, and names each snapshot `cbx-<instance>`. One whose instance no row holds is a leftover. The rows' instances are in the store, which the control plane holds locked while it runs, so stop it first:
+
+```sh
+sqlite3 -readonly <stateDir>/server.db 'SELECT instance FROM machines UNION SELECT instance FROM checkpoints'
+```
+
+Start the control plane again, and delete each leftover in the provider's console or API. Don't delete a marked resource the query lists.
+
 **tart**, as the operator's user, in a LaunchAgent in its GUI session, with `KeepAlive` set to `{SuccessfulExit: false}`; stop it with `launchctl bootout gui/<uid>/<label>`. Pull each base with `tart pull` as that user before its first create. For `pause`, keep that session unlocked: set **Lock Screen → Require password after screen saver begins or display is turned off** to **Never** (the display can still sleep), and log in once after each reboot, since FileVault rules out automatic login. macOS keeps the key that seals saved VM state in the session's keychain, so a root daemon can't save it at all. The first pause on a Mac creates that key, so make it while you're logged in and unlocked: a save while locked before then powers the VM off, keeping its disk, and fails. Later pauses work while locked, but every resume needs the session unlocked.
 
 **Network:** three paths cross the tailnet, and its policy is the only gate.
