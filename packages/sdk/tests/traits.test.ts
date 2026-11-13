@@ -8,6 +8,7 @@ import {
   fitted,
   offered,
   offers,
+  pauseCapture,
   resizable,
   RuntimeTraits,
   stopsBeforeCapture,
@@ -219,6 +220,22 @@ describe("stopsBeforeCapture", () => {
         );
         expect(stopsBeforeCapture({ ...traits, captureFrom: "running" })).toBe(
           false
+        );
+      })
+  );
+});
+
+describe("pauseCapture", () => {
+  it.effect.prop(
+    "a pause captures its machine in the one state a capture takes: running before the pause, or what the pause leaves after it, or never where that is paused",
+    { traits: RuntimeTraits },
+    ({ traits }) =>
+      Effect.sync(() => {
+        const left: string = traits.pause === "stops" ? "stopped" : "paused";
+        const after = left === traits.captureFrom ? "after" : "never";
+
+        expect(pauseCapture(traits)).toBe(
+          traits.captureFrom === "running" ? "before" : after
         );
       })
   );

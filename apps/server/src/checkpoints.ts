@@ -2,7 +2,9 @@ import type { Report } from "@clankerbox/host-contract";
 import {
   copyPrefixes,
   Internal,
+  isResting,
   labelledWith,
+  pauseCapture,
   readTimeout,
   Unavailable,
   WrongState,
@@ -35,7 +37,8 @@ import type { CheckpointEvent, CheckpointRow } from "./checkpoint-chart.ts";
 import { driver, untilRest } from "./driver.ts";
 import type { Heard } from "./driver.ts";
 import { answering, Hosts } from "./hosts.ts";
-import { stageOf } from "./machine-chart.ts";
+import { phaseOf as machinePhaseOf, stageOf } from "./machine-chart.ts";
+import type { MachineRow } from "./machine-chart.ts";
 import { stateOf } from "./machine-view.ts";
 import { Machines, unmade } from "./machines.ts";
 import { collect, cutShort, poll } from "./operations.ts";
@@ -57,8 +60,10 @@ export interface Interface {
     request: CaptureRequest
   ) => Effect.Effect<Checkpoint, Declared<"captureCheckpoint">>;
   /**
-   * Asks a machine to pause, after capturing it if `capture` says so. The capture is recorded
-   * first, and the pause waits for it to begin, so the checkpoint holds the machine as it ran.
+   * Asks a machine to pause, capturing it too if `capture` says so, where its traits' `pauseCapture`
+   * says: `before` records the capture first and the pause waits for it to begin, so the checkpoint
+   * holds the machine as it ran; `after` records the pause first, and the capture waits for the
+   * machine to rest; `never` is refused, recording nothing.
    */
   readonly pause: (
     request: PauseRequest
@@ -103,6 +108,12 @@ const shown = (record: CheckpointRow): Checkpoint => ({
   ...(record.expiresAt === undefined ? {} : { expiresAt: record.expiresAt }),
   ...(record.error === undefined ? {} : { error: record.error }),
 });
+
+const awaits = (name: string, machine: Option.Option<MachineRow>): boolean =>
+  Option.exists(
+    machine,
+    (found) => !isResting(machinePhaseOf(found.state)) && found.after !== name
+  );
 
 const expired = (record: CheckpointRow, now: DateTime.Utc): boolean =>
   record.state === "ready" &&
@@ -184,9 +195,18 @@ export const make = (settings: {
       operationOn: store.operationOn,
       activityOf,
       looking: (record) =>
-        Effect.flatMap(hosts.read(record.host), ({ boot }) =>
-          applying(record.name, { type: "read", boot, id: newId() })
-        ),
+        Effect.gen(function* () {
+          const { boot } = yield* hosts.read(record.host);
+
+          return yield* applying(record.name, {
+            type: "read",
+            boot,
+            id: newId(),
+            awaiting:
+              record.state === "capturing.due" &&
+              awaits(record.name, yield* store.findMachine(record.machine)),
+          });
+        }),
       polling: (record, op) =>
         poll(hosts, op, {
           cut: false,
@@ -195,7 +215,26 @@ export const make = (settings: {
       following,
     });
 
-    const capturing = (
+    const driveOnRest = (name: string, machine: string) => {
+      const rests = (found: Option.Option<MachineRow>) => !awaits(name, found);
+
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const { now, next } = yield* store.watchMachine(machine);
+
+          if (!rests(now)) {
+            yield* Effect.repeat(next, { until: rests });
+          }
+        })
+      ).pipe(
+        Effect.andThen(drive(name)),
+        Effect.ignore,
+        Effect.forkIn(scope),
+        Effect.asVoid
+      );
+    };
+
+    const recorded = (
       { machine: source, name, labels, expiresAt }: CaptureRequest,
       build?: string
     ) =>
@@ -235,7 +274,21 @@ export const make = (settings: {
         };
 
         yield* store.insertCheckpoint(record);
-        yield* drive(name);
+
+        return record;
+      });
+
+    const driven = (record: CheckpointRow) =>
+      Effect.andThen(
+        drive(record.name),
+        driveOnRest(record.name, record.machine)
+      );
+
+    const capturing = (request: CaptureRequest, build?: string) =>
+      Effect.gen(function* () {
+        const record = yield* recorded(request, build);
+
+        yield* driven(record);
 
         return shown(record);
       });
@@ -309,6 +362,29 @@ export const make = (settings: {
           return yield* unmade(found);
         }
 
+        switch (pauseCapture(found.traits)) {
+          case "never": {
+            return yield* new WrongState({
+              message: `machine ${id}'s traits capture only a stopped machine, and a pause leaves it paused, so no pause captures it: stop it and capture it, or pause it without a capture`,
+              machine: id,
+              state: yield* stateOf(hosts, found),
+            });
+          }
+
+          case "after": {
+            const record = yield* recorded({ machine: id, ...capture });
+            const paused = yield* machines.pause(id);
+
+            yield* driven(record);
+
+            return paused;
+          }
+
+          case "before": {
+            break;
+          }
+        }
+
         const seen = yield* stateOf(hosts, found);
 
         if (seen === "unknown") {
@@ -319,10 +395,8 @@ export const make = (settings: {
         }
 
         if (seen !== "running") {
-          const from = found.traits.captureFrom;
-
           return yield* new WrongState({
-            message: `machine ${id} is ${seen}, and a pause captures only a running machine. Its traits capture a ${from} machine: ${seen === from ? "capture it instead" : `${from === "running" ? "start" : "stop"} it, then capture it`}`,
+            message: `machine ${id} is ${seen}, and a pause captures only a running machine. Its traits capture a running machine: start it, then capture it`,
             machine: id,
             state: seen,
           });

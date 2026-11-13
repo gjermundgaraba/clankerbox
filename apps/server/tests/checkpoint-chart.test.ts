@@ -74,7 +74,10 @@ const read: CheckpointEvent = {
   type: "read",
   boot: freshBoot("fresh"),
   id: "new",
+  awaiting: false,
 };
+
+const awaited: CheckpointEvent = { ...read, awaiting: true };
 
 const done: CheckpointEvent = { type: "reported", status: "done", at };
 
@@ -98,11 +101,21 @@ const gone: CheckpointEvent = { type: "lost", error };
 
 const publish: CheckpointEvent = { type: "publish" };
 
-const events = { removal, read, done, failed, cancelled, gone, publish };
+const events = {
+  removal,
+  read,
+  awaited,
+  done,
+  failed,
+  cancelled,
+  gone,
+  publish,
+};
 
 const names = [
   "removal",
   "read",
+  "awaited",
   "done",
   "failed",
   "cancelled",
@@ -132,7 +145,11 @@ const edges: Readonly<
     gone: "discarding.due",
   },
   ready: { removal: "deleting.due", publish: "publishing.due" },
-  "publishing.due": { removal: "deleting.due", read: "publishing.sent" },
+  "publishing.due": {
+    removal: "deleting.due",
+    read: "publishing.sent",
+    awaited: "publishing.sent",
+  },
   "publishing.sent": {
     removal: "deleting.draining",
     done: "ready",
@@ -140,7 +157,11 @@ const edges: Readonly<
     cancelled: "discarding.due",
     gone: "discarding.due",
   },
-  "discarding.due": { removal: "deleting.due", read: "discarding.sent" },
+  "discarding.due": {
+    removal: "deleting.due",
+    read: "discarding.sent",
+    awaited: "discarding.sent",
+  },
   "discarding.sent": {
     removal: "deleting.sent",
     done: "failed",
@@ -148,7 +169,11 @@ const edges: Readonly<
     cancelled: "discarding.due",
     gone: "discarding.due",
   },
-  "discarding.held": { removal: "deleting.due", read: "discarding.sent" },
+  "discarding.held": {
+    removal: "deleting.due",
+    read: "discarding.sent",
+    awaited: "discarding.sent",
+  },
   "deleting.draining": {
     removal: "deleting.draining",
     done: "deleting.due",
@@ -156,7 +181,11 @@ const edges: Readonly<
     cancelled: "deleting.due",
     gone: "deleting.due",
   },
-  "deleting.due": { removal: "deleting.due", read: "deleting.sent" },
+  "deleting.due": {
+    removal: "deleting.due",
+    read: "deleting.sent",
+    awaited: "deleting.sent",
+  },
   "deleting.sent": {
     removal: "deleting.sent",
     done: "removed",
@@ -164,7 +193,11 @@ const edges: Readonly<
     cancelled: "deleting.due",
     gone: "deleting.due",
   },
-  "deleting.held": { removal: "deleting.due", read: "deleting.sent" },
+  "deleting.held": {
+    removal: "deleting.due",
+    read: "deleting.sent",
+    awaited: "deleting.sent",
+  },
   failed: { removal: "removed" },
 };
 

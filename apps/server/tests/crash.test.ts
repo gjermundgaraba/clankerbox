@@ -521,6 +521,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             type: "read",
             boot: freshBoot(host!.operations.boot),
             id: "unsent-snap",
+            awaiting: false,
           },
         ] as const) {
           yield* first.store.advance("checkpoint", "snap", (row, op) =>

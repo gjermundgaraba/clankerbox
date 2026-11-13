@@ -24,9 +24,14 @@ export interface NotDone {
   readonly cleared: boolean;
 }
 
+export interface CheckpointRead extends Read {
+  /** Whether the capture waits for its machine to rest, as no pause it follows waits for it. */
+  readonly awaiting: boolean;
+}
+
 const events = {
   delete: types<object>(),
-  read: types<Read>(),
+  read: types<CheckpointRead>(),
   reported: types<Done | NotDone>(),
   lost: types<{ readonly error: HostError }>(),
   publish: types<object>(),
@@ -41,7 +46,8 @@ const makingRegion = <const Step extends "capture" | "fetch">(step: Step) =>
       due: {
         meta: { phase: "capturing", activity: "read" },
         on: {
-          read: { target: "sent" },
+          read: ({ event }: { readonly event: CheckpointRead }) =>
+            event.awaiting ? undefined : ({ target: "sent" } as const),
           delete: { target: "#checkpoint.deleting.due" },
         },
       },

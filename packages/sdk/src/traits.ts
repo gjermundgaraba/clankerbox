@@ -179,6 +179,21 @@ export const copySizable = (
   }
 };
 
+/**
+ * Where a pause with a capture takes its capture: `before` the pause, of the running machine; `after`
+ * it, of the stopped machine a pause that stops leaves; or `never`, where a capture takes only a
+ * stopped machine and a pause leaves it paused.
+ */
+export const pauseCapture = (
+  traits: RuntimeTraits
+): "before" | "after" | "never" => {
+  if (traits.captureFrom === "running") {
+    return "before";
+  }
+
+  return traits.pause === "stops" ? "after" : "never";
+};
+
 /** Whether a template build stops its builder before it captures its copy. */
 export const stopsBeforeCapture = (traits: RuntimeTraits): boolean =>
   traits.captureFrom === "stopped";

@@ -13,6 +13,7 @@ import {
   Internal,
   NotMade,
   PinMismatch,
+  readTimeout,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Client } from "@gjermundgaraba/clankerbox-sdk";
 import { read } from "@gjermundgaraba/clankerbox-sdk/testing/files";
@@ -794,6 +795,107 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "exec dev",
           "pause dev",
         ]);
+      })
+  );
+
+  it.effect(
+    "a pause with a capture whose capture can't begin within a read, behind a step still running, captures once the step ends, then pauses",
+    () =>
+      Effect.gen(function* () {
+        const { client, host } = yield* withClient({
+          recheck: Duration.seconds(2),
+        });
+
+        yield* client.create("dev", request("dev"));
+
+        const resizing = host.fake.holdNext("resize");
+
+        const resize = yield* Effect.forkChild(
+          client.resizeMachine({ id: "dev", ramMib: 2048 })
+        );
+
+        yield* resizing.entered;
+
+        const pausing = yield* Effect.forkChild(
+          client.pauseMachine({ id: "dev", capture: { name: "snap" } })
+        );
+
+        yield* Effect.sleep(Duration.sum(readTimeout, Duration.seconds(2)));
+        yield* resizing.release;
+        yield* Fiber.join(resize);
+
+        const paused = yield* Fiber.join(pausing).pipe(
+          Effect.timeout(Duration.seconds(30))
+        );
+
+        expect(at(paused)).toStrictEqual(["paused", "paused", "settled"]);
+        expect(yield* client.getCheckpoint({ id: "snap" })).toMatchObject({
+          phase: "ready",
+        });
+        expect(
+          host.fake.calls.filter(
+            (call) => call === "capture snap" || call === "pause dev"
+          )
+        ).toStrictEqual(["capture snap", "pause dev"]);
+      }),
+    60_000
+  );
+
+  it.effect(
+    "a pause with a capture where a pause stops the machine and a capture takes a stopped one pauses first, then captures what the pause left",
+    () =>
+      Effect.gen(function* () {
+        const { client, host } = yield* withClient({
+          hosts: [{ id: "fixed", as: "fixed" }],
+        });
+
+        yield* client.create("dev", request("dev"));
+        host.fake.calls.length = 0;
+
+        const paused = yield* client.pauseMachine({
+          id: "dev",
+          capture: { name: "snap", labels: { app: "web" } },
+        });
+
+        const snap = yield* client.getCheckpoint({ id: "snap" });
+
+        expect([paused.state, paused.phase]).toStrictEqual([
+          "stopped",
+          "settled",
+        ]);
+        expect(snap).toMatchObject({ phase: "ready", labels: { app: "web" } });
+        expect(
+          host.fake.calls.filter((call) => call !== "exec dev")
+        ).toStrictEqual(["stop dev", "capture snap"]);
+      })
+  );
+
+  it.effect(
+    "a pause with a capture where a capture takes a stopped machine and a pause saves it is WrongState, recording nothing",
+    () =>
+      Effect.gen(function* () {
+        const { client, host } = yield* withClient({
+          hosts: [{ id: "tart", as: "tart" }],
+        });
+
+        yield* client.create("dev", request("dev"));
+        host.fake.calls.length = 0;
+
+        const refused = yield* Effect.flip(
+          client.pauseMachine({ id: "dev", capture: { name: "snap" } })
+        );
+
+        const dev = yield* client.getMachine({ id: "dev" });
+
+        expect(refused).toMatchObject({ _tag: "WrongState", state: "running" });
+        expect(refused.message).toBe(
+          "machine dev's traits capture only a stopped machine, and a pause leaves it paused, so no pause captures it: stop it and capture it, or pause it without a capture"
+        );
+        expect([dev.desired, dev.state]).toStrictEqual(["running", "running"]);
+        expect(
+          yield* Effect.flip(client.getCheckpoint({ id: "snap" }))
+        ).toMatchObject({ _tag: "NotFound" });
+        expect(host.fake.calls).toStrictEqual([]);
       })
   );
 

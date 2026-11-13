@@ -1878,6 +1878,7 @@ layer(NodeServices.layer)((it) => {
                     type: "read",
                     boot: freshBoot("boot-1"),
                     id: name,
+                    awaiting: false,
                   })
                 ),
               { discard: true }
