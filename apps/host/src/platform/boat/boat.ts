@@ -81,30 +81,71 @@ const heldBy = (
 
 const running = new Set(["ready", "idle", "running"]);
 
-const passing = new Set([
-  "init",
-  "provisioning",
-  "provisioned",
-  "cloning",
-  "archiving",
-]);
+/**
+ * `cancelled` and `error` as https://docs.boat.dev/openapi/boat-v1.yaml's `Sandbox.state` and
+ * https://docs.boat.dev/llms-full.txt's "A sandbox is in error" define them: a create or fork that
+ * got no machine, read once before a 404, and a machine boat lost or failed to start, unbilled,
+ * which a resume recovers.
+ */
+type Held = "running" | "stopped" | "error" | "moving" | "cancelled" | "gone";
 
-const stateOf = (sandbox: Sandbox | undefined): MachineState => {
-  if (
-    sandbox === undefined ||
-    sandbox.state === "cancelled" ||
-    (sandbox.dataExpiredAt ?? null) !== null
-  ) {
-    return "missing";
+const heldOf = (sandbox: Sandbox | undefined): Held => {
+  if (sandbox === undefined) {
+    return "gone";
   }
 
   if (running.has(sandbox.state)) {
     return "running";
   }
 
-  return ["archived", "archiving", "error"].includes(sandbox.state)
-    ? "stopped"
-    : "unknown";
+  switch (sandbox.state) {
+    case "archived": {
+      return "stopped";
+    }
+
+    case "error":
+    case "cancelled": {
+      return sandbox.state;
+    }
+
+    default: {
+      return "moving";
+    }
+  }
+};
+
+type Goal = "running" | "stopped" | "gone";
+
+const ends: Readonly<Record<Goal, ReadonlySet<Held>>> = {
+  running: new Set(["running", "error", "cancelled", "gone"]),
+  stopped: new Set(["stopped", "error", "cancelled", "gone"]),
+  gone: new Set(["cancelled", "gone"]),
+};
+
+const stateOf = (sandbox: Sandbox | undefined): MachineState => {
+  if ((sandbox?.dataExpiredAt ?? null) !== null) {
+    return "missing";
+  }
+
+  switch (heldOf(sandbox)) {
+    case "running": {
+      return "running";
+    }
+
+    case "stopped":
+    case "error": {
+      return "stopped";
+    }
+
+    case "cancelled":
+    case "gone": {
+      return "missing";
+    }
+
+    case "moving": {
+      return sandbox?.state === "archiving" ? "stopped" : "unknown";
+    }
+  }
 };
 
 const settled = new Set(["ready", "failed"]);
@@ -231,12 +272,12 @@ export const make = (
           Effect.mapError(internal(`couldn't read machine ${machine.name}`))
         );
 
-    const until = (
-      machine: Target,
-      done: (sandbox: Sandbox | undefined) => boolean,
-      what: string
-    ) =>
-      untilRest(read(machine), done, pollEvery).pipe(
+    const toward = (machine: Target, goal: Goal, what: string) =>
+      untilRest(
+        Effect.map(read(machine), heldOf),
+        (held) => ends[goal].has(held),
+        pollEvery
+      ).pipe(
         timeoutFail(
           pollFor,
           () =>
@@ -260,30 +301,37 @@ export const make = (
         return pin === undefined ? pinned(machine) : Effect.succeed(pin);
       });
 
-    const ready = (machine: Target, what: string) =>
+    const ready = (machine: Target, what: "make" | "start") =>
       Effect.gen(function* () {
-        const sandbox = yield* until(
-          machine,
-          (found) =>
-            found === undefined ||
-            running.has(found.state) ||
-            found.state === "error",
-          what
-        );
+        const held = yield* toward(machine, "running", what);
 
-        if (sandbox === undefined) {
-          return yield* new Capacity({
-            message: `boat gave machine ${machine.name} no machine to run on`,
-          });
+        switch (held) {
+          case "running":
+          case "stopped":
+          case "moving": {
+            yield* pinned(machine);
+
+            return;
+          }
+
+          case "error": {
+            return yield* new Internal({
+              message: `boat's ${what} of machine ${machine.name} ended in error`,
+            });
+          }
+
+          case "cancelled": {
+            return yield* what === "make"
+              ? new Capacity({
+                  message: `boat found machine ${machine.name} no machine to run on, and removed it`,
+                })
+              : missing(traits.runtime, machine);
+          }
+
+          case "gone": {
+            return yield* missing(traits.runtime, machine);
+          }
         }
-
-        if (sandbox.state === "error") {
-          return yield* new Internal({
-            message: `boat's ${what} of machine ${machine.name} ended in error`,
-          });
-        }
-
-        yield* pinned(machine);
       });
 
     const stopped = (machine: Target) =>
@@ -295,11 +343,7 @@ export const make = (
           Effect.mapError(internal(`couldn't stop ${machine.name}`))
         );
 
-        yield* until(
-          machine,
-          (sandbox) => sandbox === undefined || sandbox.state === "archived",
-          "stop"
-        );
+        yield* toward(machine, "stopped", "stop");
       });
 
     const typeFor = (sizes: Parameters<typeof typeOf>[1], name: string) => {
@@ -319,17 +363,44 @@ export const make = (
       [instanceLabel]: machine.instance,
     });
 
-    const sourceStopped = (source: Target) =>
-      Effect.flatMap(read(source), (sandbox) =>
-        sandbox?.state === "archived"
-          ? Effect.void
-          : Effect.fail(
-              new WrongState({
-                message: `boat copies a stopped machine, and ${source.name} is ${stateOf(sandbox)}: stop it first`,
-                machine: source.name,
-                state: stateOf(sandbox),
-              })
-            )
+    const sourceStopped = (
+      source: Target
+    ): Effect.Effect<void, Internal | Missing | WrongState> =>
+      Effect.flatMap(
+        read(source),
+        (sandbox): Effect.Effect<void, Missing | WrongState> => {
+          switch (heldOf(sandbox)) {
+            case "stopped": {
+              return Effect.void;
+            }
+
+            case "cancelled":
+            case "gone": {
+              return Effect.fail(missing(traits.runtime, source));
+            }
+
+            case "error": {
+              return Effect.fail(
+                new WrongState({
+                  message: `boat holds ${source.name} in error, which it copies from no snapshot: start it to recover it, or delete it`,
+                  machine: source.name,
+                  state: "stopped",
+                })
+              );
+            }
+
+            case "running":
+            case "moving": {
+              return Effect.fail(
+                new WrongState({
+                  message: `boat copies a stopped machine, and ${source.name} is ${stateOf(sandbox)}: stop it first`,
+                  machine: source.name,
+                  state: stateOf(sandbox),
+                })
+              );
+            }
+          }
+        }
       );
 
     const snapshots = api.savedSnapshots(snapshotPrefix, (name) =>
@@ -338,7 +409,7 @@ export const make = (
 
     const searched = (machine: Identity) =>
       Effect.map(api.sandboxes(labelsOf(machine)), (found) =>
-        found.find(({ state }) => state !== "cancelled")
+        found.find((sandbox) => heldOf(sandbox) !== "cancelled")
       );
 
     const markedMachines = Effect.gen(function* () {
@@ -446,7 +517,7 @@ export const make = (
           pins.delete(machine.handle);
         } else if (running.has(state)) {
           yield* stopped(machine);
-        } else if (passing.has(state)) {
+        } else if (heldOf(sandbox) === "moving") {
           yield* Effect.sleep(pollEvery);
         } else {
           return yield* new Internal({
@@ -543,7 +614,7 @@ export const make = (
 
           const handle = Handle.make(sandbox.id);
 
-          yield* ready({ ...machine, handle }, "start");
+          yield* ready({ ...machine, handle }, "make");
 
           return { handle, sizes: types[type] };
         }).pipe(Effect.uninterruptible),
@@ -589,7 +660,7 @@ export const make = (
           yield* api
             .remove(machine.handle)
             .pipe(Effect.mapError(internal(`couldn't delete ${machine.name}`)));
-          yield* until(machine, (sandbox) => sandbox === undefined, "delete");
+          yield* toward(machine, "gone", "delete");
           yield* prune(machine, keep);
           pins.delete(machine.handle);
         }).pipe(Effect.uninterruptible),

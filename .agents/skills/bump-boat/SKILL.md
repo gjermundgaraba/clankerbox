@@ -106,10 +106,16 @@ Each line names where the code holds it and how to check it again.
   `small`, and `/sshkey` answered 200 right after a create's answer.
   (`boat.ts`'s `capacityCodes` and `retyped`, `api.ts`'s `waitedOut`; grep
   the YAML for each code.)
-- The states: `ready`, `idle` and `running` run; `archived`, `archiving` and
-  `error` are stopped; `cancelled`, a sandbox boat removed for want of a
-  machine, a set `dataExpiredAt` or a 404 is missing; the rest are starting.
-  (`boat.ts`'s `stateOf`; the YAML's `Sandbox.state`.)
+- The states: `ready`, `idle` and `running` run; `archived` is stopped;
+  `error`, a machine boat lost or failed to start, is unbilled, read as
+  stopped, ends a stop at once and fails a start; `cancelled`, a create or
+  fork boat found no machine for, is read once and then answers 404, so a
+  make that meets it answers `Capacity` and a start `Missing`, as a 404
+  does; a set `dataExpiredAt` reads missing; the rest are on their way.
+  Neither `error` nor `cancelled` was met on the operator's account: the
+  YAML's `Sandbox.state` and the docs' "A sandbox is in error" say so.
+  (`boat.ts`'s `heldOf`, `ends` and `stateOf`; the fake's `fail`, `cancel`
+  and `vanish`.)
 - Each request is bounded by `answerWithin` in `platform/provider-http.ts`: 30
   seconds for a read, a minute for a change. A request unanswered by then is
   one whose answer was lost.

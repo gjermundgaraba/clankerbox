@@ -38,7 +38,7 @@ import {
 import { BoatSettings, image, make } from "../../src/platform/boat/boat.ts";
 import { types } from "../../src/platform/boat/traits.ts";
 import { Runtime } from "../../src/runtime.ts";
-import type { Interface } from "../../src/runtime.ts";
+import type { Interface, RuntimeError, Target } from "../../src/runtime.ts";
 import { fakeBoat } from "../fake-boat.ts";
 import type { FakeBoat, FakeBoatOptions } from "../fake-boat.ts";
 import { runtimeContract } from "../runtime-contract.ts";
@@ -773,6 +773,199 @@ describe("the boat runtime over fake boat", () => {
 
           expect(failed.message).toContain(`cbx-${instanceOf("broken")}`);
           expect(boat.sandboxes.has(machine.handle)).toBe(true);
+        })
+      ),
+    30_000
+  );
+});
+
+type Held = "running" | "stopped" | "error" | "cancelled" | "gone";
+
+const holding = (
+  boat: FakeBoat,
+  runtime: Interface,
+  machine: Target,
+  held: Held
+): Effect.Effect<void, RuntimeError> => {
+  switch (held) {
+    case "running": {
+      return Effect.void;
+    }
+
+    case "stopped": {
+      return runtime.stop(machine);
+    }
+
+    case "error": {
+      return boat.fail(machine.handle);
+    }
+
+    case "cancelled": {
+      return boat.cancel(machine.handle);
+    }
+
+    case "gone": {
+      return boat.vanish(machine.handle);
+    }
+  }
+};
+
+const outcome = <A, E extends { readonly _tag: string }, R>(
+  effect: Effect.Effect<A, E, R>
+) =>
+  Effect.match(effect.pipe(Effect.timeout("20 seconds")), {
+    onFailure: (error) => error._tag,
+    onSuccess: () => "done",
+  });
+
+const everyHeld: readonly Held[] = [
+  "running",
+  "stopped",
+  "error",
+  "cancelled",
+  "gone",
+];
+
+describe("each boat goal from each state boat holds", () => {
+  it.live(
+    "ends where the state allows, and names what stops it",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          const found = yield* Effect.forEach(
+            everyHeld,
+            (held) =>
+              Effect.gen(function* () {
+                const holdingFor = (goal: string) =>
+                  Effect.tap(made(runtime, `${held}-${goal}`), (machine) =>
+                    holding(boat, runtime, machine, held)
+                  );
+
+                const read = yield* holdingFor("read");
+                const start = yield* holdingFor("start");
+                const stop = yield* holdingFor("stop");
+                const pause = yield* holdingFor("pause");
+                const remove = yield* holdingFor("delete");
+
+                return [
+                  held,
+                  {
+                    observe: (yield* runtime.observe([read])).get(read.name),
+                    find:
+                      (yield* runtime.find("machine", read)) === read.handle
+                        ? "found"
+                        : "none",
+                    capture: yield* outcome(
+                      runtime.capture(read, {
+                        name: "snap",
+                        instance: instanceOf(`${held}-snap`),
+                      })
+                    ),
+                    start: yield* outcome(runtime.start(start, new Set())),
+                    stop: yield* outcome(runtime.stop(stop)),
+                    pause: yield* outcome(runtime.pause(pause)),
+                    delete: yield* outcome(runtime.delete(remove, new Set())),
+                  },
+                ] as const;
+              }),
+            { concurrency: "unbounded" }
+          );
+
+          expect(Object.fromEntries(found)).toStrictEqual({
+            running: {
+              observe: "running",
+              find: "found",
+              capture: "WrongState",
+              start: "done",
+              stop: "done",
+              pause: "done",
+              delete: "done",
+            },
+            stopped: {
+              observe: "stopped",
+              find: "found",
+              capture: "done",
+              start: "done",
+              stop: "done",
+              pause: "done",
+              delete: "done",
+            },
+            error: {
+              observe: "stopped",
+              find: "found",
+              capture: "WrongState",
+              start: "Internal",
+              stop: "done",
+              pause: "done",
+              delete: "done",
+            },
+            cancelled: {
+              observe: "missing",
+              find: "none",
+              capture: "Missing",
+              start: "Missing",
+              stop: "done",
+              pause: "done",
+              delete: "done",
+            },
+            gone: {
+              observe: "missing",
+              find: "none",
+              capture: "Missing",
+              start: "Missing",
+              stop: "done",
+              pause: "done",
+              delete: "done",
+            },
+          });
+        })
+      ),
+    120_000
+  );
+
+  it.live(
+    "a start whose sandbox goes once boat took its resume answers Missing",
+    () => {
+      let vanish: (() => void) | undefined;
+
+      return onBoat(
+        ({ boat, runtime }) =>
+          Effect.gen(function* () {
+            const machine = yield* made(runtime, "dev");
+
+            yield* runtime.stop(machine);
+            vanish = () => {
+              boat.vanishNow(machine.handle);
+            };
+
+            expect(
+              yield* Effect.flip(runtime.start(machine, new Set()))
+            ).toMatchObject({ _tag: "Missing", machine: "dev" });
+          }),
+        {
+          keepsStoppedFor: "0 millis",
+          onCall: (line) => {
+            if (line.includes("/resume")) {
+              vanish?.();
+              vanish = undefined;
+            }
+          },
+        }
+      );
+    },
+    30_000
+  );
+
+  it.live(
+    "a make whose sandbox boat cancels for want of a machine answers Capacity",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          yield* boat.cancelNextSandbox;
+
+          expect(yield* Effect.flip(made(runtime, "dev"))).toMatchObject({
+            _tag: "Capacity",
+          });
         })
       ),
     30_000

@@ -355,8 +355,7 @@ export const make = (settings: Settings) =>
       sandbox: (id: string) =>
         Effect.map(
           found(HttpClientRequest.get(`/sandboxes/${id}`), Created),
-          (answer) =>
-            answer?.sandbox.state === "cancelled" ? undefined : answer?.sandbox
+          (answer) => answer?.sandbox
         ),
       sandboxes: list,
       resume: (id: string) =>

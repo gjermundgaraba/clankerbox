@@ -63,6 +63,7 @@ export interface FakeSandbox {
   running: boolean;
   inPassing: "provisioning" | "archiving" | undefined;
   failed: boolean;
+  cancelled: boolean;
   stoppedAt: number | undefined;
   relay: Relay;
 }
@@ -516,6 +517,7 @@ export const fakeBoat = (
     let savingLate = false;
     let listsLagging = 0;
     let failingNext = false;
+    let cancellingNext = false;
     const gateways = new Set<BoatCall>();
 
     const malformed: Array<{ readonly name: string; readonly status: null }> =
@@ -542,12 +544,20 @@ export const fakeBoat = (
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(apiKeyFile, `${apiKey}\n`, { mode: 0o600 });
 
+    const stateIn = (sandbox: FakeSandbox) => {
+      if (sandbox.cancelled) {
+        return "cancelled";
+      }
+
+      return sandbox.failed
+        ? "error"
+        : (sandbox.inPassing ?? (sandbox.running ? "ready" : "archived"));
+    };
+
     const answeredJson = (sandbox: FakeSandbox) => ({
       id: sandbox.id,
       name: sandbox.name,
-      state: sandbox.failed
-        ? "error"
-        : (sandbox.inPassing ?? (sandbox.running ? "ready" : "archived")),
+      state: stateIn(sandbox),
       type: sandbox.type,
       labels: sandbox.labels,
       createdAt: sandbox.createdAt,
@@ -617,6 +627,7 @@ export const fakeBoat = (
         running: true,
         inPassing: "provisioning",
         failed: failingNext,
+        cancelled: cancellingNext,
         stoppedAt: undefined,
         relay: await listen(),
       };
@@ -624,6 +635,7 @@ export const fakeBoat = (
       sandboxes.set(id, sandbox);
       starts += 1;
       failingNext = false;
+      cancellingNext = false;
 
       return sandbox;
     };
@@ -758,6 +770,19 @@ export const fakeBoat = (
             copyOf: source.root,
           })
       );
+    };
+
+    const removed = (sandbox: FakeSandbox) => {
+      sandboxes.delete(sandbox.id);
+      close(sandbox.relay);
+    };
+
+    const vanishNow = (id: string) => {
+      const sandbox = sandboxes.get(id);
+
+      if (sandbox !== undefined) {
+        removed(sandbox);
+      }
     };
 
     const resumed = (sandbox: FakeSandbox): Answer => ({
@@ -1152,6 +1177,10 @@ export const fakeBoat = (
 
       switch (action) {
         case undefined: {
+          if (sandbox.cancelled) {
+            removed(sandbox);
+          }
+
           return { status: 200, body: { sandbox: sandboxJson(sandbox) } };
         }
 
@@ -1455,6 +1484,30 @@ export const fakeBoat = (
       failNextSandbox: Effect.sync(() => {
         failingNext = true;
       }),
+      cancelNextSandbox: Effect.sync(() => {
+        cancellingNext = true;
+      }),
+      cancel: (id: string) =>
+        Effect.sync(() => {
+          const sandbox = sandboxes.get(id);
+
+          if (sandbox !== undefined) {
+            sandbox.cancelled = true;
+          }
+        }),
+      vanish: (id: string) =>
+        Effect.sync(() => {
+          vanishNow(id);
+        }),
+      vanishNow,
+      fail: (id: string) =>
+        Effect.sync(() => {
+          const sandbox = sandboxes.get(id);
+
+          if (sandbox !== undefined) {
+            sandbox.failed = true;
+          }
+        }),
       listsLag: (times: number) =>
         Effect.sync(() => {
           listsLagging = times;
@@ -1488,6 +1541,14 @@ export interface FakeBoat {
   readonly listsLag: (times: number) => Effect.Effect<void>;
   readonly gatewayOnce: (call: BoatCall) => Effect.Effect<void>;
   readonly failNextSandbox: Effect.Effect<void>;
+  /** The next sandbox made reads `cancelled`, as one boat found no machine for, until a read of it by ID, which removes it. */
+  readonly cancelNextSandbox: Effect.Effect<void>;
+  readonly cancel: (id: string) => Effect.Effect<void>;
+  /** Removes a sandbox without a delete, so it reads 404 and lists nowhere. */
+  readonly vanish: (id: string) => Effect.Effect<void>;
+  /** `vanish` at once, for an `onCall` hook. */
+  readonly vanishNow: (id: string) => void;
+  readonly fail: (id: string) => Effect.Effect<void>;
   readonly malformedSnapshot: (name: string) => Effect.Effect<void>;
   readonly saveAs: (sandboxId: string, name: string) => Effect.Effect<void>;
   readonly refuseOnce: (call: BoatCall) => Effect.Effect<void>;
