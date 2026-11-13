@@ -21,6 +21,11 @@ that drive it here, with `--json` fields to check. `cb` is
 | A create on a named host | `RUN=$(launch.sh smolvm 2048 2)`; `cb create pin --base ubuntu --cpu 1 --ram 1G --disk 10G --host smolvm-2`, then `--host nope` | `capacity --json` counts `pin` on `smolvm-2`; `--host nope` answers `NotOffered`; `template build --host` lands the builder alike |
 | An image reference as the base | `cb create img --base docker.io/library/ubuntu:24.04 --cpu 1 --ram 1G --disk 10G` | `settled` on smolvm; `NotOffered` on tart, whose runtime takes only its named bases |
 | An upgrade from trunk | launch from a trunk worktree, create `keep` and capture `snap`, then `upgrade.sh "$RUN" <worktree>` | `get keep --json` has `traits`; `checkpoint get snap --json` keeps its `kind` |
+| A mixed fleet | `RUN=$(launch.sh fixed:1,smolvm:1)`, `cb hosts --json` | `fixed-1` and `smolvm-1` both `up`, with `runtime` `fixed` and `smolvm` |
+| Size classes | on `launch.sh fixed:1`, `cb create ci --base ubuntu --cpu 1 --ram 1G --disk 10G`, then `cb create odd --base ubuntu --cpu 3 --ram 6G --disk 40G --json` | `ci` is `settled` with the `small` class's sizes; `odd` is refused with no `create odd` in `runtime-calls.txt` |
+| A pause that stops | `cb pause ci` on a fixed host | `get ci --json`: `state` `stopped`, `desired` `paused`, `phase` `settled` |
+| A machine stops on its own | `fault.sh "$RUN" drift fixed-1 ci` on a running `ci` | `get ci --json` reads `running` again within a few rechecks; `runtime-calls.txt` has `drift ci`, then `start ci` |
+| A make that lands late | `fault.sh "$RUN" land-late fixed-1`, then `cb create late --base ubuntu --cpu 1 --ram 1G --disk 10G --json` | the create's `error.tag` is `Internal`; `get late --json` has `phase` `failed` and `state` `missing`; `runtime-calls.txt` has `make late`, `landed late`, then `delete <instance>`; `host-fixed-1.log` has the `sweep: deleting machine <instance>` line |
 | The control plane dies mid-create | see the skill's Faults section | the table there |
 | A host restarts mid-capture or mid-delete | see the skill's Faults section | the second table there |
 | SSH config sync | `cb machines` | `$(cat "$RUN/home")/.ssh/clankerbox` has the one block `Host *.cbx` |

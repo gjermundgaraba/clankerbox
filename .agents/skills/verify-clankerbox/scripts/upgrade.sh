@@ -35,8 +35,10 @@ sources >"$evidence/sources"
 
 for file in "$urls"/*.url; do
   [ -e "$file" ] || continue
+  id=$(basename "$file" .url)
   cp "$file" "$run/hosts/"
-  start_host "$(basename "$file" .url)"
+  [ -e "$run/hosts/$id.runtime" ] || cp "$run/runtime" "$run/hosts/$id.runtime"
+  start_host "$id"
 done
 rm -r "$urls"
 

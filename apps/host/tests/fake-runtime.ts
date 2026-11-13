@@ -18,14 +18,31 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 
-import { Internal, WrongState } from "@gjermundgaraba/clankerbox-sdk";
-import type { Sizing, Unsizable } from "@gjermundgaraba/clankerbox-sdk";
-import { Deferred, Effect, Layer, Stream } from "effect";
+import {
+  Capacity,
+  Internal,
+  RuntimeName,
+  WrongState,
+} from "@gjermundgaraba/clankerbox-sdk";
+import type {
+  RuntimeTraits,
+  Sizing,
+  Unsizable,
+} from "@gjermundgaraba/clankerbox-sdk";
+import {
+  Clock,
+  DateTime,
+  Deferred,
+  Duration,
+  Effect,
+  Layer,
+  Stream,
+} from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { traits as smolvm } from "../src/platform/smolvm/traits.ts";
 import { traits as tart } from "../src/platform/tart/traits.ts";
-import { Handle, missing, Runtime } from "../src/runtime.ts";
+import { Handle, missing, Runtime, sizedBy } from "../src/runtime.ts";
 import type {
   Activation,
   Admission,
@@ -34,6 +51,8 @@ import type {
   Identity,
   MachineState,
   Made,
+  Marked,
+  MarkedMachine,
   Observed,
   Interface,
   RuntimeError,
@@ -42,6 +61,7 @@ import type {
   Target,
 } from "../src/runtime.ts";
 import { allotted, checkRamBudget, inUse } from "../src/usage.ts";
+import type { Dropped, Faults } from "./runtime-contract.ts";
 
 export type Operation =
   | "admit"
@@ -60,13 +80,72 @@ export type Operation =
   | "deleteCheckpoint"
   | "install";
 
-export const fakedTraits = { smolvm, tart } as const;
+export interface Preset {
+  readonly traits: RuntimeTraits;
+  readonly guest: Interface["guest"];
+  readonly pin: string | undefined;
+  readonly prepares: Interface["prepares"];
+  readonly admission: { readonly stopBoots: boolean } | undefined;
+  readonly files: { readonly keyed: boolean } | undefined;
+  readonly owned: { readonly checkpoints: "held" | "marked" } | undefined;
+}
 
-export type FakeRuntimeName = keyof typeof fakedTraits;
+export const fixed: RuntimeTraits = {
+  runtime: RuntimeName.make("fixed"),
+  images: "named",
+  checkpoint: "disk",
+  captureFrom: "stopped",
+  pause: "stops",
+  copies: "any",
+  resize: { running: "none", stopped: "any" },
+  sizes: {
+    _tag: "classes",
+    classes: [
+      { name: "small", cpu: 1, ramMib: 1024, diskGib: 10 },
+      { name: "default", cpu: 2, ramMib: 4096, diskGib: 20 },
+      { name: "large", cpu: 4, ramMib: 8192, diskGib: 40 },
+    ],
+  },
+  stopsOnItsOwn: true,
+};
+
+export const presets = {
+  smolvm: {
+    traits: smolvm,
+    guest: "debian",
+    pin: "fake 1",
+    prepares: "with-setup",
+    admission: { stopBoots: true },
+    files: { keyed: true },
+    owned: undefined,
+  },
+  tart: {
+    traits: tart,
+    guest: "macos",
+    pin: undefined,
+    prepares: "with-setup",
+    admission: { stopBoots: false },
+    files: { keyed: false },
+    owned: undefined,
+  },
+  fixed: {
+    traits: fixed,
+    guest: "debian",
+    pin: undefined,
+    prepares: "always",
+    admission: undefined,
+    files: undefined,
+    owned: { checkpoints: "held" },
+  },
+} as const satisfies Record<string, Preset>;
+
+export type FakeRuntimeName = keyof typeof presets;
 
 export interface FakeOptions {
   readonly dir: string;
   readonly as?: FakeRuntimeName | undefined;
+  readonly traits?: RuntimeTraits | undefined;
+  readonly owned?: Preset["owned"];
   readonly ramBudgetMib?: number | undefined;
   readonly pin?: string | undefined;
   readonly relayed?: boolean | undefined;
@@ -107,6 +186,7 @@ export const furnish = (root: string, stubs: string): void => {
   const bin = path.join(root, "usr", "bin");
 
   mkdirSync(path.join(root, "usr", "local"), { recursive: true });
+  mkdirSync(path.join(root, "dev", "shm"), { recursive: true });
   mkdirSync(bin, { recursive: true });
   symlinkSync(stubs, path.join(root, "usr", "local", "bin"));
   symlinkSync(bin, path.join(root, "bin"));
@@ -179,6 +259,13 @@ export const writeStubs = (dir: string, uname = "Linux"): string => {
     ["sntp", "echo '+0.000123 +/- 0.010000 time.apple.com 17.253.4.125'"],
     ["brew", `echo "brew $*" >>"$CLANKERBOX_ROOT/calls"`],
     [
+      "systemctl",
+      [
+        'if [ "$1" = cat ]; then [ -e "$CLANKERBOX_ROOT/lib/systemd/system/$2" ]; exit; fi',
+        'echo "systemctl $*" >>"$CLANKERBOX_ROOT/calls"',
+      ].join("\n"),
+    ],
+    [
       "ssh-keygen",
       [
         `echo "ssh-keygen $*" >>"$CLANKERBOX_ROOT/calls"`,
@@ -207,7 +294,8 @@ export const tailnetResolver = "100.100.100.100";
 export const writeTailscaleStubs = (bin: string): void => {
   mkdirSync(bin, { recursive: true });
 
-  const running = String.raw`{\n  "BackendState": "Running",\n  "Self": {\n    "ID": "n2",\n    "DNSName": "linux-dev.example.ts.net."\n  }\n}\n`;
+  const running = String.raw`{\n  "BackendState": "Running",\n  "Self": {\n    "ID": "n2",\n    "DNSName": "linux-dev.example.ts.net.",\n    "Online": true\n  }\n}\n`;
+  const offline = String.raw`{\n  "BackendState": "Running",\n  "Self": {\n    "ID": "n2",\n    "DNSName": "linux-dev.example.ts.net.",\n    "Online": false\n  }\n}\n`;
   const needsLogin = String.raw`{\n  "BackendState": "NeedsLogin",\n  "Self": {\n    "ID": "n1",\n    "DNSName": ""\n  }\n}\n`;
 
   const stubs: ReadonlyArray<readonly [string, string]> = [
@@ -237,6 +325,7 @@ export const writeTailscaleStubs = (bin: string): void => {
         "      esac",
         "    done",
         `    printf '${running}' >"$CLANKERBOX_ROOT/status.json"`,
+        '    rm -f "$CLANKERBOX_ROOT/node-removed"',
         '    mkdir -p "$CLANKERBOX_ROOT/etc"',
         `    echo 'nameserver ${tailnetResolver}' >"$CLANKERBOX_ROOT/etc/resolv.conf"`,
         "    ;;",
@@ -252,8 +341,15 @@ export const writeTailscaleStubs = (bin: string): void => {
         '      cat "$CLANKERBOX_ROOT/var/lib/clankerbox/tailscale/tailscaled.pid" 2>/dev/null >>"$CLANKERBOX_ROOT/refused" || echo none >>"$CLANKERBOX_ROOT/refused"',
         "      exit 1",
         "    fi",
-        '    if [ -e "$CLANKERBOX_ROOT/status.json" ]; then cat "$CLANKERBOX_ROOT/status.json"; else',
+        '    if [ ! -e "$CLANKERBOX_ROOT/status.json" ]; then',
         `      printf '${needsLogin}'`,
+        '    elif [ -e "$CLANKERBOX_ROOT/node-removed" ] && [ -e "$CLANKERBOX_ROOT/var/lib/clankerbox/tailscale/state/tailscaled.state" ]; then',
+        `      echo 'Received error: PollNetMap: initial fetch failed 404: node not found' >>"$CLANKERBOX_ROOT/var/lib/clankerbox/tailscale/tailscaled.log"`,
+        `      printf '${offline}'`,
+        '    elif [ -e "$CLANKERBOX_ROOT/control-unreachable" ]; then',
+        `      printf '${offline}'`,
+        "    else",
+        '      cat "$CLANKERBOX_ROOT/status.json"',
         "    fi",
         "    ;;",
         "esac",
@@ -271,9 +367,25 @@ export const writeTailscaleStubs = (bin: string): void => {
 
 interface FakeMachine {
   state: MachineState;
+  sizes: Sizing;
+  readonly name: string;
   readonly root: string;
   readonly instance: string;
   readonly handle: Handle;
+  readonly marked: boolean;
+}
+
+interface FakeCheckpoint {
+  readonly name: string;
+  readonly instance: string;
+  readonly marked: boolean;
+  readonly of: Handle | undefined;
+}
+
+interface Landing {
+  readonly machine: Identity & Sizes;
+  readonly image: string;
+  readonly due: number;
 }
 
 const minted = (prefix: string): Handle =>
@@ -333,8 +445,48 @@ const filesIn = async (root: string): Promise<readonly string[]> => {
 const uninterruptibleWrite = <A>(write: () => Promise<A>) =>
   Effect.uninterruptible(Effect.promise(write));
 
+const unknownOutcome = (what: string) =>
+  new Internal({
+    message: `the provider's answer to ${what} was lost, and nothing it holds tells the outcome`,
+  });
+
+class ByName {
+  readonly #held: Map<Handle, FakeMachine>;
+
+  constructor(held: Map<Handle, FakeMachine>) {
+    this.#held = held;
+  }
+
+  get size(): number {
+    return this.#held.size;
+  }
+
+  get(name: string): FakeMachine | undefined {
+    return this.#held
+      .values()
+      .toArray()
+      .findLast((machine) => machine.name === name);
+  }
+
+  has(name: string): boolean {
+    return this.get(name) !== undefined;
+  }
+
+  keys(): IterableIterator<string> {
+    return this.#held.values().map(({ name }) => name);
+  }
+
+  values(): IterableIterator<FakeMachine> {
+    return this.#held.values();
+  }
+
+  clear(): void {
+    this.#held.clear();
+  }
+}
+
 export const fakeRuntime = (options: FakeOptions) => {
-  const machines = new Map<string, FakeMachine>();
+  const machines = new Map<Handle, FakeMachine>();
   const images = new Map<string, string>();
   const calls: string[] = [];
   const activations: Activation[] = [];
@@ -363,15 +515,25 @@ export const fakeRuntime = (options: FakeOptions) => {
   const partialResizes: RuntimeError[] = [];
   const sizableRefusals: Unsizable[] = [];
   const sized: Array<readonly [string, Sizes, Sizes, boolean]> = [];
-  const sizes = new Map<string, Sizing>();
+  const removals: Array<readonly [string, ReadonlySet<Handle>]> = [];
+  const starts: Array<readonly [string, ReadonlySet<Handle>]> = [];
 
   const observeHolds: Array<{
     readonly entered: Deferred.Deferred<undefined>;
     readonly until: Deferred.Deferred<undefined>;
   }> = [];
 
-  const runtime = options.as ?? "smolvm";
-  const traits = fakedTraits[runtime];
+  const preset: Preset = presets[options.as ?? "smolvm"];
+  const traits = options.traits ?? preset.traits;
+  const owned = options.owned ?? preset.owned;
+  const landings: Landing[] = [];
+  const landsLate: Duration.Duration[] = [];
+  const dropped = new Set<Dropped>();
+  let quotaOn = false;
+  let clock: Clock.Clock | undefined;
+
+  const now = () =>
+    DateTime.makeUnsafe(clock?.currentTimeMillisUnsafe() ?? Date.now());
 
   const record = (entry: string) => {
     calls.push(entry);
@@ -425,14 +587,138 @@ export const fakeRuntime = (options: FakeOptions) => {
       })
     );
 
-  const machineOf = (target: Target): FakeMachine | undefined => {
-    const found = machines.get(target.name);
+  const machineOf = (target: Target): FakeMachine | undefined =>
+    machines.get(target.handle);
 
-    return found?.handle === target.handle ? found : undefined;
+  const checkpoints = new Map<Handle, FakeCheckpoint>();
+
+  const kept = (
+    what: Parameters<Interface["find"]>[0],
+    ref: Identity
+  ): Handle | undefined => {
+    if (what === "checkpoint") {
+      return owned?.checkpoints === "held"
+        ? undefined
+        : [...checkpoints].find(
+            ([, held]) =>
+              held.name === ref.name && held.instance === ref.instance
+          )?.[0];
+    }
+
+    return machines
+      .values()
+      .find((held) => held.name === ref.name && held.instance === ref.instance)
+      ?.handle;
   };
+
+  const checkpointRoot = ({ instance }: Identity) =>
+    path.join(options.dir, "checkpoints", instance);
+
+  const heldBy = (machine: Handle) =>
+    owned?.checkpoints === "held"
+      ? [...checkpoints].filter(([, held]) => held.of === machine)
+      : [];
+
+  const pruned = async (machine: Handle, keep: ReadonlySet<Handle>) => {
+    for (const [handle, held] of heldBy(machine)) {
+      if (!keep.has(handle)) {
+        checkpoints.delete(handle);
+        await rm(checkpointRoot(held), { recursive: true, force: true });
+      }
+    }
+  };
+
+  const heldCheckpoint = (checkpoint: Target) => {
+    const held = checkpoints.get(checkpoint.handle);
+
+    return held === undefined
+      ? path.join(options.dir, "checkpoints", `none-${checkpoint.handle}`)
+      : checkpointRoot(held);
+  };
+
+  const keptCheckpoint = (
+    checkpoint: Identity,
+    of: Handle | undefined
+  ): Handle => {
+    const handle = minted("ckpt");
+
+    checkpoints.set(handle, {
+      name: checkpoint.name,
+      instance: checkpoint.instance,
+      marked: true,
+      of,
+    });
+
+    return handle;
+  };
+
+  const madeOf = (
+    machine: Identity & Sizes,
+    root: string,
+    state: MachineState = "running"
+  ): Made => {
+    const handle = minted("mach");
+
+    machines.set(handle, {
+      state,
+      sizes: sizesOf(machine),
+      name: machine.name,
+      root,
+      instance: machine.instance,
+      handle,
+      marked: true,
+    });
+
+    return { handle, sizes: sizesOf(machine) };
+  };
+
+  const leftOf = (machine: Identity & Sizes) => () => {
+    madeOf(
+      machine,
+      path.join(options.dir, "roots", machine.instance),
+      "stopped"
+    );
+  };
+
+  const land = () => {
+    const at = DateTime.toEpochMillis(now());
+
+    for (const landing of landings.filter(({ due }) => due <= at)) {
+      landings.splice(landings.indexOf(landing), 1);
+
+      const root = path.join(options.dir, "roots", landing.machine.instance);
+
+      mkdirSync(path.join(root, "etc"), { recursive: true });
+      madeOf(landing.machine, root);
+      images.set(landing.machine.name, landing.image);
+      record(`landed ${landing.machine.name}`);
+    }
+  };
+
+  const lost = <A, E, E2>(
+    dropping: Dropped,
+    work: Effect.Effect<A, E>,
+    reread: Effect.Effect<A, E2>
+  ): Effect.Effect<A, E | E2> =>
+    Effect.suspend(() => {
+      if (!dropped.delete(dropping)) {
+        return work;
+      }
+
+      return Effect.andThen(
+        work,
+        Effect.andThen(
+          Effect.sync(() => {
+            record(`lost the answer of ${dropping}`);
+          }),
+          reread
+        )
+      );
+    });
 
   const states = (refs: readonly Target[]): Effect.Effect<Observed> =>
     Effect.sync(() => {
+      land();
       observed.push(refs.map(({ name }) => name));
 
       return new Map(
@@ -479,68 +765,6 @@ export const fakeRuntime = (options: FakeOptions) => {
         allotted(running, unread, options.ramBudgetMib)
       )
     );
-
-  const checkpoints = new Map<Handle, string>();
-
-  const kept = (
-    what: Parameters<Interface["find"]>[0],
-    ref: Identity
-  ): Handle | undefined => {
-    if (what === "checkpoint") {
-      return [...checkpoints].find(
-        ([, instance]) => instance === ref.instance
-      )?.[0];
-    }
-
-    const held = machines.get(ref.name);
-
-    return held?.instance === ref.instance ? held.handle : undefined;
-  };
-
-  const checkpointRoot = ({ instance }: Identity) =>
-    path.join(options.dir, "checkpoints", instance);
-
-  const heldCheckpoint = (checkpoint: Target) => {
-    const instance = checkpoints.get(checkpoint.handle);
-
-    return instance === undefined
-      ? path.join(options.dir, "checkpoints", `none-${checkpoint.handle}`)
-      : checkpointRoot({ name: checkpoint.name, instance });
-  };
-
-  const keptCheckpoint = (checkpoint: Identity): Handle => {
-    const handle = minted("ckpt");
-
-    checkpoints.set(handle, checkpoint.instance);
-
-    return handle;
-  };
-
-  const madeOf = (
-    machine: Identity & Sizes,
-    root: string,
-    state: MachineState = "running"
-  ): Made => {
-    const handle = minted("mach");
-
-    machines.set(machine.name, {
-      state,
-      root,
-      instance: machine.instance,
-      handle,
-    });
-    sizes.set(machine.name, sizesOf(machine));
-
-    return { handle, sizes: sizesOf(machine) };
-  };
-
-  const leftOf = (machine: Identity & Sizes) => () => {
-    madeOf(
-      machine,
-      path.join(options.dir, "roots", machine.instance),
-      "stopped"
-    );
-  };
 
   const copyInto = (from: string, machine: Identity & Sizes) =>
     Effect.uninterruptible(
@@ -600,43 +824,74 @@ export const fakeRuntime = (options: FakeOptions) => {
       }
     );
 
+  const madeAgain = (machine: Identity & Sizes, what: string) =>
+    Effect.suspend(() => {
+      const handle = kept("machine", machine);
+      const held = handle === undefined ? undefined : machines.get(handle);
+
+      return held === undefined
+        ? Effect.fail(unknownOutcome(what))
+        : Effect.succeed<Made>({
+            handle: held.handle,
+            sizes: sizedBy(machine, held.sizes),
+          });
+    });
+
   const layer = Layer.effect(
     Runtime,
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      clock = yield* Clock.Clock;
       const bin = yield* Effect.sync(() => writeStubs(options.dir));
 
       stubs = bin;
+
+      const room = Effect.suspend(() =>
+        quotaOn
+          ? Effect.fail(
+              new Capacity({
+                message: `the ${traits.runtime} provider's quota is spent`,
+              })
+            )
+          : Effect.void
+      );
 
       const created = (machine: Identity & Sizes, image: string) =>
         call(
           "create",
           machine,
-          uninterruptibleWrite(async () => {
-            images.set(machine.name, image);
-            const root = path.join(options.dir, "roots", machine.instance);
+          Effect.andThen(
+            room,
+            lost(
+              "make",
+              uninterruptibleWrite(async () => {
+                images.set(machine.name, image);
+                const root = path.join(options.dir, "roots", machine.instance);
 
-            await mkdir(path.join(root, "dev"), { recursive: true });
-            await mkdir(path.join(root, "etc"), { recursive: true });
-            await writeFile(
-              path.join(root, "etc", "resolv.conf"),
-              `nameserver ${baseResolver}\n`
-            );
-            furnish(root, bin);
+                await mkdir(path.join(root, "dev"), { recursive: true });
+                await mkdir(path.join(root, "etc"), { recursive: true });
+                await writeFile(
+                  path.join(root, "etc", "resolv.conf"),
+                  `nameserver ${baseResolver}\n`
+                );
+                furnish(root, bin);
 
-            if (runtime === "tart") {
-              await mkdir(path.join(root, "etc"), { recursive: true });
-              await writeFile(path.join(root, "etc", "passwd"), macLogin);
-            }
+                if (preset.guest === "macos") {
+                  await writeFile(path.join(root, "etc", "passwd"), macLogin);
+                }
 
-            return madeOf(machine, root);
-          }),
+                return madeOf(machine, root);
+              }),
+              madeAgain(machine, `create ${machine.name}`)
+            )
+          ),
           leftOf(machine)
         );
 
       return Runtime.of({
         version: "fake",
-        pin: options.pin ?? (runtime === "smolvm" ? "fake 1" : undefined),
+        pin: options.pin ?? preset.pin,
+        prepares: preset.prepares,
         reach:
           options.relayed === true
             ? {
@@ -649,67 +904,116 @@ export const fakeRuntime = (options: FakeOptions) => {
                 },
               }
             : { _tag: "published", address: "127.0.0.1" },
-        admission: {
-          admit: (activation: Activation) =>
-            Effect.andThen(
-              Effect.sync(() => activations.push(activation)),
-              call(
-                "admit",
-                activation.machine,
-                options.ramBudgetMib === undefined
-                  ? Effect.void
-                  : checkRamBudget(options.ramBudgetMib, activation, states, 0)
-              )
-            ),
-          stopBoots: runtime === "smolvm",
-        },
-        files: {
-          checkpointFiles: (checkpoint) =>
-            Effect.promise(async () => {
-              const root = heldCheckpoint(checkpoint);
-              const found = await filesIn(root);
+        admission:
+          preset.admission === undefined
+            ? undefined
+            : {
+                admit: (activation: Activation) =>
+                  Effect.andThen(
+                    Effect.sync(() => activations.push(activation)),
+                    call(
+                      "admit",
+                      activation.machine,
+                      options.ramBudgetMib === undefined
+                        ? Effect.void
+                        : checkRamBudget(
+                            options.ramBudgetMib,
+                            activation,
+                            states,
+                            0
+                          )
+                    )
+                  ),
+                stopBoots: preset.admission.stopBoots,
+              },
+        owned:
+          owned === undefined
+            ? undefined
+            : {
+                machines: Effect.sync(() => {
+                  land();
+                  record("marked machines");
 
-              return await Promise.all(
-                found.map(async (file) => ({
-                  path: path.relative(root, file),
-                  file,
-                  ...(runtime === "smolvm" ? { key: await keyOf(file) } : {}),
-                }))
-              );
-            }),
-          held: (key) =>
-            Effect.promise(async () => {
-              const all = path.join(options.dir, "checkpoints");
+                  return machines
+                    .values()
+                    .filter(({ marked }) => marked)
+                    .map((machine): MarkedMachine => ({
+                      instance: machine.instance,
+                      handle: machine.handle,
+                      checkpoints: heldBy(machine.handle).map(
+                        ([handle]) => handle
+                      ),
+                    }))
+                    .toArray();
+                }),
+                checkpoints: Effect.sync(() =>
+                  owned.checkpoints === "held"
+                    ? []
+                    : checkpoints
+                        .entries()
+                        .filter(([, { marked }]) => marked)
+                        .map(([handle, held]): Marked => ({
+                          instance: held.instance,
+                          handle,
+                        }))
+                        .toArray()
+                ),
+              },
+        files:
+          preset.files === undefined
+            ? undefined
+            : {
+                checkpointFiles: (checkpoint) =>
+                  Effect.promise(async () => {
+                    const root = heldCheckpoint(checkpoint);
+                    const found = await filesIn(root);
 
-              for (const file of existsSync(all) ? await filesIn(all) : []) {
-                if (
-                  !file.includes(".fetching") &&
-                  (await keyOf(file)) === key
-                ) {
-                  return file;
-                }
-              }
+                    return await Promise.all(
+                      found.map(async (file) => ({
+                        path: path.relative(root, file),
+                        file,
+                        ...(preset.files?.keyed === true
+                          ? { key: await keyOf(file) }
+                          : {}),
+                      }))
+                    );
+                  }),
+                held: (key) =>
+                  Effect.promise(async () => {
+                    const all = path.join(options.dir, "checkpoints");
 
-              return undefined;
-            }),
-          staging: (checkpoint) => `${checkpointRoot(checkpoint)}.fetching`,
-          install: (checkpoint, staged) =>
-            call(
-              "install",
-              checkpoint,
-              uninterruptibleWrite(async () => {
-                const root = checkpointRoot(checkpoint);
+                    for (const file of existsSync(all)
+                      ? await filesIn(all)
+                      : []) {
+                      if (
+                        !file.includes(".fetching") &&
+                        (await keyOf(file)) === key
+                      ) {
+                        return file;
+                      }
+                    }
 
-                await rename(staged, root);
-                await mkdir(path.join(root, "dev"), { recursive: true });
-                furnish(root, bin);
+                    return undefined;
+                  }),
+                staging: (checkpoint) =>
+                  `${checkpointRoot(checkpoint)}.fetching`,
+                install: (checkpoint, staged) =>
+                  call(
+                    "install",
+                    checkpoint,
+                    uninterruptibleWrite(async () => {
+                      const root = checkpointRoot(checkpoint);
 
-                return keptCheckpoint(checkpoint);
-              })
-            ),
-        },
+                      await rename(staged, root);
+                      await mkdir(path.join(root, "dev"), { recursive: true });
+                      furnish(root, bin);
+
+                      return keptCheckpoint(checkpoint, undefined);
+                    })
+                  ),
+              },
         traits,
-        guest: runtime === "smolvm" ? "debian" : "macos",
+        guest: preset.guest,
         sizable: (machine, from, to, live) => {
           sized.push([machine.name, sizesOf(from), sizesOf(to), live]);
 
@@ -722,6 +1026,7 @@ export const fakeRuntime = (options: FakeOptions) => {
         }),
         find: (what, ref) =>
           Effect.suspend(() => {
+            land();
             const failure = findFailures.get(ref.name);
 
             return failure === undefined
@@ -730,7 +1035,34 @@ export const fakeRuntime = (options: FakeOptions) => {
           }),
         observe,
         capacity,
-        make: (machine, origin) => {
+        make: (machine, origin, bind) => {
+          if ((options.relayed === true) !== (bind._tag === "none")) {
+            return Effect.die(
+              new Error(
+                `make ${machine.name}: a ${options.relayed === true ? "relayed" : "published"} reach was given a ${bind._tag} bind`
+              )
+            );
+          }
+
+          const late = landsLate.shift();
+
+          if (late !== undefined) {
+            return Effect.suspend(() => {
+              record(`make ${machine.name}`);
+              landings.push({
+                machine,
+                image: origin._tag === "image" ? origin.image : "",
+                due: DateTime.toEpochMillis(now()) + Duration.toMillis(late),
+              });
+
+              return Effect.fail(
+                new Internal({
+                  message: `the ${traits.runtime} provider didn't answer the make of ${machine.name}`,
+                })
+              );
+            });
+          }
+
           switch (origin._tag) {
             case "image": {
               return created(machine, origin.image);
@@ -740,7 +1072,14 @@ export const fakeRuntime = (options: FakeOptions) => {
               return call(
                 "restore",
                 machine,
-                copyInto(heldCheckpoint(origin.checkpoint), machine),
+                Effect.andThen(
+                  room,
+                  lost(
+                    "make",
+                    copyInto(heldCheckpoint(origin.checkpoint), machine),
+                    madeAgain(machine, `restore ${machine.name}`)
+                  )
+                ),
                 leftOf(machine)
               );
             }
@@ -752,9 +1091,16 @@ export const fakeRuntime = (options: FakeOptions) => {
                 "fork",
                 machine,
                 Effect.andThen(
-                  copyable(source),
-                  Effect.flatMap(rootOf(source), (root) =>
-                    copyInto(root, machine)
+                  room,
+                  Effect.andThen(
+                    copyable(source),
+                    Effect.flatMap(rootOf(source), (root) =>
+                      lost(
+                        "make",
+                        copyInto(root, machine),
+                        madeAgain(machine, `fork ${machine.name}`)
+                      )
+                    )
                   )
                 ),
                 leftOf(machine)
@@ -762,21 +1108,26 @@ export const fakeRuntime = (options: FakeOptions) => {
             }
           }
         },
-        start: (machine) =>
-          call(
-            "start",
-            machine,
-            Effect.suspend(() => {
-              const found = machineOf(machine);
+        start: (machine, keep) =>
+          Effect.andThen(
+            Effect.sync(() => starts.push([machine.name, keep])),
+            call(
+              "start",
+              machine,
+              Effect.suspend(() => {
+                const found = machineOf(machine);
 
-              if (found === undefined) {
-                return Effect.fail(missing(traits.runtime, machine));
-              }
+                if (found === undefined) {
+                  return Effect.fail(missing(traits.runtime, machine));
+                }
 
-              found.state = "running";
+                found.state = "running";
 
-              return Effect.void;
-            })
+                return uninterruptibleWrite(async () => {
+                  await pruned(found.handle, keep);
+                });
+              })
+            )
           ),
         stop: (machine) =>
           call(
@@ -814,7 +1165,7 @@ export const fakeRuntime = (options: FakeOptions) => {
                 );
               }
 
-              found.state = "paused";
+              found.state = traits.pause === "stops" ? "stopped" : "paused";
 
               return Effect.void;
             })
@@ -824,13 +1175,15 @@ export const fakeRuntime = (options: FakeOptions) => {
             "resize",
             machine,
             Effect.suspend(() => {
-              const had = sizes.get(machine.name);
+              const found = machineOf(machine);
 
-              if (had === undefined || machineOf(machine) === undefined) {
+              if (found === undefined) {
                 return Effect.fail(
                   new Internal({ message: `no machine ${machine.name}` })
                 );
               }
+
+              const had = found.sizes;
 
               const partial = partialResizes.shift();
 
@@ -841,12 +1194,12 @@ export const fakeRuntime = (options: FakeOptions) => {
               };
 
               if (partial !== undefined) {
-                sizes.set(machine.name, { ...had, ramMib: given.ramMib });
+                found.sizes = { ...had, ramMib: given.ramMib };
 
                 return Effect.fail(partial);
               }
 
-              sizes.set(machine.name, given);
+              found.sizes = given;
 
               return Effect.void;
             })
@@ -856,27 +1209,38 @@ export const fakeRuntime = (options: FakeOptions) => {
             "sizes",
             machine,
             Effect.suspend(() => {
-              const held = sizes.get(machine.name);
+              const found = machineOf(machine);
 
-              return held === undefined || machineOf(machine) === undefined
+              return found === undefined
                 ? Effect.fail(
                     new Internal({ message: `no machine ${machine.name}` })
                   )
-                : Effect.succeed(held);
+                : Effect.succeed(found.sizes);
             })
           ),
-        delete: (machine) =>
-          call(
-            "delete",
-            machine,
-            Effect.andThen(
-              endCommands(machine),
-              Effect.sync(() => {
-                if (machineOf(machine) !== undefined) {
-                  machines.delete(machine.name);
-                  sizes.delete(machine.name);
-                }
-              })
+        delete: (machine, keep) =>
+          Effect.andThen(
+            Effect.sync(() => removals.push([machine.name, keep])),
+            call(
+              "delete",
+              machine,
+              lost(
+                "delete",
+                Effect.andThen(
+                  endCommands(machine),
+                  uninterruptibleWrite(async () => {
+                    const found = machineOf(machine);
+
+                    if (found === undefined) {
+                      return;
+                    }
+
+                    machines.delete(found.handle);
+                    await pruned(found.handle, keep);
+                  })
+                ),
+                Effect.void
+              )
             )
           ),
         capture: (machine, checkpoint) =>
@@ -891,12 +1255,12 @@ export const fakeRuntime = (options: FakeOptions) => {
                     recursive: true,
                   });
 
-                  return keptCheckpoint(checkpoint);
+                  return keptCheckpoint(checkpoint, machine.handle);
                 })
               )
             ),
             () => {
-              keptCheckpoint(checkpoint);
+              keptCheckpoint(checkpoint, machine.handle);
             }
           ),
         deleteCheckpoint: (checkpoint) =>
@@ -911,78 +1275,153 @@ export const fakeRuntime = (options: FakeOptions) => {
             })
           ),
         exec: (machine, command) =>
-          call(
-            "exec",
-            machine,
-            Effect.gen(function* () {
-              const found = machineOf(machine);
+          command.argv.includes("")
+            ? Effect.fail(
+                new Internal({
+                  message: `exec in ${machine.name} refuses an empty argument`,
+                })
+              )
+            : call(
+                "exec",
+                machine,
+                Effect.gen(function* () {
+                  const found = machineOf(machine);
 
-              if (found?.state !== "running" && found?.state !== "unknown") {
-                return {
-                  output: Stream.make(
-                    new TextEncoder().encode(
-                      `exec: ${machine.name} isn't running\n`
+                  if (
+                    found?.state !== "running" &&
+                    found?.state !== "unknown"
+                  ) {
+                    return {
+                      output: Stream.make(
+                        new TextEncoder().encode(
+                          `exec: ${machine.name} isn't running\n`
+                        )
+                      ),
+                      exitCode: Effect.succeed(1),
+                    };
+                  }
+
+                  const { root } = found;
+                  const [file = "/bin/sh", ...args] = command.argv;
+
+                  const handle = yield* spawner
+                    .spawn(
+                      ChildProcess.make(file, args, {
+                        env: {
+                          CLANKERBOX_ROOT: root,
+                          CLANKERBOX_USER: command.user ?? "root",
+                          PATH: `${bin}:${process.env["PATH"] ?? ""}`,
+                        },
+                        extendEnv: true,
+                        killSignal: "SIGKILL",
+                        stdin:
+                          command.stdin === undefined
+                            ? "ignore"
+                            : Stream.make(
+                                new TextEncoder().encode(command.stdin)
+                              ),
+                      })
                     )
-                  ),
-                  exitCode: Effect.succeed(1),
-                };
-              }
+                    .pipe(
+                      Effect.mapError(
+                        (error) => new Internal({ message: error.message })
+                      )
+                    );
 
-              const { root } = found;
-              const [file = "/bin/sh", ...args] = command.argv;
+                  const running = commands.get(machine.name) ?? new Set();
 
-              const handle = yield* spawner
-                .spawn(
-                  ChildProcess.make(file, args, {
-                    env: {
-                      CLANKERBOX_ROOT: root,
-                      CLANKERBOX_USER: command.user ?? "root",
-                      PATH: `${bin}:${process.env["PATH"] ?? ""}`,
-                    },
-                    extendEnv: true,
-                    killSignal: "SIGKILL",
-                    stdin:
-                      command.stdin === undefined
-                        ? "ignore"
-                        : Stream.make(Uint8Array.from(command.stdin)),
-                  })
-                )
-                .pipe(
-                  Effect.mapError(
-                    (error) => new Internal({ message: error.message })
-                  )
-                );
+                  commands.set(machine.name, running.add(handle));
+                  yield* Effect.addFinalizer(() =>
+                    Effect.sync(() => running.delete(handle))
+                  );
 
-              const running = commands.get(machine.name) ?? new Set();
-
-              commands.set(machine.name, running.add(handle));
-              yield* Effect.addFinalizer(() =>
-                Effect.sync(() => running.delete(handle))
-              );
-
-              return {
-                output: Stream.mapError(
-                  handle.all,
-                  (error) => new Internal({ message: error.message })
-                ),
-                exitCode: Effect.orElseSucceed(handle.exitCode, () => 137),
-              };
-            })
-          ),
+                  return {
+                    output: Stream.mapError(
+                      handle.all,
+                      (error) => new Internal({ message: error.message })
+                    ),
+                    exitCode: Effect.orElseSucceed(handle.exitCode, () => 137),
+                  };
+                })
+              ),
       });
     })
   );
 
+  const byName = new ByName(machines);
+
+  const faults: Faults = {
+    drift: (instance) =>
+      Effect.sync(() => {
+        const found = [...machines.values()].find(
+          (machine) => machine.instance === instance
+        );
+
+        if (found?.state === "running") {
+          found.state = "stopped";
+          record(`drift ${found.name}`);
+        }
+      }),
+    landLate: (after) =>
+      Effect.sync(() => {
+        landsLate.push(Duration.fromInputUnsafe(after));
+      }),
+    quota: (on) =>
+      Effect.sync(() => {
+        quotaOn = on;
+      }),
+    dropAnswer: (dropping) =>
+      Effect.sync(() => {
+        dropped.add(dropping);
+      }),
+  };
+
   return {
     layer,
+    faults,
     calls,
     activations,
     observed,
-    root: (name: string) => machines.get(name)?.root,
+    root: (name: string) => byName.get(name)?.root,
     images,
-    machines,
-    sizes,
+    machines: byName,
+    hold: (machine: Omit<FakeMachine, "marked" | "sizes">) => {
+      machines.set(machine.handle, {
+        ...machine,
+        marked: true,
+        sizes: { cpu: 1, ramMib: 1024, diskGib: 10 },
+      });
+    },
+    unmarked: Effect.sync(() => {
+      const handle = minted("mach");
+      const instance = randomUUID().replaceAll("-", "");
+
+      machines.set(handle, {
+        state: "running",
+        sizes: { cpu: 1, ramMib: 1024, diskGib: 10 },
+        name: instance,
+        root: path.join(options.dir, "roots", instance),
+        instance,
+        handle,
+        marked: false,
+      });
+      checkpoints.set(minted("ckpt"), {
+        name: instance,
+        instance,
+        marked: false,
+        of: owned?.checkpoints === "held" ? handle : undefined,
+      });
+    }),
+    resizedTo: (name: string, sizing: Sizing) => {
+      const found = byName.get(name);
+
+      if (found !== undefined) {
+        found.sizes = sizing;
+      }
+    },
     sized,
+    removals,
+    starts,
     stubs: () => stubs,
     failNext: <O extends Operation>(operation: O, error: FailureOf<O>) => {
       inject(operation, { kind: "fail", error });

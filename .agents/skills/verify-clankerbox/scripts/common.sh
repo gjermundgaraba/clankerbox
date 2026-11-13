@@ -45,7 +45,7 @@ start_host() {
   rm -f "$run/hosts/$id.pid"
   (
     cd "$repo" &&
-      nohup vpx apps/host/tests/serve.ts "$run" "$id" "$(cat "$run/runtime")" $(cat "$run/budget") \
+      nohup vpx apps/host/tests/serve.ts "$run" "$id" "$(cat "$run/hosts/$id.runtime")" $(cat "$run/budget") \
         >>"$evidence/host-$id.log" 2>&1 </dev/null &
     echo $! >"$run/hosts/$id.starting"
   )

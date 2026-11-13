@@ -7,6 +7,7 @@ import {
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Executed, Setup } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Option, Redacted, Schema, Stream } from "effect";
+import { Hex } from "effect/encoding";
 
 import { timeoutFail } from "./runtime.ts";
 import type {
@@ -133,8 +134,7 @@ export const runCommand = (
       {
         argv: pairs.length === 0 ? argv : ["env", ...pairs, ...argv],
         user,
-        stdin:
-          stdin === undefined ? undefined : new TextEncoder().encode(stdin),
+        stdin,
       },
       output
     );
@@ -190,6 +190,11 @@ const debianBase = [
   `  curl -fsSL "https://pkgs.tailscale.com/stable/$distro/$codename.tailscale-keyring.list" -o "$root/etc/apt/sources.list.d/tailscale.list"`,
   "  apt-get -o Acquire::Retries=5 -o APT::Update::Error-Mode=any update",
   "  apt-get -o Acquire::Retries=5 install -y --no-install-recommends tailscale",
+  "fi",
+  // systemd's own test that it booted the system:
+  // https://www.freedesktop.org/software/systemd/man/latest/sd_booted.html
+  `if [ "$joins" = joins ] && [ -d "$root/run/systemd/system" ] && systemctl cat tailscaled.service >/dev/null 2>&1; then`,
+  "  systemctl disable --now tailscaled.service",
   "fi",
   `if ! grep -q "^$login:" "$root/etc/passwd"; then`,
   `  useradd -m -s /bin/bash -U "$login"`,
@@ -257,12 +262,39 @@ export const prepareBase = (
           baseScript(runtime.guest),
           "clankerbox-base",
           loginUser,
-          joins ? "joins" : "",
+          joins ? "joins" : "nojoin",
         ],
       },
       baseTimeout
     )
   );
+
+// A guest's /dev/shm may be mounted noexec, so the script's interpreter reads it, as the guest's
+// kernel would run it: Linux gives the rest of a `#!` line as one argument, macOS splits it on
+// blanks, and a script without one runs under sh:
+// https://man7.org/linux/man-pages/man2/execve.2.html#DESCRIPTION
+const setupHeld = [
+  "set -eu",
+  "kernel=$2",
+  `script=$(mktemp "$1/clankerbox-setup.XXXXXX")`,
+  `trap "rm -f \\"$script\\"" EXIT`,
+  `cat >"$script"`,
+  `cd "$HOME"`,
+  `IFS= read -r first <"$script" || true`,
+  `case "$first" in`,
+  `  "#!"*)`,
+  "    shebang=${first#??}",
+  `    shebang=\${shebang#"\${shebang%%[![:blank:]]*}"}`,
+  "    interpreter=${shebang%%[[:blank:]]*}",
+  `    argument=\${shebang#"$interpreter"}`,
+  `    argument=\${argument#"\${argument%%[![:blank:]]*}"}`,
+  `    argument=\${argument%"\${argument##*[![:blank:]]}"}`,
+  `    if [ -z "$argument" ]; then set --; elif [ "$kernel" = Linux ]; then set -- "$argument"; else set -f; set -- $argument; set +f; fi`,
+  `    "$interpreter" "$@" "$script" </dev/null`,
+  "    ;;",
+  `  *) /bin/sh "$script" </dev/null ;;`,
+  "esac",
+].join("\n");
 
 const setupRunner = [
   "set -eu",
@@ -270,7 +302,11 @@ const setupRunner = [
   "shift",
   "root=${CLANKERBOX_ROOT-}",
   ...addingMissingKeys,
-  `sudo -n -u "$login" -H /bin/sh -c 'script=$(mktemp /var/tmp/clankerbox-setup.XXXXXX) && trap "rm -f \\"$script\\"" EXIT && cat >"$script" && chmod 700 "$script" && cd "$HOME" && "$script" </dev/null'`,
+  // /dev/shm is a tmpfs, which lives in memory:
+  // https://www.kernel.org/doc/html/latest/filesystems/tmpfs.html
+  "kernel=$(uname -s)",
+  `if [ "$kernel" = Linux ]; then held="$root/dev/shm"; else held=/var/tmp; fi`,
+  `sudo -n -u "$login" -H /bin/sh -c '${setupHeld}' clankerbox-setup "$held" "$kernel"`,
   ...addingMissingKeys,
 ].join("\n");
 
@@ -311,7 +347,7 @@ export const runSetup = (
           loginUser,
           ...keyLines(authorizedKeys),
         ],
-        stdin: new TextEncoder().encode(setup.script),
+        stdin: setup.script,
       },
       timeout
     )
@@ -378,46 +414,71 @@ export const tailnetScript = [
   "set -eu",
   "hostname=$1",
   "user=$2",
+  "joining=${3-}",
   "root=${CLANKERBOX_ROOT-}",
   brewedPath,
   `dir="${tailnetDir}"`,
   String.raw`ts() { tailscale --socket="$dir/tailscaled.sock" "$@"; }`,
   String.raw`status() { ts status --json --peers=false 2>/dev/null | tr -d '\n'; }`,
   String.raw`up() { ts up --reset --hostname="$hostname" $prefs --timeout=60s "$@"; }`,
+  // A map request for a node control no longer has fails with its 404, which tailscaled logs, and
+  // the node isn't online; the log keeps the line after a later login succeeds:
+  // https://github.com/tailscale/tailscale/blob/v1.104.6/control/controlclient/direct.go#L1215
+  // https://github.com/tailscale/tailscale/blob/v1.104.6/ipn/ipnlocal/local.go#L1881
+  String.raw`lost() { ! status | grep -Eq '"Online": *true' && grep -q 'initial fetch failed 404' "$dir/tailscaled.log" 2>/dev/null; }`,
   "if ! command -v tailscaled >/dev/null 2>&1 || ! command -v tailscale >/dev/null 2>&1; then",
   `  echo '${tailnetMarker}missing'`,
   "  exit 0",
   "fi",
   "prefs=--accept-dns",
   `if [ "$(uname -s)" = Linux ]; then prefs="$prefs --netfilter-mode=off"; fi`,
+  `if [ "$joining" = rejoin ]; then`,
+  ...dropNode.map((line) => `  ${line}`),
+  "fi",
   `mkdir -p "$dir"`,
   `chmod 711 "$dir"`,
   ...ownResolver,
-  `if [ "\${3-}" = join ]; then`,
-  `  key=$(mktemp "$dir/key.XXXXXX")`,
-  `  trap 'rm -f "$key"' EXIT`,
-  `  cat >"$key"`,
-  `  up --auth-key="file:$key"`,
-  "else",
+  `if [ "$joining" != join ]; then`,
   ...nodeProcess.map((line) => `  ${line}`),
   // The CLI retries a refused socket for 2 seconds, and up to 5 while any tailscaled runs:
   // https://github.com/tailscale/tailscale/blob/v1.104.4/safesocket/safesocket.go#L43
   "  answering=",
+  "  started=",
   `  case "$comm" in *tailscaled) if ts status --json >/dev/null 2>&1; then answering=1; fi ;; esac`,
   `  if [ -z "$answering" ]; then`,
   "    if command -v setsid >/dev/null 2>&1; then detach=setsid; else detach=nohup; fi",
   `    TS_PERMIT_CERT_UID="$user" "$detach" tailscaled --statedir="$dir/state" --socket="$dir/tailscaled.sock" --port=0 </dev/null >"$dir/tailscaled.log" 2>&1 &`,
-  `    echo "$!" >"$dir/tailscaled.pid"`,
+  "    started=$!",
+  `    echo "$started" >"$dir/tailscaled.pid"`,
   "  fi",
   "  waited=0",
-  String.raw`  until status | grep -Eq '"BackendState": *"(Running|NeedsLogin|NeedsMachineAuth|Stopped)"' || [ "$waited" -ge 150 ]; do`,
+  String.raw`  until status | grep -Eq '"BackendState": *"(Running|NeedsLogin|NeedsMachineAuth|Stopped)"' || lost || [ "$waited" -ge 150 ] || { [ -n "$started" ] && ! kill -0 "$started" 2>/dev/null; }; do`,
   "    sleep 0.1",
   "    waited=$((waited + 1))",
   "  done",
-  `  if [ -n "$(status)" ]; then`,
-  "    ts set $prefs",
-  "  fi",
   "fi",
+  `case "$joining" in`,
+  "  join | rejoin)",
+  `    key=$(mktemp "$dir/key.XXXXXX")`,
+  `    trap 'rm -f "$key"' EXIT`,
+  `    cat >"$key"`,
+  `    up --auth-key="file:$key"`,
+  "    ;;",
+  "  *)",
+  `    if [ -n "$(status)" ]; then`,
+  "      ts set $prefs",
+  "    fi",
+  "    waited=0",
+  String.raw`    while status | grep -Eq '"BackendState": *"Running"' && status | grep -Eq '"Online": *false' && ! lost && [ "$waited" -lt 100 ]; do`,
+  "      sleep 0.1",
+  "      waited=$((waited + 1))",
+  "    done",
+  "    if lost; then",
+  `      echo '${tailnetMarker}lost'`,
+  "      exit 0",
+  "    fi",
+  "    ;;",
+  "esac",
   `printf '${tailnetMarker}%s\\n' "$(status)"`,
   "",
 ].join("\n");
@@ -464,9 +525,10 @@ export const scrubScript = [
 ].join("\n");
 
 export type TailnetReport =
-  | { readonly missing: true }
+  | { readonly state: "missing" }
+  | { readonly state: "lost" }
   | {
-      readonly missing: false;
+      readonly state: "reported";
       readonly backend: string;
       readonly name: string | undefined;
     };
@@ -495,12 +557,12 @@ export const tailnetIn = (output: string): TailnetReport | undefined => {
     return undefined;
   }
 
-  if (line === "missing") {
-    return { missing: true };
+  if (line === "missing" || line === "lost") {
+    return { state: line };
   }
 
   if (line === "") {
-    return { missing: false, backend: "unreachable", name: undefined };
+    return { state: "reported", backend: "unreachable", name: undefined };
   }
 
   return Option.getOrUndefined(
@@ -508,7 +570,7 @@ export const tailnetIn = (output: string): TailnetReport | undefined => {
       const name = Self?.DNSName?.replace(/\.$/u, "");
 
       return {
-        missing: false,
+        state: "reported",
         backend: BackendState,
         name: name === "" ? undefined : name,
       };
@@ -624,7 +686,9 @@ export const identify = (
           machine.instance,
           machine.name,
         ],
-        stdin: globalThis.crypto.getRandomValues(new Uint8Array(seedBytes)),
+        stdin: Hex.encode(
+          globalThis.crypto.getRandomValues(new Uint8Array(seedBytes))
+        ),
       },
       preparationTimeout
     )
@@ -658,11 +722,16 @@ export const prepare = (
 
 const tailnetTimeout = Duration.seconds(90);
 
+export interface TailnetJoin {
+  readonly key: Redacted.Redacted;
+  readonly rejoin: boolean;
+}
+
 export const checkTailnet = (
   runtime: Runtime,
   machine: Target,
   hostname: string,
-  key?: Redacted.Redacted
+  join?: TailnetJoin
 ): Effect.Effect<TailnetReport | undefined, RuntimeError | ScriptFailed> =>
   runInGuest(
     runtime,
@@ -676,12 +745,9 @@ export const checkTailnet = (
         "clankerbox-tailnet",
         hostname,
         loginUser,
-        ...(key === undefined ? [] : ["join"]),
+        ...(join === undefined ? [] : [join.rejoin ? "rejoin" : "join"]),
       ],
-      stdin:
-        key === undefined
-          ? undefined
-          : new TextEncoder().encode(Redacted.value(key)),
+      stdin: join === undefined ? undefined : Redacted.value(join.key),
     },
     tailnetTimeout
   ).pipe(Effect.map(tailnetIn));

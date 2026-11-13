@@ -31,11 +31,7 @@ import type {
   FakeRuntimeName,
 } from "./fake-runtime.ts";
 
-export {
-  fakedTraits as runtimeTraits,
-  hostKeySetup,
-  writeTailscaleStubs,
-} from "./fake-runtime.ts";
+export { hostKeySetup, presets, writeTailscaleStubs } from "./fake-runtime.ts";
 
 export type { FakeRuntimeName } from "./fake-runtime.ts";
 

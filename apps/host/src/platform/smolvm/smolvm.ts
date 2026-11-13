@@ -1233,6 +1233,8 @@ export const make = (
     return {
       version,
       pin,
+      prepares: "with-setup",
+      owned: undefined,
       reach: { _tag: "published", address: settings.publishAddress },
       admission: {
         admit: Effect.fn("Smolvm.admit")((activation) =>

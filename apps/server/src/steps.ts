@@ -48,6 +48,13 @@ export const hasEndpoint = (
 export const mayHoldVm = (row: MachineRow): boolean =>
   hasEndpoint(row) && stageOf(row.state) !== "undone";
 
+export const keptOn = (store: Store, host: string) =>
+  Effect.map(store.checkpoints, (rows) =>
+    rows.flatMap((row) =>
+      row.host === host && row.handle !== undefined ? [row.handle] : []
+    )
+  );
+
 const pinned = (pin: string | undefined) => (pin === undefined ? {} : { pin });
 
 const copyOf = (found: Option.Option<MachineRow>) =>
@@ -134,6 +141,7 @@ export const machineStep = (
       return {
         _tag: "remove",
         machine: identityOf(found),
+        keep: yield* keptOn(store, found.host),
         ...hooked(found, hookTimeoutSeconds),
       };
     }
@@ -163,6 +171,7 @@ export const machineStep = (
         return {
           _tag: "start",
           machine: ref,
+          keep: yield* keptOn(store, found.host),
           ...pinned(found.pin),
           machines,
         };

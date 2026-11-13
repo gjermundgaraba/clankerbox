@@ -8,6 +8,7 @@ import type {
 import { Missing, readTimeout } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   Capacity,
+  Conflict,
   Internal,
   Reading,
   RuntimeName,
@@ -121,10 +122,11 @@ export interface Activation {
   readonly machines: readonly Held[];
 }
 
+/** A command in a guest. No argument of `argv` is empty, and `stdin` is text, on every runtime. */
 export interface Command {
   readonly argv: readonly string[];
   readonly user?: string | undefined;
-  readonly stdin?: Uint8Array | undefined;
+  readonly stdin?: string | undefined;
 }
 
 export interface Execution {
@@ -184,14 +186,50 @@ export interface CheckpointFiles {
   ) => Effect.Effect<Handle, RuntimeError>;
 }
 
+/** A resource carrying this host's mark, and the instance the mark names. */
+export interface Marked {
+  readonly instance: string;
+  readonly handle: Handle;
+}
+
+/** A marked machine, and the handle of each checkpoint the provider holds through it, unmarked. */
+export interface MarkedMachine extends Marked {
+  readonly checkpoints: readonly Handle[];
+}
+
+/**
+ * What carries this host's mark at its provider. The mark is this host's ID and the resource's
+ * instance, which the adapter sets on each machine and checkpoint it makes, so a provider account
+ * that several hosts or other users share lists each resource under one host alone. `machines` and
+ * `checkpoints` list only what carries this host's mark, and nothing without it, whoever made it. A
+ * sweep deletes those whose instance the control plane retired. A checkpoint the provider holds
+ * through its machine carries no mark of its own, and a row claims it by its handle alone: only a
+ * start and a remove of its machine, inside a step that owns the machine, delete it, when `keep`
+ * lacks its handle.
+ */
+export interface Owned {
+  readonly machines: Effect.Effect<readonly MarkedMachine[], RuntimeError>;
+  readonly checkpoints: Effect.Effect<readonly Marked[], RuntimeError>;
+}
+
+/**
+ * A runtime, as every host drives it. Each adapter keeps two rules. A provider call that can't be
+ * cut short runs masked and is polled to its end, so a step cut short ends only once its call has.
+ * An answer that leaves the outcome unknown, such as a dropped connection, never ends a step: the
+ * adapter reads the resource by its instance before it answers. `prepares` is `always` where the
+ * runtime's images lack the login user, so every machine made from a base is prepared, and
+ * `with-setup` where only a machine with a setup is.
+ */
 export interface Interface {
   readonly traits: RuntimeTraits;
   readonly guest: "debian" | "macos";
   readonly version: string;
   readonly pin: string | undefined;
   readonly reach: Reach;
+  readonly prepares: "with-setup" | "always";
   readonly admission: Admission | undefined;
   readonly files: CheckpointFiles | undefined;
+  readonly owned: Owned | undefined;
   readonly sizable: (
     machine: Pick<MachineRef, "name">,
     from: Sizes,
@@ -214,14 +252,23 @@ export interface Interface {
     origin: Origin,
     bind: Bind
   ) => Effect.Effect<Made, RoomError | StateError | Unsizable>;
+  /**
+   * Starts a stopped machine, or resumes a paused one. A runtime that holds checkpoints through its
+   * machine deletes, once the machine runs, each of them whose handle `keep` lacks, so a pause's own
+   * checkpoint goes only after the resume that read it.
+   */
   readonly start: (
-    machine: Target
+    machine: Target,
+    keep: ReadonlySet<Handle>
   ) => Effect.Effect<void, RoomError | StateError>;
   readonly stop: (machine: Target) => Effect.Effect<void, RuntimeError>;
   readonly pause: (
     machine: Target
   ) => Effect.Effect<void, RuntimeError | StateError>;
-  readonly delete: (machine: Target) => Effect.Effect<void, RuntimeError>;
+  readonly delete: (
+    machine: Target,
+    keep: ReadonlySet<Handle>
+  ) => Effect.Effect<void, RuntimeError>;
   readonly capture: (
     machine: Target,
     checkpoint: Identity
@@ -232,9 +279,10 @@ export interface Interface {
     running: boolean
   ) => Effect.Effect<void, RuntimeError | Unsizable>;
   readonly sizes: (machine: Target) => Effect.Effect<Sizing, RuntimeError>;
+  /** Fails `Conflict` where the provider keeps the checkpoint while something depends on it. */
   readonly deleteCheckpoint: (
     checkpoint: Target
-  ) => Effect.Effect<void, RuntimeError>;
+  ) => Effect.Effect<void, RuntimeError | Conflict>;
   readonly exec: (
     machine: Target,
     command: Command

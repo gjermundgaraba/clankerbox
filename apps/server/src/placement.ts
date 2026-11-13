@@ -3,6 +3,7 @@ import {
   buildId,
   fitted,
   formatGib,
+  givenSizes,
   formatMib,
   NotBuilt,
   NotOffered,
@@ -121,7 +122,11 @@ export const placing = (
 
       return fitted(info.traits, ask.sizes)
         ? Result.succeed(info)
-        : Result.fail(missed(`has no size class of ${sized(ask.sizes)}`));
+        : Result.fail(
+            missed(
+              `has no size class of ${sized(ask.sizes)}, and gives ${givenSizes(info.traits)}`
+            )
+          );
     }
   );
 
@@ -232,7 +237,11 @@ export const holding = <A>(
 
       return fitted(info.traits, ask.sizes)
         ? Result.succeed([info, copy] as const)
-        : Result.fail(missed(`has no size class of ${sized(ask.sizes)}`));
+        : Result.fail(
+            missed(
+              `has no size class of ${sized(ask.sizes)}, and gives ${givenSizes(info.traits)}`
+            )
+          );
     }
   );
 

@@ -1,7 +1,7 @@
 ---------------------------- MODULE MachineAnswers ----------------------------
 EXTENDS Naturals, FiniteSets, Sequences, Chart
 
-CONSTANTS Clients, Creator, Desires,
+CONSTANTS Clients, Creator, Desires, Drifts, LandsLate,
           MaxFaults, MaxCrashes, MaxPartitions, MaxRestarts, MaxDrops, MaxOps
 
 None == "none"
@@ -32,17 +32,21 @@ VARIABLES
   crashes,    \* control plane crashes so far
   partitions, \* partitions so far
   restarts,   \* host restarts so far
-  drops       \* deliveries lost so far
+  drops,      \* deliveries lost so far
+  drift,      \* none; unread once the VM stops by itself, until a read that
+              \* saw it is decided; then read
+  late,       \* none; out once a make's call may yet land; then landed
+  sent        \* a sweep on its way to the host names the instance retired
 
 vars == <<row, up, script, read, known, linked, vm, boot, high, runs, net, cut,
           applied, cl, nextOp, faults, crashes, partitions, restarts,
-          drops>>
+          drops, drift, late, sent>>
 
 hostVars == <<vm, boot, high, runs, applied>>
-worldVars == <<faults, crashes, partitions, restarts, drops>>
+worldVars == <<faults, crashes, partitions, restarts, drops, drift, late, sent>>
 
 Idle == [pc |-> "idle", d |-> None, res |-> None, by |-> None, vmAt |-> None,
-         other |-> FALSE]
+         other |-> FALSE, excused |-> FALSE, pre |-> "none"]
 
 Flag(b) == IF b THEN "1" ELSE "0"
 Key(r, e) ==
@@ -75,9 +79,16 @@ Shown == IF ~linked /\ Phase(row) # "failed" THEN "waiting" ELSE Phase(row)
 
 Asked(k, d) == \E j \in Everyone \ {k} : cl[j].pc # "idle" /\ cl[j].d = d
 
+Orphaned == (row.state = "absent" \/ row.state = Undone) /\ vm # "missing"
+
+Landed == late = "landed" /\ vm # "missing"
+
+Excused(k) == (drift = "unread" /\ cl[k].pre = "none") \/ Landed
+
 Finish(k, res, by) ==
   cl' = [cl EXCEPT ![k] = [@ EXCEPT !.pc = "done", !.res = res, !.by = by,
-                                    !.vmAt = vm, !.other = Asked(k, by)]]
+                                    !.vmAt = vm, !.other = Asked(k, by),
+                                    !.excused = Excused(k)]]
 
 Create ==
   /\ up /\ row.state = "absent" /\ cl[Creator].pc = "idle"
@@ -104,7 +115,8 @@ Request(k) ==
        THEN /\ row' = Row(row, e, NoOp)
             /\ cl' = [cl EXCEPT ![k] = [@ EXCEPT !.pc = "done", !.d = d,
                                                  !.res = "ok",
-                                                 !.vmAt = vm]]
+                                                 !.vmAt = vm,
+                                                 !.excused = Landed]]
        ELSE IF row.desired = "deleted" /\ d # "deleted"
        THEN /\ cl' = [cl EXCEPT ![k] = [@ EXCEPT !.pc = "done", !.d = d,
                                                  !.res = "superseded",
@@ -112,7 +124,8 @@ Request(k) ==
                                                  !.other = Asked(k, "deleted")]]
             /\ UNCHANGED row
        ELSE /\ row' = Row(row, e, row.op)
-            /\ cl' = [cl EXCEPT ![k] = [@ EXCEPT !.pc = "wait", !.d = d]]
+            /\ cl' = [cl EXCEPT ![k] = [@ EXCEPT !.pc = "wait", !.d = d,
+                                                 !.pre = drift]]
   /\ UNCHANGED <<up, script, read, known, linked, net, cut, nextOp>>
   /\ UNCHANGED hostVars /\ UNCHANGED worldVars
 
@@ -143,7 +156,8 @@ Read ==
        /\ faults' = IF v = "unknown" /\ linked THEN faults + 1 ELSE faults
   /\ known' = IF linked THEN boot ELSE known
   /\ UNCHANGED <<row, up, script, linked, net, cut, cl, nextOp>>
-  /\ UNCHANGED hostVars /\ UNCHANGED <<crashes, partitions, restarts, drops>>
+  /\ UNCHANGED hostVars
+  /\ UNCHANGED <<crashes, partitions, restarts, drops, drift, late, sent>>
 
 Decide ==
   /\ up /\ row.state # "absent" /\ row.op.id = 0 /\ read # None
@@ -157,8 +171,10 @@ Decide ==
              /\ nextOp' = nextOp + 1
         ELSE /\ row' = Row(row, e, NoOp)
              /\ UNCHANGED nextOp
+  /\ drift' = IF drift = "unread" /\ read = vm THEN "read" ELSE drift
   /\ UNCHANGED <<up, script, known, linked, net, cut, cl>>
-  /\ UNCHANGED hostVars /\ UNCHANGED worldVars
+  /\ UNCHANGED hostVars
+  /\ UNCHANGED <<faults, crashes, partitions, restarts, drops, late, sent>>
 
 CanSend(r) == r.op.kind # "make" \/ script
 
@@ -231,9 +247,13 @@ Lose ==
   /\ \E m \in net : net' = net \ {m}
   /\ drops' = drops + 1
   /\ UNCHANGED <<row, up, script, read, known, linked, cut, cl, nextOp>>
-  /\ UNCHANGED hostVars /\ UNCHANGED <<faults, crashes, partitions, restarts>>
+  /\ UNCHANGED hostVars
+  /\ UNCHANGED <<faults, crashes, partitions, restarts, drift, late, sent>>
 
 Ran(id) == applied' = [applied EXCEPT ![id] = @ + 1]
+
+Lands ==
+  LandsLate /\ late = "none" /\ runs.kind = "make" /\ runs.pc = "begin"
 
 HostStep ==
   /\ runs.id # 0 /\ runs.status = "running"
@@ -280,9 +300,10 @@ HostFail ==
   /\ faults < MaxFaults
   /\ faults' = faults + 1
   /\ runs' = [runs EXCEPT !.status = "failed"]
+  /\ late' = IF Lands THEN "out" ELSE late
   /\ UNCHANGED <<row, up, script, read, known, linked, vm, boot, high, net, cut,
                  applied, cl, nextOp>>
-  /\ UNCHANGED <<crashes, partitions, restarts, drops>>
+  /\ UNCHANGED <<crashes, partitions, restarts, drops, drift, sent>>
 
 HostCancel ==
   /\ runs.id # 0 /\ runs.status = "running" /\ runs.id \in cut
@@ -298,7 +319,8 @@ Crash ==
   /\ script' = FALSE
   /\ read' = None
   /\ UNCHANGED <<row, known, linked, net, cut, cl, nextOp>>
-  /\ UNCHANGED hostVars /\ UNCHANGED <<faults, partitions, restarts, drops>>
+  /\ UNCHANGED hostVars
+  /\ UNCHANGED <<faults, partitions, restarts, drops, drift, late, sent>>
 
 Revive ==
   /\ ~up
@@ -311,7 +333,8 @@ Partition ==
   /\ linked' = FALSE
   /\ partitions' = partitions + 1
   /\ UNCHANGED <<row, up, script, read, known, net, cut, cl, nextOp>>
-  /\ UNCHANGED hostVars /\ UNCHANGED <<faults, crashes, restarts, drops>>
+  /\ UNCHANGED hostVars
+  /\ UNCHANGED <<faults, crashes, restarts, drops, drift, late, sent>>
 
 Heal ==
   /\ ~linked
@@ -325,9 +348,45 @@ HostRestart ==
   /\ boot' = boot + 1
   /\ high' = 0
   /\ runs' = NoRun
+  /\ late' = IF runs.status = "running" /\ Lands THEN "out" ELSE late
   /\ UNCHANGED <<row, up, script, read, known, linked, vm, net, cut, applied, cl,
                  nextOp>>
-  /\ UNCHANGED <<faults, crashes, partitions, drops>>
+  /\ UNCHANGED <<faults, crashes, partitions, drops, drift, sent>>
+
+Drift ==
+  /\ Drifts /\ drift = "none" /\ vm = "running"
+  /\ vm' = "stopped"
+  /\ drift' = "unread"
+  /\ UNCHANGED <<row, up, script, read, known, linked, boot, high, runs, net,
+                 cut, applied, cl, nextOp>>
+  /\ UNCHANGED <<faults, crashes, partitions, restarts, drops, late, sent>>
+
+LandLate ==
+  /\ late = "out" /\ vm = "missing"
+  /\ vm' = "running"
+  /\ late' = "landed"
+  /\ UNCHANGED <<row, up, script, read, known, linked, boot, high, runs, net,
+                 cut, applied, cl, nextOp>>
+  /\ UNCHANGED <<faults, crashes, partitions, restarts, drops, drift, sent>>
+
+\* The store retired the one instance once its row, after the create, no longer
+\* holds it: the row went or rests undone. No row takes it again.
+Retired == cl[Creator].pc # "idle" /\ row.state \in {"absent", Undone}
+
+SweepRead ==
+  /\ up /\ ~sent /\ Retired
+  /\ sent' = TRUE
+  /\ UNCHANGED <<row, up, script, read, known, linked, net, cut, cl, nextOp>>
+  /\ UNCHANGED hostVars
+  /\ UNCHANGED <<faults, crashes, partitions, restarts, drops, drift, late>>
+
+Sweep ==
+  /\ linked /\ sent /\ runs.id = 0 /\ vm # "missing"
+  /\ vm' = "missing"
+  /\ sent' = FALSE
+  /\ UNCHANGED <<row, up, script, read, known, linked, boot, high, runs, net,
+                 cut, applied, cl, nextOp>>
+  /\ UNCHANGED <<faults, crashes, partitions, restarts, drops, drift, late>>
 
 Init ==
   /\ row = Absent
@@ -350,6 +409,9 @@ Init ==
   /\ partitions = 0
   /\ restarts = 0
   /\ drops = 0
+  /\ drift = "none"
+  /\ late = "none"
+  /\ sent = FALSE
 
 Terminated ==
   /\ row.state = "absent" /\ net = {}
@@ -363,6 +425,7 @@ Next ==
   \/ Deliver \/ Repeat \/ Lose
   \/ HostStep \/ HostFail \/ HostCancel
   \/ Crash \/ Revive \/ Partition \/ Heal \/ HostRestart
+  \/ Drift \/ LandLate \/ SweepRead \/ Sweep
   \/ Terminated
 
 Spec ==
@@ -373,11 +436,13 @@ Spec ==
   /\ WF_vars(Read) /\ WF_vars(Decide) /\ WF_vars(Send) /\ WF_vars(Cut)
   /\ WF_vars(Collect) /\ WF_vars(Deliver) /\ WF_vars(HostStep)
   /\ WF_vars(HostCancel) /\ WF_vars(Revive) /\ WF_vars(Heal)
+  /\ WF_vars(SweepRead) /\ WF_vars(Sweep)
 
 -----------------------------------------------------------------------------
 AnswerTrue ==
   \A k \in Everyone :
-    cl[k].pc = "done" /\ cl[k].res = "ok" => Matches(cl[k].d, cl[k].vmAt)
+    cl[k].pc = "done" /\ cl[k].res = "ok"
+      => Matches(cl[k].d, cl[k].vmAt) \/ cl[k].excused
 
 SupersededHonest ==
   \A k \in Everyone :
@@ -385,9 +450,19 @@ SupersededHonest ==
 
 RestTrue ==
   row.state # "absent" /\ Phase(row) = "settled" /\ row.op.id = 0
-    => Matches(row.desired, vm)
+    => Matches(row.desired, vm) \/ drift = "unread"
 
-NoOrphan == row.state = "absent" \/ row.state = Undone => vm = "missing"
+NoOrphan == Orphaned => late = "landed"
+
+EventuallyNoOrphan == Orphaned ~> vm = "missing"
+
+WantsRunning ==
+  row.desired = "running" /\ row.state \notin FailedCreate \cup {"absent"}
+
+RunsWhenWanted ==
+  WantsRunning
+    ~> \/ vm = "running" \/ ~WantsRunning \/ Phase(row) = "lost"
+       \/ Phase(row) = "failed" /\ faults > 0
 
 OnceOnly == \A i \in 1..MaxOps : applied[i] <= 1
 

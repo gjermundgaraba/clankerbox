@@ -45,6 +45,7 @@ const app = (config: Served) =>
         readSizes: ({ machine }) => operations.sizes(machine),
         readCapacity: ({ machines }) => operations.capacity(machines),
         adoptMachines: ({ machines }) => operations.adopt(machines),
+        sweepRetired: operations.sweep,
         runOperation: operations.run,
         waitOperation: ({ id }) => operations.wait(id),
         cancelOperation: ({ id }) => operations.cancel(id),

@@ -31,6 +31,7 @@ import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import {
   Context,
   Deferred,
+  Duration,
   Effect,
   Exit,
   Fiber,
@@ -57,7 +58,7 @@ import {
   fakeRuntime,
   writeTailscaleStubs,
 } from "./fake-runtime.ts";
-import type { FakeRuntimeName } from "./fake-runtime.ts";
+import type { FakeRuntimeName, Preset } from "./fake-runtime.ts";
 import {
   accepts,
   holding,
@@ -86,6 +87,7 @@ interface RunnerOptions {
   readonly ports?: number;
   readonly probe?: Probe;
   readonly relayed?: boolean;
+  readonly owned?: Preset["owned"];
   readonly runtime?: (fake: Runtime["Service"]) => Runtime["Service"];
   readonly tailnet?: Tailnet["Service"];
   readonly tailscale?: boolean;
@@ -102,6 +104,7 @@ const runner = (options?: RunnerOptions) =>
       ramBudgetMib: options?.ramBudgetMib,
       pin: options?.pin,
       relayed: options?.relayed,
+      owned: options?.owned,
     });
 
     const first = options?.relayed === true ? relayPorts : firstPort;
@@ -163,8 +166,9 @@ const reached = (port: number) => ({
 const portIn = ({ endpoint }: MachineRef) => endpoint?.port ?? 0;
 
 const keptByRuntime = (host: Runner, name: string) => {
-  host.fake.machines.set(name, {
+  host.fake.hold({
     state: "running",
+    name,
     root: "",
     instance: `${name}-instance`,
     handle: Handle.make(`held-${name}`),
@@ -280,6 +284,140 @@ const portOf = (report: Report) => report.outcome.endpoint?.port;
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
+    "a make whose provider answer was dropped answers the machine it finds by instance, and makes no second one",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner({ as: "fixed" });
+
+        yield* host.fake.faults.dropAnswer("make");
+
+        const report = yield* finished(host, makes("dev"));
+
+        expect([report.status, report.outcome.handle]).toStrictEqual([
+          "done",
+          host.fake.machines.get("dev")?.handle,
+        ]);
+        expect([
+          host.fake.machines.size,
+          counted(host.fake.calls, "create dev"),
+          counted(host.fake.calls, "lost the answer of make"),
+        ]).toStrictEqual([1, 1, 1]);
+      })
+  );
+
+  it.effect(
+    "a sweep deletes a marked checkpoint whose instance is retired, and nothing else",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner({
+          as: "fixed",
+          owned: { checkpoints: "marked" },
+        });
+
+        yield* finished(host, makes("dev"));
+        yield* finished(
+          host,
+          { _tag: "stop", machine: ref("dev"), machines: [] },
+          2
+        );
+
+        const captures = ["snap", "kept", "named"].map((name) => ({
+          _tag: "capture" as const,
+          machine: ref("dev"),
+          checkpoint: checkpoint(name),
+        }));
+
+        const reports = yield* Effect.forEach(captures, (step) =>
+          finished(host, step)
+        );
+
+        yield* Effect.forEach(reports, ({ id }) => host.operations.collect(id));
+        yield* Effect.sleep(Duration.millis(5));
+
+        yield* host.operations.sweep({
+          machines: ["gone-instance"],
+          checkpoints: ["snap-instance", "gone-instance"],
+        });
+
+        expect(
+          host.fake.calls.filter((call) => call.startsWith("deleteCheckpoint"))
+        ).toStrictEqual(["deleteCheckpoint snap-instance"]);
+        expect(host.fake.machines.has("dev")).toBe(true);
+      })
+  );
+
+  it.effect(
+    "a sweep deletes a retired machine with every checkpoint it holds kept",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner({ as: "fixed" });
+
+        const made = yield* finished(host, makes("dev"));
+
+        const stopped = yield* finished(
+          host,
+          { _tag: "stop", machine: ref("dev"), machines: [] },
+          2
+        );
+
+        const captured = yield* finished(host, {
+          _tag: "capture",
+          machine: ref("dev"),
+          checkpoint: checkpoint("snap"),
+        });
+
+        yield* Effect.forEach([made, stopped, captured], ({ id }) =>
+          host.operations.collect(id)
+        );
+        yield* host.operations.sweep({
+          machines: ["dev-instance"],
+          checkpoints: [],
+        });
+
+        expect(
+          host.fake.removals.map(([name, keep]) => [name, [...keep]])
+        ).toStrictEqual([["dev-instance", [captured.outcome.handle]]]);
+      })
+  );
+
+  it.effect(
+    "a sweep spares a retired machine a step the host holds names, and deletes it once that step is collected",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner({ as: "fixed" });
+
+        keptByRuntime(host, "dev");
+
+        const held = host.fake.holdNext("stop");
+
+        const stop = delivery(
+          { _tag: "stop", machine: ref("dev"), machines: [] },
+          1
+        );
+
+        yield* deliver(host, stop);
+        yield* held.entered;
+        yield* Effect.sleep(Duration.millis(5));
+
+        const retired = { machines: ["dev-instance"], checkpoints: [] };
+
+        yield* host.operations.sweep(retired);
+
+        const whileHeld = counted(host.fake.calls, "delete dev-instance");
+
+        yield* held.release;
+        yield* ended(host, stop.id);
+        yield* host.operations.collect(stop.id);
+        yield* host.operations.sweep(retired);
+
+        expect([
+          whileHeld,
+          counted(host.fake.calls, "delete dev-instance"),
+        ]).toStrictEqual([0, 1]);
+      })
+  );
+
+  it.effect(
     "a remove with no handle finds the machine by its instance and deletes it, and one that finds none is done touching nothing",
     () =>
       Effect.gen(function* () {
@@ -291,6 +429,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           host,
           {
             _tag: "remove",
+            keep: [],
             machine: { name: "dev", instance: "an-earlier-one" },
           },
           2
@@ -302,6 +441,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           host,
           {
             _tag: "remove",
+            keep: [],
             machine: { name: "dev", instance: "dev-instance" },
           },
           3
@@ -348,16 +488,26 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const host = yield* runner();
 
-        yield* finished(host, { _tag: "remove", machine: ref("dev") }, 5);
+        yield* finished(
+          host,
+          { _tag: "remove", machine: ref("dev"), keep: [] },
+          5
+        );
 
         const calls = [...host.fake.calls];
 
         const equal = yield* Effect.flip(
-          deliver(host, delivery({ _tag: "remove", machine: ref("dev") }, 5))
+          deliver(
+            host,
+            delivery({ _tag: "remove", machine: ref("dev"), keep: [] }, 5)
+          )
         );
 
         const lower = yield* Effect.flip(
-          deliver(host, delivery({ _tag: "remove", machine: ref("dev") }, 4))
+          deliver(
+            host,
+            delivery({ _tag: "remove", machine: ref("dev"), keep: [] }, 4)
+          )
         );
 
         expect([equal._tag, lower._tag]).toStrictEqual([
@@ -373,11 +523,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     Effect.gen(function* () {
       const host = yield* runner();
 
-      yield* finished(host, { _tag: "remove", machine: ref("dev") }, 5);
+      yield* finished(
+        host,
+        { _tag: "remove", machine: ref("dev"), keep: [] },
+        5
+      );
 
       const other = yield* finished(
         host,
-        { _tag: "remove", machine: ref("other") },
+        { _tag: "remove", machine: ref("other"), keep: [] },
         1
       );
 
@@ -420,7 +574,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           2
         );
 
-        const removing = delivery({ _tag: "remove", machine: ref("dev") }, 3);
+        const removing = delivery(
+          { _tag: "remove", machine: ref("dev"), keep: [] },
+          3
+        );
 
         yield* deliver(host, stopping);
         yield* entered;
@@ -463,8 +620,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* deliver(host, delivery(stop, 2));
         yield* entered;
 
-        const second = delivery({ _tag: "remove", machine: ref("dev") }, 3);
-        const third = delivery({ _tag: "remove", machine: ref("dev") }, 4);
+        const second = delivery(
+          { _tag: "remove", machine: ref("dev"), keep: [] },
+          3
+        );
+
+        const third = delivery(
+          { _tag: "remove", machine: ref("dev"), keep: [] },
+          4
+        );
 
         yield* deliver(host, second);
         yield* pause;
@@ -613,6 +777,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           host,
           {
             _tag: "remove",
+            keep: [],
             machine: { name: "one", instance: "one-instance" },
           },
           2
@@ -1061,13 +1226,25 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const refused = yield* finished(
           host,
-          { _tag: "start", machine: dev, pin: "fake 1", machines: [other] },
+          {
+            _tag: "start",
+            keep: [],
+            machine: dev,
+            pin: "fake 1",
+            machines: [other],
+          },
           3
         );
 
         const started = yield* finished(
           host,
-          { _tag: "start", machine: other, pin: "fake 1", machines: [dev] },
+          {
+            _tag: "start",
+            keep: [],
+            machine: other,
+            pin: "fake 1",
+            machines: [dev],
+          },
           2
         );
 
@@ -1387,6 +1564,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         host,
         {
           _tag: "start",
+          keep: [],
           machine: ref("dev"),
           pin: "fake 0",
           machines: [],
@@ -1415,6 +1593,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         host,
         {
           _tag: "start",
+          keep: [],
           machine: ref("dev"),
           pin: "fake 0",
           machines: [],
@@ -1767,7 +1946,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
 
         yield* reading.entered;
-        host.fake.sizes.set("dev", { cpu: 2, ramMib: 1024 });
+        host.fake.resizedTo("dev", { cpu: 2, ramMib: 1024 });
         yield* reading.release;
 
         expect((yield* Fiber.join(resizing)).outcome.sizes).toStrictEqual({
@@ -2179,6 +2358,7 @@ const rootOf = (host: Runner, file: string) =>
 
 const starting: Step = {
   _tag: "start",
+  keep: [],
   machine: ref("dev"),
   machines: [],
 };
@@ -2238,6 +2418,7 @@ const pausing: LeavingStep = {
 
 const removing: LeavingStep = {
   _tag: "remove",
+  keep: [],
   machine: { name: "dev", instance: "dev-instance" },
 };
 
@@ -3033,6 +3214,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           host,
           {
             _tag: "remove",
+            keep: [],
             machine: {
               ...ref("dev"),
               ...(handle === undefined ? {} : { handle }),
@@ -3097,12 +3279,17 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         host.fake.failNext("delete", new Internal({ message: "EBUSY" }));
 
-        const kept = yield* finished(host, { _tag: "remove", machine: app }, 3);
+        const kept = yield* finished(
+          host,
+          { _tag: "remove", machine: app, keep: [] },
+          3
+        );
+
         const keptListening = yield* accepts(portIn(app));
 
         const removed = yield* finished(
           host,
-          { _tag: "remove", machine: app },
+          { _tag: "remove", machine: app, keep: [] },
           4
         );
 
@@ -3139,7 +3326,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const refused = yield* Effect.scoped(
           Effect.andThen(
             holding(portIn(blocked)),
-            finished(host, { _tag: "start", machine: blocked, machines: [] }, 2)
+            finished(
+              host,
+              { _tag: "start", keep: [], machine: blocked, machines: [] },
+              2
+            )
           )
         );
 
@@ -3150,7 +3341,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { release, entered } = host.fake.holdNext("start");
 
         const opening = delivery(
-          { _tag: "start", machine: blocked, machines: [] },
+          { _tag: "start", keep: [], machine: blocked, machines: [] },
           3
         );
 
@@ -3177,6 +3368,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const refused = yield* finished(host, {
           _tag: "start",
+          keep: [],
           machine: ghost,
           machines: [],
         });
@@ -3296,7 +3488,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
 
         const removed = yield* Effect.forEach(refused, ({ name }) =>
-          finished(host, { _tag: "remove", machine: ref(name) }, 2)
+          finished(host, { _tag: "remove", machine: ref(name), keep: [] }, 2)
         );
 
         expect(refused.map(({ report }) => errorOf(report))).toStrictEqual([
@@ -3411,6 +3603,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           host,
           {
             _tag: "start",
+            keep: [],
             machine: dev,
             pin: "fake 1",
             machines: [broken, gone],
@@ -3461,6 +3654,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const started = yield* finished(host, {
           _tag: "start",
+          keep: [],
           machine: ref("broken"),
           pin: "fake 1",
           machines: [],
@@ -3470,6 +3664,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           host,
           {
             _tag: "remove",
+            keep: [],
             machine: { name: "broken", instance: "broken-instance" },
           },
           2
@@ -3537,6 +3732,60 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(
           host.fake.calls.filter((call) => call.startsWith("relay"))
         ).toStrictEqual(["relay ok", "relay broken"]);
+      })
+  );
+
+  it.effect(
+    "an adopt leaves closed the relay of a machine removed while it searched for another",
+    () =>
+      Effect.gen(function* () {
+        const gate = yield* Deferred.make<undefined>();
+
+        const host = yield* runner({
+          relayed: true,
+          runtime: (fake) => ({
+            ...fake,
+            find: (what, found) =>
+              found.name === "slow"
+                ? Effect.andThen(Deferred.await(gate), fake.find(what, found))
+                : fake.find(what, found),
+          }),
+        });
+
+        keptByRuntime(host, "gone");
+        keptByRuntime(host, "slow");
+
+        const gone = ref("gone", {
+          handle: Handle.make("held-gone"),
+          endpoint: { port: relayPorts + 1 },
+        });
+
+        const slow = ref("slow", { endpoint: { port: relayPorts + 2 } });
+
+        yield* host.operations.adopt([gone]);
+        yield* pause;
+
+        const openBefore = yield* accepts(relayPorts + 1);
+
+        const again = yield* Effect.forkChild(
+          host.operations.adopt([gone, slow])
+        );
+
+        yield* pause;
+
+        const removed = yield* finished(
+          host,
+          { _tag: "remove", machine: gone, keep: [] },
+          2
+        );
+
+        yield* Deferred.succeed(gate, undefined);
+        yield* Fiber.join(again);
+        yield* pause;
+
+        expect([openBefore, removed.status]).toStrictEqual([true, "done"]);
+        expect(yield* accepts(relayPorts + 1)).toBe(false);
+        expect(yield* accepts(relayPorts + 2)).toBe(true);
       })
   );
 });

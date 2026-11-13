@@ -1,5 +1,6 @@
 import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
 import type { FileSystem, Layer, Schema } from "effect";
+import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 
 import * as Smolvm from "../platform/smolvm/smolvm.ts";
@@ -10,7 +11,9 @@ import type { HostSettings } from "../settings.ts";
 type RuntimeLayer = Layer.Layer<
   Runtime,
   HostError | CannotStart,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
+  | ChildProcessSpawner.ChildProcessSpawner
+  | FileSystem.FileSystem
+  | HttpClient.HttpClient
 >;
 
 export const runtimes = {

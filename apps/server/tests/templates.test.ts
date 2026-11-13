@@ -2,7 +2,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { image, runtimeTraits } from "@gjermundgaraba/clankerbox-host/testing";
+import { image, presets } from "@gjermundgaraba/clankerbox-host/testing";
 import type {
   TestHost,
   FakeRuntimeName,
@@ -385,7 +385,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(built.pin).toBeDefined();
         expect(copy).toMatchObject({
           build: "web@1",
-          traits: runtimeTraits.smolvm,
+          traits: presets.smolvm.traits,
         });
         expect(isBuildCopy(copy?.name ?? "")).toBe(true);
         expect(copy?.machine).toMatch(/^building-[0-9a-f]{16}$/u);
@@ -867,7 +867,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(error.message).not.toContain("line 10\n");
         expect(error.message).not.toContain(marker);
         expect(read.builds.at(-1)?.error?.message).toBe(error.message);
-        expect(file).toMatch(/^\/var\/tmp\/clankerbox-setup\./u);
+        expect(file).toMatch(/\/dev\/shm\/clankerbox-setup\./u);
         expect(yield* exists(file)).toBe(false);
       })
   );

@@ -12,7 +12,7 @@ import path from "node:path";
 
 interface Break {
   readonly name: string;
-  readonly config: "TwoClients.cfg" | "MachineAnswers.cfg";
+  readonly config: "TwoClients.cfg" | "MachineAnswers.cfg" | "Drifting.cfg";
   readonly file: string;
   readonly edits: ReadonlyArray<readonly [find: string, put: string]>;
   readonly violated: string;
@@ -33,6 +33,7 @@ const copied = [
   answers,
   `${skill}/model/MachineAnswers.cfg`,
   `${skill}/model/TwoClients.cfg`,
+  `${skill}/model/Drifting.cfg`,
   `${skill}/scripts/export-chart.ts`,
 ];
 
@@ -252,6 +253,84 @@ const breaks: readonly Break[] = [
     ],
     violated: "AllAnswered",
   },
+  {
+    name: "no-sweep",
+    config: "Drifting.cfg",
+    file: answers,
+    edits: [
+      [
+        `Sweep ==
+  /\\ linked`,
+        `Sweep ==
+  /\\ FALSE /\\ linked`,
+      ],
+    ],
+    violated: "EventuallyNoOrphan",
+  },
+  {
+    name: "sweep-unclaimed",
+    config: "TwoClients.cfg",
+    file: answers,
+    edits: [
+      [
+        `Retired == cl[Creator].pc # "idle" /\\ row.state`,
+        `Retired == row.state`,
+      ],
+    ],
+    violated: "RestTrue",
+  },
+  {
+    name: "drift-ignored",
+    config: "Drifting.cfg",
+    file: answers,
+    edits: [
+      [
+        `/\\ \\E v \\in (IF linked THEN {vm} ELSE {"unknown"})`,
+        `/\\ \\E v \\in (IF linked
+               THEN {IF Phase(row) = "settled" THEN row.desired ELSE vm}
+               ELSE {"unknown"})`,
+      ],
+    ],
+    violated: "RunsWhenWanted",
+  },
+  {
+    name: "repeated-ask-rests",
+    config: "Drifting.cfg",
+    file: chart,
+    edits: [
+      [
+        `        ask: (args) => ({
+          target: "#machine.made.observing",
+          context: asked(args),
+        }),
+        resize:`,
+        `        ask: (args) =>
+          args.event.desired === args.context.desired
+            ? { context: asked(args) }
+            : { target: "#machine.made.observing", context: asked(args) },
+        resize:`,
+      ],
+    ],
+    violated: "AnswerTrue",
+  },
+  {
+    name: "drift-fails",
+    config: "Drifting.cfg",
+    file: chart,
+    edits: [
+      [
+        `      ? ({
+          target: "#machine.made.stepping.starting",
+          context: { pin },
+        } as const)`,
+        `      ? ({
+          target: "#machine.made.failed",
+          context: { pin, error: { _tag: "Internal", message: "drifted" } as never },
+        } as const)`,
+      ],
+    ],
+    violated: "RunsWhenWanted",
+  },
 ];
 
 const broken = (text: string, { name, edits }: Break) => {
@@ -271,13 +350,15 @@ const broken = (text: string, { name, edits }: Break) => {
 const verdicts = new Map<number | null, string>([
   [0, "nothing"],
   [11, "deadlock"],
-  [13, "AllAnswered"],
 ]);
 
 const verdictOf = (status: number | null, output: string) => {
-  const invariant = /Invariant (?<name>\w+) is violated/u.exec(output)?.groups;
+  const violated =
+    /(?:Invariant|Temporal property) (?<name>\w+) (?:is|was) violated/u.exec(
+      output
+    )?.groups;
 
-  return invariant?.["name"] ?? verdicts.get(status) ?? "broken";
+  return violated?.["name"] ?? verdicts.get(status) ?? "broken";
 };
 
 const run = (taken: Break) => {

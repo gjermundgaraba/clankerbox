@@ -24,7 +24,7 @@ Linux or macOS, with `vp install` done.
 
 ```sh
 S=.agents/skills/verify-clankerbox/scripts
-RUN=$($S/launch.sh)                  # or: $S/launch.sh tart, $S/launch.sh smolvm 2048 2
+RUN=$($S/launch.sh)                  # or: $S/launch.sh tart, $S/launch.sh smolvm 2048 2, $S/launch.sh fixed:1,smolvm:1
 $S/cb.sh "$RUN" create dev --base ubuntu --cpu 1 --ram 1G --disk 10G
 $S/cb.sh "$RUN" get dev --json
 $S/cleanup.sh "$RUN"
@@ -32,20 +32,37 @@ $S/cleanup.sh "$RUN"
 
 ## Launch
 
-`launch.sh [smolvm|tart] [ram-budget-mib] [hosts]` records the tree of the sources
+`launch.sh [fleet] [ram-budget-mib] [hosts]` records the tree of the sources
 it builds, builds the CLI, makes a fresh run directory under `$TMPDIR`,
 starts the hosts and the control plane in the background and waits until they
 serve. It prints the control plane's URL on stderr and the run directory on
 stdout. A build or start that fails prints its log and the evidence directory.
 Each launch is a new run: runs never share a directory, port or evidence.
 
-Each host fakes the runtime named, `smolvm` by default, with that runtime's
-traits. Hosts are named `<runtime>-<n>`: `smolvm-1`, `smolvm-2`. The budget
-applies to each.
+The fleet is a runtime, `smolvm` by default, with `hosts` of it, 1 by default:
+`launch.sh smolvm 2048 2`. Or it is `runtime:count` entries, comma-separated,
+with no `hosts` argument: `launch.sh fixed:1,smolvm:1`. Hosts start in the
+fleet's order and are named `<runtime>-<n>`, numbered per runtime: `fixed-1`,
+`smolvm-1`. Each fakes its runtime with that runtime's traits:
 
-While it serves, the run directory holds `runtime` (the runtime its hosts fake),
-`server.ready` and `server.url` (the control plane's URL), `server.pid`, `hosts/<id>.url` and `hosts/<id>.pid`, `home`
-(the path of the scratch HOME), `recipes/`, `server-state` and `evidence/`.
+- `smolvm` and `tart`, as the real runtimes are;
+- `fixed`, which stands for no provider: size classes (`small` 1 vCPU, 1G, 10G;
+  `default` 2, 4G, 20G; `large` 4, 8G, 40G), a pause that stops, disk
+  checkpoints, machines that stop unasked, and machines that carry the host's
+  mark, so that at each recheck the host deletes what it marked whose instance
+  the control plane retired and no step it holds names. Its base is `ubuntu`.
+
+The budget applies to each host. A `fixed` host's fake has no admission, so no
+start there is checked against it; it shows only as the limit its `capacity`
+reports. The control plane lists its hosts as it finds them in `hosts/`, not in
+the fleet's order, so name a host with `--host` where placement matters.
+
+
+While it serves, the run directory holds `runtime` (the first host's runtime,
+whose base the recipes name), `server.ready` and `server.url` (the control
+plane's URL), `server.pid`, `hosts/<id>.url`, `hosts/<id>.pid` and
+`hosts/<id>.runtime`, `home` (the path of the scratch HOME), `recipes/`,
+`server-state` and `evidence/`.
 `evidence/` holds:
 
 | File                | What                                                                  |
@@ -62,7 +79,8 @@ It holds the test operator key and is kept across restarts: append a key, then
 `fault.sh <run> kill-server` and `start-server`, to rotate them. The HOME's
 config names no keys.
 
-IDs are bare names. The base is `ubuntu` on smolvm and `macos` on tart. The recheck
+IDs are bare names. The base is `ubuntu` on smolvm and fixed and `macos` on
+tart. A create on a fixed host takes one class's sizes. The recheck
 runs every 2 seconds. The optional budget is the RAM, in MiB, that a host refuses
 to pass. The run has two recipes, each a directory with a `setup.sh`, and
 beside each a template file naming it with the runtime's base and 1 vCPU, 1G of
@@ -111,10 +129,29 @@ times out while it keeps its machines and steps, and `fault.sh <run> thaw-host
 <id>` sends `CONT`.
 `fault.sh <run> hold-capture <id>` makes a host hold its next capture until it
 dies, as the fake's captures are too quick for a kill to catch one.
+`fault.sh <run> drift <id> <machine>` has a fixed host's fake stop that running
+machine on its own, as `drift <machine>` in `runtime-calls.txt`; the control
+plane starts it again, a `start <machine>`, at the next recheck that reads it.
+`fault.sh <run> land-late <id>` has a fixed host's fake fail its next make and
+make the machine anyway 5 seconds later, as `landed <machine>`. The failed
+make's undo searches for the machine well within that and finds nothing, so the
+row rests undone with its instance retired, and the host's sweep deletes the
+machine at the first recheck after it lands, logging `sweep: deleting machine <instance> (<handle>)` in
+`host-<id>.log` and `delete <instance>` in `runtime-calls.txt`.
 `fault.sh <run> setup-go` lets the `slow` recipe's setup finish. Each is written
-to the transcript. A host started with `CLANKERBOX_FAKE_FAIL_FIND` set to
-machine names, comma-separated, as by `start-host` or `upgrade.sh`, fails each
-search for those machines, as smolvm does when its database is locked.
+to the transcript.
+
+`hold-capture`, `drift` and `land-late` ask the host itself: `fault.sh` writes
+the fault to `hosts/<id>.fault`, sends the host `USR2`, and waits up to 10
+seconds for its answer, `hosts/<id>.fault.ok` or `hosts/<id>.fault.refused`. The
+host logs the answer as a `fault:` line in `host-<id>.log`, with its time, and
+`fault.sh` writes it to the transcript. A refusal also goes to stderr, with exit
+1: a host whose fake keeps its machines running refuses `drift`, as does one with
+no running machine of that name; a host whose fake marks nothing refuses
+`land-late`, since nothing would sweep what landed. Only `fixed` takes both. A host started with `CLANKERBOX_FAKE_FAIL_FIND` set to
+names, comma-separated, as by `start-host` or `upgrade.sh`, fails each search
+for a machine or a checkpoint of those names, as smolvm does when its database
+is locked.
 
 What a kill catches decides the outcome:
 
@@ -145,7 +182,8 @@ Run them with `hold-capture <id>`, then `checkpoint capture <machine> <name>
 operator upgrades a control plane and its hosts. It stops the run's control
 plane and hosts with `cleanup.sh`, rewrites a run's `kind` file (`linux` or
 `mac`, as launches before runtimes wrote) to its `runtime` (`smolvm` or `tart`),
-as an operator rewrites a host config's `kind`, records the worktree's sources,
+as an operator rewrites a host config's `kind`, gives each host of a run
+launched before fleets a `hosts/<id>.runtime` of the run's `runtime`, records the worktree's sources,
 builds it, and starts its hosts under the same IDs and ports and its control
 plane on the same port and state. Run it from the worktree it names, so that
 tree's `cb.sh` drives the run: launch from a trunk worktree, drive it, then

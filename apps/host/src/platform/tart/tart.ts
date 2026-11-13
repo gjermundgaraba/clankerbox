@@ -732,6 +732,8 @@ export const make = (
     return {
       version: reported,
       pin: undefined,
+      prepares: "with-setup",
+      owned: undefined,
       reach: {
         _tag: "relayed",
         address: settings.publishAddress,

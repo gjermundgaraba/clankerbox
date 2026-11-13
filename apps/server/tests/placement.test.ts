@@ -1,7 +1,7 @@
 import type { HostInfo } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, layer } from "@effect/vitest";
-import { runtimeTraits } from "@gjermundgaraba/clankerbox-host/testing";
+import { presets } from "@gjermundgaraba/clankerbox-host/testing";
 import { Capacity, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Option, Result } from "effect";
 
@@ -12,7 +12,7 @@ import { clientOf, request, restartedHost, running } from "./support.ts";
 
 const info = (id: string, bases: readonly string[]): HostInfo => ({
   id,
-  traits: runtimeTraits.smolvm,
+  traits: presets.smolvm.traits,
   version: "0",
   runtimeVersion: "fake",
   bases,
@@ -146,7 +146,35 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           expect(refusal([classed("a", larger)], "ubuntu")).toMatchObject({
             _tag: "NotOffered",
             message:
-              "no host offers base ubuntu: a has no size class of 1 vCPUs, 1G of RAM and 10G of disk",
+              "no host offers base ubuntu: a has no size class of 1 vCPUs, 1G of RAM and 10G of disk, and gives only its size classes c0 (2 vCPUs, 1G of RAM, 10G of disk)",
+          });
+        })
+    );
+
+    it.effect(
+      "a refusal for want of a size class names the classes the host gives",
+      () =>
+        Effect.sync(() => {
+          const fixed = up("fixed-1");
+
+          expect(
+            refusal(
+              [
+                {
+                  ...fixed,
+                  info: {
+                    ...info("fixed-1", ["ubuntu"]),
+                    traits: presets.fixed.traits,
+                  },
+                },
+              ],
+              "ubuntu",
+              { ...asked, sizes: { cpu: 3, ramMib: 6144, diskGib: 40 } }
+            )
+          ).toMatchObject({
+            _tag: "NotOffered",
+            message:
+              "no host offers base ubuntu: fixed-1 has no size class of 3 vCPUs, 6G of RAM and 40G of disk, and gives only its size classes small (1 vCPUs, 1G of RAM, 10G of disk), default (2 vCPUs, 4G of RAM, 20G of disk), large (4 vCPUs, 8G of RAM, 40G of disk)",
           });
         })
     );
@@ -568,7 +596,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const found = Option.getOrThrow(yield* served.store.findMachine("dev"));
 
-        expect(machine.traits).toStrictEqual(runtimeTraits.tart);
+        expect(machine.traits).toStrictEqual(presets.tart.traits);
         expect(found.pin).toBeUndefined();
         expect(second?.fake.calls).toContain("create dev");
       })
@@ -615,7 +643,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(error._tag).toBe("Capacity");
         expect([shown.state, shown.phase]).toStrictEqual(["missing", "failed"]);
         expect(
-          served.hosts.flatMap(({ fake }) => [...fake.machines])
+          served.hosts.flatMap(({ fake }) => [...fake.machines.values()])
         ).toStrictEqual([]);
       })
   );

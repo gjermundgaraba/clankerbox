@@ -110,7 +110,10 @@ const hooked = {
  * downloading only what this host doesn't hold. A delete that will `unpublish` also removes the
  * checkpoint from the build store, with every key no other published checkpoint holds. A stop, pause
  * or remove with `hook` first runs the guest's hook for it, if its VM runs and its guest has taken the
- * machine's identity, for at most `timeoutSeconds`, and goes on whatever the hook does.
+ * machine's identity, for at most `timeoutSeconds`, and goes on whatever the hook does. A start's and
+ * a remove's `keep` is every checkpoint handle the rows hold for its host: a runtime that holds a
+ * checkpoint through its machine deletes each of the machine's checkpoints `keep` lacks, with the
+ * machine on a remove, and once it runs on a start.
  */
 export const Step = Schema.Union([
   Schema.TaggedStruct("make", {
@@ -123,6 +126,7 @@ export const Step = Schema.Union([
   }),
   Schema.TaggedStruct("start", {
     machine: MachineRef,
+    keep: Schema.Array(Handle),
     ...pinned,
     ...others,
   }),
@@ -133,7 +137,11 @@ export const Step = Schema.Union([
     ...hooked,
   }),
   Schema.TaggedStruct("pause", { machine: MachineRef, ...pinned, ...hooked }),
-  Schema.TaggedStruct("remove", { machine: Ref, ...hooked }),
+  Schema.TaggedStruct("remove", {
+    machine: Ref,
+    keep: Schema.Array(Handle),
+    ...hooked,
+  }),
   Schema.TaggedStruct("resize", {
     machine: MachineRef,
     to: Sizing,
@@ -261,6 +269,19 @@ export const Adoption = Schema.Struct({
 
 export type Adoption = typeof Adoption.Type;
 
+/**
+ * What a sweep may delete on a host: the instances of the machines and checkpoints the control
+ * plane's store retired there, each one a make, a capture or a fetch it began on that host that ended
+ * with no row keeping it. No row takes a retired instance again, so a set read at any time, by any
+ * store, names nothing a row wants.
+ */
+export const Retired = Schema.Struct({
+  machines: Schema.Array(Schema.String),
+  checkpoints: Schema.Array(Schema.String),
+});
+
+export type Retired = typeof Retired.Type;
+
 const { id: _machine, ...command } = ExecRequest.fields;
 
 export const ExecCommand = Schema.Struct({ machine: MachineRef, ...command });
@@ -309,6 +330,13 @@ export const HostHttp = ActionHttp.make(
         "Give a host that started the machines it holds, so it reaches each again, and answer what it holds of each it could resolve.",
       input: Machines,
       success: Adoption,
+    }),
+    Action.make("sweepRetired", {
+      ...write,
+      error: [Invalid, Internal] as const,
+      description:
+        "Delete what carries this host's mark at its provider whose instance is retired and named by no step the host holds. A machine goes alone, and every checkpoint it holds stays, since a row may still want one. A host whose runtime marks nothing answers at once.",
+      input: Retired,
     }),
     Action.make("runOperation", {
       ...write,

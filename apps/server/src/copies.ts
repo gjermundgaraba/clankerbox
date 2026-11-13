@@ -1,7 +1,9 @@
 import {
   copySizable,
+  fitted,
   formatGib,
   formatMib,
+  givenSizes,
   NotBuilt,
   templateRef,
   Unsizable,
@@ -40,6 +42,10 @@ const copyRefusal = (
 ): string => {
   const held = `the source's ${from.cpu} vCPUs and ${formatMib(from.ramMib)}`;
   const shrunkDisk = `machine ${name}'s disk of ${formatGib(spec.diskGib)} is below its source's ${formatGib(from.diskGib)}, and a disk only grows`;
+
+  if (!fitted(traits, spec)) {
+    return `machine ${name}'s host gives ${givenSizes(traits)}, and it was asked ${spec.cpu} vCPUs, ${formatMib(spec.ramMib)} of RAM and ${formatGib(spec.diskGib)} of disk`;
+  }
 
   switch (traits.copies) {
     case "same": {
@@ -94,13 +100,10 @@ export const cloned = (
     : Effect.succeed(spec);
 };
 
-/**
- * Why a copy can't be made: its source went before it began, which for a template's build is
- * `NotBuilt`, or it can't be at the sizes it was asked, as its source may have grown since.
- */
 export const refusedBySource = (
   store: Store,
-  found: MachineRow
+  found: MachineRow,
+  traits: RuntimeTraits | undefined
 ): Effect.Effect<NotFound | NotBuilt | Unsizable | undefined, Internal> =>
   Effect.gen(function* () {
     const { source } = found;
@@ -123,7 +126,11 @@ export const refusedBySource = (
           });
     }
 
-    return yield* copied(found.name, from.value, found, found.traits).pipe(
+    if (traits === undefined) {
+      return undefined;
+    }
+
+    return yield* copied(found.name, from.value, found, traits).pipe(
       Effect.match({
         onFailure: (refusal) => refusal,
         onSuccess: () => undefined,

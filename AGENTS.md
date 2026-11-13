@@ -86,7 +86,9 @@ the whole CLI span domains on purpose.
 - `copies.ts`: a copy's spec, and why its source refuses it.
 - `fleet.ts`: capacity, and what a recheck does beyond each loop: tells a
   restarted host its machines, again until it finds each, and stores the handle
-  and endpoint it answers in each row; and ends old failures.
+  and endpoint it answers in each row; then sends each host that answers the
+  instances the store retired there, for its sweep; and ends old failures and
+  forgets old retired instances.
 - `machine-view.ts`: what a client reads of a machine, and `waiting`, which a
   read tells.
 - `operations.ts`: plain functions of a step on its host. `poll` sends it when
@@ -107,7 +109,9 @@ or `composition/`.
 **Host** (`apps/host/src`). Domain files sit flat in `src/`:
 
 - `operations.ts`: the `Operations` service. It runs a step to its end, keeps its
-  report until collected, fences by sequence, and tells a restart by `boot`.
+  report until collected, fences by sequence, and tells a restart by `boot`. Its
+  `sweep` deletes what the runtime's `owned` facet lists whose instance the
+  control plane retired and no step it holds names.
 - `guest.ts`: setup, preparation, and the hook a stop, pause or delete
   runs first, all run in the guest.
 - `usage.ts`: the machines in use, and the RAM a runtime holds beside them, for the RAM budget and capacity.
@@ -119,7 +123,9 @@ or `composition/`.
   closes and on adopt reopens the relays of a `relayed` runtime.
 - Ports: `Runtime` (`runtime.ts`), with its `traits`, its `guest` (`debian` or
   `macos`, which picks the base `guest.ts` prepares), its `reach` (`published` or `relayed`)
-  and the facets `admission` and `files`, each present or absent as a whole,
+  its `prepares` (`always` where its images lack the login user, else
+  `with-setup`), and the facets `admission`, `files` and `owned`, each present or
+  absent as a whole,
   `PortProbe` (`machine-ports.ts`), `Relays` (`reach.ts`), `Tailnet`
   (`tailnet.ts`), which mints a machine's tailnet key, provided only on a host
   that joins a tailnet, and `BuildStore` (`builds.ts`), provided only on a host
@@ -129,7 +135,13 @@ or `composition/`.
   the runtime keeps anything of it, also of one a delete removed only part way.
   `make`, the one create, restore or fork, answers the handle it made, and
   `capture` and `install` the handle of the checkpoint they make. `Operations`
-  resolves each target from its row's handle, else by `find`.
+  resolves each target from its row's handle, else by `find`. `runtime.ts`
+  states the two rules every adapter keeps, and `tests/runtime-contract.ts` is
+  the suite each runtime passes over its own fake provider: the fake runtime's
+  three presets, `smolvm`, `tart` and `fixed`, which is neither and has size
+  classes, a pause that stops, machines that stop on their own and the `owned`
+  facet, and the two adapters over `tests/smolvm-model.ts` and
+  `tests/scripted-mac.ts`.
 
 Adapters live in `platform/`: `bind-probe.ts` (`PortProbe`), `relay.ts`
 (`Relays`, a TCP listener that carries each connection through a runtime's
@@ -210,7 +222,7 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
   and the host, the programs that serve them over the fake runtime for the
   `verify-clankerbox` skill.
 - **Property and model tests** cover IDs, units, the RAM budget, recipe
-  packing, and the store's `advance` and leases, as models checked against
+  packing, the rules of runtime traits, and the store's `advance` and leases, as models checked against
   SQLite; a chart, small enough, is checked with every event from every leaf.
   Each states what is right without calling the code under test.
 - **A chart is pure and runs inside the write.** `applied` rebuilds a snapshot
@@ -254,6 +266,24 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
   search fails fails. A runtime's stop, and Tart's pause, mask
   interruption from the command that halts a running VM until it has, so a step
   cut short reports `cancelled` only once the VM is where that command takes it.
+- **A sweep deletes only what its store retired.** A runtime with the `owned`
+  facet lists what carries the host's mark at its provider, and nothing else. A
+  store retires an instance on a host in the write that ends its row's hold on
+  it there: the row goes, moves to another host under a new instance, or rests
+  undone or failed. The record outlives the row, and lasts a day of the control
+  plane's clock from that write; no row takes the instance again. Each recheck,
+  after the adopts, sends each host the instances retired there, and the host
+  deletes those it lists that no step it holds names, a machine alone, leaving
+  every checkpoint it holds, and ignores a delete its provider refuses with
+  `Conflict`. The sweep deletes nothing for want of a claim, so a wiped or
+  second store sweeps nothing of another store's, and a make that lands later
+  than a day is left at its provider. A checkpoint a provider holds through its
+  machine has no mark: a `start` and a `remove` carry `keep`, every checkpoint
+  handle the rows hold on the host, as a checkpoint row names its source by name
+  alone, and the runtime deletes the machine's others, once a start runs it or
+  with the machine. That prune does delete for want of a claim, on one machine
+  the store claims, so a store restored from a backup prunes that machine's
+  checkpoints captured after the backup.
 - **Leases are rows.** They are the `operations` table: what changes a resource
   owns it, what copies or reads it shares it, taken in the write that begins the
   operation, and a lease that refuses leaves that write undone. They survive a

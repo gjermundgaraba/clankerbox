@@ -17,22 +17,38 @@ import {
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
-import { Context, Duration, Effect, Exit, Layer, Schedule } from "effect";
+import {
+  Context,
+  Duration,
+  Effect,
+  Exit,
+  Layer,
+  Redacted,
+  Schedule,
+} from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { expect } from "vite-plus/test";
 
 import {
+  addMissingKeys,
   beforeJoinScript,
+  checkTailnet,
   hostKeyIn,
+  identify,
   lastLines,
   identityScript,
+  leave,
+  prepare as prepareGuest,
   prepareBase,
+  rememberDns,
   startScript,
   runCommand,
   runSetup,
+  scrubNode,
   scrubScript,
   tailnetIn,
   tailnetScript,
+  unkey,
   unkeyScript,
 } from "../src/guest.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -299,6 +315,27 @@ const preparedForSetup = Effect.tap(based, ({ runtime, machine }) =>
 const numbered = (count: number) =>
   Array.from({ length: count }, (_, line) => `echo line ${line}`).join("\n");
 
+const systemctlCalls = (root: string) =>
+  Effect.map(calls(root), (made) =>
+    made.filter((call) => call.startsWith("systemctl "))
+  );
+
+const packaged = (made: Effect.Success<typeof based>) =>
+  Effect.gen(function* () {
+    const root = made.fake.root(made.machine.name) ?? "";
+
+    yield* Effect.sync(() => {
+      writeTailscaleStubs(made.bin);
+    });
+    yield* mkdir(path.join(root, "lib", "systemd", "system"));
+    yield* write(
+      path.join(root, "lib", "systemd", "system", "tailscaled.service"),
+      "[Service]\nExecStart=/usr/sbin/tailscaled\n"
+    );
+
+    return root;
+  });
+
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it("an output's tail is its last 20 lines, at most 4000 characters, with no blank end", () => {
     const lines = Array.from({ length: 30 }, (_, line) => `line ${line}`);
@@ -349,6 +386,177 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(Exit.isSuccess(ok)).toBe(true);
       })
+  );
+
+  it.effect(
+    "on linux a setup script is held only under /dev/shm while it runs, and nowhere once it ends",
+    () =>
+      Effect.gen(function* () {
+        const { runtime, fake, machine } = yield* preparedForSetup;
+        const root = fake.root(machine.name) ?? "";
+        const secret = "token-7c2d5b";
+
+        yield* runSetup(
+          runtime,
+          machine,
+          {
+            script: [
+              "#!/bin/sh",
+              `: ${secret}`,
+              `grep -rlF "${secret.slice(0, 6)}""${secret.slice(6)}" "$CLANKERBOX_ROOT" >"$CLANKERBOX_ROOT/holding" || true`,
+              'echo "$0" >"$CLANKERBOX_ROOT/held-at"',
+            ].join("\n"),
+          },
+          undefined
+        );
+
+        const heldAt = (yield* readFile(path.join(root, "held-at"))).trim();
+
+        expect(path.dirname(heldAt)).toBe(path.join(root, "dev", "shm"));
+        expect(yield* readFile(path.join(root, "holding"))).toBe(`${heldAt}\n`);
+        expect((yield* outputOf("grep", ["-rlF", secret, root])).stdout).toBe(
+          ""
+        );
+        expect(yield* isMissing(heldAt)).toBe(true);
+      })
+  );
+
+  it.effect(
+    "a setup needs no exec bit: its #! interpreter runs it with the rest of that line as one argument, and sh runs one without",
+    () =>
+      Effect.gen(function* () {
+        const { runtime, fake, machine } = yield* preparedForSetup;
+        const root = fake.root(machine.name) ?? "";
+        const interpreter = path.join(root, "interpret");
+
+        yield* write(
+          interpreter,
+          '#!/bin/sh\nprintf "%s|" "$@" >"$CLANKERBOX_ROOT/interpreted"\nexec /bin/sh "$2"\n'
+        );
+        yield* chmod(interpreter, 0o755);
+        yield* runSetup(
+          runtime,
+          machine,
+          {
+            script: `#!${interpreter}  -e  two words \nif [ -x "$0" ]; then echo executable; else echo plain; fi >"$CLANKERBOX_ROOT/mode"\n`,
+          },
+          undefined
+        );
+
+        const [argument, script, rest] = (yield* readFile(
+          path.join(root, "interpreted")
+        )).split("|");
+
+        expect(argument).toBe("-e  two words");
+        expect(path.dirname(script ?? "")).toBe(path.join(root, "dev", "shm"));
+        expect(rest).toBe("");
+        expect(yield* readFile(path.join(root, "mode"))).toBe("plain\n");
+
+        yield* runSetup(
+          runtime,
+          machine,
+          { script: 'echo "$0" >"$CLANKERBOX_ROOT/unshebanged"\n' },
+          undefined
+        );
+
+        expect(
+          path.dirname((yield* readFile(path.join(root, "unshebanged"))).trim())
+        ).toBe(path.join(root, "dev", "shm"));
+      })
+  );
+
+  it.effect(
+    "on a macOS guest a setup's #! line gives its interpreter each word after it, as that kernel does",
+    () =>
+      Effect.gen(function* () {
+        const { runtime, fake, machine, bin } = yield* preparedForSetup;
+        const root = fake.root(machine.name) ?? "";
+        const interpreter = path.join(root, "interpret");
+
+        yield* write(path.join(bin, "uname"), "#!/bin/sh\necho Darwin\n");
+        yield* chmod(path.join(bin, "uname"), 0o755);
+        yield* write(
+          interpreter,
+          '#!/bin/sh\nprintf "%s|" "$@" >"$CLANKERBOX_ROOT/interpreted"\n'
+        );
+        yield* chmod(interpreter, 0o755);
+        yield* runSetup(
+          runtime,
+          machine,
+          { script: `#!${interpreter}  -e  -u * \ntrue\n` },
+          undefined
+        );
+
+        const [first, second, third, script] = (yield* readFile(
+          path.join(root, "interpreted")
+        )).split("|");
+
+        yield* runSetup(
+          runtime,
+          machine,
+          { script: '#!/bin/sh -e -u\necho "$0" >"$CLANKERBOX_ROOT/ran"\n' },
+          undefined
+        );
+
+        expect([first, second, third]).toStrictEqual(["-e", "-u", "*"]);
+        expect(path.dirname(script ?? "")).toBe("/var/tmp");
+        expect(
+          path.dirname((yield* readFile(path.join(root, "ran"))).trim())
+        ).toBe("/var/tmp");
+      })
+  );
+
+  it.effect("no guest call holds an empty argument", () =>
+    Effect.gen(function* () {
+      const { runtime, bin, machine } = yield* based;
+      const argvs: Array<readonly string[]> = [];
+
+      const recording = Runtime.of({
+        ...runtime,
+        exec: (target, command) => {
+          argvs.push(command.argv);
+
+          return runtime.exec(target, command);
+        },
+      });
+
+      yield* Effect.sync(() => {
+        writeTailscaleStubs(bin);
+      });
+      yield* prepareBase(recording, machine, true);
+      yield* prepareBase(recording, machine, false);
+      yield* runSetup(
+        recording,
+        machine,
+        { script: "#!/bin/sh\ntrue\n" },
+        `\n${operatorKey}\n\n`
+      );
+      yield* runSetup(
+        recording,
+        machine,
+        { script: "#!/bin/sh\ntrue\n" },
+        undefined
+      );
+      yield* addMissingKeys(recording, machine, `${operatorKey}\n\n`);
+      yield* identify(recording, machine);
+      yield* prepareGuest(recording, machine);
+      yield* rememberDns(recording, machine);
+      yield* checkTailnet(recording, machine, "linux-dev");
+      yield* checkTailnet(recording, machine, "linux-dev", {
+        key: Redacted.make("tskey-auth-k1"),
+        rejoin: false,
+      });
+      yield* checkTailnet(recording, machine, "linux-dev", {
+        key: Redacted.make("tskey-auth-k2"),
+        rejoin: true,
+      });
+      yield* scrubNode(recording, machine);
+      yield* unkey(recording, machine);
+      yield* leave(recording, machine, "stop", 10);
+
+      expect(argvs).toHaveLength(14);
+      expect(argvs.filter((argv) => argv.includes(""))).toStrictEqual([]);
+    })
   );
 
   it.effect(
@@ -507,6 +715,29 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(yield* readFile(path.join(root, "keys-seen"))).toBe(
           `\n${operatorKey}\n`
         );
+      })
+  );
+
+  it.effect(
+    "a linux base that joins stops and disables tailscaled's packaged unit where systemd booted the guest, and leaves one without systemd alone",
+    () =>
+      Effect.gen(function* () {
+        const booted = yield* based;
+        const bootedRoot = yield* packaged(booted);
+
+        yield* mkdir(path.join(bootedRoot, "run", "systemd", "system"));
+        yield* prepareBase(booted.runtime, booted.machine, true);
+
+        expect(yield* systemctlCalls(bootedRoot)).toStrictEqual([
+          "systemctl disable --now tailscaled.service",
+        ]);
+
+        const plain = yield* based;
+        const plainRoot = yield* packaged(plain);
+
+        yield* prepareBase(plain.runtime, plain.machine, true);
+
+        expect(yield* systemctlCalls(plainRoot)).toStrictEqual([]);
       })
   );
 
@@ -1060,7 +1291,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { code, output } = yield* tailnet(where, ["linux-dev", "user"]);
 
         expect(code, output).toBe(0);
-        expect(tailnetIn(output)).toStrictEqual({ missing: true });
+        expect(tailnetIn(output)).toStrictEqual({ state: "missing" });
         expect(yield* calls(where.root)).toStrictEqual([]);
       })
   );
@@ -1092,7 +1323,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(code, output).toBe(0);
         expect(tailnetIn(output)).toStrictEqual({
-          missing: false,
+          state: "reported",
           backend: "NeedsLogin",
           name: undefined,
         });
@@ -1120,7 +1351,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(code, output).toBe(0);
         expect(tailnetIn(output)).toMatchObject({
-          missing: false,
+          state: "reported",
           backend: "NeedsLogin",
         });
         expect(
@@ -1256,7 +1487,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(code, output).toBe(0);
         expect(tailnetIn(output)).toStrictEqual({
-          missing: false,
+          state: "reported",
           backend: "Running",
           name: "linux-dev.example.ts.net",
         });
@@ -1332,6 +1563,31 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "the check stops waiting once the tailscaled it started has exited",
+    () =>
+      Effect.gen(function* () {
+        const where = yield* guest();
+
+        yield* Effect.sync(() => {
+          writeTailscaleStubs(where.bin);
+        });
+        yield* write(path.join(where.bin, "tailscaled"), "#!/bin/sh\nexit 1\n");
+
+        const [took, { code, output }] = yield* Effect.timed(
+          tailnet(where, ["linux-dev", "user"])
+        );
+
+        expect(code, output).toBe(0);
+        expect(tailnetIn(output)).toStrictEqual({
+          state: "reported",
+          backend: "unreachable",
+          name: undefined,
+        });
+        expect(Duration.toMillis(took)).toBeLessThan(3000);
+      })
+  );
+
+  it.effect(
     "a join signs in as the hostname given, with the key in a private file it removes",
     () =>
       Effect.gen(function* () {
@@ -1360,7 +1616,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(code, output).toBe(0);
         expect(tailnetIn(output)).toStrictEqual({
-          missing: false,
+          state: "reported",
           backend: "Running",
           name: "linux-dev.example.ts.net",
         });
@@ -1387,19 +1643,26 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           'clankerbox-tailnet: {"Self": {"CapMap": {"a": null}, "DNSName": "a.ts.net."}, "BackendState": "Running"}',
         ].join("\n")
       )
-    ).toStrictEqual({ missing: false, backend: "Running", name: "a.ts.net" });
+    ).toStrictEqual({
+      state: "reported",
+      backend: "Running",
+      name: "a.ts.net",
+    });
     expect(
       tailnetIn(
         'clankerbox-tailnet: {"BackendState": "Running", "Self": {"DNSName": ""}}'
       )
-    ).toStrictEqual({ missing: false, backend: "Running", name: undefined });
+    ).toStrictEqual({ state: "reported", backend: "Running", name: undefined });
     expect(tailnetIn("clankerbox-tailnet:  \n")).toStrictEqual({
-      missing: false,
+      state: "reported",
       backend: "unreachable",
       name: undefined,
     });
     expect(tailnetIn("clankerbox-tailnet: missing\n")).toStrictEqual({
-      missing: true,
+      state: "missing",
+    });
+    expect(tailnetIn("clankerbox-tailnet: lost\n")).toStrictEqual({
+      state: "lost",
     });
     expect(tailnetIn("clankerbox-tailnet: {not json\n")).toBeUndefined();
     expect(tailnetIn("nothing\n")).toBeUndefined();

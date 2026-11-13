@@ -123,7 +123,7 @@ describe("resizable", () => {
   );
 
   it.effect.prop(
-    "a state the runtime resizes `none` refuses any resize, and one it resizes `any` takes every one",
+    "a state the runtime resizes `none` refuses any resize, and one it resizes `any` takes every one it gives",
     { traits: RuntimeTraits, state: State, from: Sizes, to: Sizes },
     ({ traits, state, from, to }) =>
       Effect.sync(() => {
@@ -138,13 +138,13 @@ describe("resizable", () => {
         }
 
         if (traits.resize[state] === "any") {
-          expect(decided).toBe("resizes");
+          expect(decided).toBe(fitted(traits, to) ? "resizes" : "unfitted");
         }
       })
   );
 
   it.effect.prop(
-    "a state the runtime only grows takes a resize exactly when neither vCPUs nor RAM go down, whatever the disk",
+    "a state the runtime only grows takes a resize it gives exactly when neither vCPUs nor RAM go down",
     { traits: RuntimeTraits, state: State, from: Sizes, to: Sizes },
     ({ traits, state, from, to }) =>
       Effect.sync(() => {
@@ -154,12 +154,11 @@ describe("resizable", () => {
 
         const lower = to.cpu < from.cpu || to.ramMib < from.ramMib;
 
+        const given = fitted(traits, to) ? "resizes" : "unfitted";
+
         expect(resizable(traits, state, from, to)).toBe(
-          lower ? "shrinks" : "resizes"
+          lower ? "shrinks" : given
         );
-        expect(
-          resizable(traits, state, from, { ...to, diskGib: from.diskGib + 1 })
-        ).toBe(resizable(traits, state, from, to));
       })
   );
 });
@@ -177,20 +176,20 @@ describe("copySizable", () => {
   );
 
   it.effect.prop(
-    "a copy at its source's own sizes is always made",
+    "a copy at its source's own sizes is made wherever the runtime gives them",
     { traits: RuntimeTraits, from: Sizes },
     ({ traits, from }) =>
       Effect.sync(() => {
-        expect(copySizable(traits, from, from)).toBe(true);
+        expect(copySizable(traits, from, from)).toBe(fitted(traits, from));
       })
   );
 
   it.effect.prop(
-    "copies that grow take no lower vCPUs or RAM, copies of any sizes take any vCPUs and RAM, and copies of the same sizes take only the source's",
+    "copies that grow take no lower vCPUs or RAM, copies of any sizes take any vCPUs and RAM, and copies of the same sizes take only the source's, of the sizes the runtime gives",
     { traits: RuntimeTraits, from: Sizes, to: Sizes },
     ({ traits, from, to }) =>
       Effect.sync(() => {
-        const disk = to.diskGib >= from.diskGib;
+        const disk = to.diskGib >= from.diskGib && fitted(traits, to);
         const grows = to.cpu >= from.cpu && to.ramMib >= from.ramMib;
 
         const equal =
@@ -203,7 +202,7 @@ describe("copySizable", () => {
         );
         expect(copySizable({ ...traits, copies: "any" }, from, to)).toBe(disk);
         expect(copySizable({ ...traits, copies: "same" }, from, to)).toBe(
-          equal
+          equal && fitted(traits, to)
         );
       })
   );

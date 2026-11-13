@@ -23,18 +23,15 @@ import {
   BuildRow,
   CannotStart,
   CheckpointFacts,
+  ended,
   Facts,
+  holdOf,
+  Lease,
   Operation,
   Store,
   TemplateFacts,
 } from "../store.ts";
-import type {
-  Advanced,
-  Interface,
-  Lease,
-  Rows,
-  TemplateRow,
-} from "../store.ts";
+import type { Advanced, Hold, Interface, Rows, TemplateRow } from "../store.ts";
 
 export const databaseFile = "server.db";
 
@@ -232,6 +229,13 @@ export const migrations: readonly string[] = [
   ALTER TABLE checkpoints DROP COLUMN port;
   ALTER TABLE checkpoints ADD COLUMN handle TEXT;
   DELETE FROM hosts`,
+  `CREATE TABLE retired (
+    host TEXT NOT NULL,
+    resource TEXT NOT NULL,
+    instance TEXT NOT NULL,
+    retired_at TEXT NOT NULL,
+    PRIMARY KEY (host, resource, instance)
+  ) STRICT`,
 ];
 
 const isSqliteError = (
@@ -380,6 +384,12 @@ const decodeBoot = Schema.decodeUnknownSync(
   Schema.Struct({ boot: Schema.String })
 );
 
+const decodeRetired = Schema.decodeUnknownSync(
+  Schema.Array(
+    Schema.Struct({ resource: Lease.fields.resource, instance: Schema.String })
+  )
+);
+
 type Bound = string | number | null;
 
 const insertInto = (
@@ -434,6 +444,7 @@ interface Table<R> {
   readonly remove: StatementSync;
   readonly decoded: (raw: unknown) => R;
   readonly columns: (row: R) => Readonly<Record<string, Bound>>;
+  readonly holdOf: (row: R) => Hold | undefined;
 }
 
 type Tables = { readonly [K in Lease["resource"]]: Table<Rows[K]> };
@@ -598,6 +609,18 @@ export const open = (
       ON CONFLICT (template) DO UPDATE SET last = MAX(last, excluded.last)`
     );
 
+    const insertRetired = yield* prepare(
+      "INSERT INTO retired (host, resource, instance, retired_at) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING"
+    );
+
+    const selectRetired = yield* prepare(
+      "SELECT resource, instance FROM retired WHERE host = ? ORDER BY retired_at, instance"
+    );
+
+    const deleteRetired = yield* prepare(
+      "DELETE FROM retired WHERE retired_at < ?"
+    );
+
     const selectBoot = yield* prepare("SELECT boot FROM hosts WHERE id = ?");
 
     const upsertBoot = yield* prepare(
@@ -651,6 +674,7 @@ export const open = (
         remove: deleteMachine,
         decoded: rowOf,
         columns: machineColumns,
+        holdOf: holdOf.machine,
       },
       checkpoint: {
         select: selectCheckpoint,
@@ -658,6 +682,7 @@ export const open = (
         remove: deleteCheckpoint,
         decoded: checkpointOf,
         columns: checkpointColumns,
+        holdOf: holdOf.checkpoint,
       },
     };
 
@@ -675,40 +700,56 @@ export const open = (
       name: string,
       decide: (row: R, op: Operation | undefined) => Decision<R>
     ) =>
-      transaction(db, `advance ${resource} ${name}`, (): Advanced<R> => {
-        const raw = table.select.get(name);
+      Effect.flatMap(DateTime.now, (now) =>
+        transaction(db, `advance ${resource} ${name}`, (): Advanced<R> => {
+          const raw = table.select.get(name);
 
-        if (raw === undefined) {
-          return { at: "absent" };
-        }
-
-        const row = table.decoded(raw);
-        const stored = selectOperation.get(resource, name);
-        const op = stored === undefined ? undefined : operationOf(stored);
-        const { next, begin, finish } = decide(row, op);
-
-        if (begin !== undefined) {
-          const by = holderOf(begin.leases);
-
-          if (by !== undefined) {
-            return { at: "busy", by };
+          if (raw === undefined) {
+            return { at: "absent" };
           }
 
-          begun(begin);
-        }
+          const row = table.decoded(raw);
+          const stored = selectOperation.get(resource, name);
+          const op = stored === undefined ? undefined : operationOf(stored);
+          const { next, begin, finish } = decide(row, op);
 
-        if (finish && op !== undefined) {
-          deleteOperation.run(op.id);
-        }
+          if (begin !== undefined) {
+            const by = holderOf(begin.leases);
 
-        if (next === "removed") {
-          table.remove.run(name);
-        } else if (next !== row) {
-          table.update.run(table.columns(next));
-        }
+            if (by !== undefined) {
+              return { at: "busy", by };
+            }
 
-        return { at: "written", next, moved: next !== row };
-      }).pipe(
+            begun(begin);
+          }
+
+          if (finish && op !== undefined) {
+            deleteOperation.run(op.id);
+          }
+
+          if (next === "removed") {
+            table.remove.run(name);
+          } else if (next !== row) {
+            table.update.run(table.columns(next));
+          }
+
+          const retired = ended(
+            table.holdOf(row),
+            next === "removed" ? undefined : table.holdOf(next)
+          );
+
+          if (retired !== undefined) {
+            insertRetired.run(
+              retired.host,
+              resource,
+              retired.instance,
+              DateTime.formatIso(now)
+            );
+          }
+
+          return { at: "written", next, moved: next !== row };
+        })
+      ).pipe(
         Effect.tap((answer) =>
           answer.at === "written" && answer.moved
             ? told(resource, name)
@@ -780,6 +821,23 @@ export const open = (
 
           deleteExpired.run(at);
           deleteExpiredCheckpoints.run(at);
+        })
+      ),
+      retired: Effect.fn("Store.retired")((host) =>
+        sql(`read what host ${host} retired`, () => {
+          const rows = decodeRetired(selectRetired.all(host));
+
+          const of = (resource: Lease["resource"]) =>
+            rows.flatMap((row) =>
+              row.resource === resource ? [row.instance] : []
+            );
+
+          return { machines: of("machine"), checkpoints: of("checkpoint") };
+        })
+      ),
+      forgetRetired: Effect.fn("Store.forgetRetired")((before) =>
+        sql("forget old retired instances", () => {
+          deleteRetired.run(DateTime.formatIso(before));
         })
       ),
       checkpoints: sql("list checkpoints", () =>

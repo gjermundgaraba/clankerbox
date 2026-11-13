@@ -6,7 +6,7 @@ import path from "node:path";
 import type { MachineState } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { runtimeTraits } from "@gjermundgaraba/clankerbox-host/testing";
+import { presets } from "@gjermundgaraba/clankerbox-host/testing";
 import { Capacity, Internal, Unsizable } from "@gjermundgaraba/clankerbox-sdk";
 import type { Machine, Setup } from "@gjermundgaraba/clankerbox-sdk";
 import {
@@ -208,7 +208,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(made).toMatchObject({
           id: "dev",
-          traits: runtimeTraits.smolvm,
+          traits: presets.smolvm.traits,
           base: "ubuntu",
           state: "running",
           desired: "running",
@@ -335,7 +335,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       const made = yield* client.create("dev", request("dev"));
 
-      expect(made).toMatchObject({ id: "dev", traits: runtimeTraits.tart });
+      expect(made).toMatchObject({ id: "dev", traits: presets.tart.traits });
     })
   );
 
@@ -900,7 +900,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           boot: host.operations.boot,
           scope: { resource: "machine", name: "dev" },
           sequence: 4,
-          step: { _tag: "remove", machine: { name: "dev", instance: "old" } },
+          step: {
+            _tag: "remove",
+            machine: { name: "dev", instance: "old" },
+            keep: [],
+          },
         });
 
         const answer = yield* Effect.timeoutOption(
@@ -2063,6 +2067,125 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a machine its runtime stopped unasked is started again, where machines stop on their own",
+    () =>
+      Effect.gen(function* () {
+        const { client, fake, machine } = yield* served({
+          hosts: [{ id: "fixed", as: "fixed" }],
+          recheck: Duration.millis(200),
+        });
+
+        const made = yield* client.create("dev", request("dev"));
+
+        fake.calls.length = 0;
+        yield* fake.faults.drift(fake.machines.get("dev")?.instance ?? "");
+
+        const back = yield* eventually(
+          machine("dev"),
+          ({ state, phase }) =>
+            fake.calls.includes("start dev") &&
+            state === "running" &&
+            phase === "settled"
+        );
+
+        expect(made.traits.stopsOnItsOwn).toBe(true);
+        expect(at(back)).toStrictEqual(["running", "running", "settled"]);
+        expect(
+          fake.calls.filter((call) => call.startsWith("start"))
+        ).toStrictEqual(["start dev"]);
+      })
+  );
+
+  it.effect(
+    "a fork and a restore are sized by their host's live traits, not the traits stamped on their source",
+    () =>
+      Effect.gen(function* () {
+        const { client, store } = yield* served({
+          hosts: [{ id: "fixed", as: "fixed" }],
+        });
+
+        const odd = { cpu: 3, ramMib: 6144, diskGib: 40 };
+        const stamped = { traits: presets.smolvm.traits };
+
+        yield* client.create("dev", request("dev"));
+        yield* client.stopMachine({ id: "dev" });
+        yield* client.captureCheckpoint({ machine: "dev", name: "snap" });
+        yield* store.advance("machine", "dev", (row) => ({
+          next: { ...row, ...stamped },
+          finish: false,
+        }));
+        yield* store.advance("checkpoint", "snap", (row) => ({
+          next: { ...row, ...stamped },
+          finish: false,
+        }));
+
+        const refused = [
+          yield* Effect.flip(
+            client.forkMachine({ machine: "dev", name: "fork", ...odd })
+          ),
+          yield* Effect.flip(
+            client.restoreMachine({ checkpoint: "snap", name: "copy", ...odd })
+          ),
+        ];
+
+        expect(refused.map(({ _tag }) => _tag)).toStrictEqual([
+          "Unsizable",
+          "Unsizable",
+        ]);
+        expect((yield* store.machines).map(({ name }) => name)).toStrictEqual([
+          "dev",
+        ]);
+      })
+  );
+
+  it.effect(
+    "sizes outside a host's size classes are refused for a resize, a fork and a restore before any runtime call",
+    () =>
+      Effect.gen(function* () {
+        const { client, fake } = yield* served({
+          hosts: [{ id: "fixed", as: "fixed" }],
+        });
+
+        const odd = { cpu: 3, ramMib: 6144, diskGib: 40 };
+
+        yield* client.create("dev", request("dev"));
+        yield* client.stopMachine({ id: "dev" });
+        yield* client.captureCheckpoint({ machine: "dev", name: "snap" });
+        fake.calls.length = 0;
+
+        const refused = [
+          yield* Effect.flip(client.resizeMachine({ id: "dev", ...odd })),
+          yield* Effect.flip(
+            client.forkMachine({ machine: "dev", name: "fork", ...odd })
+          ),
+          yield* Effect.flip(
+            client.restoreMachine({ checkpoint: "snap", name: "copy", ...odd })
+          ),
+        ];
+
+        const resized = yield* client.resizeMachine({
+          id: "dev",
+          cpu: 2,
+          ramMib: 4096,
+          diskGib: 20,
+        });
+
+        expect(refused.map(({ _tag }) => _tag)).toStrictEqual([
+          "Unsizable",
+          "Unsizable",
+          "Unsizable",
+        ]);
+        expect(refused[0]?.message).toContain("only its size classes");
+        expect([resized.cpu, resized.ramMib, resized.diskGib]).toStrictEqual([
+          2, 4096, 20,
+        ]);
+        expect(
+          fake.calls.filter((call) => /^(?:fork|restore|resize) /u.test(call))
+        ).toStrictEqual(["resize dev"]);
+      })
+  );
+
+  it.effect(
     "a reading of a machine that a request changed while it read is dropped, not acted on",
     () =>
       Effect.gen(function* () {
@@ -2871,7 +2994,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* asking.resizeMachine({ id: "dev", ramMib: 2048 });
         yield* entered;
-        fake.sizes.set("dev", { cpu: 1, ramMib: 2048, diskGib: 10 });
+        fake.resizedTo("dev", { cpu: 1, ramMib: 2048, diskGib: 10 });
 
         yield* restartedHost(host);
 

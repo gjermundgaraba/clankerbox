@@ -7,7 +7,7 @@ import type { SQLOutputValue } from "node:sqlite";
 import { Handle } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { runtimeTraits } from "@gjermundgaraba/clankerbox-host/testing";
+import { presets } from "@gjermundgaraba/clankerbox-host/testing";
 import { Conflict, Internal, NotFound } from "@gjermundgaraba/clankerbox-sdk";
 import {
   mkdir,
@@ -212,7 +212,7 @@ const dumped = (stateDir: string) =>
 
 const traitsOf = (rows: readonly SqlRow[]) =>
   rows.map((row) =>
-    row["kind"] === "mac" ? runtimeTraits.tart : runtimeTraits.smolvm
+    row["kind"] === "mac" ? presets.tart.traits : presets.smolvm.traits
   );
 
 const without =
@@ -229,7 +229,7 @@ const row = (name: string, fields?: Partial<MachineRow>): MachineRow => ({
   name,
   instance: "0123456789abcdef0123456789abcdef",
   createdAt: DateTime.makeUnsafe("2026-10-04T12:00:00Z"),
-  traits: runtimeTraits.smolvm,
+  traits: presets.smolvm.traits,
   base: "ubuntu",
   cpu: 1,
   ramMib: 1024,
@@ -262,7 +262,7 @@ const checkpoint = (
   createdAt: DateTime.makeUnsafe("2026-10-04T13:00:00Z"),
   machine: "dev",
   host: "linux",
-  traits: runtimeTraits.smolvm,
+  traits: presets.smolvm.traits,
   pin: "smolvm 0.0.0-test linux-x64",
   handle: undefined,
   base: "ubuntu",
@@ -278,6 +278,8 @@ const checkpoint = (
   published: undefined,
   ...fields,
 });
+
+const instance = (n: number) => `${n}`.repeat(32);
 
 let nextOperation = 0;
 
@@ -417,7 +419,7 @@ layer(NodeServices.layer)((it) => {
 
         const rows = [
           row("dev", {
-            traits: runtimeTraits.tart,
+            traits: presets.tart.traits,
             handle: Handle.make("dev-handle"),
             endpoint: { host: "127.0.0.1", port: 10_000 },
             hostKey: "ssh-ed25519 AAAA",
@@ -900,7 +902,7 @@ layer(NodeServices.layer)((it) => {
         });
 
         const dev = row("dev", {
-          traits: runtimeTraits.tart,
+          traits: presets.tart.traits,
           cpu: 2,
           ramMib: 2048,
           diskGib: 20,
@@ -1284,7 +1286,7 @@ layer(NodeServices.layer)((it) => {
       const fields = {
         instance: "abcd",
         createdAt: DateTime.makeUnsafe("2026-10-04T12:01:00Z"),
-        traits: runtimeTraits.tart,
+        traits: presets.tart.traits,
         base: "macos",
         cpu: 8,
         ramMib: 2048,
@@ -1819,6 +1821,88 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
+    "a write that ends a row's hold on its instance retires it on its host, past the row, until it is forgotten",
+    () =>
+      Effect.gen(function* () {
+        const stateDir = yield* stateIn;
+        const error = new Internal({ message: "failed" });
+        const at = DateTime.makeUnsafe("2026-10-05T00:00:00Z");
+
+        const moving = (given: MachineRow) => ({
+          next: { ...given, host: "other", instance: instance(9) },
+          finish: false,
+        });
+
+        const read = yield* withStore(stateDir, (store) =>
+          Effect.gen(function* () {
+            yield* Effect.forEach([1, 2, 3, 4], (n) =>
+              store.insertMachine(row(`m${n}`, { instance: instance(n) }))
+            );
+            yield* Effect.forEach([5, 6], (n) =>
+              store.insertCheckpoint(
+                checkpoint(`c${n}`, { instance: instance(n) })
+              )
+            );
+            yield* removing(store, "m1");
+            yield* store.advance("machine", "m2", (given) => ({
+              next: { ...given, state: "undone", error, undoneAt: at },
+              finish: false,
+            }));
+            yield* store.advance("machine", "m3", moving);
+            yield* store.advance("machine", "m4", (given) => ({
+              next: { ...given, state: "made.settled" },
+              finish: false,
+            }));
+            yield* store.advance("checkpoint", "c5", (given) => ({
+              next: { ...given, state: "failed", error, failedAt: at },
+              finish: false,
+            }));
+            yield* store.advance("checkpoint", "c6", () => ({
+              next: "removed",
+              finish: false,
+            }));
+            yield* store.insertMachine(row("m2", { instance: instance(7) }));
+            yield* store.advance("machine", "m2", (given) => ({
+              next: { ...given, state: "made.settled" },
+              finish: false,
+            }));
+
+            const retired = yield* store.retired("linux");
+            const elsewhere = yield* store.retired("other");
+
+            yield* store.forgetRetired(DateTime.makeUnsafe(0));
+
+            const kept = yield* store.retired("linux");
+
+            yield* store.forgetRetired(
+              DateTime.makeUnsafe("2100-01-01T00:00:00Z")
+            );
+
+            return {
+              retired,
+              elsewhere,
+              kept,
+              forgotten: yield* store.retired("linux"),
+            };
+          })
+        );
+
+        const none = { machines: [], checkpoints: [] };
+
+        expect({
+          machines: read.retired.machines.toSorted(),
+          checkpoints: read.retired.checkpoints.toSorted(),
+        }).toStrictEqual({
+          machines: [instance(1), instance(2), instance(3)],
+          checkpoints: [instance(5), instance(6)],
+        });
+        expect(read.elsewhere).toStrictEqual(none);
+        expect(read.kept).toStrictEqual(read.retired);
+        expect(read.forgotten).toStrictEqual(none);
+      })
+  );
+
+  it.effect(
     "checkpoint rows round-trip every leaf, and only a failed one gives way to a capture",
     () =>
       Effect.gen(function* () {
@@ -1832,7 +1916,7 @@ layer(NodeServices.layer)((it) => {
             ...(state === "failed" ? { error, failedAt } : {}),
             ...(state.startsWith("discarding") ? { error } : {}),
             ...(state === "ready"
-              ? { pin: undefined, traits: runtimeTraits.tart }
+              ? { pin: undefined, traits: presets.tart.traits }
               : {}),
             ...(state === "capturing.due" ? { build: "web@1" } : {}),
           })

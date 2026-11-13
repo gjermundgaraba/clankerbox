@@ -518,6 +518,19 @@ describe("a capture", () => {
     expect(after(rowAt("capturing.sent"), done)).toStrictEqual(rowAt("ready"));
   });
 
+  it("stores its handle in the write that finishes its operation, so its machine's lease holds until a row has the handle", () => {
+    const handle = Handle.make("ckpt-made");
+
+    expect(
+      applied(
+        checkpointChart,
+        rowAt("capturing.sent"),
+        { ...done, handle },
+        inFlight("capture")
+      )
+    ).toStrictEqual({ next: rowAt("ready", { handle }), finish: true });
+  });
+
   it.each([
     ["failed", failed],
     ["cut short", cancelled],

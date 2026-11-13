@@ -238,6 +238,7 @@ export const make = (
         ? undefined
         : {
             host: candidate.host,
+            instance: newId(),
             traits: info.traits,
             pin: info.pin,
             source: candidate.source,
@@ -397,7 +398,11 @@ export const make = (
 
         const refused =
           found.state === "making.due"
-            ? yield* refusedBySource(store, found)
+            ? yield* refusedBySource(
+                store,
+                found,
+                hosts.known(found.host)?.traits
+              )
             : undefined;
 
         if (refused !== undefined) {
@@ -628,7 +633,7 @@ export const make = (
 
         return yield* copy(
           name,
-          { spec: yield* copied(name, from, sizing, from.traits), labels },
+          { spec: yield* copied(name, from, sizing, info.traits), labels },
           info,
           { host: from.host, source: { kind: "machine", name: id } }
         );

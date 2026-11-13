@@ -45,6 +45,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           sequence: 1,
           step: {
             _tag: "remove",
+            keep: [],
             machine: { name: "dev", instance: "1".repeat(32) },
           },
         });

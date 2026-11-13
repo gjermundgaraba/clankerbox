@@ -9,8 +9,6 @@ import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
 import {
   mkdir,
   readDirectory,
-  scratch,
-  write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import {
   Context,
@@ -43,7 +41,6 @@ import {
   observeEach,
   pathsIn,
   stateOf,
-  templates,
   ramBudget,
 } from "../../../src/platform/smolvm/smolvm.ts";
 import type { Settings } from "../../../src/platform/smolvm/smolvm.ts";
@@ -61,12 +58,10 @@ import type {
 } from "../../../src/runtime.ts";
 import { scripted as scriptedSpawner } from "../../scripted.ts";
 import type { Call, Reply } from "../../scripted.ts";
-import { smolvmModel } from "../../smolvm-model.ts";
+import { prepared, smolvmModel } from "../../smolvm-model.ts";
 import { admitOn, eventually, memoryBuildStore } from "../../support.ts";
 
 const failure = (error: HostError) => [error._tag, error.message];
-
-const encoder = new TextEncoder();
 
 const image = "registry.example/ubuntu@sha256:00";
 
@@ -126,35 +121,6 @@ const freezerStatus = [
 ];
 
 const listing = ["machine", "ls", "--json"];
-
-const prepared = (expanded: readonly string[] = templates) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const dir = yield* scratch;
-    const prefix = path.join(dir, "smolvm", minimumVersion);
-
-    const stateDir = yield* fs.makeTempDirectoryScoped({
-      directory: "/tmp",
-      prefix: "cbx-",
-    });
-
-    yield* mkdir(prefix);
-
-    for (const template of expanded) {
-      yield* write(path.join(prefix, template), "");
-    }
-
-    const settings: Settings = {
-      prefix,
-      publishAddress: "100.64.0.10",
-      ramBudgetMib: 4096,
-      stateDir,
-      arch: "x64",
-      bootId: "b00710ad",
-    };
-
-    return settings;
-  });
 
 const runtimeOf = (
   settings: Settings,
@@ -672,7 +638,7 @@ layer(NodeServices.layer)((it) => {
 
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-        yield* runtime.start(machine);
+        yield* runtime.start(machine, new Set());
         const error = yield* Effect.flip(runtime.stop(machine));
 
         expect(error.message).toBe(
@@ -896,14 +862,14 @@ layer(NodeServices.layer)((it) => {
           "pausing",
         ] as const) {
           reply = status(next);
-          yield* runtime.start(machine);
+          yield* runtime.start(machine, new Set());
         }
 
         const refusals = [];
 
         for (const next of [status("frozen"), unknown]) {
           reply = next;
-          refusals.push(yield* Effect.flip(runtime.start(machine)));
+          refusals.push(yield* Effect.flip(runtime.start(machine, new Set())));
         }
 
         expect(refusals.map(failure)).toStrictEqual([
@@ -1185,7 +1151,7 @@ layer(NodeServices.layer)((it) => {
 
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-        const error = yield* Effect.flip(runtime.start(machine));
+        const error = yield* Effect.flip(runtime.start(machine, new Set()));
 
         expect(failure(error)).toStrictEqual([
           "Internal",
@@ -1207,7 +1173,7 @@ layer(NodeServices.layer)((it) => {
 
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-        yield* runtime.delete(machine);
+        yield* runtime.delete(machine, new Set());
 
         expect(smolvmArgs(spawner.calls)).toStrictEqual([
           ["machine", "status", "--name", "dev-01234567", "--json"],
@@ -1230,7 +1196,7 @@ layer(NodeServices.layer)((it) => {
 
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-        yield* runtime.delete(machine);
+        yield* runtime.delete(machine, new Set());
 
         expect(smolvmArgs(spawner.calls)).toStrictEqual([
           ["machine", "status", "--name", "dev-01234567", "--json"],
@@ -1255,7 +1221,7 @@ layer(NodeServices.layer)((it) => {
 
       const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-      yield* runtime.delete(machine);
+      yield* runtime.delete(machine, new Set());
 
       expect(smolvmArgs(spawner.calls)).toStrictEqual([
         ["machine", "status", "--name", "dev-01234567", "--json"],
@@ -1285,7 +1251,7 @@ layer(NodeServices.layer)((it) => {
 
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-        yield* runtime.delete(machine);
+        yield* runtime.delete(machine, new Set());
 
         expect(smolvmArgs(spawner.calls)).toStrictEqual([
           ["machine", "status", "--name", "dev-01234567", "--json"],
@@ -1328,7 +1294,7 @@ layer(NodeServices.layer)((it) => {
 
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-        yield* runtime.delete(machine);
+        yield* runtime.delete(machine, new Set());
 
         expect(smolvmArgs(spawner.calls)).toStrictEqual([
           ["machine", "status", "--name", "dev-01234567", "--json"],
@@ -1371,7 +1337,7 @@ layer(NodeServices.layer)((it) => {
         });
 
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
-        const error = yield* Effect.flip(runtime.delete(machine));
+        const error = yield* Effect.flip(runtime.delete(machine, new Set()));
 
         expect(error.message).toBe(
           "systemctl kill smolvm-vm-dev-01234567.scope exited 1: Failed"
@@ -1401,7 +1367,7 @@ layer(NodeServices.layer)((it) => {
           Effect.flatMap(
             runtime.exec(machine, {
               argv: ["/bin/sh", "-c", "cat >/dev/null"],
-              stdin: encoder.encode("the input"),
+              stdin: "the input",
             }),
             (execution) =>
               Effect.all([
@@ -2376,7 +2342,7 @@ layer(NodeServices.layer)((it) => {
 
       const kept = model.vms.get(base)?.state;
 
-      yield* runtime.delete(child);
+      yield* runtime.delete(child, new Set());
 
       expect(parked).toStrictEqual([
         [nativeName(builderRef), "running"],
@@ -2407,13 +2373,13 @@ layer(NodeServices.layer)((it) => {
         model.faults.reply = ({ args }) =>
           args[1] === "delete" && args.includes(base) ? locked : undefined;
 
-        yield* runtime.delete(child);
+        yield* runtime.delete(child, new Set());
 
         const kept = model.vms.has(base);
 
         model.faults.reply = undefined;
 
-        yield* runtime.delete(child);
+        yield* runtime.delete(child, new Set());
 
         expect(kept).toBe(true);
         expect([...model.vms.keys()]).toStrictEqual([]);
@@ -2439,7 +2405,7 @@ layer(NodeServices.layer)((it) => {
         model.faults.reply = ({ args }) =>
           args[1] === "delete" && args.includes(base) ? locked : undefined;
 
-        yield* runtime.delete(child);
+        yield* runtime.delete(child, new Set());
 
         const kept = model.vms.has(base);
 
@@ -3354,7 +3320,7 @@ layer(NodeServices.layer)((it) => {
 
         const pinned = model.vms.get(before)?.state;
 
-        yield* rebooted.delete(child);
+        yield* rebooted.delete(child, new Set());
 
         expect(pinned).toBe("stopped");
         expect(model.vms.get(after)?.forwards).toStrictEqual([]);

@@ -1,5 +1,7 @@
 import { Schema } from "effect";
 
+import { formatGib, formatMib } from "./sizes.ts";
+
 /**
  * A runtime's name, as its host's config and its registry entry give it. The SDK holds no list of
  * runtimes: what a client may rely on of one is its `RuntimeTraits`.
@@ -100,38 +102,56 @@ export const fitted = (traits: RuntimeTraits, sizes: Sizes): boolean =>
   traits.sizes._tag === "free" ||
   traits.sizes.classes.some((given) => same(given, sizes));
 
+/** The sizes a runtime gives, as a refusal names them. */
+export const givenSizes = (traits: RuntimeTraits): string =>
+  traits.sizes._tag === "free"
+    ? "any sizes"
+    : `only its size classes ${traits.sizes.classes
+        .map(
+          ({ name, cpu, ramMib, diskGib }) =>
+            `${name} (${cpu} vCPUs, ${formatMib(ramMib)} of RAM, ${formatGib(diskGib)} of disk)`
+        )
+        .join(", ")}`;
+
 /**
  * What a runtime makes of a resize of a machine's vCPUs and RAM from `from` to `to` while it is in
- * `state`: it `resizes`, `refuses` the state, or refuses what `shrinks` where they only grow. A
- * paused machine takes none. A disk only grows, on every runtime.
+ * `state`: it `resizes`, `refuses` the state, refuses what `shrinks` where they only grow, or
+ * refuses sizes it doesn't give, `unfitted`. A paused machine takes none. A disk only grows, on
+ * every runtime.
  */
 export const resizable = (
   traits: RuntimeTraits,
   state: "running" | "stopped" | "paused",
   from: Sizes,
   to: Sizes
-): "resizes" | "refuses" | "shrinks" => {
+): "resizes" | "refuses" | "shrinks" | "unfitted" => {
   const takes = state === "paused" ? "none" : traits.resize[state];
 
   if (takes === "none") {
     return "refuses";
   }
 
-  return takes === "grow" && (to.cpu < from.cpu || to.ramMib < from.ramMib)
-    ? "shrinks"
-    : "resizes";
+  if (takes === "grow" && (to.cpu < from.cpu || to.ramMib < from.ramMib)) {
+    return "shrinks";
+  }
+
+  return fitted(traits, to) ? "resizes" : "unfitted";
 };
 
 /**
- * Whether a fork or restore of a source sized `from` can be sized `to`: a disk only grows, and a
- * runtime whose copies `grow` keeps the vCPUs and RAM it holds, and one whose copies are the
- * source's `same` takes no other sizes.
+ * Whether a fork or restore of a source sized `from` can be sized `to` by a runtime of `traits`: it
+ * gives `to`, a disk only grows, a runtime whose copies `grow` keeps the vCPUs and RAM it holds, and
+ * one whose copies are the source's `same` takes no other sizes.
  */
 export const copySizable = (
   traits: RuntimeTraits,
   from: Sizes,
   to: Sizes
 ): boolean => {
+  if (!fitted(traits, to)) {
+    return false;
+  }
+
   switch (traits.copies) {
     case "same": {
       return same(from, to);

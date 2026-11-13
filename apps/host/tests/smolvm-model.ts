@@ -1,9 +1,15 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import { Schema } from "effect";
+import {
+  mkdir,
+  scratch,
+  write,
+} from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import { Effect, FileSystem, Schema } from "effect";
 
-import { minimumVersion } from "../src/platform/smolvm/smolvm.ts";
+import { minimumVersion, templates } from "../src/platform/smolvm/smolvm.ts";
+import type { Settings } from "../src/platform/smolvm/smolvm.ts";
 import { scripted } from "./scripted.ts";
 import type { Call, Reply } from "./scripted.ts";
 
@@ -11,7 +17,10 @@ export interface Vm {
   state: string;
   readonly parent?: string | undefined;
   forwards: readonly string[];
+  sizes?: Readonly<Record<SizeFlag, number | undefined>> | undefined;
 }
+
+type SizeFlag = "--cpus" | "--mem" | "--storage";
 
 export interface Faults {
   reply?: ((call: Call) => Reply | undefined) | undefined;
@@ -74,9 +83,9 @@ export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
     name,
     state: vm.state,
     parent_machine: vm.parent ?? null,
-    cpus: 2,
-    memory_mib: 2048,
-    storage_gb: null,
+    cpus: vm.sizes?.["--cpus"] ?? 2,
+    memory_mib: vm.sizes?.["--mem"] ?? 2048,
+    storage_gb: vm.sizes?.["--storage"] ?? null,
     ports: vm.forwards.length,
   });
 
@@ -129,8 +138,24 @@ export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
     return {};
   };
 
+  const sized = (vm: Vm | undefined, args: readonly string[]) => {
+    const given = (flag: SizeFlag) => {
+      const [value] = valuesOf(args, flag);
+
+      return value === undefined ? vm?.sizes?.[flag] : Number(value);
+    };
+
+    return {
+      "--cpus": given("--cpus"),
+      "--mem": given("--mem"),
+      "--storage": given("--storage"),
+    };
+  };
+
   const update = (vm: Vm, args: readonly string[]): Reply => {
     const removed = new Set(valuesOf(args, "--remove-port"));
+
+    vm.sizes = sized(vm, args);
 
     vm.forwards = [
       ...vm.forwards.filter((forward) => !removed.has(forward)),
@@ -224,7 +249,7 @@ export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
     return {};
   };
 
-  const smolvm = ({ args }: Call): Reply => {
+  const smolvm = ({ args, stdin }: Call): Reply => {
     const [name = ""] = valuesOf(args, "--name");
     const vm = vms.get(name);
     const command = args[1] ?? "";
@@ -261,6 +286,12 @@ export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
         return update(vm, args);
       }
 
+      case "resize": {
+        vm.sizes = sized(vm, args);
+
+        return {};
+      }
+
       case "start": {
         return start(name, vm);
       }
@@ -277,6 +308,24 @@ export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
 
       case "checkpoint": {
         return checkpoint(vm, args);
+      }
+
+      case "pause": {
+        vm.state = "paused";
+
+        return {};
+      }
+
+      case "resume": {
+        vm.state = "running";
+
+        return {};
+      }
+
+      case "exec": {
+        return args.slice(args.indexOf("--") + 1).join(" ") === "cat"
+          ? { stdout: stdin ?? "" }
+          : {};
       }
 
       default: {
@@ -303,3 +352,33 @@ export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
 
   return { vms, spawner, faults };
 };
+
+/** Settings for a smolvm runtime over a scratch prefix holding `expanded`, its state on a short path for its sockets. */
+export const prepared = (expanded: readonly string[] = templates) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const dir = yield* scratch;
+    const prefix = path.join(dir, "smolvm", minimumVersion);
+
+    const stateDir = yield* fs.makeTempDirectoryScoped({
+      directory: "/tmp",
+      prefix: "cbx-",
+    });
+
+    yield* mkdir(prefix);
+
+    for (const template of expanded) {
+      yield* write(path.join(prefix, template), "");
+    }
+
+    const settings: Settings = {
+      prefix,
+      publishAddress: "100.64.0.10",
+      ramBudgetMib: 4096,
+      stateDir,
+      arch: "x64",
+      bootId: "b00710ad",
+    };
+
+    return settings;
+  });

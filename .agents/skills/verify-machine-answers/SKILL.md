@@ -13,7 +13,9 @@ answer names something another request asked for. A failed create leaves no VM
 behind, however late an old delivery arrives. An operation runs once, however
 often it is delivered. Every request gets an answer. All of that holds with the
 control plane killed at any moment, the host restarted, the link cut, and
-deliveries lost, repeated or late, given the bounds below.
+deliveries lost, repeated or late, given the bounds below. On a runtime that
+stops a VM unasked, or lands a make after its undo looked for it, the recheck
+starts a machine wanted running again, and the sweep deletes the late VM.
 
 **Harm.** A user or agent told that a machine is stopped while it runs (or the
 reverse) acts on a lie. A create that a crash left half done must neither leak
@@ -38,22 +40,31 @@ create; and `Undone`. A rename of one fails `vp check` on `export-chart.ts`.
 
 TLC checks these invariants on every reachable state:
 
-| Invariant          | In plain words                                                                       |
-| ------------------ | ------------------------------------------------------------------------------------ |
-| `AnswerTrue`       | A success answer finds the VM as asked: running, stopped, paused (or stopped), gone  |
-| `RestTrue`         | A row resting `settled` with no operation holds the VM it says                       |
-| `SupersededHonest` | `Superseded` names what another request asked for, never the request's own           |
-| `NoOrphan`         | A failed create once undone, and a deleted machine, leave no VM                      |
-| `OnceOnly`         | Each operation runs once, however often it is delivered                              |
-| `FailedSays`       | A row resting `failed` carries its error                                             |
-| `OpIsState`        | An operation is in flight exactly while the row's leaf has a step                    |
-| `AllAnswered`      | (temporal, in `MachineAnswers.cfg`) every request is answered, given fair scheduling |
+| Invariant            | In plain words                                                                                       |
+| -------------------- | ---------------------------------------------------------------------------------------------------- |
+| `AnswerTrue`         | A success answer finds the VM as asked: running, stopped, paused (or stopped), gone                  |
+| `RestTrue`           | A row resting `settled` with no operation holds the VM it says, unless it drifted since a decided read |
+| `SupersededHonest`   | `Superseded` names what another request asked for, never the request's own                           |
+| `NoOrphan`           | A failed create once undone, and a deleted machine, leave no VM but one that landed late             |
+| `OnceOnly`           | Each operation runs once, however often it is delivered                                              |
+| `FailedSays`         | A row resting `failed` carries its error                                                             |
+| `OpIsState`          | An operation is in flight exactly while the row's leaf has a step                                    |
+| `AllAnswered`        | (temporal, in `MachineAnswers.cfg` and `Drifting.cfg`) every request is answered, given fair scheduling |
+| `EventuallyNoOrphan` | (temporal, in `Drifting.cfg`) a VM whose row went or rests undone is deleted, by the sweep          |
+| `RunsWhenWanted`     | (temporal, in `Drifting.cfg`) a machine wanted running runs, unless its row rests `lost`, or `failed` once a runtime call failed |
+
+Only `Drifting.cfg` sets `Drifts` and `LandsLate`. Elsewhere no VM drifts or
+lands late, so `RestTrue` and `NoOrphan` keep their whole strength there. Under
+`Drifting.cfg`, `AnswerTrue` also excuses an answer given while the VM had
+drifted, after the request, since the last decided read, or while a late VM
+awaited the sweep: the client answers from the row's phase, and neither is in
+the row yet.
 
 ## Run it
 
 ```sh
 .agents/skills/verify-machine-answers/scripts/check.sh --quick   # two clients, about 1 min
-.agents/skills/verify-machine-answers/scripts/check.sh           # and every fault with AllAnswered, about 6 min
+.agents/skills/verify-machine-answers/scripts/check.sh           # and every fault, and Drifting.cfg, about 10 min
 vpx .agents/skills/verify-machine-answers/scripts/breaks.ts      # every break below, or those named
 ```
 
@@ -69,9 +80,9 @@ the directory. Any other result keeps it and prints the paths of `tlc.out`, the
 full output, and of `trace.json`, the counterexample, when there is one; delete
 it once you have read them.
 
-Exit 0 is a pass, 12 a violated invariant, 13 a violated `AllAnswered`, and 11
-a deadlock: a row no action can move. Anything else means the model or the
-tools are broken.
+Exit 0 is a pass, 12 a violated invariant, 13 a violated temporal property,
+which `tlc.out` names, and 11 a deadlock: a row no action can move. Anything
+else means the model or the tools are broken.
 
 ## Reading a trace
 
@@ -116,8 +127,30 @@ A pass covers this scope, and only it:
   A make not yet delivered when the process dies is undone.
 - **The runtime changes the VM only in steps**, each change atomic. A step cut
   short may make its change or not, and reports `cancelled` only once it ended,
-  which is what Tart's and smolvm's masked stops give. A VM changes by itself
-  never, and a host's restart leaves it where it is.
+  which is what Tart's and smolvm's masked stops give. Outside `Drifting.cfg` a
+  VM changes by itself never, and a host's restart leaves it where it is.
+- **`Drifting.cfg`**: one client beside the creator, a step or read that fails,
+  a host restart, and nine operations, with `Drifts` and `LandsLate` set. `Drift` stops a
+  running VM once, at any moment. `LandLate` makes a VM once, of a make that
+  failed, or was running when its host restarted, before it made one; the VM
+  lands at any later moment, also after the undo's remove found nothing. Every
+  invariant, `AllAnswered`, `EventuallyNoOrphan` and `RunsWhenWanted` hold over
+  every reachable state. A run takes about 2 minutes. A crash, a partition and
+  a lost delivery are out: with them too, it passed 6.8 million distinct states
+  in 10 minutes with its queue still growing, and was stopped.
+- **The sweep is a read and a later delete.** `SweepRead` reads whether the
+  store retired the one instance, its row gone or resting `undone` after the
+  create, and `Sweep` deletes the VM at any later moment while the host holds no
+  step. A read before the create, which the code's set of retired instances
+  never names, is the `sweep-unclaimed` break. The model has one store and one
+  instance, so a second store, a wiped or restored one, a row replaced by a
+  create of its name, and checkpoints are out; they rest on
+  `apps/server/tests/fleet.test.ts` and the store's test in
+  `apps/server/tests/platform/sqlite.test.ts`. No step the host holds ever
+  names a VM the sweep may delete, so its "no step" guard decides nothing here:
+  that a held step spares a VM rests on `apps/host/tests/operations.test.ts`.
+- **A pause meets a VM that drifted stopped and fails**, as the fake runtime's
+  pause does. A runtime whose pause stops leaves it stopped and reports done.
 - **The sequence fence is global.** The model's operation ID is its sequence,
   and the host's `high` stands for the scope's sequence, which is one scope
   here. A fence per scope is the same for one machine.
@@ -154,6 +187,9 @@ for this code:
 | `HostCancel`                     | `apps/host/src/operations.ts` `cancel`, `ended`                            |
 | `HostRestart`                    | a new process: `Operations.boot`, empty `entries` and `scopes`             |
 | `Crash`, `Revive`                | a new process: the store stays, `creates` goes; `machines.ts` start-up     |
+| `Drift`                          | a provider stopping a machine unasked; the fake runtime's `drift` hook     |
+| `LandLate`                       | a provider making a machine whose answer was lost; the fake's `landLate` hook |
+| `SweepRead`, `Sweep`             | the store retiring an instance in `advance`, read by `apps/server/src/fleet.ts`'s recheck and sent as `sweepRetired`; `apps/host/src/operations.ts`, which deletes what was retired and no step names |
 | `Shown`                          | `machine-view.ts` `phaseShown`, in `Machines.get` and `list`               |
 | `Answer`                         | `packages/sdk/src/client.ts` `machineRest`, `machineGone`, `answerOf`      |
 
@@ -199,10 +235,18 @@ change.
 | `Superseded` names what the client asked                     | model | `SupersededHonest` |
 | A make the host never got is never given up                  | model | deadlock           |
 | A host restart isn't noticed                                 | model | `AllAnswered`      |
+| `no-sweep`: the sweep never runs                             | model | `EventuallyNoOrphan` |
+| `sweep-unclaimed`: the sweep deletes what no row claims when it reads | model | `RestTrue` |
+| `drift-ignored`: the recheck of a settled row reads the row, not the VM | model | `RunsWhenWanted` |
+| `repeated-ask-rests`: a request for what a row already wants keeps its rest | chart | `AnswerTrue` |
+| `drift-fails`: a read of a stopped VM that should run rests the row `failed` | chart | `RunsWhenWanted` |
 
-The last two rows break `Collect`, which stands for `poll`, outside the chart. An
-edge taken off the chart isn't a deadlock: `Collect` clears the operation and
-`OpIsState` fails.
+The two rows before the last two break `Collect`, which stands for `poll`,
+outside the chart. An edge taken off the chart isn't a deadlock: `Collect`
+clears the operation and `OpIsState` fails. The last two run on `Drifting.cfg`.
+A break of the chart's `read` that rests a stopped machine settled fails
+`RestTrue` before any liveness, so `drift-ignored` keeps the recheck turning
+and has it never see the VM.
 
 Two breaks pass, on purpose, and `breaks.ts` fails if they stop passing.
 
@@ -222,7 +266,8 @@ model's VM changes only under a step.
 The chart has no generation. A write decides from the row as it stands, a request
 leaves rest in that write, and a VM changes only under an operation, so a read
 from before a request is still true of the VM when it is decided. No invariant
-needed more.
+needed more. A drift is the one change outside an operation, and `RestTrue`
+excuses it only until a read taken after it is decided.
 
 `Shown` has no such row. A client that reads the stored phase, or that reads
 `waiting` over a failed row, gets a different answer, and no invariant reads the

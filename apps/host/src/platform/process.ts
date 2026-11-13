@@ -97,7 +97,7 @@ export const cliIn = (env: Readonly<Record<string, string | undefined>>) =>
     const exec = (
       file: string,
       args: readonly string[],
-      stdin: Uint8Array | undefined,
+      stdin: string | undefined,
       what: string
     ): Effect.Effect<Execution, Internal, Scope.Scope> => {
       const failed = (error: PlatformError.PlatformError) =>
@@ -109,7 +109,9 @@ export const cliIn = (env: Readonly<Record<string, string | undefined>>) =>
             command(
               file,
               args,
-              stdin === undefined ? "ignore" : Stream.make(stdin)
+              stdin === undefined
+                ? "ignore"
+                : Stream.make(new TextEncoder().encode(stdin))
             )
           ),
           failed

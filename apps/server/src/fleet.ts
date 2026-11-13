@@ -1,7 +1,6 @@
 import type { Adopted } from "@clankerbox/host-contract";
 import type { Internal, Usage } from "@gjermundgaraba/clankerbox-sdk";
-import { Cause, DateTime, Effect, Option } from "effect";
-import type { Duration } from "effect";
+import { Cause, DateTime, Duration, Effect, Option } from "effect";
 
 import { applied } from "./chart.ts";
 import type { Interface as Hosts } from "./hosts.ts";
@@ -111,9 +110,30 @@ const adopted = (store: Store, hosts: Hosts, host: string, boot: string) =>
   });
 
 /**
- * What a recheck does beyond each resource's loop: tells a host that restarted which machines it
- * has, and ends the rows of failures older than `failedRowsLast`.
+ * How long a store names an instance it retired. A make that lands at its provider later than this
+ * is left there.
  */
+export const retiredLast = Duration.days(1);
+
+const swept = (store: Store, hosts: Hosts, host: string) =>
+  Effect.gen(function* () {
+    const retired = yield* store.retired(host);
+
+    if (retired.machines.length === 0 && retired.checkpoints.length === 0) {
+      return;
+    }
+
+    yield* hosts
+      .call(host, (api) => api.sweepRetired(retired))
+      .pipe(
+        Effect.catch(({ message }) =>
+          Effect.logWarning(
+            `host ${host} couldn't sweep what the store retired, so the next recheck tries again: ${message}`
+          )
+        )
+      );
+  });
+
 export const recheckHosts = (
   store: Store,
   hosts: Hosts,
@@ -131,12 +151,17 @@ export const recheckHosts = (
       { discard: true }
     );
 
-    const before = DateTime.subtractDuration(
-      yield* DateTime.now,
-      failedRowsLast
+    yield* Effect.forEach(
+      reached,
+      ({ member, info }) =>
+        info === undefined ? Effect.void : swept(store, hosts, member.id),
+      { discard: true }
     );
 
-    yield* store.expire(before);
+    const now = yield* DateTime.now;
+
+    yield* store.expire(DateTime.subtractDuration(now, failedRowsLast));
+    yield* store.forgetRetired(DateTime.subtractDuration(now, retiredLast));
   }).pipe(
     Effect.catchCause((cause) =>
       Effect.logError(`the recheck failed:\n${Cause.pretty(cause)}`)

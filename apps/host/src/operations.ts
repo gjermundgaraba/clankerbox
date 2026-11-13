@@ -7,6 +7,7 @@ import type {
   Outcome,
   Ref,
   Report,
+  Retired,
   Scope as Resource,
   Source,
   Step,
@@ -15,6 +16,7 @@ import {
   Conflict,
   formatGib,
   formatMib,
+  givenSizes,
   Internal,
   PinMismatch,
   resizable,
@@ -76,6 +78,7 @@ import type {
   Held,
   Identity,
   Observed,
+  Marked,
   Origin,
   Sized,
   Target,
@@ -99,6 +102,7 @@ export interface Interface {
     machines: readonly MachineRef[]
   ) => ReturnType<Runtime["Service"]["capacity"]>;
   readonly adopt: (machines: readonly MachineRef[]) => Effect.Effect<Adoption>;
+  readonly sweep: (retired: Retired) => Effect.Effect<void, Internal>;
   readonly exec: (
     command: ExecCommand
   ) => Effect.Effect<Executed, Missing | WrongState | Internal>;
@@ -126,8 +130,15 @@ const statusOf = (report: TailnetReport | undefined): TailnetStatus => {
     };
   }
 
-  if (report.missing) {
+  if (report.state === "missing") {
     return { state: "missing" };
+  }
+
+  if (report.state === "lost") {
+    return {
+      state: "failed",
+      error: "control no longer has the guest's node",
+    };
   }
 
   if (report.backend !== "Running") {
@@ -163,6 +174,9 @@ const targetOf = ({ name, instance }: Identity, handle: Handle): Target => ({
   handle,
 });
 
+const markedTarget = ({ instance, handle }: Marked): Target =>
+  targetOf({ name: instance, instance }, handle);
+
 const sizedOf = (machine: MachineRef, handle: Handle): Sized => ({
   ...targetOf(machine, handle),
   cpu: machine.cpu,
@@ -197,6 +211,7 @@ interface Progress {
 
 interface Entry {
   readonly scope: Resource;
+  readonly names: readonly Ref[];
   readonly fiber: Fiber.Fiber<void, HostError>;
   readonly progress: Progress;
 }
@@ -233,6 +248,37 @@ const ended = (
   });
 
 type Make = Extract<Step, { readonly _tag: "make" }>;
+
+const namedBy = (step: Step): readonly Ref[] => {
+  switch (step._tag) {
+    case "make": {
+      const { source } = step;
+
+      return source._tag === "base"
+        ? [step.machine]
+        : [step.machine, sourceSizes(source)];
+    }
+
+    case "capture": {
+      return [step.machine, step.checkpoint];
+    }
+
+    case "deleteCheckpoint":
+    case "publish":
+    case "fetch": {
+      return [step.checkpoint];
+    }
+
+    case "start":
+    case "stop":
+    case "pause":
+    case "remove":
+    case "resize":
+    case "join": {
+      return [step.machine];
+    }
+  }
+};
 
 const resizedStates = ({ resize }: RuntimeTraits): string => {
   const taking = (["stopped", "running"] as const).filter(
@@ -524,6 +570,12 @@ export const make = (
           });
         }
 
+        if (decided === "unfitted") {
+          return yield* new Unsizable({
+            message: `the ${traits.runtime} runtime gives ${givenSizes(traits)}, and ${name} was asked ${to.cpu} vCPUs, ${formatMib(to.ramMib)} of RAM and ${formatGib(to.diskGib)} of disk`,
+          });
+        }
+
         yield* runtime.sizable(machine, machine, to, live);
 
         if (live && to.ramMib > machine.ramMib) {
@@ -565,9 +617,15 @@ export const make = (
         Effect.gen(function* () {
           const report = yield* checkTailnet(runtime, machine, hostname);
 
+          const lost = report?.state === "lost";
+
           return statusOf(
-            report?.missing === false && report.backend === "NeedsLogin"
-              ? yield* checkTailnet(runtime, machine, hostname, yield* mint)
+            lost ||
+              (report?.state === "reported" && report.backend === "NeedsLogin")
+              ? yield* checkTailnet(runtime, machine, hostname, {
+                  key: yield* mint,
+                  rejoin: lost,
+                })
               : report
           );
         })
@@ -737,8 +795,14 @@ export const make = (
 
         yield* reaches.open(ref, port);
 
-        if (source._tag === "base" && source.setup !== undefined) {
+        if (
+          source._tag === "base" &&
+          (source.setup !== undefined || runtime.prepares === "always")
+        ) {
           yield* prepareBase(runtime, ref, Option.isSome(tailnet));
+        }
+
+        if (source._tag === "base" && source.setup !== undefined) {
           yield* onTailnet(
             ref,
             join,
@@ -781,6 +845,7 @@ export const make = (
       switch (step._tag) {
         case "start": {
           const { pin, machines } = step;
+          const keep = new Set(step.keep);
 
           return Effect.gen(function* () {
             const machine = yield* machineTarget(step.machine);
@@ -800,7 +865,7 @@ export const make = (
               endpoint === undefined
                 ? Effect.void
                 : reaches.open(machine, endpoint.port),
-              runtime.start(machine)
+              runtime.start(machine, keep)
             );
 
             yield* seen === "running"
@@ -870,6 +935,7 @@ export const make = (
 
         case "remove": {
           const { hook } = step;
+          const keep = new Set(step.keep);
 
           return Effect.andThen(
             ifFound("machine", step.machine, (machine) =>
@@ -880,7 +946,7 @@ export const make = (
                   hook,
                   stateNow(machine, "given its delete hook")
                 ),
-                runtime.delete(machine)
+                runtime.delete(machine, keep)
               )
             ),
             reaches.close(step.machine.name)
@@ -1056,7 +1122,12 @@ export const make = (
               hostScope
             );
 
-            entries.set(id, { scope, fiber, progress });
+            entries.set(id, {
+              scope,
+              names: namedBy(step),
+              fiber,
+              progress,
+            });
             scopes.set(keyOf(scope), { sequence, id });
 
             return reported(id, progress);
@@ -1212,8 +1283,15 @@ export const make = (
         })
       );
 
+    const lastStepOn = (name: string) =>
+      scopes.get(keyOf({ resource: "machine", name }))?.id;
+
     const adopt: Interface["adopt"] = (machines) =>
       Effect.gen(function* () {
+        const before = new Map(
+          machines.map(({ name }) => [name, lastStepOn(name)])
+        );
+
         const [adopted, unresolved] = yield* Effect.partition(
           machines,
           (machine) =>
@@ -1238,16 +1316,20 @@ export const make = (
           { discard: true }
         );
 
-        yield* reaches.adopt(
-          adopted.flatMap(({ machine, handle }) =>
-            handle === undefined || machine.endpoint === undefined
-              ? []
-              : [
-                  {
-                    machine: targetOf(machine, handle),
-                    port: machine.endpoint.port,
-                  },
-                ]
+        yield* accepting.withPermits(1)(
+          reaches.adopt(
+            adopted.flatMap(({ machine, handle }) =>
+              handle === undefined ||
+              machine.endpoint === undefined ||
+              lastStepOn(machine.name) !== before.get(machine.name)
+                ? []
+                : [
+                    {
+                      machine: targetOf(machine, handle),
+                      port: machine.endpoint.port,
+                    },
+                  ]
+            )
           )
         );
 
@@ -1263,6 +1345,107 @@ export const make = (
           unresolved: unresolved.map(({ machine }) => machine.name),
         };
       });
+
+    const namedBySteps = () => {
+      const named = new Set<string>();
+
+      for (const { names, progress } of entries.values()) {
+        for (const { instance, handle } of names) {
+          named.add(instance);
+
+          if (handle !== undefined) {
+            named.add(handle);
+          }
+        }
+
+        if (progress.outcome.handle !== undefined) {
+          named.add(progress.outcome.handle);
+        }
+      }
+
+      return ({ instance, handle }: Marked) =>
+        named.has(instance) || named.has(handle);
+    };
+
+    const sweeping = yield* Semaphore.make(1);
+
+    const swept = (
+      what: string,
+      work: Effect.Effect<void, HostError>
+    ): Effect.Effect<void> =>
+      Effect.andThen(
+        Effect.logInfo(
+          `sweep: deleting ${what}, which the control plane retired`
+        ),
+        work.pipe(
+          inTime(`the ${traits.runtime} runtime's delete of ${what}`),
+          Effect.catch((error) =>
+            error._tag === "Conflict"
+              ? Effect.void
+              : Effect.logWarning(
+                  `sweep: couldn't delete ${what}, so the next sweep tries again: ${error.message}`
+                )
+          )
+        )
+      );
+
+    const sweep: Interface["sweep"] = (retired) => {
+      const { owned } = runtime;
+
+      if (
+        owned === undefined ||
+        (retired.machines.length === 0 && retired.checkpoints.length === 0)
+      ) {
+        return Effect.void;
+      }
+
+      return sweeping.withPermits(1)(
+        Effect.gen(function* () {
+          const [machines, checkpoints] = yield* Effect.all(
+            [owned.machines, owned.checkpoints],
+            { concurrency: "unbounded" }
+          ).pipe(
+            inTime(`the ${traits.runtime} runtime's list of what it marked`)
+          );
+
+          const named = namedBySteps();
+
+          const due = <M extends Marked>(
+            listed: readonly M[],
+            instances: readonly string[]
+          ) => {
+            const wanted = new Set(instances);
+
+            return listed.filter(
+              (resource) => wanted.has(resource.instance) && !named(resource)
+            );
+          };
+
+          yield* Effect.forEach(
+            due(machines, retired.machines),
+            (machine) =>
+              swept(
+                `machine ${machine.instance} (${machine.handle})`,
+                runtime.delete(
+                  markedTarget(machine),
+                  new Set(machine.checkpoints)
+                )
+              ),
+            { discard: true }
+          );
+
+          yield* Effect.forEach(
+            due(checkpoints, retired.checkpoints),
+            (checkpoint) =>
+              swept(
+                `checkpoint ${checkpoint.instance} (${checkpoint.handle})`,
+                runtime.deleteCheckpoint(markedTarget(checkpoint))
+              ),
+            { discard: true }
+          );
+        })
+      );
+    };
 
     return {
       boot,
@@ -1280,6 +1463,7 @@ export const make = (
           inTime(`the ${traits.runtime} runtime`)
         ),
       adopt,
+      sweep,
       exec: Effect.fn("Operations.exec")(exec),
     } satisfies Interface;
   });

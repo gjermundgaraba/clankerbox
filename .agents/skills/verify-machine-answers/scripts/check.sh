@@ -10,7 +10,7 @@ model=$scripts/../model
 vpx "$scripts/export-chart.ts"
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/verify-machine-answers.XXXXXX")
-cp "$model/Chart.tla" "$model/MachineAnswers.tla" "$model/MachineAnswers.cfg" "$model/TwoClients.cfg" "$model/ThreeClients.cfg" "$work/"
+cp "$model/Chart.tla" "$model/MachineAnswers.tla" "$model/MachineAnswers.cfg" "$model/TwoClients.cfg" "$model/ThreeClients.cfg" "$model/Drifting.cfg" "$work/"
 
 status=0
 check() {
@@ -29,6 +29,9 @@ if [ "$status" -eq 0 ] && [ "${1:-}" != --quick ]; then
 fi
 if [ "$status" -eq 0 ] && [ "${1:-}" != --quick ]; then
   check ThreeClients.cfg
+fi
+if [ "$status" -eq 0 ] && [ "${1:-}" != --quick ]; then
+  check Drifting.cfg
 fi
 if [ "$status" -eq 0 ]; then
   rm -rf "$work"

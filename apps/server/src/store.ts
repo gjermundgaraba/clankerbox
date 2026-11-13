@@ -1,4 +1,5 @@
 import { Endpoint, Handle, Step } from "@clankerbox/host-contract";
+import type { Retired } from "@clankerbox/host-contract";
 import {
   Build,
   Desired,
@@ -181,6 +182,30 @@ export interface Rows {
   readonly checkpoint: CheckpointRow;
 }
 
+/** An instance on a host, as a row holds it there. */
+export interface Hold {
+  readonly host: string;
+  readonly instance: string;
+}
+
+/** Where a row holds its instance: on its host, until it rests undone or failed. */
+export const holdOf = {
+  machine: ({ host, instance, undoneAt }: MachineRow): Hold | undefined =>
+    undoneAt === undefined ? { host, instance } : undefined,
+  checkpoint: ({ host, instance, failedAt }: CheckpointRow): Hold | undefined =>
+    failedAt === undefined ? { host, instance } : undefined,
+};
+
+/** The hold a write ends, which retires its instance on its host: the row's, once the row no longer holds it there. */
+export const ended = (
+  before: Hold | undefined,
+  after: Hold | undefined
+): Hold | undefined =>
+  before !== undefined &&
+  (after?.host !== before.host || after.instance !== before.instance)
+    ? before
+    : undefined;
+
 /**
  * What a write did. `written` also answers a `decide` that changed nothing: then `moved` is false
  * and `next` the row as it stands. `busy` wrote nothing, as the operation in flight `by` holds a
@@ -216,7 +241,9 @@ export interface Interface {
    * One write of a resource's row, decided inside it: `decide` reads the row and its operation in
    * the transaction that writes what it answers, so nothing can come between, and no write needs a
    * fence. A `begin` takes its leases there, as what owns a resource excludes all else and what
-   * shares it excludes an owner, and when one is taken nothing is written.
+   * shares it excludes an owner, and when one is taken nothing is written. A write that ends a row's
+   * hold on its instance on its host retires that instance there, in the same transaction: the row
+   * goes, moves to another host, or rests undone or failed.
    */
   readonly advance: <K extends Lease["resource"]>(
     resource: K,
@@ -225,6 +252,15 @@ export interface Interface {
   ) => Effect.Effect<Advanced<Rows[K]>, Internal>;
   /** Removes the rows of failed creates and captures older than `before`. */
   readonly expire: (before: DateTime.Utc) => Effect.Effect<void, Internal>;
+  /**
+   * The instances retired on `host`, which outlive their rows. No row takes one again, so a sweep
+   * may delete what it names.
+   */
+  readonly retired: (host: string) => Effect.Effect<Retired, Internal>;
+  /** Forgets the instances retired before `before`, which a sweep then leaves at their provider. */
+  readonly forgetRetired: (
+    before: DateTime.Utc
+  ) => Effect.Effect<void, Internal>;
   readonly checkpoints: Effect.Effect<readonly CheckpointRow[], Internal>;
   readonly findCheckpoint: (
     name: string

@@ -15,7 +15,7 @@ import {
 import { Effect, Exit, Fiber, Logger, Schema } from "effect";
 import { expect } from "vite-plus/test";
 
-import { accepts, holding, hostOn, image, runtimeTraits } from "../support.ts";
+import { accepts, holding, hostOn, image, presets } from "../support.ts";
 
 const serve = hostOn({ first: 21_130, last: 21_139 });
 
@@ -89,15 +89,16 @@ const removed = (
   id,
   scope: { resource: "machine", name },
   sequence: 1,
-  step: { _tag: "remove", machine: { name, instance } },
+  step: { _tag: "remove", machine: { name, instance }, keep: [] },
 });
 
 const keptByRuntime = (
   fake: Effect.Success<ReturnType<typeof serve>>["fake"],
   { name, instance }: { readonly name: string; readonly instance: string }
 ) => {
-  fake.machines.set(name, {
+  fake.hold({
     state: "running",
+    name,
     root: "",
     instance,
     handle: Handle.make(`held-${name}`),
@@ -122,7 +123,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(decodeHost(answer.body)).toStrictEqual({
           id: "smolvm",
-          traits: runtimeTraits.smolvm,
+          traits: presets.smolvm.traits,
           version,
           runtimeVersion: "fake",
           bases: ["ubuntu"],
@@ -401,6 +402,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           readSizes: { machine: ref },
           readCapacity: { machines: [ref] },
           adoptMachines: { machines: [ref] },
+          sweepRetired: { machines: [], checkpoints: [] },
           runOperation: { ...made("op-1"), boot: yield* bootOf(url) },
           waitOperation: { id: "op-1" },
           cancelOperation: { id: "op-1" },

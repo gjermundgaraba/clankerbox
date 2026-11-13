@@ -2,7 +2,33 @@
 set -eu
 . "$(dirname "$0")/common.sh"
 use_run "$@"
-action=${2:?usage: fault.sh <run-dir> kill-server|start-server|kill-host <id>|start-host <id>|freeze-host <id>|thaw-host <id>|hold-capture <id>|setup-go}
+action=${2:?usage: fault.sh <run-dir> kill-server|start-server|kill-host <id>|start-host <id>|freeze-host <id>|thaw-host <id>|hold-capture <id>|drift <id> <machine>|land-late <id>|setup-go}
+
+ask() {
+  host=$1
+  request=$run/hosts/$host.fault
+  pid=$(host_pid "$host")
+  rm -f "$request.ok" "$request.refused"
+  printf '%s\n' "$2" >"$request.part"
+  mv "$request.part" "$request"
+  kill -USR2 "$pid"
+  tries=0
+  until [ -e "$request.ok" ] || [ -e "$request.refused" ]; do
+    tries=$((tries + 1))
+    if ! kill -0 "$pid" 2>/dev/null || [ "$tries" -gt 40 ]; then
+      echo "host $host didn't answer $action" | tee -a "$evidence/transcript.txt" >&2
+      exit 1
+    fi
+    sleep 0.25
+  done
+  if [ -e "$request.refused" ]; then
+    echo "host $host refused $action: $(cat "$request.refused")" | tee -a "$evidence/transcript.txt" >&2
+    rm "$request.refused"
+    exit 1
+  fi
+  cat "$request.ok" >>"$evidence/transcript.txt"
+  rm "$request.ok"
+}
 
 case $action in
   kill-server)
@@ -34,8 +60,13 @@ case $action in
     echo "host $3 thawed" >>"$evidence/transcript.txt"
     ;;
   hold-capture)
-    kill -USR2 "$(host_pid "${3:?host id}")"
-    echo "host $3 holds its next capture" >>"$evidence/transcript.txt"
+    ask "${3:?host id}" '{"_tag":"hold-capture"}'
+    ;;
+  drift)
+    ask "${3:?host id}" "{\"_tag\":\"drift\",\"machine\":\"${4:?machine}\"}"
+    ;;
+  land-late)
+    ask "${3:?host id}" '{"_tag":"land-late"}'
     ;;
   setup-go)
     touch "$run/setup-go"
