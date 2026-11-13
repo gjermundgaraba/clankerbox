@@ -256,7 +256,10 @@ Each: what Tart does, where, and what of ours depends on it.
   boot; a `tart get` loop of another VM failed neither a start nor a
   `tart set --disk-size` grow, 3 of 3 each. Ours: no read opens a disk, so
   reads never wait on a disk opener; `sizes` reads a machine whose step or
-  loop holds it, which no boot of its own runs beside.
+  loop holds it, which no boot of its own runs beside. A `tart list` someone
+  else runs over the host's Tart home opens every stopped VM's disk, the
+  booting one's too, so it can still fail a boot: inferred from the above,
+  not run.
 - `tart stop` sends SIGINT to `tart run`, waits up to `--timeout` (default 30 s)
   for the lock to clear, then SIGKILLs it; a stopped VM exits 2 (`stopRunning`,
   Commands/Stop.swift). Its return doesn't mean the VM is gone:
