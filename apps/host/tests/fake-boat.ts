@@ -62,6 +62,7 @@ export interface FakeSandbox {
   type: Offered;
   running: boolean;
   inPassing: "provisioning" | "archiving" | undefined;
+  failed: boolean;
   stoppedAt: number | undefined;
   relay: Relay;
 }
@@ -514,6 +515,8 @@ export const fakeBoat = (
     const pageSize = options.pageSize ?? 200;
     let savingLate = false;
     let listsLagging = 0;
+    let failingNext = false;
+    const gateways = new Set<BoatCall>();
 
     const malformed: Array<{ readonly name: string; readonly status: null }> =
       [];
@@ -542,7 +545,9 @@ export const fakeBoat = (
     const answeredJson = (sandbox: FakeSandbox) => ({
       id: sandbox.id,
       name: sandbox.name,
-      state: sandbox.inPassing ?? (sandbox.running ? "ready" : "archived"),
+      state: sandbox.failed
+        ? "error"
+        : (sandbox.inPassing ?? (sandbox.running ? "ready" : "archived")),
       type: sandbox.type,
       labels: sandbox.labels,
       createdAt: sandbox.createdAt,
@@ -611,12 +616,14 @@ export const fakeBoat = (
         type: made.type,
         running: true,
         inPassing: "provisioning",
+        failed: failingNext,
         stoppedAt: undefined,
         relay: await listen(),
       };
 
       sandboxes.set(id, sandbox);
       starts += 1;
+      failingNext = false;
 
       return sandbox;
     };
@@ -1225,6 +1232,17 @@ export const fakeBoat = (
 
       const call = callOf(method, url.pathname.split("/").filter(Boolean));
 
+      if (call !== undefined && gateways.delete(call)) {
+        const line = `${method} ${url.pathname} 502 gateway`;
+
+        calls.push(line);
+        options.onCall?.(line, logged);
+        response.writeHead(502, { "content-type": "text/html" });
+        response.end("<html>502 Bad Gateway</html>");
+
+        return;
+      }
+
       if (call !== undefined && losing.delete(call)) {
         const lost = `${method} ${url.pathname} lost`;
 
@@ -1430,6 +1448,13 @@ export const fakeBoat = (
         Effect.sync(() => {
           malformed.push({ name, status: null });
         }),
+      gatewayOnce: (call: BoatCall) =>
+        Effect.sync(() => {
+          gateways.add(call);
+        }),
+      failNextSandbox: Effect.sync(() => {
+        failingNext = true;
+      }),
       listsLag: (times: number) =>
         Effect.sync(() => {
           listsLagging = times;
@@ -1461,6 +1486,8 @@ export interface FakeBoat {
   readonly loseRequest: (call: BoatCall) => Effect.Effect<void>;
   readonly landSaveDuringDelete: Effect.Effect<void>;
   readonly listsLag: (times: number) => Effect.Effect<void>;
+  readonly gatewayOnce: (call: BoatCall) => Effect.Effect<void>;
+  readonly failNextSandbox: Effect.Effect<void>;
   readonly malformedSnapshot: (name: string) => Effect.Effect<void>;
   readonly saveAs: (sandboxId: string, name: string) => Effect.Effect<void>;
   readonly refuseOnce: (call: BoatCall) => Effect.Effect<void>;

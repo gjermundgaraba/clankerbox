@@ -57,7 +57,7 @@ export interface FakeSmolCloudOptions {
   readonly onCall?: ((call: string) => void) | undefined;
 }
 
-export type Dropping = Dropped | "capture" | "exec";
+export type Dropping = Dropped | "capture" | "exec" | "resize";
 
 export interface FakeFaults extends Faults {
   readonly dropAnswer: (dropping: Dropping) => Effect.Effect<void>;
@@ -734,9 +734,15 @@ export const fakeSmolCloud = (
           if (sub === "resize") {
             const body = yield* decodeBody(Resources)(request);
 
-            return Option.isNone(body)
-              ? problem(400, "bad_request", "unreadable resize")
-              : resize(machine, body.value);
+            if (Option.isNone(body)) {
+              return problem(400, "bad_request", "unreadable resize");
+            }
+
+            const resized = resize(machine, body.value);
+
+            return (yield* dropped(request, "resize"))
+              ? HttpServerResponse.empty()
+              : resized;
           }
 
           if (sub === "branches") {

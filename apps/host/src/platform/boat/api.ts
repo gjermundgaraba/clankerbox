@@ -275,6 +275,15 @@ export const make = (settings: Settings) =>
             Result.getOrUndefined(body)
           );
 
+          if (
+            response.status >= 500 &&
+            refused.code === `http_${response.status}`
+          ) {
+            return yield* new Unanswered({
+              message: `${what}: HTTP ${response.status} with no answer of boat's, as a gateway gives`,
+            });
+          }
+
           if (waitedOut.has(refused.code)) {
             yield* Effect.sleep(retryAfter(response));
 

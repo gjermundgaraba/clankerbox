@@ -212,8 +212,17 @@ export const make = (url: string, key: Redacted.Redacted) =>
             (response) =>
               Effect.flatMap(
                 Effect.orElseSucceed(response.text, () => ""),
-                (text) => {
+                (text): Effect.Effect<never, ApiError> => {
                   const problem = Option.getOrUndefined(problemOf(text));
+
+                  if (problem === undefined && response.status >= 500) {
+                    return Effect.fail(
+                      new Unanswered({
+                        message: `${call} answered ${response.status} with no problem of smol cloud's, as a gateway does`,
+                      })
+                    );
+                  }
+
                   const code = problem?.code ?? "unknown";
                   const detail = problem?.detail ?? "";
 

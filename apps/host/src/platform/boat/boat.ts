@@ -272,13 +272,22 @@ export const make = (
       Effect.gen(function* () {
         const sandbox = yield* until(
           machine,
-          (found) => found === undefined || running.has(found.state),
+          (found) =>
+            found === undefined ||
+            running.has(found.state) ||
+            found.state === "error",
           what
         );
 
         if (sandbox === undefined) {
           return yield* new Capacity({
             message: `boat gave machine ${machine.name} no machine to run on`,
+          });
+        }
+
+        if (sandbox.state === "error") {
+          return yield* new Internal({
+            message: `boat's ${what} of machine ${machine.name} ended in error`,
           });
         }
 

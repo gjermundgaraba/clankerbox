@@ -27,8 +27,8 @@ import { hostLayer } from "../../src/composition/host.ts";
 import { Operations } from "../../src/operations.ts";
 import * as Api from "../../src/platform/smol-cloud/api.ts";
 import * as SmolCloud from "../../src/platform/smol-cloud/smol-cloud.ts";
-import { Runtime } from "../../src/runtime.ts";
-import type { Handle, Interface, Target } from "../../src/runtime.ts";
+import { Handle, Runtime } from "../../src/runtime.ts";
+import type { Interface, Target } from "../../src/runtime.ts";
 import { Tailnet } from "../../src/tailnet.ts";
 import { fakeSmolCloud } from "../fake-smol-cloud.ts";
 import type { FakeSmolCloud } from "../fake-smol-cloud.ts";
@@ -774,6 +774,26 @@ describe("the smol cloud runtime over an account without a card", () => {
   );
 
   it.live(
+    "a resize whose answer was lost reads the machine, and ends done when it holds the sizes asked",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { fake, runtime } = yield* onCloud;
+          const dev = yield* made(runtime, "dev");
+
+          yield* fake.faults.dropAnswer("resize");
+          yield* runtime.resize(
+            { ...dev, ...sizes },
+            { cpu: 1, ramMib: 2048, diskGib: 10 },
+            true
+          );
+
+          expect(fake.machines.get(dev.handle)?.memoryMb).toBe(2048);
+        })
+      )
+  );
+
+  it.live(
     "keeps each exec's request body within the provider's MiB, counted as JSON encodes it",
     () =>
       Effect.scoped(
@@ -794,7 +814,17 @@ describe("the smol cloud runtime over an account without a card", () => {
   );
 });
 
-const scripted = (creates: { busy: number }, state: string, stalls?: string) =>
+interface Failing {
+  readonly account?: { times: number; readonly answer: "gateway" | "refused" };
+  readonly create?: string;
+}
+
+const scripted = (
+  creates: { busy: number },
+  state: string,
+  stalls?: string,
+  failing?: Failing
+) =>
   HttpClient.make((request, url) =>
     `${request.method} ${url.pathname}` === stalls
       ? Effect.never
@@ -819,6 +849,26 @@ const scripted = (creates: { busy: number }, state: string, stalls?: string) =>
             createdAt: "2026-11-13T00:00:00Z",
           };
 
+          if (
+            route === "GET /v1/account" &&
+            (failing?.account?.times ?? 0) > 0
+          ) {
+            if (failing?.account !== undefined) {
+              failing.account.times -= 1;
+            }
+
+            return failing?.account?.answer === "gateway"
+              ? HttpClientResponse.fromWeb(
+                  request,
+                  new Response("<html>bad gateway</html>", { status: 502 })
+                )
+              : reply(500, {
+                  code: "internal",
+                  detail: "the account store failed",
+                  retryable: false,
+                });
+          }
+
           if (route === "GET /v1/account") {
             return reply(200, {
               plan: { allowAlwaysOn: false },
@@ -827,6 +877,14 @@ const scripted = (creates: { busy: number }, state: string, stalls?: string) =>
               effectiveMaxCpus: 4,
               effectiveMaxMemoryMb: 16_384,
               effectiveMaxDiskGb: 200,
+            });
+          }
+
+          if (route === "POST /v1/machines" && failing?.create !== undefined) {
+            return reply(422, {
+              code: "unprocessable",
+              detail: failing.create,
+              retryable: false,
             });
           }
 
@@ -845,6 +903,10 @@ const scripted = (creates: { busy: number }, state: string, stalls?: string) =>
           }
 
           if (route === "GET /v1/machines") {
+            return reply(200, []);
+          }
+
+          if (route === "GET /v1/checkpoints") {
             return reply(200, []);
           }
 
@@ -884,6 +946,126 @@ const scriptedMake = (busy: number, state = "starting") =>
       runtime.make(machineOf("dev"), { _tag: "image", image }, { _tag: "none" })
     );
   });
+
+describe("a smol cloud make's read of the account", () => {
+  it.effect(
+    "reads the account again after a gateway's 502, and makes the machine",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* scriptedRuntime(
+          scripted({ busy: 0 }, "started", undefined, {
+            account: { times: 1, answer: "gateway" },
+          })
+        );
+
+        const making = yield* Effect.forkChild(
+          runtime.make(
+            machineOf("dev"),
+            { _tag: "image", image },
+            { _tag: "none" }
+          )
+        );
+
+        yield* TestClock.adjust("1 minute");
+
+        const ended = making.pollUnsafe();
+
+        expect(
+          ended !== undefined && Exit.isSuccess(ended),
+          "made within a minute"
+        ).toBe(true);
+      })
+  );
+
+  it.effect(
+    "keeps no failed read, so a make after a refused one reads it afresh",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* scriptedRuntime(
+          scripted({ busy: 0 }, "started", undefined, {
+            account: { times: 1, answer: "refused" },
+          })
+        );
+
+        const make = runtime.make(
+          machineOf("dev"),
+          { _tag: "image", image },
+          { _tag: "none" }
+        );
+
+        expect(Exit.isFailure(yield* Effect.exit(make))).toBe(true);
+
+        const again = yield* Effect.forkChild(make);
+
+        yield* TestClock.adjust("1 minute");
+
+        const ended = again.pollUnsafe();
+
+        expect(
+          ended !== undefined && Exit.isSuccess(ended),
+          "the second made within a minute"
+        ).toBe(true);
+      })
+  );
+});
+
+const refusedCreate = (detail: string) =>
+  Effect.flatMap(
+    scriptedRuntime(
+      scripted({ busy: 0 }, "started", undefined, { create: detail })
+    ),
+    (runtime) =>
+      Effect.flip(
+        runtime.make(
+          machineOf("dev"),
+          { _tag: "image", image },
+          { _tag: "none" }
+        )
+      )
+  );
+
+describe("a smol cloud create the provider refuses 422", () => {
+  it.effect("is Capacity only when it says a limit is reached", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* refusedCreate(
+          "concurrency limit reached: an account without a card can run 4 machines at once"
+        )
+      ).toMatchObject({ _tag: "Capacity" });
+      expect(
+        yield* refusedCreate("ttlSeconds exceeds the maximum of 86400")
+      ).toMatchObject({ _tag: "Internal" });
+    })
+  );
+});
+
+describe("a smol cloud delete", () => {
+  it.effect("ends on a record the provider reads as deleted", () =>
+    Effect.gen(function* () {
+      const runtime = yield* scriptedRuntime(scripted({ busy: 0 }, "deleted"));
+
+      const deleting = yield* Effect.forkChild(
+        runtime.delete(
+          {
+            name: "dev",
+            instance: machineOf("dev").instance,
+            handle: Handle.make("mach-1"),
+          },
+          new Set()
+        )
+      );
+
+      yield* TestClock.adjust("1 minute");
+
+      const ended = deleting.pollUnsafe();
+
+      expect(
+        ended !== undefined && Exit.isSuccess(ended),
+        "deleted within a minute"
+      ).toBe(true);
+    })
+  );
+});
 
 describe("a smol cloud step's deadline", () => {
   it.effect(

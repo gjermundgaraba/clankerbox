@@ -671,6 +671,44 @@ describe("the boat runtime over fake boat", () => {
   );
 
   it.live(
+    "takes a gateway's 502 for a lost answer, and finishes the delete it cut",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          const machine = yield* made(runtime, "dev");
+
+          yield* boat.gatewayOnce("delete");
+          yield* runtime.delete(machine, new Set());
+
+          expect(boat.sandboxes.has(machine.handle)).toBe(false);
+          expect(
+            boat.calls.filter((line) => line.startsWith("DELETE /sandboxes/"))
+          ).toStrictEqual([
+            `DELETE /sandboxes/${machine.handle} 502 gateway`,
+            `DELETE /sandboxes/${machine.handle} 202`,
+          ]);
+        })
+      ),
+    30_000
+  );
+
+  it.live(
+    "fails a make at once when boat puts its sandbox in error",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          yield* boat.failNextSandbox;
+
+          const failed = yield* Effect.flip(made(runtime, "dev"));
+
+          expect(failed).toMatchObject({ _tag: "Internal" });
+          expect(failed.message).toContain("in error");
+        })
+      ),
+    30_000
+  );
+
+  it.live(
     "lists every page of the sandboxes this host marked",
     () =>
       onBoat(

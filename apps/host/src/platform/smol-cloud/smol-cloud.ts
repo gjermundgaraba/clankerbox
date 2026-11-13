@@ -100,7 +100,7 @@ const moves: Readonly<Record<Goal, Readonly<Record<string, Move>>>> = {
     created: "done",
     paused: "done",
   },
-  gone: { missing: "done" },
+  gone: { missing: "done", deleted: "done" },
 };
 
 const transitional = new Set(["creating", "pausing", "starting", "stopping"]);
@@ -155,7 +155,7 @@ const isGone = (error: ApiError) =>
 const isConflict = (error: ApiError): error is Refused =>
   error._tag === "Refused" && error.status === 409;
 
-const quota = /limit|quota|concurrent|maximum|exceed/iu;
+const quota = /limit reached|quota|concurren/iu;
 
 const oversized = (error: Refused) =>
   error.status === 422 && error.detail.startsWith("machine size exceeds");
@@ -308,10 +308,11 @@ export const make = (
           : Effect.void
       );
 
-    const autoStopSeconds = yield* Effect.cached(
+    const autoStopSeconds = yield* Effect.cachedWithTTL(
       Effect.map(api.account, (account) =>
         account.plan.allowAlwaysOn ? 0 : idleStopSeconds
-      )
+      ),
+      (exit) => (exit._tag === "Success" ? Duration.infinity : Duration.zero)
     );
 
     const settle = (
@@ -802,6 +803,15 @@ export const make = (
             diskGb: to.diskGib,
           })
           .pipe(
+            Effect.catchTag("Unanswered", (lost) =>
+              Effect.flatMap(api.machine(machine.handle), ({ resources }) =>
+                (to.cpu ?? resources.cpus) === resources.cpus &&
+                (to.ramMib ?? resources.memoryMb) === resources.memoryMb &&
+                (to.diskGib ?? resources.diskGb) === resources.diskGb
+                  ? Effect.void
+                  : Effect.fail(lost)
+              )
+            ),
             Effect.mapError((error) =>
               error._tag === "Refused" &&
               (error.status === 400 || error.status === 422) &&
