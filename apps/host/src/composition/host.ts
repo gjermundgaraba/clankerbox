@@ -17,8 +17,7 @@ import * as Relay from "../platform/relay.ts";
 import * as S3 from "../platform/s3.ts";
 import * as Tailscale from "../platform/tailscale.ts";
 import * as Reach from "../reach.ts";
-import { Runtime } from "../runtime.ts";
-import type { CannotStart } from "../runtime.ts";
+import { CannotStart, Runtime } from "../runtime.ts";
 import type { HostSettings } from "../settings.ts";
 import { routes } from "./routes.ts";
 
@@ -49,9 +48,20 @@ export interface HostLayerConfig extends HostSettings {
   readonly builds?: S3.BuildsSettings | undefined;
 }
 
-const startedUp = Layer.effectDiscard(
-  Effect.flatMap(Runtime, ({ startup }) => startup)
-);
+const startedUp = (config: HostLayerConfig) =>
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const { files, startup, traits } = yield* Runtime;
+
+      if (config.builds !== undefined && files === undefined) {
+        return yield* new CannotStart({
+          message: `builds: the ${traits.runtime} runtime keeps its checkpoints at its provider, not as files, so it copies no build through a bucket; remove builds from this host's config`,
+        });
+      }
+
+      yield* startup;
+    })
+  );
 
 export const hostLayer = <E, R>(
   config: HostLayerConfig,
@@ -76,7 +86,9 @@ export const hostLayer = <E, R>(
     ),
     Layer.provideMerge(Operations.layer(config)),
     Layer.provideMerge(Reach.layer(config.machinePorts)),
-    Layer.provide(Layer.mergeAll(BindProbe.layer, Relay.layer, startedUp)),
+    Layer.provide(
+      Layer.mergeAll(BindProbe.layer, Relay.layer, startedUp(config))
+    ),
     Layer.provideMerge(runtime),
     Layer.provide(
       config.tailnet === undefined

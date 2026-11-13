@@ -5,22 +5,42 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { version, versionHeader } from "@gjermundgaraba/clankerbox-sdk";
 import { read, scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { Duration, Effect, Fiber, Layer, Logger, Schedule } from "effect";
+import {
+  Duration,
+  Effect,
+  Fiber,
+  Layer,
+  Logger,
+  Redacted,
+  Schedule,
+} from "effect";
 import { expect } from "vite-plus/test";
 
 import { hostLayer } from "../../src/composition/host.ts";
-import type { HostSettings } from "../../src/settings.ts";
+import type { HostLayerConfig } from "../../src/composition/host.ts";
 import { fakeRuntime } from "../fake-runtime.ts";
+import type { FakeRuntimeName } from "../fake-runtime.ts";
 import { hostConfig, hostOn, loopbackServer, noHttp } from "../support.ts";
 
 const started = hostOn({ first: 21_140, last: 21_149 });
 
-const refused = (settings: HostSettings, dir: string) =>
+const refused = (
+  settings: HostLayerConfig,
+  dir: string,
+  as?: FakeRuntimeName,
+  calls: string[] = []
+) =>
   Effect.flip(
     Layer.build(
       hostLayer(
         settings,
-        fakeRuntime({ dir }).layer,
+        fakeRuntime({
+          dir,
+          as,
+          onCall: (call) => {
+            calls.push(call);
+          },
+        }).layer,
         loopbackServer(settings.listen.port)
       ).pipe(Layer.provide(noHttp))
     )
@@ -119,6 +139,36 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(Duration.toMillis(took)).toBeLessThan(1000);
         expect(yield* Fiber.join(exec)).not.toBe(200);
+      })
+  );
+
+  it.effect(
+    "a host whose runtime keeps no checkpoint as files refuses a builds setting, naming both, before its runtime starts anything",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        const calls: string[] = [];
+
+        const failure = yield* refused(
+          {
+            ...hostConfig(dir),
+            builds: {
+              endpoint: "http://127.0.0.1:8333",
+              bucket: "builds",
+              region: "us-east-1",
+              accessKeyId: "id",
+              secretAccessKey: Redacted.make("secret"),
+            },
+          },
+          dir,
+          "fixed",
+          calls
+        );
+
+        expect(calls).toStrictEqual([]);
+        expect(failure._tag).toBe("CannotStart");
+        expect(failure.message).toContain("builds");
+        expect(failure.message).toContain("fixed");
       })
   );
 

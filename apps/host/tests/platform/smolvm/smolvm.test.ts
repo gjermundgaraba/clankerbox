@@ -60,7 +60,12 @@ import type {
 import { scripted as scriptedSpawner } from "../../scripted.ts";
 import type { Call, Reply } from "../../scripted.ts";
 import { prepared, smolvmModel } from "../../smolvm-model.ts";
-import { admitOn, eventually, memoryBuildStore } from "../../support.ts";
+import {
+  admitOn,
+  eventually,
+  filesOf,
+  memoryBuildStore,
+} from "../../support.ts";
 
 const failure = (error: HostError) => [error._tag, error.message];
 
@@ -2241,12 +2246,12 @@ layer(NodeServices.layer)((it) => {
         const settings = { ...(yield* prepared()), bootId: "5bfae059" };
         const builds = yield* runtimeOf(yield* prepared(), source.spawner);
         const fetches = yield* runtimeOf(settings, other.spawner);
-        const files = fetches.files ?? (yield* Effect.die("smolvm has files"));
+        const files = yield* filesOf(fetches);
         let hung = false;
 
         building(source);
         yield* builds.capture(builderRef, buildRef);
-        yield* publish(store, builds, buildRef);
+        yield* publish(store, yield* filesOf(builds), buildRef);
 
         other.faults.reply = ({ args }) => {
           if (args[1] !== "create" || !args.includes(base)) {
@@ -2259,7 +2264,7 @@ layer(NodeServices.layer)((it) => {
         };
 
         const fetching = yield* Effect.forkChild(
-          fetch(store, fetches, fetched, buildRef.name, "web@1")
+          fetch(store, files, fetched, buildRef.name, "web@1")
         );
 
         yield* waitFor(
@@ -3190,11 +3195,11 @@ layer(NodeServices.layer)((it) => {
 
         building(source);
         yield* builds.capture(builderRef, buildRef);
-        yield* publish(store, builds, buildRef);
+        yield* publish(store, yield* filesOf(builds), buildRef);
 
         const handle = yield* fetch(
           store,
-          fetches,
+          yield* filesOf(fetches),
           fetched,
           buildRef.name,
           "web@1"

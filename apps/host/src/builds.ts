@@ -3,7 +3,7 @@ import { Context, Effect, FileSystem, Option, Path, Schema } from "effect";
 import type { PlatformError } from "effect";
 import { Hex } from "effect/encoding";
 
-import type { Handle, Identity, Runtime, Target } from "./runtime.ts";
+import type { CheckpointFiles, Handle, Identity, Target } from "./runtime.ts";
 
 /**
  * Where a host copies template builds to and from, shared by every host of the fleet: objects by
@@ -192,27 +192,17 @@ const readManifest = (store: Interface, name: string) =>
     )
   );
 
-const filesOf = (runtime: Runtime["Service"], what: string) =>
-  runtime.files === undefined
-    ? Effect.fail(
-        new Internal({
-          message: `this host's runtime keeps no checkpoint as files, so it can't ${what}`,
-        })
-      )
-    : Effect.succeed(runtime.files);
-
 /**
  * Uploads `checkpoint`'s files under its name, each object only when the store lacks it, and the
  * manifest last, so whatever reads the manifest finds every object it names.
  */
 export const publish = (
   store: Interface,
-  runtime: Runtime["Service"],
+  local: CheckpointFiles,
   checkpoint: Target
 ): Effect.Effect<void, Internal, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const local = yield* filesOf(runtime, `publish ${checkpoint.name}`);
     const present = new Set(yield* store.list(objects));
     let uploaded = 0;
 
@@ -289,7 +279,7 @@ export const publish = (
  */
 export const fetch = (
   store: Interface,
-  runtime: Runtime["Service"],
+  local: CheckpointFiles,
   checkpoint: Identity,
   from: string,
   build: string
@@ -297,7 +287,6 @@ export const fetch = (
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const paths = yield* Path.Path;
-    const local = yield* filesOf(runtime, `fetch build ${build}`);
     const staged = local.staging(checkpoint);
     const manifest = yield* readManifest(store, from);
     let downloaded = 0;

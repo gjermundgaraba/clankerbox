@@ -75,6 +75,7 @@ import {
 } from "./runtime.ts";
 import type {
   Booting,
+  CheckpointFiles,
   Handle,
   Held,
   Identity,
@@ -325,6 +326,13 @@ export const make = (
     };
 
     const builds = yield* Effect.serviceOption(BuildStore);
+
+    const copying = Option.flatMap(builds, (store) =>
+      Option.map(Option.fromNullishOr(runtime.files), (local) => ({
+        store,
+        local,
+      }))
+    );
 
     const files = Context.make(
       FileSystem.FileSystem,
@@ -822,17 +830,19 @@ export const make = (
     const withBuilds = <A>(
       what: string,
       work: (
-        store: BuildStore["Service"]
+        store: BuildStore["Service"],
+        local: CheckpointFiles
       ) => Effect.Effect<A, HostError, FileSystem.FileSystem | Path.Path>
     ) =>
-      Option.match(builds, {
+      Option.match(copying, {
         onNone: () =>
           Effect.fail(
             new Internal({
-              message: `host ${config.id} has no builds setting, so it can't ${what}`,
+              message: `host ${config.id} copies no build through a bucket, so it can't ${what}`,
             })
           ),
-        onSome: (store) => Effect.provideContext(work(store), files),
+        onSome: ({ store, local }) =>
+          Effect.provideContext(work(store, local), files),
       });
 
     const perform = (
@@ -1025,9 +1035,9 @@ export const make = (
         }
 
         case "publish": {
-          return withBuilds(`publish ${step.checkpoint.name}`, (store) =>
+          return withBuilds(`publish ${step.checkpoint.name}`, (store, local) =>
             Effect.flatMap(checkpointTarget(step.checkpoint), (checkpoint) =>
-              publish(store, runtime, checkpoint)
+              publish(store, local, checkpoint)
             )
           );
         }
@@ -1036,9 +1046,9 @@ export const make = (
           const { checkpoint, from, build } = step;
 
           return Effect.tapError(
-            withBuilds(`fetch build ${build}`, (store) =>
+            withBuilds(`fetch build ${build}`, (store, local) =>
               Effect.map(
-                fetch(store, runtime, checkpoint, from, build),
+                fetch(store, local, checkpoint, from, build),
                 (handle) => {
                   progress.outcome = { ...progress.outcome, handle };
                 }

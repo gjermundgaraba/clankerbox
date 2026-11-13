@@ -12,6 +12,7 @@ import { BuildsSettings, make } from "../../src/platform/s3.ts";
 import { Runtime } from "../../src/runtime.ts";
 import type { Identity } from "../../src/runtime.ts";
 import { fakeRuntime } from "../fake-runtime.ts";
+import { filesOf } from "../support.ts";
 import { dockerAnswers, seaweedfs } from "./seaweedfs.ts";
 
 class Seaweed extends Context.Service<Seaweed, BuildsSettings>()(
@@ -179,10 +180,10 @@ describe.skipIf(!dockerAnswers && process.env["CI"] === undefined)(
             "disk.raw": "the disk",
           });
 
-          yield* publish(store, publishing, built);
+          yield* publish(store, yield* filesOf(publishing), built);
           yield* fetch(
             counted,
-            yield* runtimeIn(to),
+            yield* filesOf(yield* runtimeIn(to)),
             checkpointRef("fetched"),
             "built",
             "web@1"

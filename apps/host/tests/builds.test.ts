@@ -28,7 +28,7 @@ import type { Identity } from "../src/runtime.ts";
 import type { FakeRuntimeName } from "./fake-runtime.ts";
 import { fakeRuntime } from "./fake-runtime.ts";
 import { scripted } from "./scripted.ts";
-import { memoryBuildStore } from "./support.ts";
+import { filesOf, memoryBuildStore } from "./support.ts";
 
 const Written = Schema.fromJsonString(
   Schema.Struct({
@@ -128,7 +128,7 @@ const published = (
 
     yield* publish(
       memory.store,
-      from,
+      yield* filesOf(from),
       yield* planted(from, checkpointRef("built"), contents)
     );
 
@@ -155,7 +155,7 @@ const published = (
 
     const fetched = fetch(
       memory.store,
-      runtime,
+      yield* filesOf(runtime),
       checkpointRef("fetched"),
       "built",
       "web@1"
@@ -409,7 +409,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           writeFileSync(target, content);
         }
 
-        yield* publish(memory.store, yield* smolvmIn(from), {
+        yield* publish(memory.store, yield* filesOf(yield* smolvmIn(from)), {
           ...built,
           handle: nativeName(built),
         });
@@ -418,7 +418,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* fetch(
           memory.store,
-          yield* smolvmIn(to),
+          yield* filesOf(yield* smolvmIn(to)),
           fetchedRef,
           "built",
           "web@1"

@@ -248,3 +248,9 @@ export const eventually = <A, E>(
 
     return last;
   });
+
+/** The checkpoint files a runtime keeps, which a test's runtime must. */
+export const filesOf = (runtime: RuntimeInterface) =>
+  runtime.files === undefined
+    ? Effect.die(`the ${runtime.traits.runtime} runtime keeps no files`)
+    : Effect.succeed(runtime.files);
