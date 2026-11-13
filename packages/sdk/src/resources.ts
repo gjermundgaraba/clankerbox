@@ -7,8 +7,8 @@ import { RuntimeName, RuntimeTraits, Size } from "./traits.ts";
 const CheckpointKind = Schema.Literals(["ram", "disk"]);
 
 /**
- * The user a machine is logged in as, on every runtime: the user a setup, run as root, leaves in the
- * guest, for whom the host installs the operator's keys. Tart's bases ship it; never root.
+ * The user a machine with an SSH login is logged in as: the user a host's preparation creates, or a
+ * base ships, for whom the host installs the operator's keys; never root.
  */
 export const loginUser = "admin";
 

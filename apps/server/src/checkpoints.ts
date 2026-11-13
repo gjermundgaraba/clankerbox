@@ -34,7 +34,7 @@ import type { Scope } from "effect";
 import { applied } from "./chart.ts";
 import { activityOf, checkpointChart, phaseOf } from "./checkpoint-chart.ts";
 import type { CheckpointEvent, CheckpointRow } from "./checkpoint-chart.ts";
-import { driver, untilRest } from "./driver.ts";
+import { apart, driver, untilRest } from "./driver.ts";
 import type { Heard } from "./driver.ts";
 import { answering, Hosts } from "./hosts.ts";
 import { phaseOf as machinePhaseOf, stageOf } from "./machine-chart.ts";
@@ -229,7 +229,12 @@ export const make = (settings: {
         })
       ).pipe(
         Effect.andThen(drive(name)),
-        Effect.ignore,
+        Effect.catch(({ message }) =>
+          Effect.logError(
+            `checkpoint ${name} couldn't wait for machine ${machine} to rest, so the next recheck drives it: ${message}`
+          )
+        ),
+        apart({ checkpoint: name }),
         Effect.forkIn(scope),
         Effect.asVoid
       );

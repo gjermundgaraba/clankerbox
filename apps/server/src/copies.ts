@@ -49,13 +49,13 @@ const copyRefusal = (
 
   switch (traits.copies) {
     case "same": {
-      return `a ${traits.runtime} copy takes its source's own sizes, so machine ${name} keeps ${held} and its ${formatGib(from.diskGib)} disk`;
+      return `machine ${name}'s host copies a machine only at its source's own sizes, so it keeps ${held} and its ${formatGib(from.diskGib)} disk`;
     }
 
     case "grow": {
       return spec.diskGib < from.diskGib
         ? shrunkDisk
-        : `a ${traits.runtime} copy holds its source's RAM, so machine ${name}'s vCPUs and RAM only grow from ${held}`;
+        : `machine ${name}'s host copies a machine only at its source's sizes or larger, so its vCPUs and RAM only grow from ${held}`;
     }
 
     case "any": {

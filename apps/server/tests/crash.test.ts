@@ -540,7 +540,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         ]).toStrictEqual([
           "failed",
           "Unsizable",
-          "a smolvm copy holds its source's RAM, so machine copy's vCPUs and RAM only grow from the source's 1 vCPUs and 1G",
+          "machine copy's host copies a machine only at its source's sizes or larger, so its vCPUs and RAM only grow from the source's 1 vCPUs and 1G",
         ]);
         expect(fake.calls).not.toContain("restore copy");
       })
