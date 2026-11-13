@@ -124,10 +124,7 @@ describe("provider", () => {
       message: "no checkpoint gone",
       action: "restoreMachine",
     });
-    expect(requests(missing.stub)).toStrictEqual([
-      "machine.restore",
-      "machine.delete",
-    ]);
+    expect(requests(missing.stub)).toStrictEqual(["machine.restore"]);
     expect(missing.stub.held()).toStrictEqual([]);
   });
 

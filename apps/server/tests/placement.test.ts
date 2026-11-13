@@ -151,9 +151,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             placed([classed("a", larger), classed("b", larger, small), up("c")])
           ).toStrictEqual(["b", "c"]);
           expect(refusal([classed("a", larger)], "ubuntu")).toMatchObject({
-            _tag: "NotOffered",
+            _tag: "Unsizable",
             message:
-              "no host offers base ubuntu: a has no size class of 1 vCPUs, 1G of RAM and 10G of disk, and gives only its size classes c0 (2 vCPUs, 1G of RAM, 10G of disk)",
+              "no host that offers base ubuntu gives the sizes asked: a has no size class of 1 vCPUs, 1G of RAM and 10G of disk, and gives only its size classes c0 (2 vCPUs, 1G of RAM, 10G of disk)",
           });
         })
     );
@@ -179,9 +179,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
               { ...asked, sizes: { cpu: 3, ramMib: 6144, diskGib: 40 } }
             )
           ).toMatchObject({
-            _tag: "NotOffered",
+            _tag: "Unsizable",
             message:
-              "no host offers base ubuntu: fixed-1 has no size class of 3 vCPUs, 6G of RAM and 40G of disk, and gives only its size classes small (1 vCPUs, 1G of RAM, 10G of disk), default (2 vCPUs, 4G of RAM, 20G of disk), large (4 vCPUs, 8G of RAM, 40G of disk)",
+              "no host that offers base ubuntu gives the sizes asked: fixed-1 has no size class of 3 vCPUs, 6G of RAM and 40G of disk, and gives only its size classes small (1 vCPUs, 1G of RAM, 10G of disk), default (2 vCPUs, 4G of RAM, 20G of disk), large (4 vCPUs, 8G of RAM, 40G of disk)",
           });
         })
     );
@@ -208,9 +208,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           expect(
             refusal(fleet, "ubuntu", { ...odd, host: "boat-1" })
           ).toMatchObject({
-            _tag: "NotOffered",
+            _tag: "Unsizable",
             message:
-              "no host offers base ubuntu: boat-1 has no size class of 3 vCPUs, 6G of RAM and 40G of disk, and gives only its size classes small (2 vCPUs, 4G of RAM, 80G of disk), default (4 vCPUs, 8G of RAM, 80G of disk), large (8 vCPUs, 16G of RAM, 149G of disk)",
+              "no host that offers base ubuntu gives the sizes asked: boat-1 has no size class of 3 vCPUs, 6G of RAM and 40G of disk, and gives only its size classes small (2 vCPUs, 4G of RAM, 80G of disk), default (4 vCPUs, 8G of RAM, 80G of disk), large (8 vCPUs, 16G of RAM, 149G of disk)",
           });
         })
     );
@@ -242,8 +242,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ).toMatchObject({
             _tag: "NotOffered",
             base: "ubuntu",
-            message:
-              "no host offers base ubuntu: the control plane knows no host nope",
+            message: "the control plane knows no host nope",
           });
         })
     );
@@ -342,6 +341,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           expect(pick([classed("b", larger), up("d")])).toStrictEqual(
             Result.succeed(["d"])
           );
+          expect(
+            Result.getOrThrow(Result.flip(holders([classed("b", larger)])))
+          ).toMatchObject({
+            _tag: "Unsizable",
+            message:
+              "no host that holds a current copy of build web@1 gives the sizes asked: b has no size class of 1 vCPUs, 1G of RAM and 10G of disk, and gives only its size classes c0 (1 vCPUs, 2G of RAM, 10G of disk)",
+          });
           expect(
             pick([up("b"), up("d")], { ...asked, host: "d" })
           ).toStrictEqual(Result.succeed(["d"]));

@@ -135,7 +135,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a failed restore or fork is about the resource that failed it, and names the machine it makes",
+    "a refused restore or fork is about the resource that refused it, and names nothing made",
     () =>
       Effect.gen(function* () {
         const { url } = yield* running();
@@ -157,7 +157,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             message: "no checkpoint gone",
             action: "restoreMachine",
             id: "gone",
-            made: "fresh",
           })
         );
         expect(taken).toStrictEqual(
@@ -165,7 +164,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             message: "machine taken exists",
             action: "forkMachine",
             id: "taken",
-            made: "taken",
           })
         );
       })

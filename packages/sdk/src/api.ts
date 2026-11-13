@@ -101,7 +101,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: [...creating, NotBuilt] as const,
       description:
-        "Create a machine on a host with room, and prepare it: from a template's current build, or the build it pins, cloned at the build's sizes or larger ones; or from a base, or an image reference where the host's runtime takes one, its traits' `images`. With `host`, only that host is tried, as if it were the only one, and NotOffered answers a host the control plane doesn't know. A create runs no setup: a template's build runs one. NotBuilt answers a template with no ready build, or none a host that could take its clone holds a current copy of, saying why it passed over each host, and to build the template again, on `host` when given, where a host lacks a copy or holds an outdated one. A create that fails deletes the VM, again at each recheck while that delete fails, and keeps the row, failed, to say why. A template's clone is prepared as part of its create, so one whose preparation fails goes the same way; a base's preparation that fails keeps the machine.",
+        "Create a machine on a host with room, and prepare it: from a template's current build, or the build it pins, cloned at the build's sizes or larger ones; or from a base, or an image reference where the host's runtime takes one, its traits' `images`. With `host`, only that host is tried, as if it were the only one, and NotOffered answers a host the control plane doesn't know. NotOffered answers a base no host offers, and Unsizable sizes that no host offering the base, or holding a current copy of the template's build, gives, each saying why it passed over each host. A create runs no setup: a template's build runs one. NotBuilt answers a template with no ready build, or none a host that could take its clone holds a current copy of, saying why it passed over each host, and to build the template again, on `host` when given, where a host lacks a copy or holds an outdated one. A create that fails deletes the VM, again at each recheck while that delete fails, and keeps the row, failed, to say why. A template's clone is prepared as part of its create, so one whose preparation fails goes the same way; a base's preparation that fails keeps the machine.",
       input: CreateRequest,
       success: Machine,
     }),
@@ -216,8 +216,15 @@ export const Http = ActionHttp.make(
     }),
     Action.make("buildTemplate", {
       ...write,
-      error: [Invalid, Conflict, NotOffered, Unavailable, Internal] as const,
-      description: `Build a template: a machine made from its base, its setup run, then copied and deleted. Each build gives the base and the sizes, which the template then shows, and a setup without a timeout takes the host's. With \`host\`, only that host is tried, as if it were the only one, and NotOffered answers a host the control plane doesn't know. The template's current build moves to this one only once its setup has run, and it keeps its last ${keptBuilds} ready builds. Conflict refuses a build of a template whose build still runs.`,
+      error: [
+        Invalid,
+        Conflict,
+        NotOffered,
+        Unsizable,
+        Unavailable,
+        Internal,
+      ] as const,
+      description: `Build a template: a machine made from its base, its setup run, then copied and deleted. Each build gives the base and the sizes, which the template then shows, and a setup without a timeout takes the host's. With \`host\`, only that host is tried, as if it were the only one, and NotOffered answers a host the control plane doesn't know. NotOffered answers a base no host offers, and Unsizable sizes no host that offers it gives, each saying why it passed over each host. The template's current build moves to this one only once its setup has run, and it keeps its last ${keptBuilds} ready builds. Conflict refuses a build of a template whose build still runs.`,
       input: BuildRequest,
       success: Build,
     }),

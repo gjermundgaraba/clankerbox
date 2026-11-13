@@ -330,6 +330,26 @@ const making =
   (error: ClankerboxError): ClankerboxError =>
     error.located({ made: name });
 
+const mayHaveRun = (error: ClankerboxError): boolean =>
+  error._tag === "Unavailable" && !error.readOnly;
+
+const namingWhatMayExist = <
+  A,
+  B,
+  E1 extends ClankerboxError,
+  E2 extends ClankerboxError,
+>(
+  made: string,
+  sent: Effect.Effect<A, E1>,
+  waited: (recorded: A) => Effect.Effect<B, E2>
+): Effect.Effect<B, ClankerboxError> =>
+  Effect.flatMap(
+    Effect.mapError(sent, (error) =>
+      mayHaveRun(error) ? making(made)(error) : error
+    ),
+    (recorded) => Effect.mapError(waited(recorded), making(made))
+  );
+
 const unlessGone = <A>(read: Effect.Effect<A, ClankerboxError>) =>
   read.pipe(
     Effect.asSome,
@@ -508,9 +528,7 @@ export const make = (
       timeout?: Duration.Duration
     ): Effect.Effect<Success<N>, ErrorOf<N>> =>
       call(name, input, subject, made, timeout).pipe(
-        Effect.mapError((error) =>
-          error.located({ action: name, id: subject, made })
-        )
+        Effect.mapError((error) => error.located({ action: name, id: subject }))
       );
 
     const bounded = <A, E>(
@@ -634,29 +652,29 @@ export const make = (
         );
 
     const create: Interface["create"] = (name, spec, { labels } = {}) =>
-      send(
-        "createMachine",
-        {
-          ...spec,
-          id: name,
-          ...(labels === undefined ? {} : { labels }),
-        },
+      namingWhatMayExist(
         name,
-        name
-      ).pipe(
-        Effect.flatMap((recorded) =>
-          machineRest(recorded, "running", "createMachine")
+        send(
+          "createMachine",
+          {
+            ...spec,
+            id: name,
+            ...(labels === undefined ? {} : { labels }),
+          },
+          name,
+          name
         ),
-        Effect.mapError(making(name))
+        (recorded) => machineRest(recorded, "running", "createMachine")
       );
 
     const startMachine = asking("startMachine", "running");
 
     const restoreMachine: Interface["restoreMachine"] = (input) =>
-      Effect.flatMap(
+      namingWhatMayExist(
+        input.name,
         send("restoreMachine", input, input.checkpoint, input.name),
         (recorded) => machineRest(recorded, "running", "restoreMachine")
-      ).pipe(Effect.mapError(making(input.name)));
+      );
 
     const deleteMachine: Interface["deleteMachine"] = ({ id }) =>
       deleting(
@@ -791,13 +809,15 @@ export const make = (
           machineRest(recorded, "resize", "resizeMachine")
         ),
       forkMachine: (input) =>
-        Effect.flatMap(
+        namingWhatMayExist(
+          input.name,
           send("forkMachine", input, input.machine, input.name),
           (recorded) => machineRest(recorded, "running", "forkMachine")
-        ).pipe(Effect.mapError(making(input.name))),
+        ),
       restoreMachine,
       captureCheckpoint: (input) =>
-        Effect.flatMap(
+        namingWhatMayExist(
+          input.name,
           send("captureCheckpoint", input, input.machine, input.name),
           (recorded) =>
             unlessNoWait(
@@ -809,7 +829,7 @@ export const make = (
                 recorded.id
               )
             )
-        ).pipe(Effect.mapError(making(input.name))),
+        ),
       buildTemplate: (input) =>
         Effect.flatMap(
           send("buildTemplate", input, input.template),

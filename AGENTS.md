@@ -227,8 +227,8 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
   `Declared<action>`.
 - **Errors carry context.** Each failure a caller can act on is its own tagged
   error with fields. The client sets `action`; `id` is the resource the error
-  is about, and `made` the resource a create, fork, restore or capture makes. A
-  file is `Invalid` with its `file`.
+  is about, and `made` the resource a create, fork, restore or capture made or
+  may have made, never set on a refusal. A file is `Invalid` with its `file`.
 - **Tests are Effects** under `@effect/vitest`, on the test clock, except the
   suites that serve a host or a control plane or run scripts in real time, which
   pass `excludeTestServices: true`. Effect is run by hand only in each app's

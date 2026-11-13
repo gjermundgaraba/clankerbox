@@ -355,10 +355,11 @@ export const clankerboxErrors = [...hostErrors, Superseded] as const;
  * What a client's call fails with: what the control plane answers, and `Superseded`, which the
  * client makes. Each carries, where known: `action`, which the client sets; `id`, the resource the
  * error is about, which the control plane sets on `NotFound` and `Conflict` and the client sets to
- * the call's subject otherwise; and `made`, the resource a create, fork, restore or capture makes.
- * A machine whose copy or setup fails is deleted, again at each recheck while that delete fails,
- * and one whose preparation fails is kept; a call whose answer was lost, `Unavailable`, may leave
- * `made` behind.
+ * the call's subject otherwise; and `made`, the resource a create, fork, restore or capture made
+ * or may have made: set on a failure after the control plane recorded the request, and on an
+ * `Unavailable` whose answer was lost, which may leave it behind, but never on a refusal, which
+ * made nothing. A machine whose copy or setup fails is deleted, again at each recheck while that
+ * delete fails, and one whose preparation fails is kept.
  */
 export const ClankerboxError = Schema.Union(clankerboxErrors);
 

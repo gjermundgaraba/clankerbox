@@ -579,20 +579,23 @@ describe("client", () => {
         })
     );
 
-    it.effect("a base no host offers is NotOffered naming the base", () =>
-      Effect.gen(function* () {
-        const error = yield* withClient(
-          server({ bases: ["macos"] }),
-          (client) => Effect.flip(client.create("dev", spec))
-        );
+    it.effect(
+      "a base no host offers is NotOffered naming the base, and nothing made",
+      () =>
+        Effect.gen(function* () {
+          const error = yield* withClient(
+            server({ bases: ["macos"] }),
+            (client) => Effect.flip(client.create("dev", spec))
+          );
 
-        expect(error._tag).toBe("NotOffered");
-        expect(error).toMatchObject({
-          action: "createMachine",
-          base: "ubuntu",
-          made: "dev",
-        });
-      })
+          expect(error._tag).toBe("NotOffered");
+          expect(error).toMatchObject({
+            action: "createMachine",
+            id: "dev",
+            base: "ubuntu",
+          });
+          expect(error).not.toHaveProperty("made");
+        })
     );
 
     it.effect(
@@ -702,7 +705,7 @@ describe("client", () => {
     );
 
     it.effect(
-      "a name that is taken is Conflict, naming what the call makes",
+      "a name that is taken is Conflict about the name, and names nothing made",
       () =>
         Effect.gen(function* () {
           const stub = server({
@@ -716,7 +719,8 @@ describe("client", () => {
           );
 
           expect(error._tag).toBe("Conflict");
-          expect(error).toMatchObject({ id: "dev", made: "dev" });
+          expect(error).toMatchObject({ id: "dev" });
+          expect(error).not.toHaveProperty("made");
         })
     );
   });
@@ -1909,7 +1913,7 @@ describe("client", () => {
     );
 
     it.effect(
-      "a refusal of a restore is about the checkpoint and names what it makes",
+      "a refusal of a restore is about the checkpoint and names nothing made",
       () =>
         Effect.gen(function* () {
           const error = yield* withClient(server(), (client) =>
@@ -1922,13 +1926,13 @@ describe("client", () => {
             _tag: "NotFound",
             action: "restoreMachine",
             id: "gone",
-            made: "new",
           });
+          expect(error).not.toHaveProperty("made");
         })
     );
 
     it.effect(
-      "a capture of a machine that isn't there names what it makes",
+      "a refused capture of a machine that isn't there names nothing made",
       () =>
         Effect.gen(function* () {
           const stub = server({
@@ -1946,7 +1950,8 @@ describe("client", () => {
             )
           );
 
-          expect(error).toMatchObject({ id: "dev", made: "new" });
+          expect(error).toMatchObject({ id: "dev" });
+          expect(error).not.toHaveProperty("made");
         })
     );
   });

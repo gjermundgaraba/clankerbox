@@ -10,6 +10,7 @@ import {
   offered,
   offers,
   Unavailable,
+  Unsizable,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Sizes } from "@gjermundgaraba/clankerbox-sdk";
 import { Array as Arr, Result } from "effect";
@@ -19,10 +20,18 @@ import type { BuildRow, Source } from "./store.ts";
 
 interface Miss {
   readonly why: string;
-  readonly buildCures: boolean;
+  readonly cure?: "build" | "sizes";
 }
 
-const missed = (why: string): Miss => ({ why, buildCures: false });
+const sized = ({ cpu, ramMib, diskGib }: Sizes) =>
+  `${cpu} vCPUs, ${formatMib(ramMib)} of RAM and ${formatGib(diskGib)} of disk`;
+
+const missed = (why: string): Miss => ({ why });
+
+const unsized = (info: HostInfo, sizes: Sizes): Miss => ({
+  why: `has no size class of ${sized(sizes)}, and gives ${givenSizes(info.traits)}`,
+  cure: "sizes",
+});
 
 const sifted = <K, A>(
   reached: readonly Reached[],
@@ -31,12 +40,12 @@ const sifted = <K, A>(
 ) => {
   const taken: A[] = [];
   const misses: string[] = [];
+  const cures = new Set<Miss["cure"]>();
   let noReply = false;
-  let buildCures = false;
 
   const passed = (host: string, miss: Miss) => {
     misses.push(`${host} ${miss.why}`);
-    buildCures ||= miss.buildCures;
+    cures.add(miss.cure);
   };
 
   for (const { member, info, problem } of reached) {
@@ -60,16 +69,13 @@ const sifted = <K, A>(
     }
   }
 
-  return { taken, reasons: misses.join("; "), noReply, buildCures };
+  return { taken, reasons: misses.join("; "), noReply, cures };
 };
 
 export interface Ask {
   readonly sizes: Sizes;
   readonly host: string | undefined;
 }
-
-const sized = ({ cpu, ramMib, diskGib }: Sizes) =>
-  `${cpu} vCPUs, ${formatMib(ramMib)} of RAM and ${formatGib(diskGib)} of disk`;
 
 const among = (
   reached: readonly Reached[],
@@ -89,9 +95,10 @@ const among = (
 /**
  * The hosts that can take a create of `base` at the sizes asked, in config order, to try in turn: a
  * later one only after a definite `Capacity`. With none, a host not draining that gave no reply
- * might have offered the base, so that is `Unavailable`, and `NotOffered` otherwise, each saying
- * why each host was passed over. An ask that names a host is placed as if that host were the only
- * one.
+ * might have taken it, so that is `Unavailable`; a host that offers the base at other sizes makes it
+ * `Unsizable`; and `NotOffered` is the rest, each saying why each host was passed over. An ask that
+ * names a host is placed as if that host were the only one, and one the control plane doesn't know
+ * is `NotOffered`.
  */
 export const placing = (
   reached: readonly Reached[],
@@ -99,20 +106,15 @@ export const placing = (
   ask: Ask
 ): Result.Result<
   Arr.NonEmptyReadonlyArray<HostInfo>,
-  NotOffered | Unavailable
+  NotOffered | Unsizable | Unavailable
 > => {
   const named = among(reached, ask);
 
   if (Result.isFailure(named)) {
-    return Result.fail(
-      new NotOffered({
-        message: `no host offers base ${base}: ${named.failure}`,
-        base,
-      })
-    );
+    return Result.fail(new NotOffered({ message: named.failure, base }));
   }
 
-  const { taken, reasons, noReply } = sifted(
+  const { taken, reasons, noReply, cures } = sifted(
     named.success,
     () => Result.void,
     (info) => {
@@ -122,11 +124,7 @@ export const placing = (
 
       return fitted(info.traits, ask.sizes)
         ? Result.succeed(info)
-        : Result.fail(
-            missed(
-              `has no size class of ${sized(ask.sizes)}, and gives ${givenSizes(info.traits)}`
-            )
-          );
+        : Result.fail(unsized(info, ask.sizes));
     }
   );
 
@@ -134,11 +132,19 @@ export const placing = (
     return Result.succeed(taken);
   }
 
+  if (noReply) {
+    return Result.fail(
+      new Unavailable({
+        message: `no host answered that can take base ${base}: ${reasons}`,
+        readOnly: true,
+      })
+    );
+  }
+
   return Result.fail(
-    noReply
-      ? new Unavailable({
-          message: `no host answered that can take base ${base}: ${reasons}`,
-          readOnly: true,
+    cures.has("sizes")
+      ? new Unsizable({
+          message: `no host that offers base ${base} gives the sizes asked: ${reasons}`,
         })
       : new NotOffered({
           message: `no host offers base ${base}: ${reasons}`,
@@ -203,45 +209,41 @@ export const holding = <A>(
   ask: Ask
 ): Result.Result<
   Arr.NonEmptyReadonlyArray<readonly [HostInfo, A]>,
-  NotBuilt | NotOffered | Unavailable
+  NotBuilt | NotOffered | Unsizable | Unavailable
 > => {
   const named = among(reached, ask);
 
   if (Result.isFailure(named)) {
     return Result.fail(
-      new NotOffered({
-        message: `no host can take a clone of build ${made.id}: ${named.failure}`,
-        base: made.base,
-      })
+      new NotOffered({ message: named.failure, base: made.base })
     );
   }
 
-  const { taken, reasons, noReply, buildCures } = sifted(
+  const { taken, reasons, noReply, cures } = sifted(
     named.success,
     (host) => {
       const copy = copies.get(host);
 
       return copy === undefined
-        ? Result.fail({ why: `holds no copy of ${made.id}`, buildCures: true })
+        ? Result.fail<Miss>({
+            why: `holds no copy of ${made.id}`,
+            cure: "build",
+          })
         : Result.succeed(copy);
     },
     (info, copy) => {
       const why = outdated(info, made);
 
       if (why !== undefined) {
-        return Result.fail({
+        return Result.fail<Miss>({
           why: `holds an outdated copy: it ${why}`,
-          buildCures: true,
+          cure: "build",
         });
       }
 
       return fitted(info.traits, ask.sizes)
         ? Result.succeed([info, copy] as const)
-        : Result.fail(
-            missed(
-              `has no size class of ${sized(ask.sizes)}, and gives ${givenSizes(info.traits)}`
-            )
-          );
+        : Result.fail(unsized(info, ask.sizes));
     }
   );
 
@@ -249,19 +251,26 @@ export const holding = <A>(
     return Result.succeed(taken);
   }
 
-  const advice =
-    ask.host === undefined
-      ? `; run clankerbox template build on ${template}'s template file to build it again`
-      : `; run clankerbox template build on ${template}'s template file with --host ${ask.host} to build it there`;
+  if (noReply) {
+    return Result.fail(
+      new Unavailable({
+        message: `no host answered that can take a clone of build ${made.id}: ${reasons}`,
+        readOnly: true,
+      })
+    );
+  }
+
+  const advice = cures.has("build")
+    ? `; run clankerbox template build on ${template}'s template file ${ask.host === undefined ? "to build it again" : `with --host ${ask.host} to build it there`}`
+    : "";
 
   return Result.fail(
-    noReply
-      ? new Unavailable({
-          message: `no host answered that can take a clone of build ${made.id}: ${reasons}`,
-          readOnly: true,
+    cures.has("sizes")
+      ? new Unsizable({
+          message: `no host that holds a current copy of build ${made.id} gives the sizes asked: ${reasons}${advice}`,
         })
       : new NotBuilt({
-          message: `no host can take a clone of build ${made.id}: ${reasons}${buildCures ? advice : ""}`,
+          message: `no host can take a clone of build ${made.id}: ${reasons}${advice}`,
           template,
         })
   );
