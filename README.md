@@ -172,7 +172,7 @@ One process runs from one JSON config file:
 clankerbox-server --config /etc/clankerbox/server.json
 ```
 
-The control plane exits 130 on SIGINT or SIGTERM and 1 when it fails.
+The control plane exits 130 on SIGINT or SIGTERM and 1 when it fails. Its log holds what an operator acts on: a host that stops answering and answers again, a step a host refuses, a request that answers `Internal` or fails, a loop, recheck or build that fails, and an expiry. Each line of a machine's or checkpoint's own work names it, and the step it follows. An answered request, a refusal included, logs at debug, which `--log-level debug` shows.
 
 ### Upgrading from 0.40
 

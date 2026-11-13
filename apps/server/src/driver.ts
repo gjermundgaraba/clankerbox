@@ -1,5 +1,13 @@
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Cause, Duration, Effect, Latch, Option, Schedule } from "effect";
+import {
+  Cause,
+  Duration,
+  Effect,
+  Latch,
+  Option,
+  References,
+  Schedule,
+} from "effect";
 import type { Scope } from "effect";
 
 import type { Activity } from "./chart.ts";
@@ -80,21 +88,13 @@ const looked = <R extends { readonly state: string }>(
     Effect.catchTag("Unreachable", () => Effect.succeed("rest" as const))
   );
 
-const followed = <R extends { readonly state: string }>(
+const polledFor = <R extends { readonly state: string }>(
   resource: Resource<R>,
-  name: string,
   found: R,
+  op: Operation,
   latch: Latch.Latch
 ) =>
   Effect.gen(function* () {
-    const op = yield* Effect.fromOption(
-      yield* resource.operationOn(resource.kind, name),
-      () =>
-        new Internal({
-          message: `${resource.kind} ${name} is at ${found.state} with no operation`,
-        })
-    );
-
     const polled = yield* Effect.raceFirst(
       resource.polling(found, op),
       Effect.as(latch.await, { at: "woken" } as const)
@@ -117,6 +117,24 @@ const followed = <R extends { readonly state: string }>(
         yield* resource.following(found, op, polled);
       }
     }
+  }).pipe(Effect.annotateLogs({ operation: op.id, step: op.kind }));
+
+const followed = <R extends { readonly state: string }>(
+  resource: Resource<R>,
+  name: string,
+  found: R,
+  latch: Latch.Latch
+) =>
+  Effect.gen(function* () {
+    const op = yield* Effect.fromOption(
+      yield* resource.operationOn(resource.kind, name),
+      () =>
+        new Internal({
+          message: `${resource.kind} ${name} is at ${found.state} with no operation`,
+        })
+    );
+
+    yield* polledFor(resource, found, op, latch);
   });
 
 const turn = <R extends { readonly state: string }>(
@@ -156,6 +174,18 @@ const turn = <R extends { readonly state: string }>(
       }
     }
   });
+
+/**
+ * Work that outlives the request that began it, such as a loop or a build, logs under its own
+ * annotations alone, so none of its lines carries a request that ended long ago.
+ */
+export const apart =
+  (annotations: Readonly<Record<string, string>>) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+    effect.pipe(
+      Effect.provideService(References.CurrentLogAnnotations, annotations),
+      Effect.provideService(References.CurrentLogSpans, [])
+    );
 
 /**
  * Looks until `rests` answers true. A look that fails with `Unavailable` tells of a host's fault,
@@ -212,6 +242,10 @@ export const driver = <R extends { readonly state: string }>(
           yield* latch.close;
 
           const at = yield* turn(resource, name, latch, rechecked).pipe(
+            Effect.withSpan(`${resource.kind}.turn`, {
+              root: true,
+              attributes: { [resource.kind]: name },
+            }),
             Effect.catchCause((cause) =>
               Effect.as(
                 Effect.logError(
@@ -248,6 +282,11 @@ export const driver = <R extends { readonly state: string }>(
 
         wakes.set(name, latch);
 
-        return Effect.asVoid(Effect.forkIn(looped(name, latch), scope));
+        return Effect.asVoid(
+          Effect.forkIn(
+            apart({ [resource.kind]: name })(looped(name, latch)),
+            scope
+          )
+        );
       });
   });

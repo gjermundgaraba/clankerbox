@@ -33,6 +33,7 @@ import type { Scope, Duration } from "effect";
 import { isPublished } from "./checkpoint-chart.ts";
 import type { CheckpointRow } from "./checkpoint-chart.ts";
 import { Checkpoints } from "./checkpoints.ts";
+import { apart } from "./driver.ts";
 import { Hosts } from "./hosts.ts";
 import type { Reached } from "./hosts.ts";
 import { Machines } from "./machines.ts";
@@ -458,7 +459,9 @@ export const make = (settings: {
         const begin = Arr.lastNonEmpty(row.builds);
 
         yield* Effect.forkIn(
-          run(name, begin.number, asked, request.setup.script, host),
+          apart({ template: name, build: buildId(name, begin.number) })(
+            run(name, begin.number, asked, request.setup.script, host)
+          ),
           scope
         );
 

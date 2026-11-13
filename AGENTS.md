@@ -70,7 +70,9 @@ the whole CLI span domains on purpose.
 - `machine-chart.ts`, `checkpoint-chart.ts`: the xstate charts. Each leaf's `meta`
   holds its `phase`, its `step` and the `activity` its loop runs there.
 - `driver.ts`: `driver`, the loops of one resource, at most one per name, with
-  the activity of a row's leaf picking each turn; `untilRest`, a build's wait.
+  the activity of a row's leaf picking each turn; `untilRest`, a build's wait;
+  `apart`, which logs a loop or a build as its own, not as the request that
+  began it.
 - `machines.ts`, `checkpoints.ts`: the `Machines` and `Checkpoints` services,
   one per resource, each with its `make` and `layer`. `Machines` takes the
   requests, places a create and starts the recheck; `Checkpoints` captures,
@@ -103,7 +105,8 @@ the whole CLI span domains on purpose.
 `platform/sqlite.ts` is the `Store`, and loads each chart's `leaves` at runtime to
 validate `state`. `composition/`: `config.ts` reads the config file, `routes.ts`
 serves the client contract, and `server.ts`, the package's entry, builds the
-server over a server Layer it is given. A domain file never imports `platform/`
+server over a server Layer it is given, with `journaled`, which logs a request
+only when it answers `Internal` or fails, and every other at debug. A domain file never imports `platform/`
 or `composition/`.
 
 **Host** (`apps/host/src`). Domain files sit flat in `src/`:

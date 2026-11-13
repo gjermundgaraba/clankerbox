@@ -1,13 +1,14 @@
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Layer } from "effect";
+import { Cause, Effect, Exit, Layer } from "effect";
 import type { FileSystem, Path } from "effect";
-import { HttpRouter } from "effect/http";
+import { HttpRouter, HttpServerRequest } from "effect/http";
 import type {
   Etag,
   HttpClient,
   HttpPlatform,
   HttpServer,
   HttpServerError,
+  HttpServerResponse,
 } from "effect/http";
 
 import * as Checkpoints from "../checkpoints.ts";
@@ -28,6 +29,43 @@ export type ServerLayer = Layer.Layer<
   HttpServerError.ServeError
 >;
 
+const internalStatus = 500;
+
+/**
+ * The journal holds what an operator acts on: a request that answers `Internal` or fails as no
+ * declared error does. An answer, a refusal included, is the client's, and logs at debug.
+ */
+export const journaled = <E, R>(
+  app: Effect.Effect<
+    HttpServerResponse.HttpServerResponse,
+    E,
+    HttpServerRequest.HttpServerRequest | R
+  >
+) =>
+  Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
+    Effect.onExit(app, (exit) => {
+      const fields = { "http.method": request.method, "http.url": request.url };
+
+      if (Exit.isFailure(exit)) {
+        return Cause.hasInterruptsOnly(exit.cause)
+          ? Effect.void
+          : Effect.annotateLogs(
+              Effect.logError("a request failed", exit.cause),
+              fields
+            );
+      }
+
+      const status = { ...fields, "http.status": exit.value.status };
+
+      return exit.value.status === internalStatus
+        ? Effect.annotateLogs(
+            Effect.logError("a request answered Internal"),
+            status
+          )
+        : Effect.annotateLogs(Effect.logDebug("Sent HTTP response"), status);
+    })
+  );
+
 export const serverLayer = (
   config: ServerSettings,
   server: ServerLayer
@@ -41,7 +79,10 @@ export const serverLayer = (
   CannotStart | Internal,
   HttpClient.HttpClient | FileSystem.FileSystem
 > =>
-  HttpRouter.serve(routes).pipe(
+  HttpRouter.serve(routes, {
+    disableLogger: true,
+    middleware: journaled,
+  }).pipe(
     Layer.provideMerge(
       Layer.catchTag(server, "ServeError", (error) =>
         Layer.effectContext(

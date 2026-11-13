@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Deferred, Duration, Effect, Logger, Option } from "effect";
+import { Deferred, Duration, Effect, Logger, Option, References } from "effect";
 import { TestClock } from "effect/testing";
 
 import { driver } from "../src/driver.ts";
@@ -190,6 +190,56 @@ describe("a wake", () => {
 });
 
 describe("a loop", () => {
+  it.effect(
+    "logs as its own, naming its resource and the step it follows, not the request that started it",
+    () =>
+      Effect.gen(function* () {
+        const lines: Array<{
+          readonly annotations: ReadonlyArray<readonly [string, unknown]>;
+          readonly spans: readonly string[];
+        }> = [];
+
+        const heard = Logger.make(({ fiber }) => {
+          lines.push({
+            annotations: Object.entries(
+              fiber.getRef(References.CurrentLogAnnotations)
+            ),
+            spans: fiber
+              .getRef(References.CurrentLogSpans)
+              .map(([label]) => label),
+          });
+        });
+
+        const { held, hooks, drive } = yield* harness({ state: "following" });
+
+        hooks.following = () =>
+          Effect.andThen(
+            Effect.logWarning("heard"),
+            Effect.sync(() => {
+              held.row = { state: "resting" };
+            })
+          );
+
+        yield* drive("dev").pipe(
+          Effect.annotateLogs({ "action.name": "createMachine" }),
+          Effect.withLogSpan("http.span"),
+          Effect.provide(Logger.layer([heard]))
+        );
+        yield* settled;
+
+        expect(lines).toStrictEqual([
+          {
+            annotations: [
+              ["machine", "dev"],
+              ["operation", "op"],
+              ["step", "stop"],
+            ],
+            spans: [],
+          },
+        ]);
+      })
+  );
+
   it.effect(
     "ends at a leaf only a request moves, and a request starts another",
     () =>
