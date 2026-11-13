@@ -403,6 +403,57 @@ describe("provider", () => {
     ]);
   });
 
+  it("a destroy and a pause keep the tunnel open until the machine's delete or stop is done, so a reply the agent is still sending arrives", async () => {
+    const open: Record<string, boolean> = {};
+    let port = 0;
+
+    const { sandbox, calls } = await setup(
+      { machines: [reachable("kept"), reachable("held")] },
+      {},
+      fakeSsh,
+      (client) => ({
+        ...client,
+        deleteMachine: (input) =>
+          Effect.andThen(
+            Effect.promise(async () => {
+              open["delete"] = await listening(port);
+            }),
+            client.deleteMachine(input)
+          ),
+        stopMachine: (input) =>
+          Effect.andThen(
+            Effect.promise(async () => {
+              open["stop"] = await listening(port);
+            }),
+            client.stopMachine(input)
+          ),
+      })
+    );
+
+    const kept = await SandboxAgent.start({
+      sandbox,
+      sandboxId: "clankerbox/kept",
+    });
+
+    const keptCalls = await calls();
+
+    port = keptCalls.at(-1)?.port ?? 0;
+    await kept.pauseSandbox();
+
+    const held = await SandboxAgent.start({
+      sandbox,
+      sandboxId: "clankerbox/held",
+    });
+
+    const heldCalls = await calls();
+
+    port = heldCalls.at(-1)?.port ?? 0;
+    await held.destroySandbox();
+
+    expect(open).toStrictEqual({ stop: true, delete: true });
+    await until("the tunnel to end", async () => !(await listening(port)));
+  });
+
   it("one sandbox's calls take turns: two reconnects never start its machine at the same time", async () => {
     let running = 0;
     let most = 0;

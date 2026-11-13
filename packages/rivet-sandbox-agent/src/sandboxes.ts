@@ -253,8 +253,9 @@ export const make = (options: Options, ssh = "ssh") => {
         Effect.gen(function* () {
           const client = yield* Client.Client;
 
-          yield* closed(known);
-          yield* client.deleteMachine({ id });
+          yield* client
+            .deleteMachine({ id })
+            .pipe(Effect.ensuring(closed(known)));
           known.urlPort = undefined;
         })
       ),
@@ -263,8 +264,9 @@ export const make = (options: Options, ssh = "ssh") => {
         Effect.gen(function* () {
           const client = yield* Client.Client;
 
-          yield* closed(known);
-          yield* client.stopMachine({ id });
+          yield* client
+            .stopMachine({ id })
+            .pipe(Effect.ensuring(closed(known)));
         })
       ),
     resize: (id: string, sizes: Sizing) =>
