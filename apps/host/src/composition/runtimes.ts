@@ -3,6 +3,7 @@ import type { FileSystem, Layer, Schema } from "effect";
 import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 
+import type { Box } from "../box.ts";
 import type { ReservedPorts } from "../machine-ports.ts";
 import * as Boat from "../platform/boat/boat.ts";
 import * as SmolCloud from "../platform/smol-cloud/smol-cloud.ts";
@@ -17,6 +18,7 @@ type RuntimeLayer = Layer.Layer<
   | ChildProcessSpawner.ChildProcessSpawner
   | FileSystem.FileSystem
   | HttpClient.HttpClient
+  | Box
 >;
 
 export const runtimes = {

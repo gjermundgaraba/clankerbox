@@ -23,6 +23,8 @@ import {
 import type { Scope } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 
+import { Box } from "../../box.ts";
+import type { Facts } from "../../box.ts";
 import { unkey } from "../../guest.ts";
 import type { ReservedPorts } from "../../machine-ports.ts";
 import {
@@ -49,14 +51,7 @@ import type {
 } from "../../runtime.ts";
 import type { HostSettings } from "../../settings.ts";
 import { allotted, checkRamBudget, inUse } from "../../usage.ts";
-import {
-  cliIn,
-  expect,
-  failure,
-  files,
-  processEnded,
-  regularFiles,
-} from "../process.ts";
+import { cliIn, expect, failure, files, regularFiles } from "../process.ts";
 import { aloneOnBox, boxLock } from "./one-per-box.ts";
 import { traits } from "./traits.ts";
 
@@ -94,12 +89,6 @@ export interface Settings {
   readonly stateDir: string;
   readonly arch: string;
   readonly bootId: string;
-}
-
-/** What the box a smolvm host runs on tells it beside its settings: its uid, and whether a process has ended. */
-export interface Box {
-  readonly uid: number | undefined;
-  readonly ended: (pid: number) => Effect.Effect<boolean>;
 }
 
 const bootIdFile = "/proc/sys/kernel/random/boot_id";
@@ -411,7 +400,7 @@ const given = (flag: string, size: number | undefined) =>
 
 export const make = (
   settings: Settings,
-  { uid, ended }: Box
+  { uid, ended }: Pick<Facts, "uid" | "ended">
 ): Effect.Effect<
   Interface,
   HostError | CannotStart,
@@ -1681,12 +1670,13 @@ export const layer = (
 ): Layer.Layer<
   Runtime,
   HostError | CannotStart,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Box
 > =>
   Layer.effect(
     Runtime,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
+      const box = yield* Box;
 
       yield* aloneOnBox(lock, config.stateDir);
 
@@ -1707,7 +1697,7 @@ export const layer = (
           arch: process.arch,
           bootId: bootId.replaceAll("-", "").slice(0, 8),
         },
-        { uid: process.getuid?.(), ended: processEnded }
+        box
       );
     })
   );

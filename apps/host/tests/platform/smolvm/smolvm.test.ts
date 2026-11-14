@@ -27,6 +27,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { TestClock } from "effect/testing";
 import { expect } from "vite-plus/test";
 
+import type { Facts } from "../../../src/box.ts";
 import { fetch, publish } from "../../../src/builds.ts";
 import { runCommand } from "../../../src/guest.ts";
 import { PortProbe } from "../../../src/machine-ports.ts";
@@ -44,7 +45,7 @@ import {
   stateOf,
   ramBudget,
 } from "../../../src/platform/smolvm/smolvm.ts";
-import type { Box, Settings } from "../../../src/platform/smolvm/smolvm.ts";
+import type { Settings } from "../../../src/platform/smolvm/smolvm.ts";
 import * as Reach from "../../../src/reach.ts";
 import { Runtime } from "../../../src/runtime.ts";
 import type {
@@ -128,7 +129,10 @@ const freezerStatus = [
 
 const listing = ["machine", "ls", "--json"];
 
-const callsEnded: Box = { uid: 0, ended: () => Effect.succeed(true) };
+const callsEnded: Pick<Facts, "uid" | "ended"> = {
+  uid: 0,
+  ended: () => Effect.succeed(true),
+};
 
 const runtimeOf = (
   settings: Settings,

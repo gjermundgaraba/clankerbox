@@ -9,7 +9,8 @@ import {
 import { Address } from "@gjermundgaraba/clankerbox-sdk/node";
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
 
-import { defaultMachinePorts, ephemeralPorts } from "../machine-ports.ts";
+import { Box } from "../box.ts";
+import { defaultMachinePorts } from "../machine-ports.ts";
 import { BuildsSettings } from "../platform/s3.ts";
 import { TailnetSettings } from "../platform/tailscale.ts";
 import type { HostSettings } from "../settings.ts";
@@ -107,19 +108,16 @@ const chosenRuntime = (
 
 const resolveConfig = (
   decoded: HostConfigFile,
-  directory: string,
-  platform: string
-): Effect.Effect<HostConfig, Invalid, Path.Path> =>
+  directory: string
+): Effect.Effect<HostConfig, Invalid, Path.Path | Box> =>
   Effect.gen(function* () {
     const path = yield* Path.Path;
+    const { ephemeralPorts } = yield* Box;
     const runtime = yield* chosenRuntime(decoded.runtime);
     const machinePorts = decoded.machinePorts ?? defaultMachinePorts;
     const { port } = decoded.listen;
 
-    const reserved = [
-      ...reservedPortsOf(runtime.name),
-      ephemeralPorts(platform),
-    ].find(
+    const reserved = [...reservedPortsOf(runtime.name), ephemeralPorts].find(
       ({ first, last }) =>
         machinePorts.first <= last && machinePorts.last >= first
     );
@@ -145,11 +143,14 @@ const resolveConfig = (
     };
   });
 
-/** Reads the host config `file` for a box whose OS is `platform`, as Node's `process.platform` names it. */
+/** Reads the host config `file`, for the box its `Box` tells of. */
 export const loadConfig = (
-  file: string,
-  platform: string
-): Effect.Effect<HostConfig, Invalid, FileSystem.FileSystem | Path.Path> =>
+  file: string
+): Effect.Effect<
+  HostConfig,
+  Invalid,
+  FileSystem.FileSystem | Path.Path | Box
+> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -175,7 +176,7 @@ export const loadConfig = (
       )
     );
 
-    return yield* resolveConfig(decoded, path.dirname(resolved), platform).pipe(
+    return yield* resolveConfig(decoded, path.dirname(resolved)).pipe(
       Effect.mapError(
         (error) =>
           new Invalid({

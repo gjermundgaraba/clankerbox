@@ -8,8 +8,9 @@ import {
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { Effect, FileSystem, Schema } from "effect";
 
+import type { Facts } from "../src/box.ts";
 import { minimumVersion, templates } from "../src/platform/smolvm/smolvm.ts";
-import type { Box, Settings } from "../src/platform/smolvm/smolvm.ts";
+import type { Settings } from "../src/platform/smolvm/smolvm.ts";
 import { scripted } from "./scripted.ts";
 import type { Call, Reply } from "./scripted.ts";
 
@@ -374,7 +375,7 @@ export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
 
   const running = new Set<number>();
 
-  const box = (uid: number | undefined = 0): Box => ({
+  const box = (uid: number | undefined = 0): Pick<Facts, "uid" | "ended"> => ({
     uid,
     ended: (pid) => Effect.sync(() => !running.has(pid)),
   });

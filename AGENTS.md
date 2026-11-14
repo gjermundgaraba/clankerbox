@@ -126,7 +126,9 @@ or `composition/`.
   its `prepares` (`always` where its images lack the login user, else
   `with-setup`), and the facets `admission`, `files` and `owned`, each present or
   absent as a whole,
-  `PortProbe` (`machine-ports.ts`), `Relays` (`reach.ts`), `Tailnet`
+  `PortProbe` (`machine-ports.ts`), `Box` (`box.ts`), what the box tells a host
+  beside its config: its uid, whether a process has ended, and its ephemeral
+  ports, `Relays` (`reach.ts`), `Tailnet`
   (`tailnet.ts`), which mints a machine's tailnet key, provided only on a host
   that joins a tailnet, and `BuildStore` (`builds.ts`), provided only on a host
   with a `builds` setting. Each `Runtime` method that acts on a machine or
@@ -143,7 +145,8 @@ or `composition/`.
   facet, and the four adapters over `tests/smolvm-model.ts`,
   `tests/scripted-mac.ts`, `tests/fake-smol-cloud.ts` and `tests/fake-boat.ts`.
 
-Adapters live in `platform/`: `bind-probe.ts` (`PortProbe`), `relay.ts`
+Adapters live in `platform/`: `bind-probe.ts` (`PortProbe`), `box.ts` (`Box`,
+which reads Linux's `ip_local_port_range`), `relay.ts`
 (`Relays`, a TCP listener that carries each connection through a runtime's
 dial), `tailscale.ts` (`Tailnet`, over Tailscale's API), `s3.ts` (`BuildStore`,
 over S3, path-style and signed), the runtimes `smolvm/` (the lock that keeps
@@ -197,8 +200,9 @@ delete, over the client), `job.ts` (the job, from the environment Amp gives),
 
 Only at an entry: each app's `main.ts` (the CLI's: Node's services, HTTP client
 and TCP dial, and the path that runs it; the server's: the config's server Layer
-and Node's HTTP client, given to `serverLayer`; the host's: the config's
-runtime, from the registry, and Node's HTTP server, given to `hostLayer`), the SDK's `node.ts` (the
+and Node's HTTP client, given to `serverLayer`; the host's: the box's facts,
+the config's runtime, from the registry, and Node's HTTP server, given to
+`hostLayer`), the SDK's `node.ts` (the
 client over Node's HTTP), the provider's `index.ts` (the client over its
 server URL, given to `provider`), and the Amp orb provider's `main.ts` (Node's
 services and HTTP client, given to its command). Tests pass their own: the host's `./testing`

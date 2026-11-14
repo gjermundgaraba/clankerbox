@@ -7,6 +7,7 @@ import { layer } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import { describe, expect } from "vite-plus/test";
 
+import * as NodeBox from "../../../src/platform/box.ts";
 import { aloneOnBox } from "../../../src/platform/smolvm/one-per-box.ts";
 import { layer as smolvmLayer } from "../../../src/platform/smolvm/smolvm.ts";
 
@@ -22,7 +23,7 @@ const started = (lock: string) =>
         lock
       )
     )
-  );
+  ).pipe(Effect.provide(NodeBox.layer));
 
 const squatted = (lock: string) =>
   Effect.acquireRelease(

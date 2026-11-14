@@ -12,10 +12,11 @@ import { Command, Flag } from "effect/cli";
 import { loadConfig } from "./composition/config.ts";
 import { hostLayer, listening } from "./composition/host.ts";
 import { runtimeLayer } from "./composition/runtimes.ts";
+import * as NodeBox from "./platform/box.ts";
 
 const run = (file: string) =>
   Effect.gen(function* () {
-    const config = yield* loadConfig(file, process.platform);
+    const config = yield* loadConfig(file);
 
     return yield* Layer.launch(
       hostLayer(
@@ -42,7 +43,10 @@ const host = Command.make(
 NodeRuntime.runMain(
   Command.run(host, { version }).pipe(
     Effect.provide(
-      Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerNodeHttp)
+      Layer.mergeAll(
+        Layer.provideMerge(NodeBox.layer, NodeServices.layer),
+        NodeHttpClient.layerNodeHttp
+      )
     )
   )
 );

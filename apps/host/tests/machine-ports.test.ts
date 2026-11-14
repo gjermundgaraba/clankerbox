@@ -3,12 +3,9 @@ import { Effect, Layer } from "effect";
 import { expect } from "vite-plus/test";
 
 import { runtimes } from "../src/composition/runtimes.ts";
-import {
-  defaultMachinePorts,
-  ephemeralPorts,
-  PortProbe,
-} from "../src/machine-ports.ts";
+import { defaultMachinePorts, PortProbe } from "../src/machine-ports.ts";
 import type { PortRange, Probe } from "../src/machine-ports.ts";
+import { defaultEphemeralPorts } from "../src/platform/box.ts";
 import * as Reach from "../src/reach.ts";
 
 const probing = (busy: ReadonlySet<number>) => {
@@ -69,7 +66,7 @@ it.effect(
 describe("reserved ports", () => {
   it("the default range lies below every reserved range, of any runtime", () => {
     const reservedPorts = [
-      ...["linux", "darwin", "freebsd"].map(ephemeralPorts),
+      ...["linux", "darwin", "freebsd"].map(defaultEphemeralPorts),
       ...Object.values(runtimes).flatMap((runtime) =>
         "reservedPorts" in runtime ? runtime.reservedPorts : []
       ),

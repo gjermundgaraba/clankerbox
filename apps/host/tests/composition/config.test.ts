@@ -8,7 +8,9 @@ import { Effect, Redacted } from "effect";
 import type { Schema } from "effect";
 import { expect } from "vite-plus/test";
 
+import { Box } from "../../src/box.ts";
 import { loadConfig } from "../../src/composition/config.ts";
+import type { ReservedPorts } from "../../src/machine-ports.ts";
 
 const image = "registry.example/ubuntu@sha256:00";
 const macImage = "registry.example/macos@sha256:00";
@@ -21,13 +23,26 @@ const config = {
   runtime: { smolvm: { prefix: "/opt/smolvm" } },
 };
 
-const load = (contents: Schema.Json, platform = "linux") =>
+const linuxDefault: ReservedPorts = {
+  first: 32_768,
+  last: 60_999,
+  owner: "Linux's default ephemeral ports",
+};
+
+const onBox = (ephemeralPorts: ReservedPorts) =>
+  Effect.provideService(Box, {
+    uid: 0,
+    ended: () => Effect.succeed(true),
+    ephemeralPorts,
+  });
+
+const load = (contents: Schema.Json, ephemeral = linuxDefault) =>
   Effect.gen(function* () {
     const file = path.join(yield* scratch, "host.json");
 
     yield* write(file, JSON.stringify(contents));
 
-    return { file, loaded: loadConfig(file, platform) };
+    return { file, loaded: onBox(ephemeral)(loadConfig(file)) };
   });
 
 layer(NodeServices.layer)((it) => {
@@ -352,95 +367,109 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "machinePorts stays out of its box's ephemeral ports on every host, and out of smolvm's fork ports on a smolvm host alone",
+    "machinePorts stays out of the ephemeral ports its box tells of on every host, and out of smolvm's fork ports on a smolvm host alone",
     () =>
       Effect.gen(function* () {
         const tart = { tart: { binary: "/opt/homebrew/bin/tart" } };
 
-        for (const [runtime, platform, first, last] of [
-          [config.runtime, "linux", 9000, 19_999],
-          [config.runtime, "linux", 32_000, 32_767],
-          [config.runtime, "linux", 61_000, 65_535],
-          [config.runtime, "darwin", 32_000, 49_151],
-          [tart, "darwin", 20_000, 31_999],
+        const macBox = {
+          first: 49_152,
+          last: 65_535,
+          owner: "macOS's ephemeral ports",
+        };
+
+        const tuned = {
+          first: 15_000,
+          last: 15_999,
+          owner: "this box's ephemeral ports, its ip_local_port_range",
+        };
+
+        for (const [runtime, box, first, last] of [
+          [config.runtime, linuxDefault, 9000, 19_999],
+          [config.runtime, linuxDefault, 32_000, 32_767],
+          [config.runtime, linuxDefault, 61_000, 65_535],
+          [config.runtime, macBox, 32_000, 49_151],
+          [tart, macBox, 20_000, 31_999],
+          [config.runtime, tuned, 40_000, 49_999],
+          [config.runtime, tuned, 10_000, 14_999],
         ] as const) {
           const { loaded } = yield* load(
             { ...config, runtime, machinePorts: { first, last } },
-            platform
+            box
           );
 
-          expect(yield* loaded, `${platform} ${first}-${last}`).toMatchObject({
+          expect(yield* loaded, `${box.owner} ${first}-${last}`).toMatchObject({
             machinePorts: { first, last },
           });
         }
 
-        for (const [runtime, platform, first, last, reserved] of [
+        for (const [runtime, box, first, last, reserved] of [
           [
             config.runtime,
-            "linux",
+            linuxDefault,
             19_999,
             20_000,
             "20000-31999, smolvm's fork ports",
           ],
           [
             config.runtime,
-            "linux",
+            linuxDefault,
             31_999,
             32_000,
             "20000-31999, smolvm's fork ports",
           ],
           [
             config.runtime,
-            "linux",
+            linuxDefault,
             32_767,
             32_768,
-            "32768-60999, Linux's ephemeral ports",
+            "32768-60999, Linux's default ephemeral ports",
           ],
           [
             config.runtime,
-            "linux",
+            linuxDefault,
             60_999,
             61_000,
-            "32768-60999, Linux's ephemeral ports",
+            "32768-60999, Linux's default ephemeral ports",
           ],
           [
             config.runtime,
-            "linux",
+            linuxDefault,
             1,
             65_535,
             "20000-31999, smolvm's fork ports",
           ],
           [
+            config.runtime,
+            tuned,
+            10_000,
+            19_999,
+            "15000-15999, this box's ephemeral ports, its ip_local_port_range",
+          ],
+          [
             tart,
-            "darwin",
+            macBox,
             49_151,
             49_152,
             "49152-65535, macOS's ephemeral ports",
           ],
           [
             tart,
-            "darwin",
+            macBox,
             65_535,
             65_535,
             "49152-65535, macOS's ephemeral ports",
           ],
-          [
-            tart,
-            "freebsd",
-            49_152,
-            49_152,
-            "49152-65535, IANA's dynamic ports",
-          ],
         ] as const) {
           const { loaded } = yield* load(
             { ...config, runtime, machinePorts: { first, last } },
-            platform
+            box
           );
 
           const error = yield* Effect.flip(loaded);
 
-          expect(error._tag, `${platform} ${first}-${last}`).toBe("Invalid");
-          expect(error.message, `${platform} ${first}-${last}`).toContain(
+          expect(error._tag, `${box.owner} ${first}-${last}`).toBe("Invalid");
+          expect(error.message, `${box.owner} ${first}-${last}`).toContain(
             `must stay out of ${reserved}`
           );
         }
@@ -518,9 +547,9 @@ layer(NodeServices.layer)((it) => {
     Effect.gen(function* () {
       const missing = path.join(yield* scratch, "nope.json");
 
-      const error = yield* Effect.flip(loadConfig(missing, "linux")).pipe(
-        Effect.provide(NodeServices.layer)
-      );
+      const error = yield* Effect.flip(
+        onBox(linuxDefault)(loadConfig(missing))
+      ).pipe(Effect.provide(NodeServices.layer));
 
       expect(error._tag).toBe("Invalid");
       expect(error.file).toBe(missing);
