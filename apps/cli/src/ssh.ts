@@ -27,7 +27,7 @@ import {
   SpawnFailed,
   withClient,
 } from "./command.ts";
-import { machineDomain } from "./ssh-config.ts";
+import { machineDomain, sshKeepalive } from "./ssh-config.ts";
 
 /**
  * How the CLI reaches a machine's SSH endpoint: `open` connects, and the endpoint must send its first
@@ -57,18 +57,27 @@ const destination = (
     : { id: machine.slice(at + 1), user: machine.slice(0, at) };
 };
 
+const keepalive = sshKeepalive.flatMap(([option, value]) => [
+  "-o",
+  `${option}=${value}`,
+]);
+
 const runSsh = (target: SshTarget, user: string, extra: readonly string[]) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
     const ssh = yield* spawner.spawn(
-      ChildProcess.make("ssh", yield* pinnedSsh(target, user, extra), {
-        stdin: "inherit",
-        stdout: "inherit",
-        stderr: "inherit",
-        detached: false,
-        forceKillAfter: Duration.seconds(5),
-      })
+      ChildProcess.make(
+        "ssh",
+        yield* pinnedSsh(target, user, [...keepalive, ...extra]),
+        {
+          stdin: "inherit",
+          stdout: "inherit",
+          stderr: "inherit",
+          detached: false,
+          forceKillAfter: Duration.seconds(5),
+        }
+      )
     );
 
     return yield* ssh.exitCode;

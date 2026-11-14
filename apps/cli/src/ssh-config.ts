@@ -7,6 +7,17 @@ const usableShell = /^\/[^\s"'$`\\%]*$/u;
 
 export const machineDomain = ".cbx";
 
+/**
+ * The ssh options that end a session whose endpoint goes silent once it has sent its banner, which
+ * no other bound covers: a relay whose host stops answering may hold the connection open. ssh asks a
+ * quiet endpoint every 30 s and gives up after 4 asks go unanswered, so a session rides out a network
+ * that drops for less than two minutes, the patience a wait has for an outage.
+ */
+export const sshKeepalive = [
+  ["ServerAliveInterval", 30],
+  ["ServerAliveCountMax", 4],
+] as const;
+
 export const renderSshConfig = (shell: string): string =>
   [
     "# Managed by clankerbox; do not edit. CLANKERBOX_SSH_CONFIG=false removes it.",
@@ -20,6 +31,7 @@ export const renderSshConfig = (shell: string): string =>
     "  StrictHostKeyChecking yes",
     "  CheckHostIP no",
     "  UpdateHostKeys no",
+    ...sshKeepalive.map(([option, value]) => `  ${option} ${value}`),
     "",
   ].join("\n");
 

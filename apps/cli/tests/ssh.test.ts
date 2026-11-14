@@ -161,7 +161,7 @@ describe("ssh", () => {
 
   layer(NodeServices.layer)((it) => {
     it.effect(
-      "ssh runs ssh pinned to the machine, as its user, with the caller's args, and removes the known-hosts file after",
+      "ssh runs ssh pinned to the machine, as its user, with its checks of a quiet endpoint ahead of the caller's args, and removes the known-hosts file after",
       () =>
         Effect.gen(function* () {
           const { config, server } = yield* setup();
@@ -190,8 +190,12 @@ describe("ssh", () => {
           );
           expect(spawned?.args.slice(0, 2)).toStrictEqual(["-l", "admin"]);
           expect(spawned?.args).toContain("ConnectTimeout=15");
-          expect(spawned?.args.slice(-4)).toStrictEqual([
+          expect(spawned?.args.slice(-8)).toStrictEqual([
             "100.64.0.7",
+            "-o",
+            "ServerAliveInterval=30",
+            "-o",
+            "ServerAliveCountMax=4",
             "-L",
             "8080:localhost:80",
             "uptime",
@@ -212,7 +216,7 @@ describe("ssh", () => {
 
         expect(code).toBe(0);
         expect(ssh.spawned[0]?.args.slice(0, 2)).toStrictEqual(["-l", "ops"]);
-        expect(ssh.spawned[0]?.args.at(-1)).toBe("100.64.0.7");
+        expect(ssh.spawned[0]?.args).toContain("100.64.0.7");
       })
     );
 

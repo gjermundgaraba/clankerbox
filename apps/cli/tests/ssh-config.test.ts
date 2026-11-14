@@ -73,6 +73,12 @@ layer(NodeServices.layer)((it) => {
     expect(renderSshConfig("/bin/zsh")).not.toMatch(/ConnectTimeout/iu);
   });
 
+  it("ends a session whose endpoint goes silent, after the banner too, once 4 asks of it, 30 s apart, go unanswered", () => {
+    expect(renderSshConfig("/bin/zsh")).toContain(
+      "  ServerAliveInterval 30\n  ServerAliveCountMax 4\n"
+    );
+  });
+
   it("the include goes after everything else once, and comes out leaving the file as it was", () => {
     const included = withInclude(mine);
 
