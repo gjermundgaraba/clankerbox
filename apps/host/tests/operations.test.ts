@@ -3392,6 +3392,35 @@ layer(NodeServices.layer)((it) => {
     })
   );
 
+  it.effect(
+    "a runtime that doesn't answer a read of a machine's sizes answers Internal",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner();
+
+        keptByRuntime(host, "dev");
+        host.fake.holdNext("sizes");
+
+        const reading = yield* Effect.forkChild(
+          Effect.flip(
+            host.operations.sizes(
+              ref("dev", { handle: Handle.make("held-dev") })
+            )
+          )
+        );
+
+        yield* TestClock.adjust(readTimeout);
+
+        expect(
+          reading.pollUnsafe() === undefined
+            ? "still waiting"
+            : (yield* Fiber.join(reading)).message
+        ).toBe(
+          "the smolvm runtime's read of dev's sizes didn't answer within 9s"
+        );
+      })
+  );
+
   it.effect("a runtime that doesn't answer a read answers Internal", () =>
     Effect.gen(function* () {
       const host = yield* runner();

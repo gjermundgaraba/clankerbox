@@ -1569,7 +1569,12 @@ export const make = (
       read: reading,
       sizes: (machine) =>
         Effect.flatMap(machineTarget(machine), (target) =>
-          Effect.map(runtime.sizes(target), (read) => sizedBy(machine, read))
+          runtime.sizes(target).pipe(
+            inTime(
+              `the ${traits.runtime} runtime's read of ${machine.name}'s sizes`
+            ),
+            Effect.map((read) => sizedBy(machine, read))
+          )
         ),
       capacity: (machines) =>
         Effect.flatMap(heldBy(machines), runtime.capacity).pipe(
