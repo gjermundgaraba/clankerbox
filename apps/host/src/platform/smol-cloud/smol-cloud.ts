@@ -545,12 +545,15 @@ export const make = (
     const byName = (name: string) =>
       Effect.map(listed, (all) => all.find((found) => found.name === name)?.id);
 
-    const made = (machine: Identity & Sizes, origin: Origin) => {
+    const creation = (
+      machine: Identity & Sizes,
+      origin: Origin
+    ): Effect.Effect<Effect.Effect<MachineRecord, ApiError>, ApiError> => {
       const name = nameOf(machine.instance);
 
       switch (origin._tag) {
         case "image": {
-          return Effect.flatMap(autoStopSeconds, (autoStop) =>
+          return Effect.map(autoStopSeconds, (autoStop) =>
             api.create({
               name,
               image: origin.image,
@@ -566,23 +569,23 @@ export const make = (
         }
 
         case "checkpoint": {
-          return Effect.flatMap(autoStopSeconds, (autoStop) =>
+          return Effect.map(autoStopSeconds, (autoStop) =>
             api.restore(origin.checkpoint.handle, name, autoStop)
           );
         }
 
         case "machine": {
-          return api.branch(origin.machine.handle, name);
+          return Effect.succeed(api.branch(origin.machine.handle, name));
         }
       }
     };
 
     const created = (
-      machine: Identity & Sizes,
-      origin: Origin,
+      machine: Identity,
+      send: Effect.Effect<MachineRecord, ApiError>,
       tries = 5
     ): Effect.Effect<Handle, ApiError> =>
-      Effect.flatMap(Effect.result(made(machine, origin)), (answered) => {
+      Effect.flatMap(Effect.result(send), (answered) => {
         if (answered._tag === "Success") {
           return Effect.succeed(answered.success.id);
         }
@@ -599,7 +602,7 @@ export const make = (
             Effect.fromNullishOr(handle).pipe(
               Effect.catch(() =>
                 tries > 1 && unknownOutcome(error)
-                  ? created(machine, origin, tries - 1)
+                  ? created(machine, send, tries - 1)
                   : Effect.fail(error)
               )
             )
@@ -890,7 +893,10 @@ export const make = (
         Effect.gen(function* () {
           yield* told([machine]);
 
-          const handle = yield* created(machine, origin).pipe(
+          const handle = yield* Effect.flatMap(
+            creation(machine, origin),
+            (send) => created(machine, send)
+          ).pipe(
             Effect.catchIf(
               isGone,
               (error): Effect.Effect<never, ApiError | Missing> =>

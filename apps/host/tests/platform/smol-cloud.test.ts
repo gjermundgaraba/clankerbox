@@ -1167,9 +1167,6 @@ const scripted = (
               plan: { allowAlwaysOn: false },
               effectiveMaxMachines: 20,
               effectiveMaxConcurrentMachines: 4,
-              effectiveMaxCpus: 4,
-              effectiveMaxMemoryMb: 16_384,
-              effectiveMaxDiskGb: 200,
             });
           }
 
@@ -1509,9 +1506,6 @@ const smolAccount = {
   plan: { allowAlwaysOn: false },
   effectiveMaxMachines: 20,
   effectiveMaxConcurrentMachines: 4,
-  effectiveMaxCpus: 4,
-  effectiveMaxMemoryMb: 16_384,
-  effectiveMaxDiskGb: 200,
 };
 
 const answering = (answer: (route: string) => Response | undefined) => {
@@ -1573,6 +1567,28 @@ const failureOf = <A, E>(ended: Exit.Exit<A, E> | undefined) =>
 const Created = Schema.fromJsonString(
   Schema.Struct({ autoStopSeconds: Schema.Int })
 );
+
+describe("a smol cloud make whose read of the account goes unanswered", () => {
+  it.effect("fails, sending no create and listing nothing", () =>
+    Effect.gen(function* () {
+      const { asked, client } = answering((route) =>
+        route === "GET /v1/account"
+          ? new Response("<html>bad gateway</html>", { status: 502 })
+          : undefined
+      );
+
+      const runtime = yield* scriptedRuntime(client);
+
+      const ended = yield* endedWithin(
+        runtime.make(machineOf("dev"), { _tag: "image", image }, 10_022),
+        "10 minutes"
+      );
+
+      expect(failureOf(ended)).toMatchObject({ _tag: "Internal" });
+      expect(new Set(asked)).toStrictEqual(new Set(["GET /v1/account"]));
+    })
+  );
+});
 
 describe("a smol cloud make on an account whose plan changes", () => {
   it.effect(

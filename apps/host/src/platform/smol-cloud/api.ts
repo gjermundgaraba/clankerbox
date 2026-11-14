@@ -42,9 +42,6 @@ const Account = Schema.Struct({
   plan: Schema.Struct({ allowAlwaysOn: Schema.Boolean }),
   effectiveMaxConcurrentMachines: Schema.Int,
   effectiveMaxMachines: Schema.Int,
-  effectiveMaxCpus: Schema.Int,
-  effectiveMaxMemoryMb: Schema.Int,
-  effectiveMaxDiskGb: Schema.Int,
 });
 
 export type Account = typeof Account.Type;
