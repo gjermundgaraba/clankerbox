@@ -1,6 +1,9 @@
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import {
   Capacity,
+  formatCpu,
+  formatGib,
+  formatMib,
   givenSizes,
   Internal,
   Missing,
@@ -400,7 +403,7 @@ export const make = (
       return type === undefined
         ? Effect.fail(
             new Unsizable({
-              message: `boat gives ${givenSizes(traits)}, and ${name} was asked ${sizes.cpu} vCPUs, ${sizes.ramMib} MiB of RAM and ${sizes.diskGib} GiB of disk`,
+              message: `boat gives ${givenSizes(traits)}, and ${name} was asked ${formatCpu(sizes.cpu)}, ${formatMib(sizes.ramMib)} of RAM and ${formatGib(sizes.diskGib)} of disk`,
             })
           )
         : Effect.succeed(type);

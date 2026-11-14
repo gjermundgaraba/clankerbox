@@ -999,7 +999,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         ]);
         expect(failure(least)).toStrictEqual([
           "Unsizable",
-          "machine dev's 1 vCPUs and 8G are below what its guest takes: Error: VM should have 2 CPU cores at minimum (requested 1)",
+          "machine dev's 1 vCPU and 8G are below what its guest takes: Error: VM should have 2 CPU cores at minimum (requested 1)",
         ]);
       })
   );

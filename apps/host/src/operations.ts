@@ -15,6 +15,7 @@ import type {
 } from "@clankerbox/host-contract";
 import {
   Conflict,
+  formatCpu,
   formatGib,
   formatMib,
   givenSizes,
@@ -626,13 +627,13 @@ export const make = (
 
         if (decided === "shrinks") {
           return yield* new Unsizable({
-            message: `a ${seen} machine's vCPUs and RAM only grow, and ${name} has ${machine.cpu} vCPUs and ${formatMib(machine.ramMib)}${live && traits.resize.stopped === "any" ? ": stop it to shrink them" : ""}`,
+            message: `a ${seen} machine's vCPUs and RAM only grow, and ${name} has ${formatCpu(machine.cpu)} and ${formatMib(machine.ramMib)}${live && traits.resize.stopped === "any" ? ": stop it to shrink them" : ""}`,
           });
         }
 
         if (decided === "unfitted") {
           return yield* new Unsizable({
-            message: `the ${traits.runtime} runtime gives ${givenSizes(traits)}, and ${name} was asked ${to.cpu} vCPUs, ${formatMib(to.ramMib)} of RAM and ${formatGib(to.diskGib)} of disk`,
+            message: `the ${traits.runtime} runtime gives ${givenSizes(traits)}, and ${name} was asked ${formatCpu(to.cpu)}, ${formatMib(to.ramMib)} of RAM and ${formatGib(to.diskGib)} of disk`,
           });
         }
 

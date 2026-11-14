@@ -1456,6 +1456,38 @@ const failureOf = <A, E>(ended: Exit.Exit<A, E> | undefined) =>
     ? Cause.squash(ended.cause)
     : undefined;
 
+describe("a boat make of sizes no type gives", () => {
+  it.effect("is Unsizable, naming the types and the sizes asked", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { runtime, asked } = yield* scriptedBoat(() => undefined);
+
+        const refused = yield* Effect.flip(
+          runtime.make(
+            {
+              name: "dev",
+              instance: bx1.instance,
+              cpu: 1,
+              ramMib: 4096,
+              diskGib: 80,
+            },
+            { _tag: "image", image: "ubuntu-24.04" },
+            { _tag: "none" }
+          )
+        );
+
+        expect(refused).toMatchObject({ _tag: "Unsizable" });
+        expect(refused.message).toContain(
+          "and dev was asked 1 vCPU, 4G of RAM and 80G of disk"
+        );
+        expect(
+          asked.filter((route) => route === "POST /sandboxes")
+        ).toHaveLength(0);
+      })
+    )
+  );
+});
+
 describe("a boat make of a type the account's plan no longer offers", () => {
   it.effect("is Capacity, which moves the create to the next host", () =>
     Effect.scoped(

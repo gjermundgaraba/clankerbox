@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   Capacity,
   formatGib,
+  formatCpu,
   formatMib,
   Internal,
   Unsizable,
@@ -758,7 +759,7 @@ export const make = (
 
         if (ran.exitCode !== 0 && ran.stderr.includes(minimumRefusal)) {
           return yield* new Unsizable({
-            message: `machine ${machine.name}'s ${sizes.cpu} vCPUs and ${formatMib(sizes.ramMib)} are below what its guest takes: ${lastLines(ran.stderr)}`,
+            message: `machine ${machine.name}'s ${formatCpu(sizes.cpu)} and ${formatMib(sizes.ramMib)} are below what its guest takes: ${lastLines(ran.stderr)}`,
           });
         }
 
@@ -1065,7 +1066,7 @@ export const make = (
         if (to.cpu > maximumFlag || diskGb(to.diskGib) > maximumFlag) {
           return Effect.fail(
             new Unsizable({
-              message: `tart set takes at most ${maximumFlag} vCPUs and ${maximumFlag} GB of disk, and ${machine.name} would have ${to.cpu} vCPUs and ${diskGb(to.diskGib)} GB`,
+              message: `tart set takes at most ${maximumFlag} vCPUs and ${maximumFlag} GB of disk, and ${machine.name} would have ${formatCpu(to.cpu)} and ${diskGb(to.diskGib)} GB`,
             })
           );
         }

@@ -2416,7 +2416,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ["Unsizable", "machine dev's disk is 10G, and a disk only grows"],
           [
             "Unsizable",
-            "a running machine's vCPUs and RAM only grow, and dev has 1 vCPUs and 1G: stop it to shrink them",
+            "a running machine's vCPUs and RAM only grow, and dev has 1 vCPU and 1G: stop it to shrink them",
           ],
           [
             "WrongState",
