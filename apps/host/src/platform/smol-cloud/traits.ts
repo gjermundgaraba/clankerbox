@@ -1,7 +1,10 @@
 import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
 import { RuntimeName } from "@gjermundgaraba/clankerbox-sdk";
 
-export const traits: RuntimeTraits = {
+/** smol cloud's traits, with the most the account's plan gives one machine. */
+export const traits = (
+  most: RuntimeTraits["limits"]["most"]
+): RuntimeTraits => ({
   runtime: RuntimeName.make("smol-cloud"),
   images: "references",
   checkpoint: "ram",
@@ -11,5 +14,5 @@ export const traits: RuntimeTraits = {
   copies: "same",
   resize: { running: "grow", stopped: "grow" },
   sizes: { _tag: "free" },
-  limits: { least: {}, most: {}, live: {} },
-};
+  limits: { least: {}, most, live: {} },
+});

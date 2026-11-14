@@ -1,3 +1,8 @@
+import {
+  fitted,
+  formatSizes,
+  givenSizes,
+} from "@clankerbox/host-contract/traits";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import {
   Capacity,
@@ -50,7 +55,7 @@ import {
 import * as Api from "./api.ts";
 import { apiErrors } from "./api.ts";
 import type { ApiError, MachineRecord, Refused } from "./api.ts";
-import { traits } from "./traits.ts";
+import { traits as traitsOf } from "./traits.ts";
 import { tunnel } from "./tunnel.ts";
 
 export const defaultApi = "https://api.smolmachines.com";
@@ -191,6 +196,27 @@ const oversized = (error: Refused) =>
 const internal = (what: string) => (error: ApiError) =>
   new Internal({ message: `${what}: ${error.message}` });
 
+const autoStopSeconds = (account: Api.Account) =>
+  account.plan.allowAlwaysOn ? 0 : idleStopSeconds;
+
+const perMachine = (account: Api.Account) => ({
+  cpu: account.effectiveMaxCpus,
+  ramMib: account.effectiveMaxMemoryMb,
+  diskGib: account.effectiveMaxDiskGb,
+});
+
+const planned = (machine: Identity & Sizes, account: Api.Account) => {
+  const given = traitsOf(perMachine(account));
+
+  return fitted(given, machine)
+    ? Effect.void
+    : Effect.fail(
+        new Unsizable({
+          message: `make ${machine.name}: the account's plan now gives ${givenSizes(given)}, and ${machine.name} was asked ${formatSizes(machine)}`,
+        })
+      );
+};
+
 const waited = (error: ApiError) =>
   Effect.sleep(
     error._tag === "Refused" ? Duration.seconds(error.retryAfterSeconds) : poll
@@ -264,8 +290,17 @@ export const make = (
   host: Pick<HostSettings, "id" | "listen">,
   api: Api.Api,
   sockets: Socket.WebSocketConstructor["Service"]
-): Effect.Effect<Interface> =>
-  Effect.sync(() => {
+): Effect.Effect<Interface, Internal> =>
+  Effect.gen(function* () {
+    const traits = traitsOf(
+      perMachine(
+        yield* Effect.mapError(
+          api.account,
+          internal("couldn't read the account's plan")
+        )
+      )
+    );
+
     const prefix = `cbx-${host.id}-`;
     const nameOf = (instance: string) => `${prefix}${instance}`;
 
@@ -346,10 +381,6 @@ export const make = (
 
         return Effect.fail(internal(what)(error));
       };
-
-    const autoStopSeconds = Effect.map(api.account, (account) =>
-      account.plan.allowAlwaysOn ? 0 : idleStopSeconds
-    );
 
     const rested = (handle: Handle) =>
       untilRest(
@@ -543,35 +574,36 @@ export const make = (
 
     const creation = (
       machine: Identity & Sizes,
-      origin: Origin
-    ): Effect.Effect<Effect.Effect<MachineRecord, ApiError>, ApiError> => {
+      origin: Origin,
+      account: Api.Account
+    ): Effect.Effect<MachineRecord, ApiError> => {
       const name = nameOf(machine.instance);
 
       switch (origin._tag) {
         case "image": {
-          return Effect.map(autoStopSeconds, (autoStop) =>
-            api.create({
-              name,
-              image: origin.image,
-              sizes: {
-                cpus: machine.cpu,
-                memoryMb: machine.ramMib,
-                diskGb: machine.diskGib,
-              },
-              ttlSeconds: settings.ttlSeconds,
-              autoStopSeconds: autoStop,
-            })
-          );
+          return api.create({
+            name,
+            image: origin.image,
+            sizes: {
+              cpus: machine.cpu,
+              memoryMb: machine.ramMib,
+              diskGb: machine.diskGib,
+            },
+            ttlSeconds: settings.ttlSeconds,
+            autoStopSeconds: autoStopSeconds(account),
+          });
         }
 
         case "checkpoint": {
-          return Effect.map(autoStopSeconds, (autoStop) =>
-            api.restore(origin.checkpoint.handle, name, autoStop)
+          return api.restore(
+            origin.checkpoint.handle,
+            name,
+            autoStopSeconds(account)
           );
         }
 
         case "machine": {
-          return Effect.succeed(api.branch(origin.machine.handle, name));
+          return api.branch(origin.machine.handle, name);
         }
       }
     };
@@ -890,9 +922,15 @@ export const make = (
         Effect.gen(function* () {
           yield* told([machine]);
 
-          const handle = yield* Effect.flatMap(
-            creation(machine, origin),
-            (send) => created(machine, send)
+          const account = yield* api.account.pipe(
+            Effect.catchTag(apiErrors, failed(`make ${machine.name}`))
+          );
+
+          yield* planned(machine, account);
+
+          const handle = yield* created(
+            machine,
+            creation(machine, origin, account)
           ).pipe(
             Effect.catchIf(
               isGone,
@@ -907,7 +945,7 @@ export const make = (
               (error) => error._tag === "Refused" && oversized(error),
               (error) =>
                 Effect.fail(
-                  new Capacity({
+                  new Unsizable({
                     message: `make ${machine.name}: smol cloud makes no machine of these sizes on this account: ${error.message}`,
                   })
                 )

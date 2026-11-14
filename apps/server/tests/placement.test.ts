@@ -280,6 +280,26 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     );
 
     it.effect(
+      "a smol cloud host whose plan gives a machine at most 4 vCPUs, 16G of RAM and 200G of disk is passed over past them, and alone refuses them Unsizable, naming them",
+      () =>
+        Effect.sync(() => {
+          const fleet = [up("local"), withTraits(up("cloud"), smolCloud)];
+          const big = { cpu: 8, ramMib: 1024, diskGib: 10 };
+
+          expect(
+            placed(fleet, "ubuntu", { sizes: big, host: undefined })
+          ).toStrictEqual(["local"]);
+          expect(
+            refusal(fleet, "ubuntu", { sizes: big, host: "cloud" })
+          ).toMatchObject({
+            _tag: "Unsizable",
+            message:
+              "no host that offers base ubuntu gives the sizes asked: cloud gives any sizes up to 4 vCPUs, 16G of RAM and 200G of disk, not 8 vCPUs, 1G of RAM and 10G of disk",
+          });
+        })
+    );
+
+    it.effect(
       "a host whose runtime takes image references takes one no base names",
       () =>
         Effect.sync(() => {

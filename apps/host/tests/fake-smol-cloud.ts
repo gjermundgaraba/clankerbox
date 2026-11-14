@@ -11,13 +11,12 @@ import type { HttpServerRequest } from "effect/http";
 import { HttpRouter, HttpServer, HttpServerResponse } from "effect/http";
 import { Socket } from "effect/socket";
 
+import { traits as traitsOf } from "../src/platform/smol-cloud/traits.ts";
 import { furnish, writeStubs } from "./fake-runtime.ts";
 import { guestGroups } from "./guest-groups.ts";
 import { lateLandings } from "./late-landing.ts";
 import type { Dropped, Faults } from "./runtime-contract.ts";
 import { loopbackServer } from "./support.ts";
-
-export { traits } from "../src/platform/smol-cloud/traits.ts";
 
 export type FakeState = "stopped" | "creating" | "started" | "paused";
 
@@ -85,6 +84,13 @@ const concurrentLimit = 4;
 const machineLimit = 20;
 
 const perMachine = { cpus: 4, memoryMb: 16_384, diskGb: 200 };
+
+/** The traits of a smol cloud host over this fake, whose plan gives a machine `perMachine`. */
+export const traits = traitsOf({
+  cpu: perMachine.cpus,
+  ramMib: perMachine.memoryMb,
+  diskGib: perMachine.diskGb,
+});
 
 const nameLimit = 63;
 

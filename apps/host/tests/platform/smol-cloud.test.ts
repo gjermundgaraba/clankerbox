@@ -661,21 +661,26 @@ const onCloud = Effect.gen(function* () {
 
 describe("the smol cloud runtime over an account without a card", () => {
   it.live(
-    "moves a make past the account's per-machine sizes on as Capacity, and refuses such a resize as unsizable",
+    "states the account's per-machine sizes as its limits, refuses a make past them Unsizable before it sends the create, and such a resize as unsizable",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
           const { runtime } = yield* onCloud;
           const big = { ...machineOf("big"), cpu: 5 };
 
-          yield* runtime.sizable(big, sizes, big, false);
-
           const refused = yield* Effect.flip(
             runtime.make(big, { _tag: "image", image }, 10_022)
           );
 
-          expect(refused).toMatchObject({ _tag: "Capacity" });
-          expect(refused.message).toContain("up to 4 vCPU");
+          expect(runtime.traits.limits.most).toStrictEqual({
+            cpu: 4,
+            ramMib: 16_384,
+            diskGib: 200,
+          });
+          expect([refused._tag, refused.message]).toStrictEqual([
+            "Unsizable",
+            "make big: the account's plan now gives any sizes up to 4 vCPUs, 16G of RAM and 200G of disk, and big was asked 5 vCPUs, 1G of RAM and 10G of disk",
+          ]);
 
           const dev = yield* made(runtime, "dev");
 
@@ -1108,9 +1113,19 @@ const scripted = (
   state: string,
   stalls?: string,
   failing?: Failing
-) =>
-  HttpClient.make((request, url) =>
-    `${request.method} ${url.pathname}` === stalls
+) => {
+  let planRead = false;
+
+  const stalled = (route: string) => {
+    const startup = route === "GET /v1/account" && !planRead;
+
+    planRead ||= route === "GET /v1/account";
+
+    return route === stalls && !startup;
+  };
+
+  return HttpClient.make((request, url) =>
+    stalled(`${request.method} ${url.pathname}`)
       ? Effect.never
       : Effect.sync(() => {
           const route = `${request.method} ${url.pathname}`;
@@ -1167,6 +1182,9 @@ const scripted = (
               plan: { allowAlwaysOn: false },
               effectiveMaxMachines: 20,
               effectiveMaxConcurrentMachines: 4,
+              effectiveMaxCpus: 4,
+              effectiveMaxMemoryMb: 16_384,
+              effectiveMaxDiskGb: 200,
             });
           }
 
@@ -1217,6 +1235,7 @@ const scripted = (
           return reply(200, record);
         })
   );
+};
 
 const scriptedRuntime = (client: HttpClient.HttpClient) =>
   Effect.gen(function* () {
@@ -1243,6 +1262,27 @@ const scriptedMake = (busy: number, state = "starting") =>
     );
   });
 
+describe("a smol cloud host's start", () => {
+  it.effect(
+    "fails Internal when it can't read the account's plan, whose sizes are its limits",
+    () =>
+      Effect.gen(function* () {
+        const refused = yield* Effect.flip(
+          scriptedRuntime(
+            scripted({ busy: 0 }, "started", undefined, {
+              account: { times: 1, answer: "refused" },
+            })
+          )
+        );
+
+        expect([refused._tag, refused.message]).toStrictEqual([
+          "Internal",
+          expect.stringMatching(/^couldn't read the account's plan: /u),
+        ]);
+      })
+  );
+});
+
 describe("a smol cloud make's read of the account", () => {
   it.effect(
     "reads the account again after a gateway's 502, and makes the machine",
@@ -1250,7 +1290,7 @@ describe("a smol cloud make's read of the account", () => {
       Effect.gen(function* () {
         const runtime = yield* scriptedRuntime(
           scripted({ busy: 0 }, "started", undefined, {
-            account: { times: 1, answer: "gateway" },
+            account: { answeredFirst: 1, times: 1, answer: "gateway" },
           })
         );
 
@@ -1275,7 +1315,7 @@ describe("a smol cloud make's read of the account", () => {
       Effect.gen(function* () {
         const runtime = yield* scriptedRuntime(
           scripted({ busy: 0 }, "started", undefined, {
-            account: { times: 1, answer: "refused" },
+            account: { answeredFirst: 1, times: 1, answer: "refused" },
           })
         );
 
@@ -1338,6 +1378,23 @@ describe("a smol cloud create the provider refuses 422", () => {
   );
 
   it.effect(
+    "is Unsizable when the machine's sizes exceed what the account runs, though its plan gave them",
+    () =>
+      Effect.gen(function* () {
+        const refused = yield* refusedCreate(
+          "machine size exceeds what an account without a card can run, up to 4 vCPU, 16 GB memory and 200 GB disk per machine (requested 1 vCPU, 1 GB, 10 GB disk)"
+        );
+
+        expect([refused._tag, refused.message]).toStrictEqual([
+          "Unsizable",
+          expect.stringMatching(
+            /^make dev: smol cloud makes no machine of these sizes on this account: /u
+          ),
+        ]);
+      })
+  );
+
+  it.effect(
     "is Internal when the account is within its limits, or its limits can't be read",
     () =>
       Effect.gen(function* () {
@@ -1354,7 +1411,7 @@ describe("a smol cloud create the provider refuses 422", () => {
           "resources.cpus: expected integer",
           {
             inUse: { machines: 4, started: 4 },
-            account: { answeredFirst: 1, times: 5, answer: "refused" },
+            account: { answeredFirst: 2, times: 5, answer: "refused" },
           }
         );
 
@@ -1399,6 +1456,15 @@ const recordIn = (state: string | undefined) => ({
   resources: { cpus: 1, memoryMb: 1024 },
 });
 
+const smolAccount = {
+  plan: { allowAlwaysOn: false },
+  effectiveMaxMachines: 20,
+  effectiveMaxConcurrentMachines: 4,
+  effectiveMaxCpus: 4,
+  effectiveMaxMemoryMb: 16_384,
+  effectiveMaxDiskGb: 200,
+};
+
 const acting = (machine: { state: string | undefined; refusals: number }) =>
   HttpClient.make((request, url) =>
     Effect.sync(() => {
@@ -1435,7 +1501,9 @@ const acting = (machine: { state: string | undefined; refusals: number }) =>
           : reply(200, recordIn(machine.state));
       }
 
-      return reply(200, []);
+      return route === "GET /v1/account"
+        ? reply(200, smolAccount)
+        : reply(200, []);
     })
   );
 
@@ -1502,12 +1570,6 @@ describe("a smol cloud start", () => {
   );
 });
 
-const smolAccount = {
-  plan: { allowAlwaysOn: false },
-  effectiveMaxMachines: 20,
-  effectiveMaxConcurrentMachines: 4,
-};
-
 const answering = (answer: (route: string) => Response | undefined) => {
   const asked: string[] = [];
 
@@ -1571,13 +1633,21 @@ const Created = Schema.fromJsonString(
 describe("a smol cloud make whose read of the account goes unanswered", () => {
   it.effect("fails, sending no create and listing nothing", () =>
     Effect.gen(function* () {
-      const { asked, client } = answering((route) =>
-        route === "GET /v1/account"
-          ? new Response("<html>bad gateway</html>", { status: 502 })
-          : undefined
-      );
+      let planRead = false;
+
+      const { asked, client } = answering((route) => {
+        if (route !== "GET /v1/account" || !planRead) {
+          planRead ||= route === "GET /v1/account";
+
+          return undefined;
+        }
+
+        return new Response("<html>bad gateway</html>", { status: 502 });
+      });
 
       const runtime = yield* scriptedRuntime(client);
+
+      asked.length = 0;
 
       const ended = yield* endedWithin(
         runtime.make(machineOf("dev"), { _tag: "image", image }, 10_022),
