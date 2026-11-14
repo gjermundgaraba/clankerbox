@@ -185,8 +185,10 @@ export const endDeadline = Duration.subtract(endTimeout, endMargin);
 const recordMinutes = 60;
 
 // Linux's /proc/<pid>/stat holds the command's name in parentheses, which may hold any character,
-// then the state, the parent and, 19 fields on, the start time:
+// a newline too, then the state, the parent and, 19 fields on, the start time:
 // https://man7.org/linux/man-pages/man5/proc_pid_stat.5.html
+// Reading the stat of a process that exits as it is read fails, which ends mawk at a `getline`,
+// and `grep -s` passes over; `grep -H` starts each line it prints with its file's name.
 // macOS's `ps -E` prints a process's environment after its arguments, also another user's to root,
 // a newline in either as `\012`, so each process on a line of its own, and `lstart` as five words.
 // A stopped process forks nothing and keeps its children's parent, so what the end stops before it
@@ -197,25 +199,26 @@ function add(pid, ppid, start, state) {
   if (state ~ /^[ZX]/ || pid == 1 || pid == self) return
   n++; P[n] = pid; PP[pid] = ppid; ST[pid] = start
 }
-BEGIN {
-  held = dir "/held"
-  while ((getline line < held) > 0) if (split(line, h, " ") == 3) { H[h[1]] = h[2]; F[h[1]] = h[3] }
-  close(held)
+function stated() {
+  if (spid != "" && match(stat, /\) [^)]*$/)) {
+    split(substr(stat, RSTART + 2), s, " ")
+    add(spid, s[2], s[20], s[1])
+  }
 }
 NR == 1 { word = $0; next }
-proc && part == 0 && $0 == "." { part = 1; next }
-proc && part == 0 { split($0, p, "/"); M[p[3]] = 1; next }
-proc && part == 1 { for (i = 1; i <= NF; i++) D[++d] = $i; next }
-{ if (index(" " $0 " ", " " word " ")) M[$1] = 1; add($1, $2, $3 $4 $5 $6 $7, $8) }
+part == 0 && $0 == "." { part = 1; next }
+part == 0 { if (NF == 3) { H[$1] = $2; F[$1] = $3 }; next }
+proc && part == 1 && $0 == "." { part = 2; next }
+proc && part == 1 { split($0, p, "/"); M[p[3]] = 1; next }
+proc && part == 2 && match($0, /^\/proc\/[0-9]+\/stat:/) {
+  pid = substr($0, 7, RLENGTH - 12); line = substr($0, RLENGTH + 1)
+  if (pid == spid) stat = stat "\n" line; else { stated(); spid = pid; stat = line }
+  next
+}
+proc && part == 2 { next }
+part == 1 { if (index(" " $0 " ", " " word " ")) M[$1] = 1; add($1, $2, $3 $4 $5 $6 $7, $8) }
 END {
-  for (i = 1; i <= d; i++) {
-    f = D[i] "/stat"
-    if ((getline line < f) > 0 && match(line, /\) [^)]*$/)) {
-      split(substr(line, RSTART + 2), s, " ")
-      add(substr(D[i], 7), s[2], s[20], s[1])
-    }
-    close(f)
-  }
+  stated()
   if (rows == 0) { print "unlisted"; exit }
   for (grown = 1; grown;) {
     grown = 0
@@ -224,19 +227,18 @@ END {
       if (!(pid in K) && ((pid in M) || ((pid in H) && H[pid] == ST[pid]) || (PP[pid] in K))) { K[pid] = 1; grown = 1 }
     }
   }
-  fresh = dir "/fresh"; all = dir "/all"
-  printf "" > fresh; printf "" > all; printf "" > held
   for (i = 1; i <= n; i++) {
     pid = P[i]
     if (!(pid in K)) continue
     count++
-    sent = ((pid in H) && H[pid] == ST[pid]) ? F[pid] : "-"
-    if (!index(sent, signal)) { printf " %s", pid > fresh; sent = sent signal }
-    printf " %s", pid > all
-    printf "%s %s %s\n", pid, ST[pid], sent > held
+    sent[pid] = ((pid in H) && H[pid] == ST[pid]) ? F[pid] : "-"
   }
-  close(fresh); close(all); close(held)
   printf "%d\n", count
+  for (pid in sent) if (!index(sent[pid], signal)) printf " %s", pid
+  printf "\n"
+  for (pid in sent) printf " %s", pid
+  printf "\n"
+  for (pid in sent) { if (!index(sent[pid], signal)) sent[pid] = sent[pid] signal; printf "%s %s %s\n", pid, ST[pid], sent[pid] }
 }
 `;
 
@@ -245,9 +247,12 @@ END {
  * the exec's or not, and what descends from one. It reads the mark and its deadline in seconds,
  * then TERMs what it lists, and once at least the grace has passed, or nothing it TERMed runs, STOPs
  * what it lists until a listing finds none it hasn't stopped, and KILLs them all, again until a
- * listing finds none. Each listing is one `grep`, or `ps`, and one `awk` pass, which writes what it
- * found to files in a directory of the end's own that the shell reads whole, so its cost grows with
- * the guest's processes and not with their square, under every shell. It begins no listing once its deadline
+ * listing finds none. Each listing is two `grep`s over `/proc`, given its paths by `xargs`, as zsh
+ * globs a path below each process slowly and a guest's processes may name more paths than a command
+ * line holds, or one `ps`, and one `awk` pass, and `awk` picks out each of its lines again, where
+ * zsh's patterns take time that grows with the square of the listing, so its cost grows with the
+ * guest's processes and not with their square, under every shell, and it writes no file. It begins
+ * no listing once its deadline
  * has passed, as `date +%s` counts it, nor the grace past it, and then, or when a TERM, HUP or INT
  * cuts it short, sends KILL and then CONT to every process it last listed, so none is left stopped,
  * and exits 1, saying how many there were: only a listing that finds none confirms the end. A
@@ -267,6 +272,7 @@ export const endScript = [
   `mkdir -p "$records" && : >"$records/$mark" || echo "clankerbox: couldn't record that $mark ended, so a command of it that begins later runs" >&2`,
   `find "$records" -type f -mmin +${recordMinutes} -exec rm -f {} + 2>/dev/null || true`,
   `program='${membersProgram.replaceAll("'", String.raw`'\''`)}'`,
+  "held=",
   "all=",
   "count=0",
   "release() {",
@@ -276,26 +282,25 @@ export const endScript = [
   "}",
   `trap 'release "its end was cut short, with $count processes of the command running at its last listing"' HUP INT TERM`,
   "trap '' PIPE",
-  `listing=$(mktemp -d 2>/dev/null) || release "couldn't make a directory for its listings"`,
-  `trap 'rm -rf "$listing"' EXIT`,
-  `: >"$listing/held"`,
   "if [ -r /proc/self/stat ]; then proc=1; else proc=0; fi",
   "round() {",
   `  [ "$(date +%s)" -lt "$ends" ] || release "$count processes of the command still ran at its last listing when its end's \${seconds}s ran out"`,
-  "  count=$(",
-  `    { printf '%s\\n' "$word"`,
+  "  listed=$(",
+  `    { printf '%s\\n%s\\n.\\n' "$word" "$held"`,
   `      if [ "$proc" = 1 ]; then`,
-  `        grep -ls -e "${markName}[=]$mark" /proc/[0-9]*/cmdline /proc/[0-9]*/environ`,
+  `        { printf '%s/cmdline\\n' /proc/[0-9]*; printf '%s/environ\\n' /proc/[0-9]*; } | xargs grep -ls -e "${markName}[=]$mark"`,
   "        echo .",
-  "        echo /proc/[0-9]*",
+  `        printf '%s/stat\\n' /proc/[0-9]* | LC_ALL=C xargs grep -Hs -e ''`,
   "      else",
   "        ps -axEww -o pid=,ppid=,lstart=,state=,command=",
   "      fi",
-  `    } | awk -v signal="$1" -v self="$$" -v proc="$proc" -v dir="$listing" "$program"`,
+  `    } | awk -v signal="$1" -v self="$$" -v proc="$proc" "$program"`,
   "  )",
+  `  count=$(printf '%s\\n' "$listed" | awk 'NR == 1')`,
   `  case $count in '' | *[!0-9]*) release "couldn't list the guest's processes, with /proc or ps, and awk" ;; esac`,
-  `  fresh=$(cat "$listing/fresh")`,
-  `  all=$(cat "$listing/all")`,
+  `  fresh=$(printf '%s\\n' "$listed" | awk 'NR == 2')`,
+  `  all=$(printf '%s\\n' "$listed" | awk 'NR == 3')`,
+  `  held=$(printf '%s\\n' "$listed" | awk 'NR > 3')`,
   "}",
   "alive() {",
   `  if [ "$proc" = 1 ]; then`,

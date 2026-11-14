@@ -541,13 +541,14 @@ const endUnder = (
   shell: readonly string[],
   root: string,
   mark: string,
-  seconds = endSeconds
+  seconds = endSeconds,
+  env: Readonly<Record<string, string>> = {}
 ) =>
   outputOf(
     shell[0] ?? "",
     [...shell.slice(1), "-c", endScript, "clankerbox-end"],
     {
-      env: { CLANKERBOX_ROOT: root },
+      env: { ...env, CLANKERBOX_ROOT: root },
       extendEnv: true,
       input: new TextEncoder().encode(`${mark} ${seconds}\n`),
     }
@@ -2789,6 +2790,55 @@ const shellCases = (shell: readonly string[]) => {
           );
 
           const ended = yield* endUnder(shell, root, mark);
+
+          expect(ended.code, ended.stderr).toBe(0);
+          expect(yield* runningOf(tree)).toStrictEqual([]);
+        }),
+      endsTimeout(1, 1)
+    );
+
+    it.effect(
+      "an end ends a process whose name holds a newline, and what it started",
+      () =>
+        Effect.gen(function* () {
+          const root = yield* scratch;
+          const mark = unsharedMark();
+
+          const tree = yield* marked(
+            root,
+            "printf 'x\\n/proc/1/st' >/proc/$$/comm; trap '' TERM; while :; do sleep 300; done",
+            2,
+            mark
+          );
+
+          const ended = yield* endUnder(shell, root, mark);
+
+          expect(ended.code, ended.stderr).toBe(0);
+          expect(yield* runningOf(tree)).toStrictEqual([]);
+        }),
+      endsTimeout(1, 1)
+    );
+
+    it.effect(
+      "an end confirms the end of a command on a guest where no temporary file can be written, as when a full disk cut it",
+      () =>
+        Effect.gen(function* () {
+          const root = yield* scratch;
+          const mark = unsharedMark();
+          const unwritable = path.join(root, "no-temporary-files");
+
+          writeFileSync(unwritable, "");
+
+          const tree = yield* marked(
+            root,
+            "trap '' TERM; sleep 300 & wait",
+            2,
+            mark
+          );
+
+          const ended = yield* endUnder(shell, root, mark, endSeconds, {
+            TMPDIR: unwritable,
+          });
 
           expect(ended.code, ended.stderr).toBe(0);
           expect(yield* runningOf(tree)).toStrictEqual([]);
