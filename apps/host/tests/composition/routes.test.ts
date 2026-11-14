@@ -12,9 +12,19 @@ import {
   version,
   versionHeader,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Exit, Fiber, Logger, References, Schema } from "effect";
+import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import {
+  Effect,
+  Exit,
+  Fiber,
+  Logger,
+  References,
+  Schedule,
+  Schema,
+} from "effect";
 import { expect } from "vite-plus/test";
 
+import { startRentedHost } from "../rented.ts";
 import {
   accepts,
   holding,
@@ -642,5 +652,93 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect((yield* finished(url, "op-1")).status).toBe("done");
         expect(fake.calls).toContain("create dev");
       })
+  );
+});
+
+const onDev = (
+  id: string,
+  sequence: number,
+  step: Operation["step"]
+): Omit<Operation, "boot"> => ({
+  id,
+  scope: { resource: "machine", name: "dev" },
+  sequence,
+  step,
+});
+
+const ended = (url: string, id: string) =>
+  finished(url, id).pipe(
+    Effect.repeat({
+      until: ({ status }) => status !== "running",
+      schedule: Schedule.spaced("50 millis"),
+    })
+  );
+
+layer(NodeServices.layer, { excludeTestServices: true })((it) => {
+  it.effect(
+    "a rented step runs whole: a later step of its machine cuts it short only once the provider call it waits on has answered",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* startRentedHost(yield* scratch, {
+          runtime: "smol-cloud",
+          id: "smol-cloud-1",
+        });
+
+        const { api } = host;
+
+        if (api.runtime !== "smol-cloud") {
+          return yield* Effect.die(new Error("the host isn't on smol cloud"));
+        }
+
+        const { fake } = api;
+
+        yield* deliver(host.url, made("op-1"));
+
+        const { handle } = (yield* ended(host.url, "op-1")).outcome;
+        const machine = { ...dev, ...(handle === undefined ? {} : { handle }) };
+        const stop = { _tag: "stop", machine, machines: [] } as const;
+
+        yield* deliver(host.url, onDev("op-2", 2, stop));
+        yield* ended(host.url, "op-2");
+
+        const settle = yield* fake.faults.holdStarts;
+
+        yield* deliver(
+          host.url,
+          onDev("op-3", 3, { _tag: "start", machine, keep: [], machines: [] })
+        );
+        yield* Effect.repeat(
+          Effect.sync(() => fake.machines.get(handle ?? "")?.state),
+          {
+            until: (state) => state === "creating",
+            schedule: Schedule.spaced("20 millis"),
+          }
+        );
+        yield* deliver(host.url, onDev("op-4", 4, stop));
+
+        const held = yield* finished(host.url, "op-3");
+
+        yield* settle;
+
+        const [started, stopped] = [
+          yield* ended(host.url, "op-3"),
+          yield* ended(host.url, "op-4"),
+        ];
+
+        const asked = fake.calls.filter((call) =>
+          call.startsWith(`POST /v1/machines/${handle}/`)
+        );
+
+        expect([held.status, started.status, stopped.status]).toStrictEqual([
+          "running",
+          "cancelled",
+          "done",
+        ]);
+        expect(fake.machines.get(handle ?? "")?.state).toBe("stopped");
+        expect(asked.slice(-2).map((call) => call.split(" ")[1])).toStrictEqual(
+          [`/v1/machines/${handle}/start`, `/v1/machines/${handle}/stop`]
+        );
+      }),
+    30_000
   );
 });
