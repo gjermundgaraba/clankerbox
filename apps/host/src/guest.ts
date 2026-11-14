@@ -549,11 +549,6 @@ const debianBase = [
 ];
 
 const macosBase = [
-  "networksetup -listallnetworkservices | while IFS= read -r service; do",
-  `  case "$service" in "An asterisk"*) continue ;; esac`,
-  '  networksetup -setdnsservers "${service#\\*}" 1.1.1.1 9.9.9.9',
-  "done",
-  "systemsetup -setnetworktimeserver time.apple.com >/dev/null 2>&1 || true",
   `if [ "$joins" = joins ] && ! command -v tailscaled >/dev/null 2>&1; then`,
   `  sudo -n -u "$login" -H env HOMEBREW_NO_AUTO_UPDATE=1 "$root/opt/homebrew/bin/brew" install --quiet tailscale`,
   "fi",

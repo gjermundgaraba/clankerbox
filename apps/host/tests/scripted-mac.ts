@@ -310,7 +310,7 @@ export const scriptedMac = (stateDir: string, tart = binary) => {
           return { exitCode: 2, stderr: `Error: VM "${vm}" is not running\n` };
         }
 
-        if (rest.includes("/bin/date")) {
+        if (rest.includes("clankerbox-settle")) {
           clockSets.push({ vm, stamp: rest.at(-1) ?? "" });
 
           return hooks.clock?.(vm);

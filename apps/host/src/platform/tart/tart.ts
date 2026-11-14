@@ -113,7 +113,27 @@ const suspendWait = Duration.minutes(2);
 
 const forcedStopWait = Duration.seconds(10);
 
-const clockWait = Duration.seconds(30);
+const settleWait = Duration.seconds(30);
+
+/**
+ * What a Tart guest needs from its host at each boot, run as root with the host's UTC time
+ * (`dateStamp`) as its one argument: the host's clock, as a base boots weeks behind and a resumed VM
+ * goes on from its save, and public resolvers on each network service that names none, as Softnet
+ * blocks the gateway's resolver a guest gets by DHCP. A service whose resolvers were set, by a
+ * template's setup, its user or a tailnet's client, keeps them.
+ */
+export const settleScript = [
+  "set -eu",
+  `root=\${CLANKERBOX_ROOT-}`,
+  `"$root/bin/date" -u "$1" >/dev/null`,
+  `"$root/usr/sbin/networksetup" -listallnetworkservices | while IFS= read -r service; do`,
+  `  case $service in "An asterisk"*) continue ;; esac`,
+  `  service=\${service#\\*}`,
+  `  if ! "$root/usr/sbin/networksetup" -getdnsservers "$service" | grep -Eq '^[0-9A-Fa-f.:]+$'; then`,
+  `    "$root/usr/sbin/networksetup" -setdnsservers "$service" 1.1.1.1 9.9.9.9`,
+  "  fi",
+  "done",
+].join("\n");
 
 const stopPause = Duration.millis(500);
 
@@ -546,21 +566,29 @@ export const make = (
       );
     };
 
-    const clockSet = (machine: Target) =>
+    const settled = (machine: Target) =>
       Effect.gen(function* () {
         const vm = machine.handle;
         const stamp = dateStamp(yield* DateTime.now);
 
         yield* expect(
-          yield* tartExec(vm, ["sudo", "-n", "/bin/date", "-u", stamp]),
-          `tart exec ${vm} date`
+          yield* tartExec(vm, [
+            "sudo",
+            "-n",
+            "/bin/sh",
+            "-c",
+            settleScript,
+            "clankerbox-settle",
+            stamp,
+          ]),
+          `tart exec ${vm} setting the guest's clock and resolvers`
         );
       }).pipe(
         timeoutFail(
-          clockWait,
+          settleWait,
           () =>
             new Internal({
-              message: `${machine.name}'s guest didn't take the host's clock within ${Duration.format(clockWait)}`,
+              message: `${machine.name}'s guest didn't take the host's clock and resolvers within ${Duration.format(settleWait)}`,
             })
         )
       );
@@ -648,7 +676,7 @@ export const make = (
       Effect.andThen(launch(machine), ready(machine));
 
     const boot = (machine: Target) =>
-      Effect.andThen(booted(machine), clockSet(machine));
+      Effect.andThen(booted(machine), settled(machine));
 
     const stop = (machine: Target) =>
       Effect.gen(function* () {
@@ -797,7 +825,7 @@ export const make = (
             })
           )
         ),
-        Effect.andThen(clockSet(machine))
+        Effect.andThen(settled(machine))
       );
 
     const suspend = (machine: Target) =>
@@ -1021,7 +1049,7 @@ export const make = (
           }
 
           if (observed === "running") {
-            yield* clockSet(machine);
+            yield* settled(machine);
           }
         })
       ),

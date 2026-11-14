@@ -13,7 +13,9 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
 import {
+  chmod,
   mkdir,
+  outputOf,
   read,
   scratch,
   write,
@@ -47,6 +49,7 @@ import {
   machineName,
   make,
   plist,
+  settleScript,
   supported,
 } from "../../../src/platform/tart/tart.ts";
 import type { Settings } from "../../../src/platform/tart/tart.ts";
@@ -140,7 +143,10 @@ const calls = (mac: ScriptedMac) =>
         ...call.args,
       ]
         .join(" ")
-        .replace(/ \/bin\/date -u \d{12}\.\d{2}$/u, " /bin/date -u <now>")
+        .replace(
+          / \/bin\/sh -c [\s\S]* clankerbox-settle \d{12}\.\d{2}$/u,
+          " settle <now>"
+        )
     )
     .filter(
       (line) =>
@@ -155,6 +161,58 @@ const launchctlPrint = (name: string) =>
   readFileSync(new URL(`launchctl/${name}.txt`, import.meta.url), "utf-8");
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
+  it.effect(
+    "the boot's settle script sets the host's clock, and public resolvers on each network service that names none, and leaves those a service names",
+    () =>
+      Effect.gen(function* () {
+        const root = yield* scratch;
+        const called = path.join(root, "calls");
+
+        yield* mkdir(path.join(root, "bin"));
+        yield* mkdir(path.join(root, "usr", "sbin"));
+        yield* write(
+          path.join(root, "bin", "date"),
+          `#!/bin/sh\necho "date $*" >>"${called}"\n`
+        );
+        yield* write(
+          path.join(root, "usr", "sbin", "networksetup"),
+          [
+            "#!/bin/sh",
+            `echo "networksetup $*" >>"${called}"`,
+            "case $1 in",
+            "  -listallnetworkservices) printf '%s\\n' 'An asterisk (*) denotes that a network service is disabled.' Ethernet 'Wi-Fi' '*Thunderbolt Bridge' 'USB 10/100/1000 LAN' ;;",
+            "  -getdnsservers) case $2 in",
+            "    Wi-Fi) printf '%s\\n' 8.8.8.8 2001:4860:4860::8888 ;;",
+            '    *) echo "There aren\'t any DNS Servers set on $2." ;;',
+            "  esac ;;",
+            "esac",
+            "",
+          ].join("\n")
+        );
+        yield* chmod(path.join(root, "bin", "date"), 0o755);
+        yield* chmod(path.join(root, "usr", "sbin", "networksetup"), 0o755);
+
+        const ran = yield* outputOf(
+          "/bin/sh",
+          ["-c", settleScript, "clankerbox-settle", "111409302026.05"],
+          { env: { CLANKERBOX_ROOT: root }, extendEnv: true }
+        );
+
+        expect(ran.code, ran.stderr).toBe(0);
+        expect((yield* read(called)).trim().split("\n")).toStrictEqual([
+          "date -u 111409302026.05",
+          "networksetup -listallnetworkservices",
+          "networksetup -getdnsservers Ethernet",
+          "networksetup -setdnsservers Ethernet 1.1.1.1 9.9.9.9",
+          "networksetup -getdnsservers Wi-Fi",
+          "networksetup -getdnsservers Thunderbolt Bridge",
+          "networksetup -setdnsservers Thunderbolt Bridge 1.1.1.1 9.9.9.9",
+          "networksetup -getdnsservers USB 10/100/1000 LAN",
+          "networksetup -setdnsservers USB 10/100/1000 LAN 1.1.1.1 9.9.9.9",
+        ]);
+      })
+  );
+
   it("native names carry the host ID, the kind and the instance, and disk sizes round up to GB", () => {
     const ref = { name: "dev", instance: "0123456789abcdef0123456789abcdef" };
 
@@ -293,7 +351,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           `launchctl bootstrap gui/501 ${path.join(jobsDir(mac.settings.stateDir), `${vm}.plist`)}`,
           `launchctl kickstart gui/501/${vm}`,
           `tart exec ${vm} true`,
-          `tart exec ${vm} sudo -n /bin/date -u <now>`,
+          `tart exec ${vm} sudo -n settle <now>`,
         ]);
 
         const log = path.join(jobsDir(mac.settings.stateDir), `${vm}.log`);
@@ -402,7 +460,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           `launchctl kickstart gui/501/${vm}`,
           `tart exec ${vm} true`,
           `tart exec ${vm} true`,
-          `tart exec ${vm} sudo -n /bin/date -u <now>`,
+          `tart exec ${vm} sudo -n settle <now>`,
         ]);
       })
   );
@@ -422,7 +480,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* runtime.start(machine, new Set());
 
         expect(calls(mac).slice(before)).toStrictEqual([
-          `tart exec ${vm} sudo -n /bin/date -u <now>`,
+          `tart exec ${vm} sudo -n settle <now>`,
         ]);
       })
   );
@@ -470,7 +528,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           `launchctl bootstrap gui/501 ${path.join(jobsDir(mac.settings.stateDir), `${vm}.plist`)}`,
           `launchctl kickstart gui/501/${vm}`,
           `tart exec ${vm} true`,
-          `tart exec ${vm} sudo -n /bin/date -u <now>`,
+          `tart exec ${vm} sudo -n settle <now>`,
         ]);
       })
   );
@@ -714,14 +772,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           [
             `launchctl kickstart gui/501/${vmOf(current)}`,
             `tart exec ${vmOf(current)} true`,
-            `tart exec ${vmOf(current)} sudo -n /bin/date -u <now>`,
+            `tart exec ${vmOf(current)} sudo -n settle <now>`,
           ],
           [
             `launchctl bootout gui/501/${vmOf(older)}`,
             `launchctl bootstrap gui/501 ${plistOf(vmOf(older))}`,
             `launchctl kickstart gui/501/${vmOf(older)}`,
             `tart exec ${vmOf(older)} true`,
-            `tart exec ${vmOf(older)} sudo -n /bin/date -u <now>`,
+            `tart exec ${vmOf(older)} sudo -n settle <now>`,
           ],
         ]);
         expect(mac.programs.get(vmOf(older))).toStrictEqual([
@@ -1108,11 +1166,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           `tart clone ${vmOf(source)} ${vmOf(forked)}`,
           `tart set ${vmOf(forked)} --random-serial`,
           `tart exec ${vmOf(forked)} true`,
-          `tart exec ${vmOf(forked)} sudo -n /bin/date -u <now>`,
+          `tart exec ${vmOf(forked)} sudo -n settle <now>`,
           `tart clone ${snap} ${vmOf(restored)}`,
           `tart set ${vmOf(restored)} --random-serial`,
           `tart exec ${vmOf(restored)} true`,
-          `tart exec ${vmOf(restored)} sudo -n /bin/date -u <now>`,
+          `tart exec ${vmOf(restored)} sudo -n settle <now>`,
           `tart delete ${snap}`,
           `tart delete ${snap}`,
         ]);
@@ -1668,7 +1726,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a boot whose guest refuses the host's clock fails Internal naming the date, and a resume's says nothing of a locked session",
+    "a boot whose guest refuses the host's clock and resolvers fails Internal naming them, and a resume's says nothing of a locked session",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -1686,7 +1744,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(error._tag).toBe("Internal");
         expect(error.message).toBe(
-          `tart exec ${vm} date exited 1: sudo: a password is required`
+          `tart exec ${vm} setting the guest's clock and resolvers exited 1: sudo: a password is required`
         );
       })
   );
@@ -1972,7 +2030,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(calls(mac).slice(before)).toStrictEqual([
         `launchctl kickstart gui/501/${vm}`,
         `tart exec ${vm} true`,
-        `tart exec ${vm} sudo -n /bin/date -u <now>`,
+        `tart exec ${vm} sudo -n settle <now>`,
       ]);
       expect(yield* runtime.observe([machine])).toStrictEqual(
         new Map([[machine.name, "running"]])
@@ -2157,7 +2215,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             used: 1,
           });
           expect(calls(mac).slice(before)).toStrictEqual([
-            `tart exec ${vm} sudo -n /bin/date -u <now>`,
+            `tart exec ${vm} sudo -n settle <now>`,
             `tart exec ${vm} sudo -n /sbin/shutdown -h now`,
           ]);
           expect(yield* runtime.observe([machine])).toStrictEqual(

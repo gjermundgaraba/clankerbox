@@ -1440,19 +1440,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a mac base names public resolvers and installs tailscale with brew only where the host joins and it lacks it",
+    "a mac base installs tailscale with brew only where the host joins and it lacks it, and leaves resolvers and the clock to each boot",
     () =>
       Effect.gen(function* () {
         const { runtime, fake, machine } = yield* madeOn("tart");
 
         yield* prepareBase(runtime, machine, false);
 
-        const made = yield* calls(fake.root(machine.name) ?? "");
-
-        expect(made).toContain(
-          "networksetup -setdnsservers Ethernet 1.1.1.1 9.9.9.9"
-        );
-        expect(made.some((call) => call.startsWith("brew"))).toBe(false);
+        expect(yield* calls(fake.root(machine.name) ?? "")).toStrictEqual([]);
       })
   );
 

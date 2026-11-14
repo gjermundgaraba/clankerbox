@@ -249,17 +249,6 @@ export const writeStubs = (dir: string, uname = "Linux"): string => {
         'echo "$user:x:1000:1000::/home/$user:/bin/sh" >>"$CLANKERBOX_ROOT/etc/passwd"',
       ].join("\n"),
     ],
-    [
-      "networksetup",
-      [
-        `echo "networksetup $*" >>"$CLANKERBOX_ROOT/calls"`,
-        'if [ "$1" = -listallnetworkservices ]; then',
-        "  echo 'An asterisk (*) denotes that a network service is disabled.'",
-        "  echo Ethernet",
-        "fi",
-      ].join("\n"),
-    ],
-    ["systemsetup", `echo "systemsetup $*" >>"$CLANKERBOX_ROOT/calls"`],
     ["brew", `echo "brew $*" >>"$CLANKERBOX_ROOT/calls"`],
     [
       "systemctl",

@@ -361,8 +361,13 @@ Each: what Tart does, where, and what of ours depends on it.
   vmnet's own isolation off (`enable_isolation: Some(false)`, lib/host.rs), so
   that fallback is the isolation. Blocking `@host` also blocks the gateway's
   DNS. 0.25.0's DNS zone, `<name>.internal`, answers only for VMs started with
-  a name (`dns_server` in lib/manager.rs), which Tart never passes. Ours: setup
-  sets public resolvers; guests can't reach any of the Mac's addresses.
+  a name (`dns_server` in lib/manager.rs), which Tart never passes. Ours: each
+  boot's `settleScript` names `1.1.1.1` and `9.9.9.9` on each network service
+  of the guest that names none, after it sets the clock; guests can't reach
+  any of the Mac's addresses. Measured on the pinned base: `networksetup
+  -getdnsservers` printed "There aren't any DNS Servers set on Ethernet." and
+  a lookup timed out at 15 s before, answered in 0.07 s after, and a fork
+  kept them.
 
 **Exec, the control socket and the guest agent**
 
