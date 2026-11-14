@@ -38,7 +38,13 @@ starts the hosts and the control plane in the background and waits until they
 serve. It prints the control plane's URL on stderr and the run directory on
 stdout. A build that fails prints its log and the evidence directory, and a
 host or control plane that exits before it serves prints its log.
-Each launch is a new run: runs never share a directory, port or evidence.
+Each launch is a new run: runs never share a directory, a host's or the
+control plane's port, or evidence. Machines' SSH ports, 21000 to 21099, are
+shared by every run and test suite on the machine. A host probes a port before
+it gives one to a machine, but a smolvm machine's port is free while it is
+stopped or paused, so another run's machine or program can take it, and the
+start then answers `Capacity` naming the port, as it should: free the port, or
+run one lane at a time, to keep such a start from failing.
 
 The fleet is a runtime, `smolvm` by default, with `hosts` of it, 1 by default:
 `launch.sh smolvm 2048 2`. Or it is `runtime:count` entries, comma-separated,
