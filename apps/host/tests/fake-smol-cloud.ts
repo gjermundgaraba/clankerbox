@@ -61,6 +61,8 @@ export type Dropping = Dropped | "capture" | "exec" | "resize";
 
 export interface FakeFaults extends Faults {
   readonly dropAnswer: (dropping: Dropping) => Effect.Effect<void>;
+  /** Loses the next `times` resize requests before the provider takes them. */
+  readonly loseResize: (times: number) => Effect.Effect<void>;
 }
 
 export interface FakeSmolCloud {
@@ -224,6 +226,7 @@ export const fakeSmolCloud = (
     const running = new Map<string, Set<ChildProcess>>();
     const calls: string[] = [];
     const dropping = new Set<Dropping>();
+    let losingResizes = 0;
     const landsLate: Duration.Duration[] = [];
     let quotaOn = false;
     const malformed: object[] = [];
@@ -746,6 +749,16 @@ export const fakeSmolCloud = (
               return problem(400, "bad_request", "unreadable resize");
             }
 
+            if (losingResizes > 0) {
+              losingResizes -= 1;
+
+              if (request.source instanceof IncomingMessage) {
+                request.source.socket.destroy();
+              }
+
+              return HttpServerResponse.empty();
+            }
+
             const resized = resize(machine, body.value);
 
             return (yield* dropped(request, "resize"))
@@ -917,6 +930,10 @@ export const fakeSmolCloud = (
       dropAnswer: (what) =>
         Effect.sync(() => {
           dropping.add(what);
+        }),
+      loseResize: (times) =>
+        Effect.sync(() => {
+          losingResizes = times;
         }),
     };
 

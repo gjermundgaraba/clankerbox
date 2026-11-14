@@ -44,7 +44,7 @@ import type {
 } from "../../runtime.ts";
 import { KeyedApiUrl } from "../../settings.ts";
 import type { HostSettings } from "../../settings.ts";
-import { untilRest } from "../provider-http.ts";
+import { sentUntilHeld, triesAfterLoss, untilRest } from "../provider-http.ts";
 import * as Api from "./api.ts";
 import type { ApiError, MachineRecord, Refused } from "./api.ts";
 import { traits } from "./traits.ts";
@@ -216,6 +216,11 @@ const targetOf = (machine: Identity, handle: Handle): Target => ({
   handle,
 });
 
+const holds = (record: MachineRecord, asked: Api.Sizes) =>
+  (asked.cpus ?? record.resources.cpus) === record.resources.cpus &&
+  (asked.memoryMb ?? record.resources.memoryMb) === record.resources.memoryMb &&
+  (asked.diskGb ?? record.resources.diskGb) === record.resources.diskGb;
+
 const sizesOf = (record: MachineRecord, asked: Sizes): Sizes => ({
   cpu: record.resources.cpus,
   ramMib: record.resources.memoryMb,
@@ -297,6 +302,24 @@ export const make = (
 
     const record = (handle: Handle) =>
       api.machine(handle).pipe(Effect.catchIf(isGone, () => Effect.undefined));
+
+    const atRest = (handle: Handle) =>
+      untilRest(
+        api.machine(handle),
+        (found) => !transitional.has(found.state),
+        poll
+      );
+
+    const resized = (machine: Target, asked: Api.Sizes) =>
+      sentUntilHeld({
+        send: api.resize(machine.handle, asked),
+        rested: atRest(machine.handle),
+        holds: (found) => holds(found, asked),
+        unheld: (found) =>
+          new Internal({
+            message: `smol cloud answered none of ${triesAfterLoss} resizes of ${machine.name}, and holds it at ${found.resources.cpus} CPUs, ${found.resources.memoryMb} MiB and ${found.resources.diskGb ?? "an unknown"} GiB of disk`,
+          }),
+      });
 
     const atLimit = Effect.map(
       Effect.all([api.account, api.inUse], { concurrency: "unbounded" }),
@@ -842,32 +865,23 @@ export const make = (
           return checkpoint.id;
         }).pipe(bounded(`capture ${machine.name}`)),
       resize: (machine, to) =>
-        api
-          .resize(machine.handle, {
-            cpus: to.cpu,
-            memoryMb: to.ramMib,
-            diskGb: to.diskGib,
-          })
-          .pipe(
-            Effect.catchTag("Unanswered", (lost) =>
-              Effect.flatMap(api.machine(machine.handle), ({ resources }) =>
-                (to.cpu ?? resources.cpus) === resources.cpus &&
-                (to.ramMib ?? resources.memoryMb) === resources.memoryMb &&
-                (to.diskGib ?? resources.diskGb) === resources.diskGb
-                  ? Effect.void
-                  : Effect.fail(lost)
-              )
-            ),
-            Effect.mapError((error) =>
+        resized(machine, {
+          cpus: to.cpu,
+          memoryMb: to.ramMib,
+          diskGb: to.diskGib,
+        }).pipe(
+          Effect.catchTag(["Refused", "Unanswered", "Unreadable"], (error) =>
+            Effect.fail(
               error._tag === "Refused" &&
-              (error.status === 400 || error.status === 422)
+                (error.status === 400 || error.status === 422)
                 ? new Unsizable({
                     message: `resize ${machine.name}: ${error.detail}`,
                   })
                 : internal(`resize ${machine.name}`)(error)
-            ),
-            bounded(`resize ${machine.name}`)
+            )
           ),
+          bounded(`resize ${machine.name}`)
+        ),
       sizes: (machine) =>
         Effect.map(
           read(`the read of ${machine.name}`, api.machine(machine.handle)),

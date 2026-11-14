@@ -101,6 +101,11 @@ Each is an assertion of the live suite, in the case named.
   `Authorization`, carries raw TCP to sshd, and doesn't wake a stopped machine.
 - Memory, vCPUs and disk grow on a running machine and on a stopped one;
   memory doesn't shrink (400).
+- A resize is absolute, so the adapter follows boat's rule for a lost
+  answer: it reads the machine until it rests, is done when it holds the
+  sizes asked, and sends the resize again otherwise, at most three times.
+  (`smol-cloud.ts`'s `resized`; the fake's `loseResize` and the resize
+  tests.)
 - A capture with `wait=true` can answer `creating`, so the adapter polls it to
   `available`.
 - A pause leaves a checkpoint of its own, which outlives the resume. While

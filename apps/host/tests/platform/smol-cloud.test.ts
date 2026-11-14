@@ -793,6 +793,51 @@ describe("the smol cloud runtime over an account without a card", () => {
   );
 
   it.live(
+    "a resize whose request was lost sends it again until smol cloud holds the sizes asked",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { fake, runtime } = yield* onCloud;
+          const dev = yield* made(runtime, "dev");
+
+          yield* fake.faults.loseResize(2);
+          yield* runtime.resize(
+            { ...dev, ...sizes },
+            { cpu: 1, ramMib: 2048, diskGib: 10 },
+            true
+          );
+
+          expect(fake.machines.get(dev.handle)?.memoryMb).toBe(2048);
+        })
+      )
+  );
+
+  it.live(
+    "a resize whose every request is lost fails after three, and says the sizes smol cloud holds",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { fake, runtime } = yield* onCloud;
+          const dev = yield* made(runtime, "dev");
+
+          yield* fake.faults.loseResize(3);
+
+          const failed = yield* Effect.flip(
+            runtime.resize(
+              { ...dev, ...sizes },
+              { cpu: 1, ramMib: 2048, diskGib: 10 },
+              true
+            )
+          );
+
+          expect(failed._tag).toBe("Internal");
+          expect(failed.message).toContain("answered none of 3 resizes");
+          expect(fake.machines.get(dev.handle)?.memoryMb).not.toBe(2048);
+        })
+      )
+  );
+
+  it.live(
     "a resize whose answer was lost reads the machine, and ends done when it holds the sizes asked",
     () =>
       Effect.scoped(
