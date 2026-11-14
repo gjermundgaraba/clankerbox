@@ -63,6 +63,7 @@ import type { Leaving, TailnetReport } from "./guest.ts";
 import { Reaches } from "./reach.ts";
 import {
   missing,
+  missingCheckpoint,
   Runtime,
   sizedBy,
   stateIn,
@@ -412,11 +413,7 @@ export const make = (
     const checkpointTarget = (checkpoint: Ref) =>
       Effect.flatMap(found("checkpoint", checkpoint), (handle) =>
         handle === undefined
-          ? Effect.fail(
-              new Internal({
-                message: `checkpoint ${checkpoint.name} is missing from the ${traits.runtime} runtime; delete it`,
-              })
-            )
+          ? Effect.fail(missingCheckpoint(traits.runtime, checkpoint))
           : Effect.succeed(targetOf(checkpoint, handle))
       );
 

@@ -32,7 +32,13 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { traits as smolvm } from "../src/platform/smolvm/traits.ts";
 import { traits as tart } from "../src/platform/tart/traits.ts";
-import { Handle, missing, Runtime, sizedBy } from "../src/runtime.ts";
+import {
+  Handle,
+  missing,
+  missingCheckpoint,
+  Runtime,
+  sizedBy,
+} from "../src/runtime.ts";
 import type {
   Activation,
   Admission,
@@ -1074,19 +1080,23 @@ export const fakeRuntime = (options: FakeOptions) => {
             }
 
             case "checkpoint": {
-              return call(
-                "restore",
-                machine,
-                Effect.andThen(
-                  room,
-                  lost(
-                    "make",
-                    copyInto(heldCheckpoint(origin.checkpoint), machine),
-                    madeAgain(machine, `restore ${machine.name}`)
+              const { checkpoint } = origin;
+
+              return checkpoints.has(checkpoint.handle)
+                ? call(
+                    "restore",
+                    machine,
+                    Effect.andThen(
+                      room,
+                      lost(
+                        "make",
+                        copyInto(heldCheckpoint(checkpoint), machine),
+                        madeAgain(machine, `restore ${machine.name}`)
+                      )
+                    ),
+                    leftOf(machine)
                   )
-                ),
-                leftOf(machine)
-              );
+                : Effect.fail(missingCheckpoint(traits.runtime, checkpoint));
             }
 
             case "machine": {
@@ -1408,6 +1418,17 @@ export const fakeRuntime = (options: FakeOptions) => {
       });
       remembered();
     }),
+    lose: (checkpoint: Handle) =>
+      Effect.promise(async () => {
+        const held = checkpoints.get(checkpoint);
+
+        checkpoints.delete(checkpoint);
+        remembered();
+
+        if (held !== undefined) {
+          await rm(checkpointRoot(held), { recursive: true, force: true });
+        }
+      }),
     resizedTo: (name: string, sizing: Sizing) => {
       const found = byName.get(name);
 

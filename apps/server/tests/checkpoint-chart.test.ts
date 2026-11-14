@@ -1,6 +1,6 @@
 import { Handle } from "@clankerbox/host-contract";
 import { describe, expect, it } from "@effect/vitest";
-import { Internal, Name } from "@gjermundgaraba/clankerbox-sdk";
+import { Internal, Missing, Name } from "@gjermundgaraba/clankerbox-sdk";
 import { Schema } from "effect";
 import { adjacencyMapToArray, getAdjacencyMap } from "xstate/graph";
 
@@ -107,6 +107,16 @@ const found: CheckpointEvent = {
   handle: Handle.make("ckpt-found"),
 };
 
+const vanished: CheckpointEvent = {
+  type: "missing",
+  host: "linux",
+  error: new Missing({
+    message: "checkpoint snap is missing from the smolvm runtime of this host",
+    checkpoint: "snap",
+  }),
+  at,
+};
+
 const events = {
   removal,
   read,
@@ -117,6 +127,7 @@ const events = {
   gone,
   publish,
   found,
+  vanished,
 };
 
 const names = [
@@ -129,6 +140,7 @@ const names = [
   "gone",
   "publish",
   "found",
+  "vanished",
 ] as const;
 
 type Edge = (typeof names)[number];
@@ -162,7 +174,12 @@ const edges: Readonly<
     gone: "discarding.due",
     found: "fetching.sent",
   },
-  ready: { removal: "deleting.due", publish: "publishing.due", found: "ready" },
+  ready: {
+    removal: "deleting.due",
+    publish: "publishing.due",
+    found: "ready",
+    vanished: "failed",
+  },
   "publishing.due": {
     removal: "deleting.due",
     read: "publishing.sent",
@@ -403,7 +420,7 @@ describe("the chart", () => {
     ).toStrictEqual([]);
   });
 
-  it("a leaf is followed exactly when it has a step, and a rest moves to another leaf only by a request", () => {
+  it("a leaf is followed exactly when it has a step, and a rest moves to another leaf only by a request, or a ready one to failed by its host saying it holds it no more", () => {
     expect(
       leaves.filter(
         (state) =>
@@ -420,10 +437,24 @@ describe("the chart", () => {
           (state === "ready" || state === "failed") &&
           Object.entries(taken).some(
             ([edge, to]) =>
-              edge !== "removal" && edge !== "publish" && to !== state
+              edge !== "removal" &&
+              edge !== "publish" &&
+              edge !== "vanished" &&
+              to !== state
           )
       )
     ).toStrictEqual([]);
+  });
+
+  it("a ready checkpoint its host no longer holds fails with what the host said, and one on another host is kept", () => {
+    const ready = rowAt("ready", { handle: Handle.make("ckpt-1") });
+
+    expect(after(ready, vanished)).toMatchObject({
+      state: "failed",
+      error: { _tag: "Missing", checkpoint: "snap" },
+      failedAt: at,
+    });
+    expect(go(ready, { ...vanished, host: "other" }).next).toBe(ready);
   });
 
   it("a capture shares its machine and owns the checkpoint, and a delete owns it alone", () => {

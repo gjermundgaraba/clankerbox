@@ -36,6 +36,11 @@ const events = {
   lost: types<{ readonly error: HostError }>(),
   publish: types<object>(),
   found: types<{ readonly instance: string; readonly handle: Handle }>(),
+  missing: types<{
+    readonly host: string;
+    readonly error: HostError;
+    readonly at: Done["at"];
+  }>(),
 };
 
 export type CheckpointEvent = InferEvents<typeof events>;
@@ -122,6 +127,13 @@ export const checkpoint = setup({
       meta: { phase: "ready", activity: "none" },
       on: {
         delete: { target: "#checkpoint.deleting.due" },
+        missing: ({ context, event }) =>
+          event.host === context.host
+            ? {
+                target: "#checkpoint.failed",
+                context: { error: event.error, failedAt: event.at },
+              }
+            : undefined,
         publish: ({ context }) => ({
           target: "#checkpoint.publishing.due",
           context: { published: context.name },

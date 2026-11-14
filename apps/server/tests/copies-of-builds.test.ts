@@ -1,3 +1,4 @@
+import { Handle } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { memoryBuildStore } from "@gjermundgaraba/clankerbox-host/testing";
@@ -151,6 +152,48 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           served.shared.objects.has(manifest),
         ]).toStrictEqual([true, false]);
       })
+  );
+
+  it.effect(
+    "a create from a template whose copy its host no longer holds moves on to the next host that holds the build, and that copy is fetched again",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* onTwo();
+        const client = yield* clientOf(served.url);
+
+        yield* client.buildTemplate({ ...web, host: "two" });
+        yield* eventually(copiesOf(served), (shown) =>
+          shown.includes("web@1 one ready")
+        );
+
+        const lost = (yield* served.store.checkpoints).find(
+          ({ host }) => host === "one"
+        );
+
+        yield* served.one.fake.lose(lost?.handle ?? Handle.make("none"));
+
+        const created = yield* client.create("dev", { template: "web" });
+        const row = yield* served.store.findMachine("dev");
+
+        const again = yield* eventually(
+          Effect.map(served.store.checkpoints, (rows) =>
+            rows.find(({ host }) => host === "one")
+          ),
+          (copy) =>
+            copy !== undefined &&
+            copy.instance !== lost?.instance &&
+            copy.state === "ready"
+        );
+
+        expect(created.phase).toBe("settled");
+        expect(Option.map(row, ({ host }) => host)).toStrictEqual(
+          Option.some("two")
+        );
+        expect(callsTo(served.one, "restore")).toStrictEqual([]);
+        expect(again?.handle).not.toBe(lost?.handle);
+        expect(callsTo(served.one, "install")).toHaveLength(2);
+      }),
+    20_000
   );
 
   it.effect("a host with another pin reads outdated and takes no create", () =>

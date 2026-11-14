@@ -383,7 +383,13 @@ the run.
   `undoing`, deletes the VM, again at each recheck while that fails, and rests
   `undone` with its error for `failedRowsLast`. A delete clears it at once and a
   create of the name replaces it. A `Capacity` failure moves the create to the
-  next host instead, for a template's the next that holds its build, once its VM is gone, while the control plane that took the create runs; after a restart it rests `undone`. Nothing ambiguous ever moves one.
+  next host instead, for a template's the next that holds its build, once its VM is gone, while the control plane that took the create runs; after a restart it rests `undone`. So does a `Missing` that names the checkpoint a template's create restores, as each later host holds a copy of its own. Nothing ambiguous ever moves one.
+- **A checkpoint a make finds gone fails.** A runtime answers a make from a
+  checkpoint it no longer holds `Missing`, naming the checkpoint, with nothing
+  made, and the control plane then fails that checkpoint's row, if it is ready
+  on that host, with the same error: a build's copy so failed is cleared and
+  fetched again where a build store has it, and a user's checkpoint reads
+  `failed`, saying to delete it.
 - **A start starts the machine, also when it runs already, or resumes it when it
   is paused, and prepares it.** A pause leaves a stopped machine stopped. On a
   runtime whose `pause` trait `saves`, it saves a running machine and stops its
@@ -394,7 +400,8 @@ the run.
   whose `stop` trait `resumes` it, and a capture or fork copies only a VM booted under the
   host's pin; the step carries the pin and the host compares. A resize is a step
   too, and the row keeps the sizes the runtime reads after it, also after one
-  that failed part way. A checkpoint is usable only `ready`, and never changes; a
+  that failed part way. A checkpoint is usable only `ready`, and never changes
+  but to fail when its host no longer holds it; a
   template's current build moves to a build only once its setup has run and its
   copy is ready, and a control plane that restarts ends a build that ran failed
   and deletes its builder, which is ephemeral.

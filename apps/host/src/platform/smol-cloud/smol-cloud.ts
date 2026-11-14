@@ -19,7 +19,12 @@ import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 import { Socket } from "effect/socket";
 
-import { CannotStart, missing, Runtime } from "../../runtime.ts";
+import {
+  CannotStart,
+  missing,
+  missingCheckpoint,
+  Runtime,
+} from "../../runtime.ts";
 import type {
   Command,
   Execution,
@@ -885,6 +890,15 @@ export const make = (
           yield* told([machine]);
 
           const handle = yield* created(machine, origin).pipe(
+            Effect.catchIf(
+              isGone,
+              (error): Effect.Effect<never, ApiError | Missing> =>
+                Effect.fail(
+                  origin._tag === "checkpoint"
+                    ? missingCheckpoint(traits.runtime, origin.checkpoint)
+                    : error
+                )
+            ),
             Effect.catchIf(
               (error) => error._tag === "Refused" && oversized(error),
               (error) =>

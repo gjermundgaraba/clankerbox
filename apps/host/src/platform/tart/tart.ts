@@ -32,6 +32,7 @@ import {
   changes,
   Handle,
   missing,
+  missingCheckpoint,
   Runtime,
   sizedBy,
   timeoutFail,
@@ -897,10 +898,14 @@ export const make = (
         case "checkpoint": {
           const { checkpoint } = origin;
 
-          return cloneInto(
-            (into) => clone(checkpoint.handle, into),
-            machine,
-            sizeFlags(changes(checkpoint, machine))
+          return Effect.flatMap(home.look(checkpoint.handle), (held) =>
+            held === undefined
+              ? Effect.fail(missingCheckpoint(traits.runtime, checkpoint))
+              : cloneInto(
+                  (into) => clone(checkpoint.handle, into),
+                  machine,
+                  sizeFlags(changes(checkpoint, machine))
+                )
           );
         }
 

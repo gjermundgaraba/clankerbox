@@ -1,7 +1,7 @@
 import type { Handle } from "@clankerbox/host-contract";
 import { fitted, resizable } from "@clankerbox/host-contract/traits";
 import { describe, it } from "@effect/vitest";
-import { Capacity, WrongState } from "@gjermundgaraba/clankerbox-sdk";
+import { Capacity, Missing, WrongState } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Fiber, Schedule, Stream } from "effect";
 import type { Scope } from "effect";
 import { expect } from "vite-plus/test";
@@ -336,6 +336,40 @@ export const runtimeContract = (subject: Subject): void => {
             );
             yield* runtime.deleteCheckpoint({ ...snap, handle });
             yield* runtime.deleteCheckpoint({ ...snap, handle });
+          })
+        )
+    );
+
+    it.live(
+      "refuses a make from a checkpoint it no longer holds as Missing, naming the checkpoint, and makes nothing",
+      () =>
+        withFixture(({ runtime }) =>
+          Effect.gen(function* () {
+            const machine = yield* made(runtime, "dev");
+            const snap = { name: "snap", instance: second };
+
+            yield* inCaptureState(runtime, machine);
+
+            const handle = yield* runtime.capture(machine, snap);
+
+            yield* runtime.deleteCheckpoint({ ...snap, handle });
+
+            const copy = sized("copy", third);
+
+            const refused = yield* Effect.flip(
+              runtime.make(
+                copy,
+                {
+                  _tag: "checkpoint",
+                  checkpoint: { ...snap, ...subject.sizes, handle },
+                },
+                bindFor(runtime)
+              )
+            );
+
+            expect(refused).toBeInstanceOf(Missing);
+            expect(refused).toMatchObject({ checkpoint: "snap" });
+            expect(yield* runtime.find("machine", copy)).toBeUndefined();
           })
         )
     );

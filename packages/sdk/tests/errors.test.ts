@@ -10,6 +10,7 @@ import {
   Internal,
   Invalid,
   Machine,
+  Missing,
   NotFound,
   NotOffered,
   retryable,
@@ -33,6 +34,46 @@ describe("errors", () => {
   it("a request superseded names what the later one asked for: a desired state", () => {
     expectTypeOf<Superseded["by"]>().toEqualTypeOf<Desired>();
   });
+
+  it.effect(
+    "Missing names a machine as a 0.40 row stored it, or a checkpoint a create's host no longer holds",
+    () =>
+      Effect.gen(function* () {
+        const decode = Schema.decodeUnknownEffect(wire);
+
+        const stored = yield* decode(
+          JSON.stringify({
+            _tag: "Missing",
+            message:
+              "machine dev is missing from the smolvm runtime; delete it",
+            machine: "dev",
+          })
+        );
+
+        const source = new Missing({
+          message: "checkpoint web@2 is missing from the smolvm runtime",
+          checkpoint: "web@2",
+        });
+
+        const sent = yield* decode(yield* Schema.encodeEffect(wire)(source));
+
+        expect(stored).toStrictEqual(
+          new Missing({
+            message:
+              "machine dev is missing from the smolvm runtime; delete it",
+            machine: "dev",
+          })
+        );
+        expect(sent).toStrictEqual(source);
+        expect(source.located({ action: "createMachine" })).toStrictEqual(
+          new Missing({
+            message: "checkpoint web@2 is missing from the smolvm runtime",
+            action: "createMachine",
+            checkpoint: "web@2",
+          })
+        );
+      })
+  );
 
   it("retryable follows the tag", () => {
     const message = "m";

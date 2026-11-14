@@ -25,7 +25,7 @@ The goal is that a client talks to one server, IDs carry no host, and adding a h
     - The tailnet stays the only gate, and secrets stay where they are (D7).
     - One instance with SQLite, and backups are required (D8).
     - Everything upgrades together (D4).
-    - Placement takes the first host that fits, then the next on `Capacity`, and a create from a template takes only a host that holds its build's copy (D9, decision 16).
+    - Placement takes the first host that fits, then the next on `Capacity`, and a create from a template takes only a host that holds its build's copy (D9, decision 16), and the next such host on a `Missing` naming the copy, which its host no longer holds. The control plane then fails that copy's row, so a recheck clears it and fetches the build there again where the build store holds it.
     - A build's copy lives on the host that built it, under a name that means nothing to a client, and a client names the build, `web@2` (D9, decision 16).
     - Tailnet nodes are named with a fixed prefix, `cbx-dev`, so they can't clash with other nodes (D5).
 12. **Labels are set when a resource is made, and lists filter by them.** (0.35) `create`, `fork`, `restore` and `captureCheckpoint` take `labels`, kept on the row as JSON, and a copy takes only the labels its own request gives. `listMachines` and `listCheckpoints` take a filter that every pair must match. Nothing changes a label later, so a label is a fact about how the resource was made, and no write can race another over it.

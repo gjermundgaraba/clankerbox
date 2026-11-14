@@ -39,6 +39,7 @@ import {
 import type { Scope } from "effect";
 
 import { applied } from "./chart.ts";
+import { checkpointChart } from "./checkpoint-chart.ts";
 import {
   cloned,
   copied,
@@ -149,6 +150,10 @@ export class Machines extends Context.Service<Machines, Interface>()(
   "@clankerbox/server/Machines"
 ) {}
 
+const movesOn = (error: MachineRow["error"]): boolean =>
+  error?._tag === "Capacity" ||
+  (error?._tag === "Missing" && error.checkpoint !== undefined);
+
 interface CreateHeldInMemory {
   readonly setup: Setup | undefined;
   readonly untried: readonly Candidate[];
@@ -235,13 +240,13 @@ export const make = (
     const shown = (found: MachineRow, seen?: MachineState) =>
       machineOf(found, seen, tailnets.get(found.name)?.status);
 
-    const movedPastCapacity = (found: MachineRow): Move | undefined => {
+    const movedOn = (found: MachineRow): Move | undefined => {
       const [candidate] = creates.get(found.name)?.untried ?? [];
       const info = hosts.known(candidate?.host ?? "");
 
       return candidate === undefined ||
         info === undefined ||
-        found.error?._tag !== "Capacity"
+        !movesOn(found.error)
         ? undefined
         : {
             host: candidate.host,
@@ -267,7 +272,7 @@ export const make = (
         };
       }
 
-      const move = op.kind === "remove" ? movedPastCapacity(found) : undefined;
+      const move = op.kind === "remove" ? movedOn(found) : undefined;
 
       return {
         type: "reported",
@@ -277,6 +282,24 @@ export const make = (
         ...(move === undefined ? {} : { move }),
       };
     };
+
+    const sourceLost = (
+      host: string,
+      error: Report["error"],
+      at: DateTime.Utc
+    ) =>
+      error?._tag === "Missing" && error.checkpoint !== undefined
+        ? Effect.asVoid(
+            store.advance("checkpoint", error.checkpoint, (record, held) =>
+              applied(
+                checkpointChart,
+                record,
+                { type: "missing", host, error, at },
+                held
+              )
+            )
+          )
+        : Effect.void;
 
     const stored = (name: string, event: MachineEvent) =>
       Effect.gen(function* () {
@@ -348,10 +371,16 @@ export const make = (
           case "ended": {
             const { report } = heard;
 
+            const at = yield* DateTime.now;
+
             const written = yield* stored(
               name,
-              reportedBy(found, op, report, yield* DateTime.now)
+              reportedBy(found, op, report, at)
             );
+
+            if (written && op.kind === "make") {
+              yield* sourceLost(found.host, report.error, at);
+            }
 
             if (written && op.kind === "start") {
               tailnets.delete(name);

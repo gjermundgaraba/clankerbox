@@ -167,6 +167,11 @@ const fromCheckpoint = (checkpoint: Sized): Origin => ({
   checkpoint,
 });
 
+const holdingSnap = (settings: { readonly stateDir: string }) =>
+  mkdir(
+    path.join(settings.stateDir, "checkpoints", "snap-fedcba98.checkpoint")
+  );
+
 const fromMachine = (source: Sized): Origin => ({
   _tag: "machine",
   machine: source,
@@ -1962,6 +1967,8 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const settings = yield* prepared();
+
+        yield* holdingSnap(settings);
         const spawner = scripted(() => {});
         const runtime = yield* runtimeOf(settings, spawner);
 
@@ -1995,6 +2002,8 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const settings = yield* prepared();
+
+        yield* holdingSnap(settings);
 
         const parked = scripted((call) =>
           call.args[1] === "status" &&
@@ -2940,7 +2949,10 @@ layer(NodeServices.layer)((it) => {
   it.effect("a ram restore that got its source's old port keeps it", () =>
     Effect.gen(function* () {
       const spawner = scripted(() => {});
-      const runtime = yield* runtimeOf(yield* prepared(), spawner);
+      const settings = yield* prepared();
+      const runtime = yield* runtimeOf(settings, spawner);
+
+      yield* holdingSnap(settings);
 
       yield* runtime.make(copy, fromCheckpoint(ramCheckpoint), on(10_000));
 
@@ -3021,7 +3033,10 @@ layer(NodeServices.layer)((it) => {
           call.args[1] === "status" ? status("running") : undefined
         );
 
-        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+        const settings = yield* prepared();
+        const runtime = yield* runtimeOf(settings, spawner);
+
+        yield* holdingSnap(settings);
 
         const larger = {
           ...copy,
@@ -3078,7 +3093,10 @@ layer(NodeServices.layer)((it) => {
               : undefined
           );
 
-          const runtime = yield* runtimeOf(yield* prepared(), spawner);
+          const settings = yield* prepared();
+          const runtime = yield* runtimeOf(settings, spawner);
+
+          yield* holdingSnap(settings);
 
           const error = yield* Effect.flip(
             runtime.make(larger, fromCheckpoint(ramCheckpoint), copyPort)

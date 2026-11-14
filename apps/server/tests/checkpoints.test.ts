@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { Handle } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { startHost } from "@gjermundgaraba/clankerbox-host/testing";
@@ -615,6 +616,42 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             error?._tag,
           ])
         ).toStrictEqual([["snap", "failed", "Missing"]]);
+      })
+  );
+
+  it.effect(
+    "a restore from a checkpoint its host no longer holds is Missing, naming the checkpoint, which then reads failed",
+    () =>
+      Effect.gen(function* () {
+        const { client, host, store } = yield* withSource();
+
+        const snap = yield* client.captureCheckpoint({
+          machine: "dev",
+          name: "snap",
+        });
+
+        const row = yield* store.findCheckpoint("snap");
+
+        yield* host.fake.lose(
+          Option.getOrThrow(row).handle ?? Handle.make("none")
+        );
+
+        const refused = yield* Effect.flip(
+          client.restoreMachine({ checkpoint: "snap", name: "copy" })
+        );
+
+        const after = yield* client.getCheckpoint({ id: "snap" });
+
+        expect(snap.phase).toBe("ready");
+        expect(refused).toMatchObject({
+          _tag: "Missing",
+          checkpoint: "snap",
+          made: "copy",
+        });
+        expect([after.phase, after.error?._tag]).toStrictEqual([
+          "failed",
+          "Missing",
+        ]);
       })
   );
 

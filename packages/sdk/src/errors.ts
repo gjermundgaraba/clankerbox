@@ -172,19 +172,31 @@ export class NotMade extends Schema.TaggedError<
   }
 }
 
-/** The runtime no longer has `machine`: it can only be deleted. */
+/**
+ * The runtime no longer has what the request needs, which it names: `machine`, which can then only
+ * be deleted, or `checkpoint`, the source a create, restore or a template's build asked for, which
+ * the host no longer holds.
+ */
 export class Missing extends Schema.TaggedError<
   Missing,
   { readonly brand: unique symbol }
 >()(
   "Missing",
-  { message: Schema.String, ...located, machine: Schema.String },
+  {
+    message: Schema.String,
+    ...located,
+    machine: Schema.optionalKey(Schema.String),
+    checkpoint: Schema.optionalKey(Schema.String),
+  },
   { httpApiStatus: 412 }
 ) {
   located(where: Where): Missing {
+    const { machine, checkpoint } = this;
+
     return new Missing({
       ...at(this, where),
-      machine: this.machine,
+      ...(machine === undefined ? {} : { machine }),
+      ...(checkpoint === undefined ? {} : { checkpoint }),
       message: this.message,
     });
   }

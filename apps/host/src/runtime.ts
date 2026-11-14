@@ -149,6 +149,15 @@ export const missing = (
     machine: machine.name,
   });
 
+export const missingCheckpoint = (
+  runtime: RuntimeName,
+  checkpoint: Pick<Ref, "name">
+): Missing =>
+  new Missing({
+    message: `checkpoint ${checkpoint.name} is missing from the ${runtime} runtime of this host`,
+    checkpoint: checkpoint.name,
+  });
+
 /**
  * A file of a checkpoint, as a build store copies it: `path` within the checkpoint, and `file` where
  * it lies on this host. A runtime that names a file by its content gives that name as `key`, which
@@ -249,7 +258,10 @@ export interface Interface {
   readonly capacity: (
     machines: readonly Held[]
   ) => Effect.Effect<readonly Reading[], RuntimeError>;
-  /** Makes the machine, from an image or a copy. A name the runtime can't give a VM is `Invalid`. */
+  /**
+   * Makes the machine, from an image or a copy. A name the runtime can't give a VM is `Invalid`, and
+   * a checkpoint it no longer holds is `Missing`, naming the checkpoint, with nothing made.
+   */
   readonly make: (
     machine: Identity & Sizes,
     origin: Origin,

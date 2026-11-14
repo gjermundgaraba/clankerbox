@@ -10,7 +10,11 @@ import {
   Unsizable,
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
-import type { HostError, Sizing } from "@gjermundgaraba/clankerbox-sdk";
+import type {
+  HostError,
+  Missing,
+  Sizing,
+} from "@gjermundgaraba/clankerbox-sdk";
 import {
   Duration,
   Effect,
@@ -34,6 +38,7 @@ import {
   changes,
   Handle,
   missing,
+  missingCheckpoint,
   Runtime,
   stateReadWait,
   timeoutFail,
@@ -1472,7 +1477,14 @@ export const make = (
 
         yield* Match.valueTags(origin, {
           image: ({ image }) => created(machine, image, bind),
-          checkpoint: ({ checkpoint }) => restored(checkpoint, machine, bind),
+          checkpoint: ({ checkpoint }) =>
+            Effect.flatMap(
+              stored(checkpoint.handle),
+              (held): Effect.Effect<void, Internal | Missing> =>
+                held
+                  ? restored(checkpoint, machine, bind)
+                  : Effect.fail(missingCheckpoint(traits.runtime, checkpoint))
+            ),
           machine: (source) => forked(source.machine, machine, bind),
         });
 

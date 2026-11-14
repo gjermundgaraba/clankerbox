@@ -25,7 +25,13 @@ import type { FileSystem } from "effect";
 import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 
-import { CannotStart, Handle, missing, Runtime } from "../../runtime.ts";
+import {
+  CannotStart,
+  Handle,
+  missing,
+  missingCheckpoint,
+  Runtime,
+} from "../../runtime.ts";
 import type {
   Dial,
   Identity,
@@ -709,6 +715,22 @@ export const make = (
 
           if (origin._tag === "machine") {
             yield* sourceStopped(origin.machine);
+          }
+
+          if (origin._tag === "checkpoint") {
+            const { checkpoint } = origin;
+
+            const snapshot = yield* api
+              .saved(checkpoint.handle)
+              .pipe(
+                Effect.mapError(
+                  internal(`couldn't read snapshot ${checkpoint.handle}`)
+                )
+              );
+
+            if (snapshot === undefined) {
+              return yield* missingCheckpoint(traits.runtime, checkpoint);
+            }
           }
 
           const sent =
