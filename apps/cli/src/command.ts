@@ -255,7 +255,10 @@ export const readStdin: Effect.Effect<string, Invalid, Stdio.Stdio> =
 
     return yield* Effect.try({
       try: () => {
-        const decoder = new TextDecoder("utf-8", { fatal: true });
+        const decoder = new TextDecoder("utf-8", {
+          fatal: true,
+          ignoreBOM: true,
+        });
 
         return (
           chunks

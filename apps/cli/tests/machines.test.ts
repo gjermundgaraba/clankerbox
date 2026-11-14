@@ -747,6 +747,25 @@ describe("machines", () => {
         })
     );
 
+    it.effect("exec --stdin sends a leading byte-order mark as text", () =>
+      Effect.gen(function* () {
+        const { execs } = yield* execOn(
+          ["--stdin", "dev", "--", "cat"],
+          undefined,
+          {},
+          [Uint8Array.of(0xef, 0xbb, 0xbf, 0x78)]
+        );
+
+        expect(execs).toStrictEqual([
+          {
+            id: "dev",
+            argv: ["cat"],
+            stdin: `${String.fromCodePoint(0xfe_ff)}x`,
+          },
+        ]);
+      })
+    );
+
     it.effect(
       "exec --stdin refuses bytes that aren't UTF-8, and sends nothing",
       () =>
