@@ -14,7 +14,7 @@ import { SandboxAgent } from "sandbox-agent";
 import { expect } from "vite-plus/test";
 
 import { provider } from "../src/provider.ts";
-import { fakeSsh } from "./support.ts";
+import { fakeSsh, fakeSshIn } from "./support.ts";
 
 const sizesOn: Record<RentedRuntime, Sizes> = {
   "smol-cloud": { cpu: 1, ramMib: 1024, diskGib: 10 },
@@ -45,7 +45,10 @@ const agentOn = (runtime: RentedRuntime) =>
       setup: { script: `#!/bin/sh\n${hostKeySetup}` },
     });
 
-    process.env["FAKE_SSH_DIR"] = dir;
+    yield* Effect.acquireRelease(
+      Effect.sync(() => fakeSshIn(dir)),
+      (pointedBack) => Effect.sync(pointedBack)
+    );
 
     const sandbox = yield* Effect.acquireRelease(
       Effect.sync(() =>

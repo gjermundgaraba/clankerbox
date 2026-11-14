@@ -214,6 +214,16 @@ describe("recipes", { timeout: testLimit }, () => {
     }
   });
 
+  it("each recipe holds the same serve.sh, as each template's setup directory stands alone", async () => {
+    const served = await Promise.all(
+      recipes.map(async (name) => await readFile(recipeFile(name, "serve.sh")))
+    );
+
+    expect(new Set(served.map((bytes) => bytes.toString("base64"))).size).toBe(
+      1
+    );
+  });
+
   it.each(recipes)(
     "the %s recipe's launcher runs the serve.sh its setup installs, with the agent.env it installs",
     async (name) => {

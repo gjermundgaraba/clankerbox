@@ -86,6 +86,21 @@ type Call = typeof Call.Type;
 
 const decodeCall = Schema.decodeSync(Schema.fromJsonString(Call));
 
+/** Points fake-ssh at `dir`, answering what puts back the directory it was pointed at before. */
+export const fakeSshIn = (dir: string): (() => void) => {
+  const before = process.env["FAKE_SSH_DIR"];
+
+  process.env["FAKE_SSH_DIR"] = dir;
+
+  return () => {
+    if (before === undefined) {
+      Reflect.deleteProperty(process.env, "FAKE_SSH_DIR");
+    } else {
+      process.env["FAKE_SSH_DIR"] = before;
+    }
+  };
+};
+
 /** The ssh calls fake-ssh recorded in `dir`, in the order they started. */
 export const callsIn = async (dir: string): Promise<Call[]> => {
   const recorded = await readFile(path.join(dir, "calls"), "utf-8").catch(
@@ -127,7 +142,7 @@ export const setup = async (
       }),
   });
 
-  process.env["FAKE_SSH_DIR"] = dir;
+  const pointedBack = fakeSshIn(dir);
 
   const sandbox = provider(
     { server: url, from: { template: "agent" }, ...options },
@@ -152,6 +167,7 @@ export const setup = async (
   cleanups.push(async () => {
     await dispose();
     await stub.dispose();
+    pointedBack();
     await rm(dir, { recursive: true, force: true });
   });
 

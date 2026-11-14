@@ -30,6 +30,7 @@ import type { BuildsSettings } from "../src/platform/s3.ts";
 import type { TailnetSettings } from "../src/platform/tailscale.ts";
 import type {
   Admission,
+  Runtime,
   Interface as RuntimeInterface,
 } from "../src/runtime.ts";
 import type { HostSettings } from "../src/settings.ts";
@@ -70,14 +71,30 @@ export const loopbackServer = (port = 0) =>
     listening({ listen: { address: "127.0.0.1", port } })
   );
 
-export interface TestHost {
+export interface HostOptions {
+  readonly id?: string;
+  readonly port?: number;
+  readonly bases?: ReadonlyMap<string, string>;
+  readonly logger?: Logger.Logger<unknown, unknown>;
+  readonly ports?: PortRange;
+  readonly tailnet?: Layer.Layer<Tailnet>;
+  readonly tailnetSettings?: TailnetSettings;
+  readonly builds?: Layer.Layer<BuildStore>;
+  readonly buildsSettings?: BuildsSettings;
+  readonly http?: Layer.Layer<HttpClient.HttpClient>;
+}
+
+export interface ServedHost {
   readonly id: string;
   readonly dir: string;
-  readonly fake: FakeRuntime;
   readonly stateDir: string;
   readonly url: string;
   readonly operations: OperationsInterface;
   readonly dispose: Effect.Effect<void>;
+}
+
+export interface TestHost extends ServedHost {
+  readonly fake: FakeRuntime;
 }
 
 export const noHttp = Layer.succeed(
@@ -87,43 +104,41 @@ export const noHttp = Layer.succeed(
   )
 );
 
-export const startHost = (
+/**
+ * A host over the runtime `runtime` makes of its settings, on loopback. It ends with the scope, or
+ * at `dispose`.
+ */
+export const startHostOver = <E>(
   dir: string,
-  options?: {
-    readonly fake?: FakeRuntime;
-    readonly id?: string;
-    readonly port?: number;
-    readonly as?: FakeRuntimeName;
-    readonly bases?: ReadonlyMap<string, string>;
-    readonly logger?: Logger.Logger<unknown, unknown>;
-    readonly runtime?: Omit<FakeOptions, "dir" | "as">;
-    readonly ports?: PortRange;
-    readonly tailnet?: Layer.Layer<Tailnet>;
-    readonly tailnetSettings?: TailnetSettings;
-    readonly builds?: Layer.Layer<BuildStore>;
-    readonly buildsSettings?: BuildsSettings;
-    readonly http?: Layer.Layer<HttpClient.HttpClient>;
-  }
+  runtime: (
+    settings: HostSettings
+  ) => Layer.Layer<
+    Runtime,
+    E,
+    NodeServices.NodeServices | HttpClient.HttpClient
+  >,
+  options?: HostOptions
 ) =>
   Effect.gen(function* () {
-    const fake =
-      options?.fake ??
-      fakeRuntime({ dir, as: options?.as, ...options?.runtime });
-
+    const id = options?.id ?? "smolvm";
     const stateDir = path.join(dir, "state");
     const scope = yield* Scope.make();
 
     yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
 
+    const settings: HostSettings = {
+      ...hostConfig(stateDir, options?.ports, id),
+      ...(options?.bases === undefined ? {} : { bases: options.bases }),
+    };
+
     const context = yield* Layer.buildWithScope(
       hostLayer(
         {
-          ...hostConfig(stateDir, options?.ports, options?.id ?? options?.as),
-          ...(options?.bases === undefined ? {} : { bases: options.bases }),
+          ...settings,
           tailnet: options?.tailnetSettings,
           builds: options?.buildsSettings,
         },
-        fake.layer,
+        runtime(settings),
         loopbackServer(options?.port)
       ).pipe(
         Layer.provide(options?.tailnet ?? Layer.empty),
@@ -137,10 +152,9 @@ export const startHost = (
       scope
     );
 
-    const host: TestHost = {
-      id: options?.id ?? options?.as ?? "smolvm",
+    const host: ServedHost = {
+      id,
       dir,
-      fake,
       stateDir,
       url: HttpServer.formatAddress(
         Context.get(context, HttpServer.HttpServer).address
@@ -151,6 +165,26 @@ export const startHost = (
 
     return host;
   });
+
+export const startHost = (
+  dir: string,
+  options?: HostOptions & {
+    readonly fake?: FakeRuntime;
+    readonly as?: FakeRuntimeName;
+    readonly runtime?: Omit<FakeOptions, "dir" | "as">;
+  }
+) => {
+  const fake =
+    options?.fake ?? fakeRuntime({ dir, as: options?.as, ...options?.runtime });
+
+  return Effect.map(
+    startHostOver(dir, () => fake.layer, {
+      ...options,
+      id: options?.id ?? options?.as ?? "smolvm",
+    }),
+    (host): TestHost => ({ ...host, fake })
+  );
+};
 
 export const hostOn =
   (ports: PortRange) =>
