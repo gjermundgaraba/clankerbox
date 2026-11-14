@@ -88,7 +88,8 @@ Each line names where the code holds it and how to check it again.
 - A resume within minutes of a stop answers 200 with the same machine, host
   key and address, and counts no start; past that, or with a `type`, it
   answers 202 and counts one. A resume of a sandbox that runs answers 200,
-  `status: running`, and counts no start (measured in fix round 2's probe).
+  `status: running`, and counts no start (measured on the operator's
+  account on 2026-11-14).
   A start whose answer was lost reads the sandbox until it rests and sends
   the resume again only while boat holds it stopped, three sends in all.
   (`api.ts`'s `resume`, `boat.ts`'s `start` over `provider-http.ts`'s
@@ -101,8 +102,8 @@ Each line names where the code holds it and how to check it again.
 - An exec runs over `ssh` with no terminal, so ending it ends only the local
   `ssh`: in the guest a command that writes a line a second is gone within
   5 seconds, and a silent one runs on 30 seconds after the cut, whether its
-  caller went away or its host-side timeout fired (fix round 2's exec-cut
-  probe). boat's API ends only a command it started detached
+  caller went away or its host-side timeout fired (measured on the
+  operator's account on 2026-11-14, with no end sent). boat's API ends only a command it started detached
   (`DELETE /sandboxes/{id}/commands/{processId}`: SIGTERM to it and all it
   started, SIGKILL after 5 s), which the adapter doesn't use: the host ends a
   cut command itself, over a second exec, as on every runtime. The fake runs
@@ -124,7 +125,8 @@ Each line names where the code holds it and how to check it again.
   unmeasured until a plan offers it. (`traits.ts`'s `types`; the live
   suite's disk findings.)
 - The codes `limit_reached`, `rate_limited`, `out_of_capacity` and
-  `no_ready_machine` mean no room, which moves a create to the next host;
+  `no_ready_machine` mean no room, and `machine_class_plan_required` a type
+  the plan no longer offers, each of which moves a create to the next host;
   `IP_RATE_LIMIT_EXCEEDED`, `sandbox_starting`, `sandbox_stopping`,
   `save_in_progress` and `ssh_host_key_unavailable` are waited out by
   `Retry-After`, and so is a 429 with any other code or none, as the YAML
@@ -134,11 +136,12 @@ Each line names where the code holds it and how to check it again.
   adapter maps no such refusal: one fails the resize `Internal` with boat's
   code. A `/sshkey` 503 was never provoked either: `/sshkey` answered 200
   right after a create's answer. (`api.ts`'s `noRoom` and `asksToWait`,
-  `provider-http.ts`'s `waitedOut`; grep the YAML for each code.)
+  `provider-http.ts`'s `askedAgain`; grep the YAML for each code.)
 - A second save of a name boat is still saving answers 409
   `save_in_progress` and leaves the first saving until it ends `ready`, about
   5 seconds later; a save over a ready name answers 202 `saving` while the
-  name reads `ready` throughout (measured in fix round 2's probe). (The fake's
+  name reads `ready` throughout (measured on the operator's account on
+  2026-11-13 and 2026-11-14). (The fake's
   `saveAs`, which takes how long its save lasts, and the capture test of a
   name still saving.)
 - A resize sends its typed resume to an archived sandbox only: once boat
