@@ -307,14 +307,21 @@ export const make = (settings: {
           : drive(name)
       );
 
-    const discarded = (name: string) =>
-      remove(name).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning(
-            `couldn't discard checkpoint ${name}, whose pause was refused, so it stays a capture of its own, which runs now or at the next start of the control plane: ${Cause.pretty(cause)}`
-          )
+    const discarded = ({ name, instance }: CheckpointRow) =>
+      store
+        .advance("checkpoint", name, (found, op) =>
+          found.instance === instance
+            ? applied(checkpointChart, found, { type: "delete" }, op)
+            : { next: found, finish: false }
         )
-      );
+        .pipe(
+          Effect.andThen(drive(name)),
+          Effect.catchCause((cause) =>
+            Effect.logWarning(
+              `couldn't discard checkpoint ${name}, whose pause was refused, so it stays a capture of its own, which runs now or at the next start of the control plane: ${Cause.pretty(cause)}`
+            )
+          )
+        );
 
     const rests = (name: string) =>
       Effect.gen(function* () {
@@ -428,7 +435,7 @@ export const make = (settings: {
 
                 const paused = yield* machines
                   .pause(id)
-                  .pipe(Effect.tapError(() => discarded(record.name)));
+                  .pipe(Effect.tapError(() => discarded(record)));
 
                 yield* driven(record);
 
@@ -465,12 +472,14 @@ export const make = (settings: {
 
         return yield* Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
-            yield* capturing({ machine: id, ...capture });
-            yield* Effect.exit(restore(begun(capture.name)));
+            const record = yield* recorded({ machine: id, ...capture });
+
+            yield* driven(record);
+            yield* Effect.exit(restore(begun(record.name)));
 
             return yield* machines
-              .pause(id, capture.name)
-              .pipe(Effect.tapError(() => discarded(capture.name)));
+              .pause(id, record.name)
+              .pipe(Effect.tapError(() => discarded(record)));
           })
         );
       });

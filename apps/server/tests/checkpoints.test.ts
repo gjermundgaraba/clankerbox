@@ -1387,6 +1387,75 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
+  for (const [as, first, captureFrom] of [
+    ["fixed", "the pause", "stopped"],
+    ["smolvm", "the capture", "running"],
+  ] as const) {
+    it.effect(
+      `a pause with a capture whose capture is deleted and another of its name recorded before the pause is refused, where ${first} comes first, keeps the other`,
+      () =>
+        Effect.gen(function* () {
+          const planned = yield* plane(on(as));
+          const made = yield* planned.start();
+          const client = yield* clientOf(made.url);
+
+          yield* client.create("dev", request("dev"));
+          yield* client.create("other", request("other"));
+
+          if (captureFrom === "stopped") {
+            yield* client.stopMachine({ id: "other" });
+          }
+
+          yield* made.crash;
+
+          const entered = yield* Deferred.make<true>();
+          const release = yield* Deferred.make<true>();
+
+          const served = yield* services(planned, (machines) => ({
+            ...machines,
+            pause: () =>
+              Deferred.succeed(entered, true).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.andThen(
+                  Effect.fail(new Internal({ message: "the store refused it" }))
+                )
+              ),
+          }));
+
+          yield* Effect.addFinalizer(() => served.crash);
+
+          const asking = yield* Effect.forkChild(
+            served.checkpoints.pause({ id: "dev", capture: { name: "snap" } })
+          );
+
+          yield* Deferred.await(entered);
+          yield* served.checkpoints.delete("snap");
+          yield* gone(served, "snap");
+          yield* served.checkpoints.capture({ machine: "other", name: "snap" });
+
+          const other = Option.getOrThrow(
+            yield* served.store.findCheckpoint("snap")
+          );
+
+          yield* Deferred.succeed(release, true);
+
+          const refused = yield* Effect.flip(Fiber.join(asking));
+          const kept = yield* served.checkpoints.get("snap");
+
+          expect(refused).toStrictEqual(
+            new Internal({ message: "the store refused it" })
+          );
+          expect(kept.phase).not.toBe("deleting");
+          expect(yield* rested(served, "snap")).toMatchObject({
+            instance: other.instance,
+            machine: "other",
+            state: "ready",
+          });
+        }),
+      60_000
+    );
+  }
+
   it.effect(
     "a pause with a capture killed between its two writes, where the pause comes first, leaves a capture its host refuses at the restart, saying why, its machine running, and a retry that pauses and captures",
     () =>
