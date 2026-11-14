@@ -322,7 +322,9 @@ export const keptBuilds = 2;
  * A setup the control plane builds, each time from the base and sizes its build asks, and that a
  * create clones with no setup run. Each build is sent its own setup, which is never kept. `current`
  * is the newest ready build, which a create clones unless it pins another. `state` is `building`
- * while a build runs, else `ready` once one is, else `failed`.
+ * while a build runs, else `ready` while the current build has a copy ready or being fetched, and
+ * `failed` while no build is ready or none of the current one's copies is, as when the hosts lost
+ * them, until a build ends ready.
  */
 export const Template = Schema.Struct({
   id: Name,
@@ -336,9 +338,10 @@ export type Template = typeof Template.Type;
 
 /** A template's `current` build and its `state`, as its builds, oldest first, tell them. */
 export const builtFrom = (
-  builds: ReadonlyArray<Pick<Build, "id" | "phase">>
+  builds: ReadonlyArray<Pick<Build, "id" | "phase" | "copies">>
 ): Pick<Template, "current" | "state"> => {
-  const current = builds.findLast(({ phase }) => phase === "ready")?.id;
+  const built = builds.findLast(({ phase }) => phase === "ready");
+  const current = built?.id;
 
   if (builds.some(({ phase }) => phase === "building")) {
     return current === undefined
@@ -346,9 +349,18 @@ export const builtFrom = (
       : { current, state: "building" };
   }
 
-  return current === undefined
-    ? { state: "failed" }
-    : { current, state: "ready" };
+  if (built === undefined) {
+    return { state: "failed" };
+  }
+
+  return {
+    current: built.id,
+    state: built.copies.some(
+      ({ phase }) => phase === "ready" || phase === "fetching"
+    )
+      ? "ready"
+      : "failed",
+  };
 };
 
 /**

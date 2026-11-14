@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { Handle } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { image } from "@gjermundgaraba/clankerbox-host/testing";
@@ -704,6 +705,45 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
 
         expect(read).toMatchObject({ state: "ready", current: "web@1" });
+      })
+  );
+
+  it.effect(
+    "a template whose current build has no copy left to clone reads failed, with that build current",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* withClient();
+        const { client, host } = served;
+
+        yield* client.buildTemplate(web());
+
+        const [copy] = yield* served.store.checkpoints;
+
+        yield* host.fake.lose(copy?.handle ?? Handle.make("none"));
+        yield* Effect.flip(client.create("dev", { template: "web" }));
+
+        const read = yield* eventually(
+          client.getTemplate({ id: "web" }),
+          ({ builds }) => builds[0]?.copies[0]?.phase === "failed"
+        );
+
+        expect(read).toMatchObject({ current: "web@1", state: "failed" });
+      })
+  );
+
+  it.effect(
+    "a template whose current build's only copy is on a host that doesn't answer reads ready",
+    () =>
+      Effect.gen(function* () {
+        const { client, host } = yield* withClient();
+
+        yield* client.buildTemplate(web());
+        yield* host.dispose;
+
+        expect(yield* client.getTemplate({ id: "web" })).toMatchObject({
+          current: "web@1",
+          state: "ready",
+        });
       })
   );
 
