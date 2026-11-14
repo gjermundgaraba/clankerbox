@@ -75,6 +75,8 @@ const sent = async (
 
 const accepted = () => new Response(null, { status: 202 });
 
+const agent = new Agent({ keepAlive: true });
+
 /**
  * The SDK's fetch to one sandbox's agent through its tunnel, over `node:http`, which bounds no wait
  * for a reply: the agent's server answers a prompt's POST only once its turn ends, and Node's own
@@ -89,12 +91,14 @@ const accepted = () => new Response(null, { status: 202 });
  * after that reaches a caller, and a request still waiting there never settles; the DELETE lets go
  * of the POSTs still waiting on the connection, so their sockets don't keep the process alive.
  *
- * It sends through an agent of its own, so how its consumer set up Node's global agent, a cap on its
- * sockets or a proxy taken from the environment, never reaches the tunnel. Nothing ends that agent:
- * a socket it keeps between requests holds no process alive, and ends with its tunnel.
+ * Every sandbox's fetch sends through one agent of the provider's own, so how its consumer set up
+ * Node's global agent, a cap on its sockets or a proxy taken from the environment, never reaches
+ * the tunnel. Its pools are by address, and each tunnel has its own port, so an SDK started again
+ * on a sandbox takes up the connections the last one left, which the agent's server keeps open as
+ * long as they last. Nothing ends that agent: a socket it keeps between requests holds no process
+ * alive, and ends with its tunnel.
  */
 export const agentFetch = (sandbox: string): typeof globalThis.fetch => {
-  const agent = new Agent({ keepAlive: true });
   const connections = new Map<string, AbortController>();
 
   const closed = (pathname: string) => {

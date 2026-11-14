@@ -71,9 +71,10 @@ publish, change production hosts, or commit unless asked.
   the turn ends, and Node's fetch gives up on headers after 300 s (undici's
   `headersTimeout`), which the next claim turns into an ended process. Ours:
   `agentFetch` in `fetch.ts`, over `node:http`, which bounds no wait for a
-  reply, a new one at each `getFetch`, each with an `http.Agent` of its own,
-  so a cap on Node's global agent's sockets or a proxy it takes from
-  `NODE_USE_ENV_PROXY` never reaches the tunnel.
+  reply, a new one at each `getFetch`, all over one `http.Agent` of the
+  provider's own, so a cap on Node's global agent's sockets or a proxy it
+  takes from `NODE_USE_ENV_PROXY` never reaches the tunnel, and an SDK
+  started again on a sandbox takes up the connections the last one left.
 - The ACP connection posts each message to `/v1/acp/<server>` (`API_PREFIX`,
   dist:chunk-*.js, `new AcpHttpClient`) without awaiting it:
   `acp-http-client`'s `StreamableHttpAcpTransport.postMessage` takes a 2xx

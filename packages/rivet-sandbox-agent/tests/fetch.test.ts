@@ -243,6 +243,22 @@ describe("agentFetch", () => {
     expect(connections()).toBe(1);
   });
 
+  it("an SDK started again and again on one sandbox, each with its own fetch, reuses the connections the last one left", async () => {
+    const { send, connections } = await servedAgent();
+
+    for (const started of Array.from({ length: 10 }, (_, at) => `kept-${at}`)) {
+      await Promise.all(
+        Array.from({ length: 3 }, async () => {
+          const reply = await send(started, "/answered");
+
+          await reply.text();
+        })
+      );
+    }
+
+    expect(connections()).toBe(3);
+  });
+
   it("answers a request on a connection whose reply is cut as that request's error", async () => {
     const { send } = await servedAgent();
 
