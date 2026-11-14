@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -29,6 +30,7 @@ import {
   writeStubs,
   writeTailscaleStubs,
 } from "./fake-runtime.ts";
+import { guestGroups } from "./guest-groups.ts";
 import type { Dropped, Faults } from "./runtime-contract.ts";
 
 export interface FakeBoatOptions {
@@ -75,6 +77,7 @@ export interface FakeSnapshot {
   readonly type: Offered;
   readonly root: string;
   status: "saving" | "ready";
+  readonly readyAt: number;
 }
 
 interface Malformed {
@@ -386,6 +389,7 @@ const Asked = Schema.Struct({
   pinned: Schema.optionalKey(Schema.String),
   identity: Schema.String,
   login: Schema.String,
+  remote: Schema.String,
 });
 
 type Asked = typeof Asked.Type;
@@ -393,7 +397,7 @@ type Asked = typeof Asked.Type;
 const askedBody = Schema.decodeUnknownOption(Schema.fromJsonString(Asked));
 
 const Admission = Schema.Union([
-  Schema.Struct({ root: Schema.String, path: Schema.String }),
+  Schema.Struct({ session: Schema.String }),
   Schema.Struct({ refusal: Schema.String }),
 ]);
 
@@ -402,6 +406,18 @@ type Admission = typeof Admission.Type;
 const admissionOf = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Admission)
 );
+
+const client = [
+  "exec 5<&0",
+  'cat <&5 >"$1/in" &',
+  'cat <"$1/err" >&2 &',
+  "err=$!",
+  'cat <"$1/out"',
+  'wait "$err"',
+  "code=255",
+  'if [ -s "$1/code" ]; then read -r code <"$1/code"; fi',
+  'exit "$code"',
+].join("\n");
 
 const exited = (code: number) =>
   ChildProcessSpawner.makeHandle({
@@ -457,6 +473,7 @@ const ssh = (
           : { pinned: typeAndKey(pinned.slice(call.alias.length)) }),
         identity: await readFile(`${call.identity}.pub`, "utf8"),
         login: call.login,
+        remote: call.remote,
       };
 
       const response = await fetch(`${url}${admissionRoute}`, {
@@ -479,20 +496,19 @@ const ssh = (
     }
 
     return yield* outer.spawn(
-      ChildProcess.make("/bin/sh", ["-c", call.remote], {
+      ChildProcess.make("/bin/sh", ["-c", client, "ssh", admission.session], {
         ...command.options,
-        env: {
-          CLANKERBOX_ROOT: admission.root,
-          PATH: `${admission.path}:${process.env["PATH"] ?? ""}`,
-        },
         extendEnv: true,
       })
     );
   });
 
 /**
- * OpenSSH as fake boat answers it, from any process: a call fake boat admits runs its command in
- * `/bin/sh` under the sandbox's root, and one it refuses exits 255 with OpenSSH's words in its log.
+ * OpenSSH as fake boat answers it, from any process: fake boat runs the command of a call it
+ * admits in `/bin/sh` under the sandbox's root, in its guest, and this process carries its stdio
+ * over the session's FIFOs and exits with its status, or 255 once the session ends without one,
+ * as ssh does, so a caller that ends leaves it running; one it refuses exits 255 with OpenSSH's
+ * words in its log.
  */
 export const fakeBoatSsh = (url: string, apiKey: string) =>
   Layer.effect(
@@ -531,6 +547,7 @@ export const fakeBoat = (
     const refusing = new Set<BoatCall>();
     const lateBy: number[] = [];
     const landings: Landing[] = [];
+    const guests = guestGroups();
 
     let keepsStoppedFor = Duration.toMillis(
       Duration.fromInputUnsafe(options.keepsStoppedFor ?? Duration.minutes(10))
@@ -585,13 +602,16 @@ export const fakeBoat = (
       type: snapshot.type,
     });
 
-    const snapshotRead = (snapshot: FakeSnapshot) => {
-      const json = snapshotJson(snapshot);
+    const settled = (snapshot: FakeSnapshot) => {
+      if (snapshot.status === "saving" && Date.now() >= snapshot.readyAt) {
+        snapshot.status = "ready";
+      }
 
-      snapshot.status = "ready";
-
-      return json;
+      return snapshot;
     };
+
+    const snapshotRead = (snapshot: FakeSnapshot) =>
+      snapshotJson(settled(snapshot));
 
     const born = async (made: {
       readonly type: Offered;
@@ -732,7 +752,10 @@ export const fakeBoat = (
       const snapshot =
         body.from === undefined ? undefined : snapshots.get(body.from);
 
-      if (body.from !== undefined && snapshot?.status !== "ready") {
+      if (
+        body.from !== undefined &&
+        (snapshot === undefined || settled(snapshot).status !== "ready")
+      ) {
         return notFound(`ready saved snapshot ${body.from}`);
       }
 
@@ -780,6 +803,7 @@ export const fakeBoat = (
     const removed = (sandbox: FakeSandbox) => {
       sandboxes.delete(sandbox.id);
       close(sandbox.relay);
+      void guests.end(sandbox.root);
     };
 
     const vanishNow = (id: string) => {
@@ -851,7 +875,7 @@ export const fakeBoat = (
       };
     };
 
-    const stop = (sandbox: FakeSandbox): Answer => {
+    const stop = async (sandbox: FakeSandbox): Promise<Answer> => {
       if (!sandbox.running) {
         return {
           status: 200,
@@ -859,6 +883,7 @@ export const fakeBoat = (
         };
       }
 
+      await guests.end(sandbox.root);
       sandbox.running = false;
       sandbox.inPassing = "archiving";
       sandbox.stoppedAt = Date.now();
@@ -942,6 +967,7 @@ export const fakeBoat = (
       if (sandbox !== undefined) {
         sandboxes.delete(id);
         close(sandbox.relay);
+        await guests.end(sandbox.root);
         await rm(sandbox.root, { recursive: true, force: true });
       }
 
@@ -954,7 +980,11 @@ export const fakeBoat = (
       };
     };
 
-    const save = async (sandboxId: string, name: string): Promise<Answer> => {
+    const save = async (
+      sandboxId: string,
+      name: string,
+      lasts = Duration.zero
+    ): Promise<Answer> => {
       const source = sandboxes.get(sandboxId);
 
       if (!/^[a-z0-9][a-z0-9-]{0,62}$/u.test(name)) {
@@ -965,8 +995,17 @@ export const fakeBoat = (
         return notFound(`sandbox ${sandboxId}`);
       }
 
-      const root = path.join(options.dir, "snapshots", minted(name));
       const before = snapshots.get(name);
+
+      if (before !== undefined && settled(before).status === "saving") {
+        return refused(
+          409,
+          "save_in_progress",
+          `"${name}" is already being saved. Wait for it to finish.`
+        );
+      }
+
+      const root = path.join(options.dir, "snapshots", minted(name));
 
       await cp(source.root, root, { recursive: true, verbatimSymlinks: true });
 
@@ -980,7 +1019,8 @@ export const fakeBoat = (
         createdAt: new Date().toISOString(),
         type: source.type,
         root,
-        status: "saving",
+        status: before === undefined ? "saving" : "ready",
+        readyAt: Date.now() + Duration.toMillis(lasts),
       };
 
       if (savingLate) {
@@ -993,7 +1033,7 @@ export const fakeBoat = (
           status: 202,
           body: {
             type: "snapshot.saved.saving",
-            snapshot: snapshotJson(snapshot),
+            snapshot: { ...snapshotJson(snapshot), status: "saving" },
           },
           lands: "late",
         };
@@ -1005,7 +1045,7 @@ export const fakeBoat = (
         status: 202,
         body: {
           type: "snapshot.saved.saving",
-          snapshot: snapshotJson(snapshot),
+          snapshot: { ...snapshotJson(snapshot), status: "saving" },
         },
       };
     };
@@ -1204,7 +1244,7 @@ export const fakeBoat = (
         }
 
         case "stop": {
-          return stop(sandbox);
+          return await stop(sandbox);
         }
 
         case "sshkey": {
@@ -1352,12 +1392,37 @@ export const fakeBoat = (
         return { refusal: changedKey };
       }
 
-      return asked.login === login &&
-        sandbox.authorized.has(typeAndKey(asked.identity))
-        ? { root: sandbox.root, path: stubs }
-        : {
-            refusal: `${asked.login}@127.0.0.1: Permission denied (publickey).\n`,
-          };
+      if (
+        asked.login !== login ||
+        !sandbox.authorized.has(typeAndKey(asked.identity))
+      ) {
+        return {
+          refusal: `${asked.login}@127.0.0.1: Permission denied (publickey).\n`,
+        };
+      }
+
+      const session = path.join(options.dir, "sessions", minted("ssh"));
+
+      await mkdir(session, { recursive: true });
+      await once(
+        spawn(
+          "mkfifo",
+          ["in", "out", "err"].map((name) => path.join(session, name))
+        ),
+        "exit"
+      );
+      guests.overFifos(
+        sandbox.root,
+        ["/bin/sh", "-c", asked.remote],
+        {
+          ...process.env,
+          CLANKERBOX_ROOT: sandbox.root,
+          PATH: `${stubs}:${process.env["PATH"] ?? ""}`,
+        },
+        session
+      );
+
+      return { session };
     };
 
     const http = createServer((request, response) => {
@@ -1403,7 +1468,7 @@ export const fakeBoat = (
           http.close(() => {
             finish(Effect.void);
           });
-        })
+        }).pipe(Effect.andThen(Effect.promise(guests.endAll)))
     );
 
     const url = `http://127.0.0.1:${portOf(http)}`;
@@ -1415,9 +1480,10 @@ export const fakeBoat = (
 
     const faults: Faults = {
       drift: (instance) =>
-        Effect.sync(() => {
+        Effect.promise(async () => {
           for (const sandbox of sandboxes.values()) {
             if (sandbox.labels[Boat.instanceLabel] === instance) {
+              await guests.end(sandbox.root);
               sandbox.running = false;
               sandbox.stoppedAt = undefined;
             }
@@ -1475,9 +1541,15 @@ export const fakeBoat = (
       landSaveDuringDelete: Effect.sync(() => {
         savingLate = true;
       }),
-      saveAs: (sandboxId: string, name: string) =>
+      saveAs: (sandboxId, name, lasts) =>
         Effect.promise(async () => {
-          await save(sandboxId, name);
+          await save(
+            sandboxId,
+            name,
+            lasts === undefined
+              ? Duration.zero
+              : Duration.fromInputUnsafe(lasts)
+          );
         }),
       malformedSnapshot: (name: string, sourceSandboxId?: string | number) =>
         Effect.sync(() => {
@@ -1564,7 +1636,12 @@ export interface FakeBoat {
     name: string,
     sourceSandboxId?: string | number
   ) => Effect.Effect<void>;
-  readonly saveAs: (sandboxId: string, name: string) => Effect.Effect<void>;
+  /** Saves `name` as a POST does, the save running `lasts`, none by default. */
+  readonly saveAs: (
+    sandboxId: string,
+    name: string,
+    lasts?: Duration.Input
+  ) => Effect.Effect<void>;
   readonly refuseOnce: (call: BoatCall) => Effect.Effect<void>;
   readonly calls: readonly string[];
   readonly requests: readonly FakeRequest[];

@@ -48,6 +48,12 @@ import { Handle, Runtime } from "../../src/runtime.ts";
 import type { Interface, RuntimeError, Target } from "../../src/runtime.ts";
 import { fakeBoat } from "../fake-boat.ts";
 import type { FakeBoat, FakeBoatOptions } from "../fake-boat.ts";
+import {
+  cutAndLeftRunning,
+  gone,
+  leftInTheBackground,
+  holdsPid,
+} from "../guest-processes.ts";
 import { runtimeContract } from "../runtime-contract.ts";
 
 const services = Layer.mergeAll(
@@ -339,6 +345,73 @@ describe("the boat runtime over fake boat", () => {
   );
 
   it.live(
+    "an exec its caller cuts short leaves its command running, as boat does, its writes to stdout dying of SIGPIPE, until a stop ends it",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          const machine = yield* made(runtime, "dev");
+
+          expect(
+            yield* cutAndLeftRunning(
+              runtime,
+              machine,
+              rootOf(boat, machine.handle),
+              runtime.stop(machine)
+            )
+          ).toBe("141");
+        })
+      ),
+    20_000
+  );
+
+  for (const [ending, end] of [
+    ["stop", (runtime: Interface, dev: Target) => runtime.stop(dev)],
+    [
+      "delete",
+      (runtime: Interface, dev: Target) => runtime.delete(dev, new Set()),
+    ],
+  ] as const) {
+    it.live(
+      `a ${ending} ends what an exec left running in the background once it ended`,
+      () =>
+        onBoat(({ boat, runtime }) =>
+          Effect.gen(function* () {
+            const machine = yield* made(runtime, "dev");
+
+            const pid = yield* leftInTheBackground(
+              runtime,
+              machine,
+              rootOf(boat, machine.handle)
+            );
+
+            yield* end(runtime, machine);
+            yield* gone(pid);
+
+            expect(holdsPid(pid)).toBe(false);
+          })
+        ),
+      20_000
+    );
+  }
+
+  it.live(
+    "the fake's end ends what an exec left running in the background",
+    () =>
+      Effect.gen(function* () {
+        const pid = yield* onBoat(({ boat, runtime }) =>
+          Effect.flatMap(made(runtime, "dev"), (machine) =>
+            leftInTheBackground(runtime, machine, rootOf(boat, machine.handle))
+          )
+        );
+
+        yield* gone(pid);
+
+        expect(holdsPid(pid)).toBe(false);
+      }),
+    20_000
+  );
+
+  it.live(
     "the relay's dial carries bytes both ways",
     () =>
       onBoat(({ runtime }) =>
@@ -464,6 +537,35 @@ describe("the boat runtime over fake boat", () => {
               line.startsWith("POST /saved-snapshots")
             )
           ).toStrictEqual(["POST /saved-snapshots 202 dropped"]);
+        })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a capture whose name boat is still saving waits that save out, refused while it saves, and saves again over the ready name, which stays ready",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          const machine = yield* made(runtime, "dev");
+          const checkpoint = { name: "snap", instance: instanceOf("snap") };
+          const name = `cbx-${checkpoint.instance}`;
+
+          yield* runtime.stop(machine);
+          yield* boat.saveAs(machine.handle, name, "2 seconds");
+
+          const handle = yield* runtime.capture(machine, checkpoint);
+
+          expect(boat.snapshots.get(handle)?.status).toBe("ready");
+          expect(posts(boat, "/saved-snapshots")).toStrictEqual([
+            "POST /saved-snapshots 409",
+            "POST /saved-snapshots 409",
+            "POST /saved-snapshots 202",
+          ]);
+
+          yield* boat.saveAs(machine.handle, name);
+
+          expect(boat.snapshots.get(name)?.status).toBe("ready");
         })
       ),
     30_000

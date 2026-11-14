@@ -34,6 +34,12 @@ import type { Interface, Target } from "../../src/runtime.ts";
 import { Tailnet } from "../../src/tailnet.ts";
 import { fakeSmolCloud } from "../fake-smol-cloud.ts";
 import type { FakeSmolCloud } from "../fake-smol-cloud.ts";
+import {
+  cutAndLeftRunning,
+  gone,
+  leftInTheBackground,
+  holdsPid,
+} from "../guest-processes.ts";
 import { runtimeContract } from "../runtime-contract.ts";
 import {
   hostConfig,
@@ -764,6 +770,74 @@ describe("the smol cloud runtime over an account without a card", () => {
           ).toHaveLength(1);
         })
       )
+  );
+
+  it.live(
+    "an exec its caller cuts short leaves its command running, as smol cloud does, until a stop ends it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { fake, runtime } = yield* onCloud;
+          const dev = yield* made(runtime, "dev");
+          const root = fake.machines.get(dev.handle)?.root ?? "";
+
+          expect(
+            yield* cutAndLeftRunning(runtime, dev, root, runtime.stop(dev))
+          ).toBe("0");
+        })
+      ),
+    20_000
+  );
+
+  for (const [ending, end] of [
+    ["stop", (runtime: Interface, dev: Target) => runtime.stop(dev)],
+    [
+      "delete",
+      (runtime: Interface, dev: Target) => runtime.delete(dev, new Set()),
+    ],
+  ] as const) {
+    it.live(
+      `a ${ending} ends what an exec left running in the background once it ended`,
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { fake, runtime } = yield* onCloud;
+            const dev = yield* made(runtime, "dev");
+            const root = fake.machines.get(dev.handle)?.root ?? "";
+            const pid = yield* leftInTheBackground(runtime, dev, root);
+
+            yield* end(runtime, dev);
+            yield* gone(pid);
+
+            expect(holdsPid(pid)).toBe(false);
+          })
+        ),
+      20_000
+    );
+  }
+
+  it.live(
+    "the fake's end ends what an exec left running in the background",
+    () =>
+      Effect.gen(function* () {
+        const pid = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const { fake, runtime } = yield* onCloud;
+            const dev = yield* made(runtime, "dev");
+
+            return yield* leftInTheBackground(
+              runtime,
+              dev,
+              fake.machines.get(dev.handle)?.root ?? ""
+            );
+          })
+        );
+
+        yield* gone(pid);
+
+        expect(holdsPid(pid)).toBe(false);
+      }),
+    20_000
   );
 
   it.live(

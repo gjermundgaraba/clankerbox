@@ -115,6 +115,12 @@ Each line names where the code holds it and how to check it again.
   code. A `/sshkey` 503 was never provoked either: `/sshkey` answered 200
   right after a create's answer. (`api.ts`'s `noRoom` and `asksToWait`,
   `provider-http.ts`'s `waitedOut`; grep the YAML for each code.)
+- A second save of a name boat is still saving answers 409
+  `save_in_progress` and leaves the first saving until it ends `ready`, about
+  5 seconds later; a save over a ready name answers 202 `saving` while the
+  name reads `ready` throughout (measured in fix round 2's probe). (The fake's
+  `saveAs`, which takes how long its save lasts, and the capture test of a
+  name still saving.)
 - A resize sends its typed resume to an archived sandbox only: once boat
   takes it, the sandbox comes back at the new type or the resize fails
   naming both types, as each resume counts a start; a lost one is read back

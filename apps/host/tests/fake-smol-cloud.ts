@@ -1,10 +1,9 @@
-import { spawn } from "node:child_process";
-import type { ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { cp, mkdir, rm } from "node:fs/promises";
 import { IncomingMessage } from "node:http";
 import path from "node:path";
+import { finished } from "node:stream/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import {
@@ -23,6 +22,7 @@ import { HttpRouter, HttpServer, HttpServerResponse } from "effect/http";
 import { Socket } from "effect/socket";
 
 import { furnish, writeStubs } from "./fake-runtime.ts";
+import { guestGroups } from "./guest-groups.ts";
 import type { Dropped, Faults } from "./runtime-contract.ts";
 import { loopbackServer } from "./support.ts";
 
@@ -232,7 +232,7 @@ export const fakeSmolCloud = (
     const bin = writeStubs(options.dir);
     const machines = new Map<string, FakeMachine>();
     const checkpoints = new Map<string, FakeCheckpoint>();
-    const running = new Map<string, Set<ChildProcess>>();
+    const guests = guestGroups();
     const calls: string[] = [];
     const dropping = new Set<Dropping>();
     let losingResizes = 0;
@@ -248,12 +248,8 @@ export const fakeSmolCloud = (
       options.onCall?.(call);
     };
 
-    const killAll = (machine: FakeMachine) => {
-      for (const child of running.get(machine.id) ?? []) {
-        child.kill("SIGKILL");
-      }
-
-      running.delete(machine.id);
+    const killAll = async (machine: FakeMachine) => {
+      await guests.end(machine.root);
     };
 
     const started = () =>
@@ -458,7 +454,7 @@ export const fakeSmolCloud = (
             );
           }
 
-          killAll(machine);
+          await killAll(machine);
           machine.state = "stopped";
 
           return answer(200, recordOf(machine));
@@ -551,7 +547,7 @@ export const fakeSmolCloud = (
         );
       }
 
-      killAll(machine);
+      await killAll(machine);
       machines.delete(machine.id);
       await rm(machine.root, { recursive: true, force: true });
 
@@ -644,51 +640,62 @@ export const fakeSmolCloud = (
       body: typeof ExecRequest.Type
     ): Stream.Stream<string> =>
       Stream.callback<string>((queue) =>
-        Effect.sync(() => {
-          const [file = "/bin/sh", ...args] = body.command.map((argument) =>
+        Effect.gen(function* () {
+          const argv = body.command.map((argument) =>
             argument.startsWith(guestShm)
               ? path.join(machine.root, argument)
               : argument
           );
 
-          const user = body.user ?? "root";
-
-          const child = spawn(file, args, {
-            env: {
+          const { stdin, stdout, stderr, status } = guests.piped(
+            machine.root,
+            argv,
+            {
               ...process.env,
               CLANKERBOX_ROOT: machine.root,
-              CLANKERBOX_USER: user,
+              CLANKERBOX_USER: body.user ?? "root",
               PATH: `${bin}:${process.env["PATH"] ?? ""}`,
-            },
-            stdio: ["pipe", "pipe", "pipe"],
-          });
+            }
+          );
 
-          const children = running.get(machine.id) ?? new Set();
+          let code = "";
 
-          running.set(machine.id, children.add(child));
-
-          child.stdout.on("data", (chunk: Buffer) => {
+          stdout.on("data", (chunk: Buffer) => {
             Queue.offerUnsafe(queue, frame("stdout", chunk.toString("utf8")));
           });
-          child.stderr.on("data", (chunk: Buffer) => {
+          stderr.on("data", (chunk: Buffer) => {
             Queue.offerUnsafe(queue, frame("stderr", chunk.toString("utf8")));
           });
-          child.on("error", (error) => {
-            Queue.offerUnsafe(queue, frame("error", error.message));
-            Queue.endUnsafe(queue);
+          status.on("data", (chunk: Buffer) => {
+            code += chunk.toString("utf8");
           });
-          child.on("close", (code) => {
-            children.delete(child);
-            Queue.offerUnsafe(
-              queue,
-              frame("exit", JSON.stringify({ exitCode: code ?? 137 }))
-            );
-            Queue.endUnsafe(queue);
+          stdin.on("error", () => {
+            stdin.destroy();
           });
-          child.stdin.on("error", () => {
-            child.stdin.destroy();
-          });
-          child.stdin.end(body.stdin ?? "");
+          stdin.end(body.stdin ?? "");
+
+          yield* Effect.forkScoped(
+            Effect.andThen(
+              Effect.promise(
+                async () =>
+                  await Promise.allSettled(
+                    [stdout, stderr, status].map(async (stream) => {
+                      await finished(stream);
+                    })
+                  )
+              ),
+              Effect.sync(() => {
+                Queue.offerUnsafe(
+                  queue,
+                  frame(
+                    "exit",
+                    JSON.stringify({ exitCode: Number(code.trim() || "137") })
+                  )
+                );
+                Queue.endUnsafe(queue);
+              })
+            )
+          );
         })
       );
 
@@ -951,13 +958,13 @@ export const fakeSmolCloud = (
 
     const faults: FakeFaults = {
       drift: (instance) =>
-        Effect.sync(() => {
+        Effect.promise(async () => {
           for (const machine of machines.values()) {
             if (
               machine.name.endsWith(`-${instance}`) &&
               machine.state === "started"
             ) {
-              killAll(machine);
+              await killAll(machine);
               machine.state = "stopped";
               record(`drift ${machine.name}`);
             }
@@ -1012,13 +1019,7 @@ export const fakeSmolCloud = (
       )
     ).pipe(Effect.orDie);
 
-    yield* Effect.addFinalizer(() =>
-      Effect.sync(() => {
-        for (const machine of machines.values()) {
-          killAll(machine);
-        }
-      })
-    );
+    yield* Effect.addFinalizer(() => Effect.promise(guests.endAll));
 
     return {
       url: HttpServer.formatAddress(

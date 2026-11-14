@@ -103,7 +103,11 @@ Each is an assertion of the live suite, in the case named.
 - `POST /exec/stream` refuses an empty argument with 400, answers a missing
   user with an error, takes string `stdin`, and sends each output line as a
   `data` line of an `stdout` event, ending with an `exit` event of
-  `{exitCode}`.
+  `{exitCode}`. The fake runs each exec in a process group of its own, which
+  only a stop, a delete or the fake's end ends, with what the command left in
+  the background, as a VM's stop ends all it runs; a caller that goes away
+  leaves it running. (`guest-groups.ts`, and the tests of an exec cut short
+  and of what one leaves in the background.)
 - The tunnel, `wss://.../v1/machines/{id}/tunnel/22`, takes the key in
   `Authorization`, carries raw TCP to sshd, and doesn't wake a stopped machine.
 - Memory, vCPUs and disk grow on a running machine and on a stopped one;
