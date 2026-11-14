@@ -4,7 +4,7 @@ import type { Server } from "node:http";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { version } from "@gjermundgaraba/clankerbox-sdk";
+import { readTimeout, version } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Logger, Schema } from "effect";
 import { expect } from "vite-plus/test";
 
@@ -127,6 +127,31 @@ const stubHost = (
     })
   );
 
+const silentHost = Effect.acquireRelease(
+  Effect.callback<Server>((resume) => {
+    const server = createServer(() => {});
+
+    server.listen({ host: "127.0.0.1", port: 0 }, () => {
+      resume(Effect.succeed(server));
+    });
+  }),
+  (server) =>
+    Effect.callback<undefined>((resume) => {
+      server.closeAllConnections();
+      server.close(() => {
+        resume(Effect.undefined);
+      });
+    })
+).pipe(
+  Effect.map((server) => {
+    const { port } = Schema.decodeUnknownSync(
+      Schema.Struct({ port: Schema.Finite })
+    )(server.address(), { onExcessProperty: "ignore" });
+
+    return `http://127.0.0.1:${port}`;
+  })
+);
+
 const listedAt = (url: string) =>
   Effect.gen(function* () {
     const hosts = yield* Hosts.make([{ id: "old", url, draining: false }]);
@@ -240,6 +265,30 @@ layer(NodeServices.layer, { excludeTestServices: true })(
             unsent: true,
           });
         })
+    );
+
+    it.effect(
+      "that doesn't answer is named unreachable in capacity within one read, and asked nothing more",
+      () =>
+        Effect.gen(function* () {
+          const url = yield* silentHost;
+
+          const served = yield* running({
+            members: [{ id: "silent", url, draining: false }],
+          });
+
+          const client = yield* clientOf(served.url);
+          const [took, report] = yield* Effect.timed(client.capacity);
+
+          expect(
+            report.unreported.map(({ host, state }) => [host, state])
+          ).toStrictEqual([["silent", "unreachable"]]);
+          expect(report.unreported[0]?.problem).toContain("didn't answer");
+          expect(Duration.toMillis(took)).toBeLessThan(
+            Duration.toMillis(readTimeout) + 3000
+          );
+        }),
+      40_000
     );
 
     it.effect(

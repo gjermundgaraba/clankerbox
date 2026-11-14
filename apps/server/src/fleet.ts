@@ -28,10 +28,29 @@ export const capacity = (
     const rows = yield* store.machines;
     const unreported: Unreported[] = [];
 
+    const unreportedBy = (
+      host: string,
+      problem: { readonly message: string; readonly incompatible?: true }
+    ) => {
+      unreported.push({
+        host,
+        state: problem.incompatible === true ? "incompatible" : "unreachable",
+        problem: problem.message,
+      });
+    };
+
     const usage = yield* Effect.forEach(
       reached,
-      ({ member }) =>
-        hosts
+      ({ member, info, problem }) => {
+        if (info === undefined) {
+          if (problem !== undefined) {
+            unreportedBy(member.id, problem);
+          }
+
+          return Effect.succeed<Usage[]>([]);
+        }
+
+        return hosts
           .call(member.id, (api) =>
             api.readCapacity({
               machines: rows
@@ -48,19 +67,13 @@ export const capacity = (
             ),
             Effect.catch((error) =>
               Effect.sync((): Usage[] => {
-                unreported.push({
-                  host: member.id,
-                  state:
-                    "incompatible" in error && error.incompatible
-                      ? "incompatible"
-                      : "unreachable",
-                  problem: error.message,
-                });
+                unreportedBy(member.id, error);
 
                 return [];
               })
             )
-          ),
+          );
+      },
       { concurrency: "unbounded" }
     );
 
