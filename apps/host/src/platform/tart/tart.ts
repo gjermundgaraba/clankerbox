@@ -259,7 +259,8 @@ export const make = (
     const fs = yield* FileSystem.FileSystem;
     const home = Home.make(fs, settings.tartHome);
     const env = environment(settings);
-    const { run, exec, dial } = yield* cliIn(env);
+    const { run } = yield* cliIn(env);
+    const inGuest = yield* cliIn(env, { detached: false });
     const jobs = jobsDir(settings.stateDir);
 
     if (settings.uid === undefined) {
@@ -276,6 +277,9 @@ export const make = (
 
     const tart = (args: readonly string[], what: string) =>
       run(settings.binary, args, `tart ${what}`);
+
+    const tartExec = (vm: string, command: readonly string[]) =>
+      inGuest.run(settings.binary, ["exec", vm, ...command], `tart exec ${vm}`);
 
     const call = (
       args: readonly string[],
@@ -458,7 +462,7 @@ export const make = (
       const { target } = job(vm);
 
       const probe = Effect.gen(function* () {
-        if ((yield* tart(["exec", vm, "true"], `exec ${vm}`)).exitCode === 0) {
+        if ((yield* tartExec(vm, ["true"])).exitCode === 0) {
           return true;
         }
 
@@ -596,10 +600,7 @@ export const make = (
 
         const shutdown = Effect.andThen(
           Effect.ignore(
-            tart(
-              ["exec", vm, "sudo", "-n", "/sbin/shutdown", "-h", "now"],
-              `exec ${vm}`
-            )
+            tartExec(vm, ["sudo", "-n", "/sbin/shutdown", "-h", "now"])
           ),
           Effect.never
         );
@@ -820,7 +821,7 @@ export const make = (
         _tag: "relayed",
         address: settings.publishAddress,
         dial: (machine) =>
-          dial(settings.binary, [
+          inGuest.dial(settings.binary, [
             "exec",
             "-i",
             machine.handle,
@@ -1010,7 +1011,7 @@ export const make = (
         const vm = machine.handle;
         const as = user === undefined ? [] : ["-u", user, "-H"];
 
-        return exec(
+        return inGuest.exec(
           settings.binary,
           ["exec", "-i", vm, "sudo", "-n", ...as, "--", ...argv],
           stdin,

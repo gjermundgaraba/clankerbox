@@ -1367,6 +1367,42 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "each tart exec a Tart host runs stays in the host's process group, which launchd ends with the host, and every other command in a group of its own",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const machine = machineOn("dev");
+        const { reach } = runtime;
+
+        yield* runtime.make(machine, fromImage("base"), unbound);
+        yield* runCommand(runtime, { machine, argv: ["/bin/true"] });
+
+        if (reach._tag === "relayed") {
+          yield* Stream.runDrain(reach.dial(machine)(Stream.empty));
+        }
+
+        yield* runtime.stop(machine);
+
+        const run = (detached: boolean) =>
+          mac.spawner.calls
+            .filter((call) => call.detached === detached)
+            .map((call) =>
+              call.file === mac.settings.binary
+                ? (call.args[0] ?? "")
+                : path.basename(call.file)
+            );
+
+        expect({
+          own: [...new Set(run(true))].toSorted(),
+          hosts: run(false),
+        }).toStrictEqual({
+          own: ["--version", "clone", "launchctl", "perl", "set"],
+          hosts: ["exec", "exec", "exec", "exec"],
+        });
+      })
+  );
+
+  it.effect(
     "exec runs the command as root through sudo -n, with its stdin",
     () =>
       Effect.gen(function* () {
