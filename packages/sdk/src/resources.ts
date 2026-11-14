@@ -1,4 +1,4 @@
-import { Result, Schema } from "effect";
+import { Effect, Result, Schema, SchemaIssue } from "effect";
 
 import { Desired, HostError } from "./errors.ts";
 import { CheckpointName, HostId, Name } from "./ids.ts";
@@ -478,10 +478,40 @@ export const MachineSpec = Schema.Union([TemplateSpec, BaseSpec]);
 
 export type MachineSpec = typeof MachineSpec.Type;
 
+const misses = (issue: SchemaIssue.Issue, key: string) =>
+  (issue._tag === "Composite" ? issue.issues : [issue]).some(
+    (inner) =>
+      inner._tag === "Pointer" &&
+      inner.path.length === 1 &&
+      inner.path[0] === key &&
+      inner.issue._tag === "MissingKey"
+  );
+
+const namedOnly = (issue: SchemaIssue.Issue) => {
+  if (issue._tag !== "AnyOf") {
+    return Effect.fail(issue);
+  }
+
+  const named = issue.issues.find(
+    (member) => !misses(member, "template") && !misses(member, "base")
+  );
+
+  return Effect.fail(
+    named ??
+      new SchemaIssue.InvalidValue({
+        message: "a create names a template or a base",
+      })
+  );
+};
+
+/**
+ * A create from a template or from a base, read as the one it names, a template whatever else it
+ * holds, so a refusal says what is wrong with that one alone.
+ */
 export const CreateRequest = Schema.Union([
   Schema.Struct({ id: Name, ...fromTemplate, ...labelled }),
   Schema.Struct({ id: Name, ...fromBase, ...labelled }),
-]);
+]).pipe(Schema.catchDecoding(namedOnly), Schema.catchEncoding(namedOnly));
 
 export type CreateRequest = typeof CreateRequest.Type;
 

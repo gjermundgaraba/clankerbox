@@ -6,7 +6,11 @@ import { it } from "@effect/vitest";
 import { Effect, FileSystem, Schema } from "effect";
 import { expect } from "vite-plus/test";
 
-import { describeFileError, describeIssues } from "../src/index.ts";
+import {
+  CreateRequest,
+  describeFileError,
+  describeIssues,
+} from "../src/index.ts";
 
 const Config = Schema.Struct({
   hosts: Schema.Array(Schema.Struct({ id: Schema.String, url: Schema.String })),
@@ -64,4 +68,36 @@ it.effect(
         "EISDIR: illegal operation on a directory"
       );
     }).pipe(Effect.provide(NodeServices.layer))
+);
+
+it.effect(
+  "a create's failures are those of the template or the base it names, once, in either decode mode",
+  () =>
+    Effect.gen(function* () {
+      const said = yield* Effect.forEach(
+        [
+          { id: "dev", base: "ubuntu", cpu: 0, ramMib: 1024, diskGib: 10 },
+          { id: "dev", template: "web", cpu: 0 },
+          { id: "2dev", base: "ubuntu", cpu: 1, ramMib: 1024, diskGib: 10 },
+          { id: "dev" },
+        ],
+        (input) =>
+          Effect.forEach(["all", "first"] as const, (errors) =>
+            Schema.decodeUnknownEffect(CreateRequest)(input, { errors }).pipe(
+              Effect.flip,
+              Effect.map((error) => describeIssues(error))
+            )
+          )
+      );
+
+      const name =
+        "id: a name is 1 to 62 characters: it starts with a letter, then letters, digits and '-', with no '--' and no '-' at the end";
+
+      expect(said).toStrictEqual([
+        Array.from({ length: 2 }, () => "cpu: Expected a value greater than 0"),
+        Array.from({ length: 2 }, () => "cpu: Expected a value greater than 0"),
+        [name, name],
+        Array.from({ length: 2 }, () => "a create names a template or a base"),
+      ]);
+    })
 );

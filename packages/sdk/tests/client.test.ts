@@ -693,6 +693,29 @@ describe("client", () => {
     );
 
     it.effect(
+      "a create that doesn't encode says once what is wrong with what it names, a template or a base",
+      () =>
+        Effect.gen(function* () {
+          const stub = server();
+
+          const refused = yield* withClient(stub, (client) =>
+            Effect.all([
+              Effect.flip(client.create("dev", { ...spec, cpu: 0 })),
+              Effect.flip(client.create("dev", { template: "web", cpu: 0 })),
+              Effect.flip(client.create("2dev", spec)),
+            ])
+          );
+
+          expect(refused.map(({ message }) => message)).toStrictEqual([
+            "createMachine dev: the request doesn't match the action's input: Expected a value greater than 0\n  at [\"cpu\"]",
+            "createMachine dev: the request doesn't match the action's input: Expected a value greater than 0\n  at [\"cpu\"]",
+            `createMachine 2dev: the request doesn't match the action's input: a name is 1 to 62 characters: it starts with a letter, then letters, digits and '-', with no '--' and no '-' at the end\n  at ["id"]`,
+          ]);
+          expect(stub.calls).toStrictEqual([]);
+        })
+    );
+
+    it.effect(
       "an environment name that isn't a variable's name, or a label key that isn't a name, is Invalid naming it, and sends nothing",
       () =>
         Effect.gen(function* () {
