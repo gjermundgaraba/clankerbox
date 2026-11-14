@@ -233,7 +233,13 @@ const onBase = ({ id }: HostInfo): Candidate => ({
 
 const absent = ({ name, state, error }: MachineRow): NotFound => {
   switch (stageOf(state)) {
-    case "undoing":
+    case "undoing": {
+      return new NotFound({
+        message: `machine ${name}'s create failed, and is being undone: ${error?.message ?? "it ended"}`,
+        id: name,
+      });
+    }
+
     case "undone": {
       return new NotFound({
         message: `machine ${name}'s create failed, so there is no machine ${name}: ${error?.message ?? "it ended"}; delete it, or create it again`,

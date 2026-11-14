@@ -152,7 +152,7 @@ const unusable = (host: string, error: unknown): Unreachable => {
   switch (error.reason._tag) {
     case "EncodeError":
     case "InvalidUrlError": {
-      return new Unsent({
+      return new Unanswered({
         host,
         message: `host ${host} wasn't called: the control plane couldn't make the request`,
         logOnly,

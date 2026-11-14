@@ -817,6 +817,37 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a fork of a machine whose failed create is being undone says so, advising nothing, as the create may yet move on",
+    () =>
+      Effect.gen(function* () {
+        const { client, fake } = yield* served();
+
+        fake.failNext("create", new Internal({ message: "krun EINVAL" }));
+
+        const { entered, release } = fake.holdNext("delete");
+
+        const creating = yield* Effect.forkChild(
+          Effect.flip(client.create("dev", request("dev")))
+        );
+
+        yield* entered;
+
+        const forked = yield* Effect.flip(
+          client.forkMachine({ machine: "dev", name: "copy" })
+        );
+
+        yield* release;
+        yield* Fiber.join(creating);
+
+        expect(forked).toMatchObject({
+          _tag: "NotFound",
+          message:
+            "machine dev's create failed, and is being undone: krun EINVAL",
+        });
+      })
+  );
+
+  it.effect(
     "a request on a machine whose create failed says so, with its error, as a list shows it failed",
     () =>
       Effect.gen(function* () {
