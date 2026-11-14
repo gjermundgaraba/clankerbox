@@ -107,11 +107,12 @@ export const fixed: RuntimeTraits = {
       { name: "large", cpu: 4, ramMib: 8192, diskGib: 40 },
     ],
   },
+  limits: { least: {}, most: {}, live: {} },
 };
 
 export const presets = {
   smolvm: {
-    traits: smolvm,
+    traits: smolvm("x64"),
     guest: "debian",
     pin: "fake 1",
     prepares: "with-setup",

@@ -1084,6 +1084,31 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
+    "a live RAM grow past what smolvm's VMM reserved above the boot RAM fails Unsizable, saying so",
+    () =>
+      Effect.gen(function* () {
+        const spawner = scripted((call) =>
+          call.args[1] === "resize"
+            ? {
+                exitCode: 1,
+                stderr:
+                  "Error: RAM resize: RAM growth not confirmed: ERR EIO RAM hot-add area must grow in 128 MiB units within the platform aperture; limits may be raised, reconcile before retrying\n",
+              }
+            : undefined
+        );
+
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+        const refused = yield* Effect.flip(
+          runtime.resize(machine, { ramMib: 200_000 }, true)
+        );
+
+        expect(refused._tag).toBe("Unsizable");
+        expect(refused.message).toContain("64G above the RAM it booted with");
+      })
+  );
+
+  it.effect(
     "sizes reads vCPUs, RAM and storage from smolvm's status, and smolvm's default storage where it records none",
     () =>
       Effect.gen(function* () {
@@ -2928,22 +2953,26 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "sizes smolvm can't give are Unsizable before anything native: RAM below its least, vCPUs or RAM past what its CLI takes, and for a live grow RAM off its 128M steps or vCPUs off x86_64",
+    "smolvm's traits bound a machine at 64M of RAM at least, and at most at the vCPUs and RAM its CLI parses, 254 vCPUs on x86_64, which libkrun's MP table holds, and a running one's vCPUs at 16; a live grow of RAM off its 128M steps or of vCPUs off x86_64 is Unsizable before anything native",
     () =>
       Effect.gen(function* () {
         const settings = yield* prepared();
         const spawner = scripted(() => {});
-        const runtime = yield* runtimeOf(settings, spawner);
+        const runtime = yield* runtimeOf({ ...settings, arch: "x64" }, spawner);
         const arm = yield* runtimeOf({ ...settings, arch: "arm64" }, spawner);
         const before = spawner.calls.length;
 
+        expect(runtime.traits.limits).toStrictEqual({
+          least: { ramMib: 64 },
+          most: { cpu: 254, ramMib: 2 ** 32 - 1 },
+          live: { cpu: 16 },
+        });
+        expect(arm.traits.limits.most).toStrictEqual({
+          cpu: 255,
+          ramMib: 2 ** 32 - 1,
+        });
+
         const refused = [
-          yield* Effect.flip(
-            runtime.sizable(machine, machine, { ...machine, ramMib: 32 }, false)
-          ),
-          yield* Effect.flip(
-            runtime.sizable(machine, machine, { ...machine, cpu: 256 }, false)
-          ),
           yield* Effect.flip(
             runtime.sizable(
               machine,
@@ -2966,19 +2995,11 @@ layer(NodeServices.layer)((it) => {
         yield* runtime.sizable(
           machine,
           machine,
-          { ...machine, cpu: 255, ramMib: 2176 },
+          { ...machine, cpu: 16, ramMib: 2176 },
           true
         );
 
         expect(refused.map(failure)).toStrictEqual([
-          [
-            "Unsizable",
-            "smolvm gives a machine at least 64M of RAM, and dev would have 32M",
-          ],
-          [
-            "Unsizable",
-            "smolvm's CLI takes at most 255 vCPUs, and dev would have 256",
-          ],
           [
             "Unsizable",
             "smolvm grows a running machine's RAM in 128M steps, and dev's would grow from 2G to 2100M",

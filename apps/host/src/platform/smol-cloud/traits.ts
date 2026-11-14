@@ -11,4 +11,5 @@ export const traits: RuntimeTraits = {
   copies: "same",
   resize: { running: "grow", stopped: "grow" },
   sizes: { _tag: "free" },
+  limits: { least: {}, most: {}, live: {} },
 };

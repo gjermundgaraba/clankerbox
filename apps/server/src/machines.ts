@@ -1,5 +1,5 @@
 import type { HostInfo, MachineState, Report } from "@clankerbox/host-contract";
-import { pinRefusal } from "@clankerbox/host-contract/traits";
+import { pinRefusal, resizeRefusal } from "@clankerbox/host-contract/traits";
 import {
   buildId,
   Internal,
@@ -593,7 +593,7 @@ export const make = (
         return yield* born(
           name,
           {
-            spec: yield* cloned(name, build, held, sizing),
+            spec: yield* cloned(name, build, held, sizing, info.traits),
             labels,
             template: build,
           },
@@ -738,9 +738,34 @@ export const make = (
           );
       });
 
+    const restingIn = (found: MachineRow) =>
+      phaseOf(found.state) === "settled"
+        ? Effect.map(stateOf(hosts, found), (seen) =>
+            seen === "running" || seen === "stopped" || seen === "paused"
+              ? seen
+              : undefined
+          )
+        : Effect.undefined;
+
     const resize = (request: ResizeRequest) =>
       Effect.gen(function* () {
         const { id, ...sizing } = request;
+        const found = yield* row(id);
+        const info = hosts.known(found.host);
+
+        if (info !== undefined && stageOf(found.state) === "made") {
+          const refusal = resizeRefusal(
+            info.traits,
+            id,
+            yield* restingIn(found),
+            found,
+            sizedBy(found, sizing)
+          );
+
+          if (refusal !== undefined) {
+            return yield* refusal;
+          }
+        }
 
         const { next, moved } = yield* recorded(id, {
           type: "resize",

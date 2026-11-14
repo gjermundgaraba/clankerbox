@@ -1072,49 +1072,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "vCPUs or a disk past what tart set parses are Unsizable before anything native",
+    "Tart's traits bound a machine at the vCPUs and the disk tart set parses, whose GB a disk's GiB round up to",
     () =>
       Effect.gen(function* () {
-        const { mac, runtime } = yield* runtimeOn();
-        const machine = machineOn("dev");
+        const { runtime } = yield* runtimeOn();
+        const { most } = runtime.traits.limits;
 
-        const refused = [
-          yield* Effect.flip(
-            runtime.sizable(
-              machine,
-              machine,
-              { ...machine, cpu: 65_536 },
-              false
-            )
-          ),
-          yield* Effect.flip(
-            runtime.sizable(
-              machine,
-              machine,
-              { ...machine, diskGib: 61_035 },
-              false
-            )
-          ),
-        ];
-
-        yield* runtime.sizable(
-          machine,
-          machine,
-          { ...machine, cpu: 65_535, diskGib: 61_034 },
-          false
-        );
-
-        expect(refused.map(failure)).toStrictEqual([
-          [
-            "Unsizable",
-            "tart set takes at most 65535 vCPUs and 65535 GB of disk, and dev would have 65536 vCPUs and 65 GB",
-          ],
-          [
-            "Unsizable",
-            "tart set takes at most 65535 vCPUs and 65535 GB of disk, and dev would have 4 vCPUs and 65536 GB",
-          ],
-        ]);
-        expect(calls(mac)).toStrictEqual([]);
+        expect(most).toStrictEqual({ cpu: 65_535, diskGib: 61_034 });
+        expect(diskGb(most.diskGib ?? 0)).toBeLessThanOrEqual(65_535);
+        expect(diskGb((most.diskGib ?? 0) + 1)).toBeGreaterThan(65_535);
       })
   );
 

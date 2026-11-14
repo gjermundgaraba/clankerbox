@@ -43,4 +43,5 @@ export const traits = (
     _tag: "classes",
     classes: Arr.map(offered, (name) => ({ name, ...types[name] })),
   },
+  limits: { least: {}, most: {}, live: {} },
 });

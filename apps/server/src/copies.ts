@@ -3,6 +3,7 @@ import {
   copySizable,
   fitted,
   givenSizes,
+  grownPast,
 } from "@clankerbox/host-contract/traits";
 import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
 import {
@@ -59,9 +60,15 @@ const copyRefusal = (
     }
 
     case "grow": {
-      return spec.diskGib < from.diskGib
-        ? shrunkDisk
-        : `machine ${name}'s host copies a machine only at its source's sizes or larger, so its vCPUs and RAM only grow from ${held}`;
+      const past = grownPast(traits, from, spec);
+
+      if (spec.diskGib < from.diskGib) {
+        return shrunkDisk;
+      }
+
+      return past === undefined
+        ? `machine ${name}'s host copies a machine only at its source's sizes or larger, so its vCPUs and RAM only grow from ${held}`
+        : `machine ${name}'s host grows a copy live from ${held} once it runs, to at most ${past.limit}, and it was asked ${past.asked}`;
     }
 
     case "any": {
@@ -110,11 +117,16 @@ export const uncopiable = (
     : undefined;
 };
 
+/**
+ * A template's clone of `build`, sized `from`, at the sizes asked: at least the build's, and as a
+ * copy of it on a runtime of `traits`, a restore of its checkpoint.
+ */
 export const cloned = (
   name: string,
   build: string,
   from: Spec,
-  sizing: Sizing
+  sizing: Sizing,
+  traits: RuntimeTraits
 ): Effect.Effect<Spec, Unsizable> => {
   const spec = sizedBy(from, sizing);
 
@@ -126,7 +138,7 @@ export const cloned = (
           message: `machine ${name} takes at least build ${build}'s ${formatCpu(from.cpu)}, ${formatMib(from.ramMib)} of RAM and ${formatGib(from.diskGib)} of disk`,
         })
       )
-    : Effect.succeed(spec);
+    : copied(name, from, sizing, traits);
 };
 
 export const refusedBySource = (

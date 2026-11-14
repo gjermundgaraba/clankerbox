@@ -13,20 +13,11 @@ import type {
   Source,
   Step,
 } from "@clankerbox/host-contract";
-import {
-  givenSizes,
-  pinRefusal,
-  resizable,
-} from "@clankerbox/host-contract/traits";
-import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
+import { pinRefusal, resizeRefusal } from "@clankerbox/host-contract/traits";
 import {
   Conflict,
-  formatCpu,
-  formatGib,
-  formatMib,
   Internal,
   timedOutExitCode,
-  Unsizable,
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
@@ -336,18 +327,6 @@ const namedBy = (step: Step): readonly Ref[] => {
   }
 };
 
-const resizedStates = ({ resize }: RuntimeTraits): string => {
-  const taking = (["stopped", "running"] as const).filter(
-    (state) => resize[state] !== "none"
-  );
-
-  if (taking.length === 0) {
-    return "no machine";
-  }
-
-  return `${taking.length === 1 ? "only " : ""}a ${taking.join(" or ")} machine${resize.stopped === "none" ? "" : ": stop it first"}`;
-};
-
 type Settings = Pick<HostSettings, "id" | "bases">;
 
 export const make = (
@@ -584,11 +563,10 @@ export const make = (
       Effect.gen(function* () {
         const { name } = ref;
         const to = sizedBy(ref, request);
+        const unsized = resizeRefusal(traits, name, undefined, ref, to);
 
-        if (to.diskGib < ref.diskGib) {
-          return yield* new Unsizable({
-            message: `machine ${name}'s disk is ${formatGib(ref.diskGib)}, and a disk only grows`,
-          });
+        if (unsized !== undefined) {
+          return yield* unsized;
         }
 
         const machine = yield* machineTarget(ref);
@@ -599,26 +577,10 @@ export const make = (
         }
 
         const live = seen === "running";
-        const decided = resizable(traits, seen, machine, to);
+        const refusal = resizeRefusal(traits, name, seen, machine, to);
 
-        if (decided === "refuses") {
-          return yield* new WrongState({
-            message: `machine ${name} is ${seen}, and the ${traits.runtime} runtime resizes ${resizedStates(traits)}`,
-            machine: name,
-            state: seen,
-          });
-        }
-
-        if (decided === "shrinks") {
-          return yield* new Unsizable({
-            message: `a ${seen} machine's vCPUs and RAM only grow, and ${name} has ${formatCpu(machine.cpu)} and ${formatMib(machine.ramMib)}${live && traits.resize.stopped === "any" ? ": stop it to shrink them" : ""}`,
-          });
-        }
-
-        if (decided === "unfitted") {
-          return yield* new Unsizable({
-            message: `the ${traits.runtime} runtime gives ${givenSizes(traits)}, and ${name} was asked ${formatCpu(to.cpu)}, ${formatMib(to.ramMib)} of RAM and ${formatGib(to.diskGib)} of disk`,
-          });
+        if (refusal !== undefined) {
+          return yield* refusal;
         }
 
         yield* runtime.sizable(machine, machine, to, live);

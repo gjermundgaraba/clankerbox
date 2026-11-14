@@ -2806,6 +2806,74 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
+  it.effect(
+    "a running smolvm machine's vCPUs grow live to at most 16: a resize past that is refused Unsizable before anything is recorded, and a stopped one takes it",
+    () =>
+      Effect.gen(function* () {
+        const { client, fake, row } = yield* served();
+
+        yield* client.create("dev", request("dev"));
+
+        const before = yield* row("dev");
+
+        fake.calls.length = 0;
+
+        const refused = yield* Effect.flip(
+          client.resizeMachine({ id: "dev", cpu: 32 })
+        );
+
+        expect(refused._tag).toBe("Unsizable");
+        expect(refused.message).toContain("at most 16 vCPUs");
+        expect(yield* row("dev")).toStrictEqual(before);
+        expect(fake.calls).toStrictEqual([]);
+
+        yield* client.stopMachine({ id: "dev" });
+
+        const resized = yield* client.resizeMachine({ id: "dev", cpu: 32 });
+
+        expect(sizesOf(resized)).toStrictEqual([32, 1024, 10]);
+      })
+  );
+
+  it.effect(
+    "a create, a resize or a fork past the most vCPUs smolvm gives a machine is refused Unsizable, naming it, before anything is recorded",
+    () =>
+      Effect.gen(function* () {
+        const { client, fake, rows } = yield* served();
+
+        const created = yield* Effect.flip(
+          client.create("big", request("big", { cpu: 255 }))
+        );
+
+        expect(created._tag).toBe("Unsizable");
+        expect(created.message).toContain("up to 254 vCPUs");
+
+        yield* client.create("dev", request("dev"));
+        yield* client.stopMachine({ id: "dev" });
+        fake.calls.length = 0;
+
+        const resized = yield* Effect.flip(
+          client.resizeMachine({ id: "dev", cpu: 255 })
+        );
+
+        expect(resized._tag).toBe("Unsizable");
+        expect(resized.message).toContain("up to 254 vCPUs");
+
+        yield* client.startMachine({ id: "dev" });
+
+        const forked = yield* Effect.flip(
+          client.forkMachine({ machine: "dev", name: "copy", cpu: 32 })
+        );
+
+        expect(forked._tag).toBe("Unsizable");
+        expect(forked.message).toContain("at most 16 vCPUs");
+        expect((yield* rows).map(({ name }) => name)).toStrictEqual(["dev"]);
+        expect(
+          fake.calls.filter((call) => call.startsWith("resize"))
+        ).toStrictEqual([]);
+      })
+  );
+
   it.effect("a size left out of a resize stays as it is", () =>
     Effect.gen(function* () {
       const { client } = yield* served();

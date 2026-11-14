@@ -10,6 +10,7 @@ import {
   pauseCapture,
   pinRefusal,
   resizable,
+  resizeRefusal,
   RuntimeTraits,
 } from "../src/traits.ts";
 
@@ -27,23 +28,50 @@ const Bases = Schema.Array(Schema.Literals(["ubuntu", "macos"]));
 
 const State = Schema.Literals(["running", "stopped", "paused"]);
 
-const Given = Schema.Union([
-  Schema.TaggedStruct("free", {}),
-  Schema.TaggedStruct("classes", {
-    classes: Schema.NonEmptyArray(
-      Schema.Struct({ name: Schema.Literals(["a", "b"]), ...Sizes.fields })
-    ),
-  }),
-]);
+const Bound = Schema.Struct({
+  cpu: Schema.optionalKey(Small),
+  ramMib: Schema.optionalKey(Small),
+  diskGib: Schema.optionalKey(Small),
+});
+
+const Given = Schema.Struct({
+  sizes: Schema.Union([
+    Schema.TaggedStruct("free", {}),
+    Schema.TaggedStruct("classes", {
+      classes: Schema.NonEmptyArray(
+        Schema.Struct({ name: Schema.Literals(["a", "b"]), ...Sizes.fields })
+      ),
+    }),
+  ]),
+  limits: Schema.Struct({ least: Bound, most: Bound, live: Bound }),
+});
 
 type Given = typeof Given.Type;
 
-const gives = (given: Given, sizes: typeof Sizes.Type): boolean =>
-  given._tag === "free" ||
-  given.classes.some(
-    ({ cpu, ramMib, diskGib }) =>
-      cpu === sizes.cpu && ramMib === sizes.ramMib && diskGib === sizes.diskGib
-  );
+type Sized = typeof Sizes.Type;
+
+const names = ["cpu", "ramMib", "diskGib"] as const;
+
+const gives = ({ sizes: given, limits }: Given, sizes: Sized): boolean =>
+  names.every(
+    (name) =>
+      (limits.least[name] === undefined || sizes[name] >= limits.least[name]) &&
+      (limits.most[name] === undefined || sizes[name] <= limits.most[name])
+  ) &&
+  (given._tag === "free" ||
+    given.classes.some(
+      ({ cpu, ramMib, diskGib }) =>
+        cpu === sizes.cpu &&
+        ramMib === sizes.ramMib &&
+        diskGib === sizes.diskGib
+    ));
+
+const growsPast = ({ limits: { live } }: Given, from: Sized, to: Sized) =>
+  names.some((name) => {
+    const bound = live[name];
+
+    return bound !== undefined && to[name] > from[name] && to[name] > bound;
+  });
 
 describe("offers", () => {
   it.effect.prop(
@@ -90,28 +118,35 @@ describe("offers", () => {
 
 describe("fitted", () => {
   it.effect.prop(
-    "a runtime of free sizes gives any",
+    "a runtime of free sizes and no limits gives any",
     { traits: RuntimeTraits, sizes: Sizes },
     ({ traits, sizes }) =>
       Effect.sync(() => {
-        expect(fitted({ ...traits, sizes: { _tag: "free" } }, sizes)).toBe(
-          true
-        );
+        expect(
+          fitted(
+            {
+              ...traits,
+              sizes: { _tag: "free" },
+              limits: { least: {}, most: {}, live: {} },
+            },
+            sizes
+          )
+        ).toBe(true);
       })
   );
 
   it.effect.prop(
-    "a runtime of size classes gives each class exactly, and no other sizes",
+    "a runtime gives sizes within its least and most of each size it caps: any, or each of its size classes exactly",
     { traits: RuntimeTraits, given: Given, sizes: Sizes },
     ({ traits, given, sizes }) =>
       Effect.sync(() => {
-        const sized = { ...traits, sizes: given };
+        const sized = { ...traits, ...given };
 
         expect(fitted(sized, sizes)).toBe(gives(given, sizes));
 
-        if (given._tag === "classes") {
-          for (const each of given.classes) {
-            expect(fitted(sized, each)).toBe(true);
+        if (given.sizes._tag === "classes") {
+          for (const each of given.sizes.classes) {
+            expect(fitted(sized, each)).toBe(gives(given, each));
           }
         }
       })
@@ -129,7 +164,7 @@ describe("resizable", () => {
   );
 
   it.effect.prop(
-    "a state the runtime resizes `none` refuses any resize, and one it resizes `any` takes every one it gives",
+    "a state the runtime resizes `none` refuses any resize, and one it resizes `any` takes every one it gives, a running machine's up to its live limit",
     {
       traits: RuntimeTraits,
       given: Given,
@@ -143,21 +178,25 @@ describe("resizable", () => {
           return;
         }
 
-        const sized = { ...traits, sizes: given };
-        const decided = resizable(sized, state, from, to);
+        const decided = resizable({ ...traits, ...given }, state, from, to);
+
+        const live =
+          state === "running" && growsPast(given, from, to)
+            ? "unlive"
+            : "resizes";
 
         if (traits.resize[state] === "none") {
           expect(decided).toBe("refuses");
         }
 
         if (traits.resize[state] === "any") {
-          expect(decided).toBe(gives(given, to) ? "resizes" : "unfitted");
+          expect(decided).toBe(gives(given, to) ? live : "unfitted");
         }
       })
   );
 
   it.effect.prop(
-    "a state the runtime only grows takes a resize it gives exactly when neither vCPUs nor RAM go down",
+    "a state the runtime only grows takes a resize it gives exactly when neither vCPUs nor RAM go down, a running machine's up to its live limit",
     {
       traits: RuntimeTraits,
       given: Given,
@@ -172,11 +211,47 @@ describe("resizable", () => {
         }
 
         const lower = to.cpu < from.cpu || to.ramMib < from.ramMib;
-        const fits = gives(given, to) ? "resizes" : "unfitted";
 
-        expect(resizable({ ...traits, sizes: given }, state, from, to)).toBe(
+        const live =
+          state === "running" && growsPast(given, from, to)
+            ? "unlive"
+            : "resizes";
+
+        const fits = gives(given, to) ? live : "unfitted";
+
+        expect(resizable({ ...traits, ...given }, state, from, to)).toBe(
           lower ? "shrinks" : fits
         );
+      })
+  );
+});
+
+describe("resizeRefusal", () => {
+  it.effect.prop(
+    "a resize is refused unless its disk doesn't shrink and its runtime gives its sizes: in a known state as it takes them there, and a refusal names the machine",
+    {
+      traits: RuntimeTraits,
+      given: Given,
+      state: Schema.UndefinedOr(State),
+      from: Sizes,
+      to: Sizes,
+    },
+    ({ traits, given, state, from, to }) =>
+      Effect.sync(() => {
+        const sized = { ...traits, ...given };
+        const refusal = resizeRefusal(sized, "dev", state, from, to);
+
+        const takes =
+          to.diskGib >= from.diskGib &&
+          (state === undefined
+            ? gives(given, to)
+            : resizable(sized, state, from, to) === "resizes");
+
+        expect(refusal === undefined).toBe(takes);
+
+        if (refusal?._tag === "Unsizable" && to.diskGib >= from.diskGib) {
+          expect(refusal.message).toContain("dev");
+        }
       })
   );
 });
@@ -198,14 +273,14 @@ describe("copySizable", () => {
     { traits: RuntimeTraits, given: Given, from: Sizes },
     ({ traits, given, from }) =>
       Effect.sync(() => {
-        expect(copySizable({ ...traits, sizes: given }, from, from)).toBe(
+        expect(copySizable({ ...traits, ...given }, from, from)).toBe(
           gives(given, from)
         );
       })
   );
 
   it.effect.prop(
-    "copies that grow take no lower vCPUs or RAM, copies of any sizes take any vCPUs and RAM, and copies of the same sizes take only the source's, of the sizes the runtime gives",
+    "copies that grow take no lower vCPUs or RAM and grow live to the runtime's live limit, copies of any sizes take any vCPUs and RAM, and copies of the same sizes take only the source's, of the sizes the runtime gives",
     { traits: RuntimeTraits, given: Given, from: Sizes, to: Sizes },
     ({ traits, given, from, to }) =>
       Effect.sync(() => {
@@ -219,11 +294,13 @@ describe("copySizable", () => {
 
         const sized = (copies: RuntimeTraits["copies"]) => ({
           ...traits,
+          ...given,
           copies,
-          sizes: given,
         });
 
-        expect(copySizable(sized("grow"), from, to)).toBe(disk && grows);
+        expect(copySizable(sized("grow"), from, to)).toBe(
+          disk && grows && !growsPast(given, from, to)
+        );
         expect(copySizable(sized("any"), from, to)).toBe(disk);
         expect(copySizable(sized("same"), from, to)).toBe(
           equal && gives(given, to)

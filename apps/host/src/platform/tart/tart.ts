@@ -229,10 +229,6 @@ const decodeInfo = Schema.decodeUnknownEffect(
   )
 );
 
-// https://github.com/openai/tart/blob/2.41.1/Sources/tart/Commands/Set.swift#L12
-// https://github.com/openai/tart/blob/2.41.1/Sources/tart/Commands/Set.swift#L41
-const maximumFlag = 2 ** 16 - 1;
-
 const sizeFlags = ({ cpu, ramMib, diskGib }: Sizing): readonly string[] => [
   ...(cpu === undefined ? [] : ["--cpu", String(cpu)]),
   ...(ramMib === undefined ? [] : ["--memory", String(ramMib)]),
@@ -1061,17 +1057,7 @@ export const make = (
 
         return Effect.as(copied("checkpoint", machine, handle), handle);
       }),
-      sizable: (machine, _from, to) => {
-        if (to.cpu > maximumFlag || diskGb(to.diskGib) > maximumFlag) {
-          return Effect.fail(
-            new Unsizable({
-              message: `tart set takes at most ${maximumFlag} vCPUs and ${maximumFlag} GB of disk, and ${machine.name} would have ${formatCpu(to.cpu)} and ${diskGb(to.diskGib)} GB`,
-            })
-          );
-        }
-
-        return Effect.void;
-      },
+      sizable: () => Effect.void,
       resize: Effect.fn("Tart.resize")((machine, to) =>
         Effect.gen(function* () {
           const flags = sizeFlags(to);

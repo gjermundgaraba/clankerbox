@@ -340,13 +340,27 @@ as it is.
   a null `storage_gb` as `defaultStorageGib`. A `ram` restore or fork comes up
   with its source's vCPUs and RAM, so the core refuses a copy's smaller ones
   before the copy, and `restoreRam` grows a larger copy live with the sizes
-  that differ from its source's once it boots. `sizable`, which the core calls
-  before it admits a create, a copy or a resize, refuses as `Unsizable` RAM
-  below `minimumRamMib`, vCPUs or RAM past what the CLI parses (`maximumCpu`,
-  `maximumRamMib`; the 16-vCPU cap and the VMM's capacity are left to smolvm),
-  and for a live grow or a copy's, RAM off `ramStepMib` (from the row's RAM,
-  which is the boot memory plus earlier live steps) or more vCPUs on a host
-  whose `arch` isn't `x64`.
+  that differ from its source's once it boots. The limits are traits
+  (`platform/smolvm/traits.ts`), which the control plane checks before it
+  records a create, a copy or a resize, and the host again before it runs a
+  resize: at
+  least `MIN_MEMORY_MIB` of RAM; at most the vCPUs and RAM the CLI parses,
+  and on x86_64 254 vCPUs, libkrun's `MAX_SUPPORTED_CPUS`
+  (src/arch/src/x86_64/mptable.rs in the pinned `libkrun` submodule, whose
+  `setup_mptable` refuses more at boot; above 16, `validate` only warns, and
+  a Linux VM boots with all of them); and a running machine's vCPUs grown to
+  at most 16, the slots `configure_live_resize` reserves only for a boot of
+  16 or fewer (src/agent/krun.rs; `topology.vcpu_count = 16` in libkrun's
+  src/vmm/src/builder.rs), past which `grow_cpus_locked` refuses with the
+  VMM's `PROTOTYPE_CPU_STATUS` capacity. A live RAM grow past the region
+  libkrun reserves, 64 GiB above the boot RAM cut to the guest's physical
+  address width (`memory_growth_region_size`), is refused "within the
+  platform aperture", which `grown` answers `Unsizable` (`apertureRefusal`):
+  the row doesn't hold the boot RAM, so no trait states it. `sizable`, which
+  the core calls before it admits a create, a copy or a resize, refuses as
+  `Unsizable` for a live grow or a copy's RAM off `ramStepMib` (from the row's
+  RAM, which is the boot memory plus earlier live steps) or more vCPUs on a
+  host whose `arch` isn't `x64`.
 - Concurrent CLI calls on different machines need no serializing: an inventory
   database in WAL mode with a 15 s busy timeout (`BUSY_TIMEOUT`, src/db.rs), a
   per-VM `vm.lock`, the uid allocation lock, the store's shared/exclusive lock

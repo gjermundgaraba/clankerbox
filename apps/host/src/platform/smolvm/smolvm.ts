@@ -2,6 +2,7 @@ import { totalmem } from "node:os";
 import path from "node:path";
 
 import {
+  formatGib,
   formatMib,
   Internal,
   Invalid,
@@ -53,7 +54,7 @@ import type { HostSettings } from "../../settings.ts";
 import { allotted, checkRamBudget, inUse } from "../../usage.ts";
 import { cliIn, expect, failure, files, regularFiles } from "../process.ts";
 import { aloneOnBox, boxLock } from "./one-per-box.ts";
-import { traits } from "./traits.ts";
+import { traits as traitsOn } from "./traits.ts";
 
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
 
@@ -88,24 +89,17 @@ const bootIdFile = "/proc/sys/kernel/random/boot_id";
 // https://github.com/smol-machines/smolvm/blob/v1.34.1/src/agent/live_resize.rs#L368
 const ramStepMib = 128;
 
-// https://github.com/smol-machines/smolvm/blob/v1.34.1/src/data/resources.rs#L250
-const minimumRamMib = 64;
-
 // https://github.com/smol-machines/smolvm/blob/v1.34.1/src/data/storage.rs#L14
 const defaultStorageGib = 20;
 
-// https://github.com/smol-machines/smolvm/blob/v1.34.1/src/cli/machine.rs#L4511
-// https://github.com/smol-machines/smolvm/blob/v1.34.1/src/cli/machine.rs#L6466
-// https://github.com/smol-machines/smolvm/blob/v1.34.1/src/cli/machine.rs#L6539
-const maximumCpu = 255;
-
-// https://github.com/smol-machines/smolvm/blob/v1.34.1/src/cli/machine.rs#L4517
-// https://github.com/smol-machines/smolvm/blob/v1.34.1/src/cli/machine.rs#L6470
-// https://github.com/smol-machines/smolvm/blob/v1.34.1/src/cli/machine.rs#L6543
-const maximumRamMib = 2 ** 32 - 1;
-
 // https://github.com/smol-machines/smolvm/blob/v1.34.1/src/db/resize.rs#L179
 const unfinishedRefusal = "an unfinished resize belongs to a different target";
+
+// https://github.com/smol-machines/libkrun/blob/9df62257098acb5a3cd4f6807cf84f09e1b13323/src/vmm/src/memory_growth.rs#L28
+const apertureRefusal = "within the platform aperture";
+
+// https://github.com/smol-machines/libkrun/blob/9df62257098acb5a3cd4f6807cf84f09e1b13323/src/vmm/src/builder.rs#L3966
+const apertureGib = 64;
 
 export const pathsIn = (stateDir: string) => ({
   dataDir: path.join(stateDir, "smolvm"),
@@ -403,6 +397,7 @@ export const make = (
     const layerScope = yield* Effect.scope;
     const binary = path.join(settings.prefix, "smolvm");
     const paths = pathsIn(settings.stateDir);
+    const traits = traitsOn(settings.arch);
     const { run, exec } = yield* cliIn(environment(settings));
 
     const smolvm = (args: readonly string[], what: string) =>
@@ -723,14 +718,26 @@ export const make = (
                   ["machine", "resize", "--name", native, flag, String(size)],
                   `machine resize ${native}`
                 ),
-                (ran) =>
-                  size === had &&
-                  ran.exitCode !== 0 &&
-                  ran.stderr.includes(unfinishedRefusal)
+                (ran): Effect.Effect<void, Internal | Unsizable> => {
+                  if (
+                    ran.exitCode !== 0 &&
+                    ran.stderr.includes(apertureRefusal)
+                  ) {
+                    return Effect.fail(
+                      new Unsizable({
+                        message: `smolvm grows a running machine's RAM only within ${formatGib(apertureGib)} above the RAM it booted with, and this one would grow to ${formatMib(size)}: stop it to give it more`,
+                      })
+                    );
+                  }
+
+                  return size === had &&
+                    ran.exitCode !== 0 &&
+                    ran.stderr.includes(unfinishedRefusal)
                     ? Effect.void
                     : Effect.asVoid(
                         expect(ran, `smolvm machine resize ${native}`)
-                      )
+                      );
+                }
               ),
         { discard: true }
       );
@@ -743,30 +750,6 @@ export const make = (
       to: Sizes,
       live: boolean
     ) => {
-      if (to.ramMib < minimumRamMib) {
-        return Effect.fail(
-          new Unsizable({
-            message: `smolvm gives a machine at least ${formatMib(minimumRamMib)} of RAM, and ${machine.name} would have ${formatMib(to.ramMib)}`,
-          })
-        );
-      }
-
-      if (to.cpu > maximumCpu) {
-        return Effect.fail(
-          new Unsizable({
-            message: `smolvm's CLI takes at most ${maximumCpu} vCPUs, and ${machine.name} would have ${to.cpu}`,
-          })
-        );
-      }
-
-      if (to.ramMib > maximumRamMib) {
-        return Effect.fail(
-          new Unsizable({
-            message: `smolvm's CLI takes at most ${formatMib(maximumRamMib)} of RAM, and ${machine.name} would have ${formatMib(to.ramMib)}`,
-          })
-        );
-      }
-
       if (!live) {
         return Effect.void;
       }

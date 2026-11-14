@@ -141,9 +141,16 @@ export const Http = ActionHttp.make(
     }),
     Action.make("resizeMachine", {
       ...write,
-      error: [Invalid, NotFound, NotMade, Internal] as const,
+      error: [
+        Invalid,
+        NotFound,
+        NotMade,
+        WrongState,
+        Unsizable,
+        Internal,
+      ] as const,
       description:
-        "Give a machine other vCPUs, RAM or disk. Its traits' `resize` says what a running and what a stopped machine take of vCPUs and RAM: `any`; `grow`, only larger ones, live on a running machine, needing room for its RAM as a start does; or `none`, which refuses a machine in that state, so stop a running one or start a stopped one first where the other state takes a resize. A paused machine is refused. A disk only grows, and its guest grows its filesystem into it, at once on a machine resized while it runs and at the next boot otherwise. It waits for a step under way, and the next step waits for it; a resize that fails part way keeps what the runtime gave.",
+        "Give a machine other vCPUs, RAM or disk. Its runtime says what a running and what a stopped machine take of vCPUs and RAM: any; only larger ones, live on a running machine, needing room for its RAM as a start does; or none, so stop a running one or start a stopped one first where the other state takes a resize. A paused machine is refused. Sizes past what its runtime gives a machine, or grows a running one to, are Unsizable, naming the limit, and a state its runtime takes no resize in WrongState: before anything is recorded where its host was read and the machine is at rest, and otherwise as the resize's error once its host decides. A disk only grows, and its guest grows its filesystem into it, at once on a machine resized while it runs and at the next boot otherwise. It waits for a step under way, and the next step waits for it; a resize that fails part way keeps what the runtime gave.",
       input: ResizeRequest,
       success: Machine,
     }),

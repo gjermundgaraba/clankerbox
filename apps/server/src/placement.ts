@@ -32,7 +32,10 @@ const sized = ({ cpu, ramMib, diskGib }: Sizes) =>
 const missed = (why: string): Miss => ({ why });
 
 const unsized = (info: HostInfo, sizes: Sizes): Miss => ({
-  why: `has no size class of ${sized(sizes)}, and gives ${givenSizes(info.traits)}`,
+  why:
+    info.traits.sizes._tag === "classes"
+      ? `has no size class of ${sized(sizes)}, and gives ${givenSizes(info.traits)}`
+      : `gives ${givenSizes(info.traits)}, not ${sized(sizes)}`,
   cure: "sizes",
 });
 
