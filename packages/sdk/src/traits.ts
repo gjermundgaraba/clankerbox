@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 
-import { formatGib, formatMib } from "./sizes.ts";
+import { formatCpu, formatGib, formatMib } from "./sizes.ts";
 
 /**
  * A runtime's name, as its host's config and its registry entry give it. The SDK holds no list of
@@ -117,7 +117,7 @@ export const givenSizes = (traits: RuntimeTraits): string =>
     : `only its size classes ${traits.sizes.classes
         .map(
           ({ name, cpu, ramMib, diskGib }) =>
-            `${name} (${cpu} vCPUs, ${formatMib(ramMib)} of RAM, ${formatGib(diskGib)} of disk)`
+            `${name} (${formatCpu(cpu)}, ${formatMib(ramMib)} of RAM, ${formatGib(diskGib)} of disk)`
         )
         .join(", ")}`;
 

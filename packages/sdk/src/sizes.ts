@@ -8,3 +8,7 @@ export const formatMib = (mib: number): string =>
 
 /** As a size flag takes it: `60G`. */
 export const formatGib = (gib: number): string => `${gib}G`;
+
+/** In words: `1 vCPU`, `4 vCPUs`. */
+export const formatCpu = (cpu: number): string =>
+  cpu === 1 ? "1 vCPU" : `${cpu} vCPUs`;

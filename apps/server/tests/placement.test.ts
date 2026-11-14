@@ -164,7 +164,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           expect(refusal([classed("a", larger)], "ubuntu")).toMatchObject({
             _tag: "Unsizable",
             message:
-              "no host that offers base ubuntu gives the sizes asked: a has no size class of 1 vCPUs, 1G of RAM and 10G of disk, and gives only its size classes c0 (2 vCPUs, 1G of RAM, 10G of disk)",
+              "no host that offers base ubuntu gives the sizes asked: a has no size class of 1 vCPU, 1G of RAM and 10G of disk, and gives only its size classes c0 (2 vCPUs, 1G of RAM, 10G of disk)",
           });
         })
     );
@@ -192,7 +192,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ).toMatchObject({
             _tag: "Unsizable",
             message:
-              "no host that offers base ubuntu gives the sizes asked: fixed-1 has no size class of 3 vCPUs, 6G of RAM and 40G of disk, and gives only its size classes small (1 vCPUs, 1G of RAM, 10G of disk), default (2 vCPUs, 4G of RAM, 20G of disk), large (4 vCPUs, 8G of RAM, 40G of disk)",
+              "no host that offers base ubuntu gives the sizes asked: fixed-1 has no size class of 3 vCPUs, 6G of RAM and 40G of disk, and gives only its size classes small (1 vCPU, 1G of RAM, 10G of disk), default (2 vCPUs, 4G of RAM, 20G of disk), large (4 vCPUs, 8G of RAM, 40G of disk)",
           });
         })
     );
@@ -371,7 +371,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ).toMatchObject({
             _tag: "Unsizable",
             message:
-              "no host that holds a current copy of build web@1 gives the sizes asked: b has no size class of 1 vCPUs, 1G of RAM and 10G of disk, and gives only its size classes c0 (1 vCPUs, 2G of RAM, 10G of disk)",
+              "no host that holds a current copy of build web@1 gives the sizes asked: b has no size class of 1 vCPU, 1G of RAM and 10G of disk, and gives only its size classes c0 (1 vCPU, 2G of RAM, 10G of disk)",
           });
           expect(
             pick([up("b"), up("d")], { ...asked, host: "d" })

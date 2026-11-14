@@ -2,6 +2,7 @@ import type { MachineState } from "@clankerbox/host-contract";
 import {
   copySizable,
   fitted,
+  formatCpu,
   formatGib,
   formatMib,
   givenSizes,
@@ -45,11 +46,11 @@ const copyRefusal = (
   spec: Spec,
   traits: RuntimeTraits
 ): string => {
-  const held = `the source's ${from.cpu} vCPUs and ${formatMib(from.ramMib)}`;
+  const held = `the source's ${formatCpu(from.cpu)} and ${formatMib(from.ramMib)}`;
   const shrunkDisk = `machine ${name}'s disk of ${formatGib(spec.diskGib)} is below its source's ${formatGib(from.diskGib)}, and a disk only grows`;
 
   if (!fitted(traits, spec)) {
-    return `machine ${name}'s host gives ${givenSizes(traits)}, and it was asked ${spec.cpu} vCPUs, ${formatMib(spec.ramMib)} of RAM and ${formatGib(spec.diskGib)} of disk`;
+    return `machine ${name}'s host gives ${givenSizes(traits)}, and it was asked ${formatCpu(spec.cpu)}, ${formatMib(spec.ramMib)} of RAM and ${formatGib(spec.diskGib)} of disk`;
   }
 
   switch (traits.copies) {
@@ -151,7 +152,7 @@ export const cloned = (
     spec.diskGib < from.diskGib
     ? Effect.fail(
         new Unsizable({
-          message: `machine ${name} takes at least build ${build}'s ${from.cpu} vCPUs, ${formatMib(from.ramMib)} of RAM and ${formatGib(from.diskGib)} of disk`,
+          message: `machine ${name} takes at least build ${build}'s ${formatCpu(from.cpu)}, ${formatMib(from.ramMib)} of RAM and ${formatGib(from.diskGib)} of disk`,
         })
       )
     : Effect.succeed(spec);

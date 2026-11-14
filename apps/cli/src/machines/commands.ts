@@ -1,5 +1,6 @@
 import {
   actionsByName,
+  formatCpu,
   formatGib,
   formatMib,
   Invalid,
@@ -184,7 +185,7 @@ export const pause = Command.make(
 );
 
 const sized = (machine: Machine) =>
-  `${machine.id} ${machine.cpu} vCPUs, ${formatMib(machine.ramMib)} RAM, ${formatGib(machine.diskGib)} disk`;
+  `${machine.id} ${formatCpu(machine.cpu)}, ${formatMib(machine.ramMib)} RAM, ${formatGib(machine.diskGib)} disk`;
 
 export const resize = Command.make(
   "resize",

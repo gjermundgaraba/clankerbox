@@ -2,6 +2,7 @@ import type { HostInfo } from "@clankerbox/host-contract";
 import {
   buildId,
   fitted,
+  formatCpu,
   formatGib,
   givenSizes,
   formatMib,
@@ -24,7 +25,7 @@ interface Miss {
 }
 
 const sized = ({ cpu, ramMib, diskGib }: Sizes) =>
-  `${cpu} vCPUs, ${formatMib(ramMib)} of RAM and ${formatGib(diskGib)} of disk`;
+  `${formatCpu(cpu)}, ${formatMib(ramMib)} of RAM and ${formatGib(diskGib)} of disk`;
 
 const missed = (why: string): Miss => ({ why });
 

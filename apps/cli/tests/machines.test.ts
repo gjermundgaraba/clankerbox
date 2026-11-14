@@ -596,7 +596,7 @@ describe("machines", () => {
 
           expect(stderr).toBe("");
           expect(code).toBe(0);
-          expect(stdout).toBe("dev 1 vCPUs, 2G RAM, 30G disk");
+          expect(stdout).toBe("dev 1 vCPU, 2G RAM, 30G disk");
         })
     );
 

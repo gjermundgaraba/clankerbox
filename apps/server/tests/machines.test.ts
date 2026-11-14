@@ -3446,7 +3446,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect([refused._tag, refused.message]).toStrictEqual([
           "Unsizable",
-          "machine copy's host copies a machine only at its source's sizes or larger, so its vCPUs and RAM only grow from the source's 1 vCPUs and 2G",
+          "machine copy's host copies a machine only at its source's sizes or larger, so its vCPUs and RAM only grow from the source's 1 vCPU and 2G",
         ]);
         expect(refusal(yield* machine("copy"))).toStrictEqual([
           "failed",

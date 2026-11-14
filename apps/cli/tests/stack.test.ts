@@ -744,7 +744,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(grown).toMatchObject({
           code: 0,
-          stdout: "dev 1 vCPUs, 2G RAM, 20G disk",
+          stdout: "dev 1 vCPU, 2G RAM, 20G disk",
         });
         expect(decodeFailure(shrunk.stdout).error.tag).toBe("Unsizable");
         expect(yield* used(hot.stdout)).toStrictEqual([
