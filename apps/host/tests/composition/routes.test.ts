@@ -15,9 +15,16 @@ import {
 import { Effect, Exit, Fiber, Logger, References, Schema } from "effect";
 import { expect } from "vite-plus/test";
 
-import { accepts, holding, hostOn, image, presets } from "../support.ts";
+import {
+  accepts,
+  holding,
+  hostOn,
+  image,
+  presets,
+  suitePorts,
+} from "../support.ts";
 
-const serve = hostOn({ first: 21_130, last: 21_139 });
+const serve = hostOn(suitePorts.routes);
 
 const versioned = (sent: string) => ({ [versionHeader]: sent });
 
@@ -375,7 +382,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* deliver(url, made("op-1"));
 
         const { outcome } = yield* finished(url, "op-1");
-        const gone = { ...dev, name: "gone", endpoint: { port: 21_131 } };
+
+        const gone = {
+          ...dev,
+          name: "gone",
+          endpoint: { port: suitePorts.routes.first + 1 },
+        };
 
         const answer = yield* post(url, "adoptMachines", {
           machines: [
@@ -396,7 +408,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             {
               name: gone.name,
               instance: gone.instance,
-              endpoint: { host: "127.0.0.1", port: 21_131 },
+              endpoint: {
+                host: "127.0.0.1",
+                port: suitePorts.routes.first + 1,
+              },
             },
           ],
           unresolved: [],
@@ -409,7 +424,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { url, fake } = yield* serve({ runtime: { relayed: true } });
-        const up = { ...dev, name: "up", endpoint: { port: 21_138 } };
+
+        const up = {
+          ...dev,
+          name: "up",
+          endpoint: { port: suitePorts.routes.last - 1 },
+        };
 
         keptByRuntime(fake, up);
 
@@ -441,7 +461,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           logger: Logger.make(({ message }) => logged.push(message)),
         });
 
-        const blocked = { ...dev, name: "blocked", endpoint: { port: 21_139 } };
+        const blocked = {
+          ...dev,
+          name: "blocked",
+          endpoint: { port: suitePorts.routes.last },
+        };
 
         keptByRuntime(fake, blocked);
 

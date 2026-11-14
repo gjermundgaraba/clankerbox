@@ -6,29 +6,22 @@ import { layer } from "@effect/vitest";
 import { Effect, Layer, Logger } from "effect";
 import { expect } from "vite-plus/test";
 
-import { PortProbe } from "../src/machine-ports.ts";
+import { defaultMachinePorts, PortProbe } from "../src/machine-ports.ts";
 import * as Relay from "../src/platform/relay.ts";
 import * as Reach from "../src/reach.ts";
 import { Handle } from "../src/runtime.ts";
 import type { Reach as RuntimeReach } from "../src/runtime.ts";
-import { accepts, holding } from "./support.ts";
+import { accepts, freePort, holding } from "./support.ts";
 
-let nextPort = 21_500;
-
-const machineOn = (name: string): Reach.Reopened => {
-  const port = nextPort;
-
-  nextPort += 1;
-
-  return {
+const machineOn = (name: string): Effect.Effect<Reach.Reopened> =>
+  Effect.map(freePort, (port) => ({
     machine: {
       name,
       instance: `${name}-instance`,
       handle: Handle.make(`${name}-handle`),
     },
     port,
-  };
-};
+  }));
 
 const relayed: RuntimeReach = {
   _tag: "relayed",
@@ -45,7 +38,7 @@ const reachesOf = (reach: RuntimeReach) =>
       )
     ),
     (context) =>
-      Reach.make(reach, { first: 21_500, last: 21_599 }).pipe(
+      Reach.make(reach, defaultMachinePorts).pipe(
         Effect.provideContext(context)
       )
   );
@@ -73,7 +66,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect("a relayed runtime's port carries bytes to its dial", () =>
     Effect.gen(function* () {
       const reaches = yield* reachesOf(relayed);
-      const { machine, port } = machineOn("dev");
+      const { machine, port } = yield* machineOn("dev");
 
       yield* reaches.open(machine, port);
 
@@ -86,7 +79,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect("adopt reopens every relay of the machines given", () =>
     Effect.gen(function* () {
       const reaches = yield* reachesOf(relayed);
-      const [up, down] = [machineOn("up"), machineOn("down")];
+      const [up, down] = [yield* machineOn("up"), yield* machineOn("down")];
 
       yield* reaches.adopt([up, down]);
 
@@ -100,7 +93,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect("a port adopt can't listen on is logged and the rest served", () =>
     Effect.gen(function* () {
       const reaches = yield* reachesOf(relayed);
-      const [blocked, other] = [machineOn("dev"), machineOn("other")];
+
+      const [blocked, other] = [
+        yield* machineOn("dev"),
+        yield* machineOn("other"),
+      ];
+
       const logged: unknown[] = [];
 
       yield* Effect.scoped(
@@ -138,7 +136,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const reaches = yield* reachesOf(relayed);
-        const [machine, never] = [machineOn("dev"), machineOn("never")];
+
+        const [machine, never] = [
+          yield* machineOn("dev"),
+          yield* machineOn("never"),
+        ];
 
         yield* reaches.adopt([machine]);
 
@@ -160,7 +162,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           address: "127.0.0.1",
         });
 
-        const adopted = machineOn("dev");
+        const adopted = yield* machineOn("dev");
 
         yield* reaches.open(adopted.machine, adopted.port);
         yield* reaches.adopt([adopted]);

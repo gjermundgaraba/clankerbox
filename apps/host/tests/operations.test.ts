@@ -69,11 +69,12 @@ import {
   hostKeySetup,
   memoryBuildStore,
   pause,
+  suitePorts,
 } from "./support.ts";
 
 const firstPort = 10_000;
 
-const relayPorts = 21_600;
+const relayPorts = suitePorts.operations.first;
 
 const allFree: Probe = { free: () => Effect.succeed(true) };
 

@@ -19,9 +19,9 @@ import { expect } from "vite-plus/test";
 import { tailnetIn, tailnetScript } from "../src/guest.ts";
 import type { TailnetSettings } from "../src/platform/tailscale.ts";
 import { furnish, writeStubs, writeTailscaleStubs } from "./fake-runtime.ts";
-import { hostOn } from "./support.ts";
+import { hostOn, suitePorts } from "./support.ts";
 
-const host = hostOn({ first: 21_120, last: 21_129 });
+const host = hostOn(suitePorts.tailnet);
 
 const joinsTailnet = Effect.gen(function* () {
   const dir = yield* scratch;

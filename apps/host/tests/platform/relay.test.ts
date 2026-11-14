@@ -14,6 +14,7 @@ import { expect } from "vite-plus/test";
 
 import { cliIn } from "../../src/platform/process.ts";
 import { make as relaying } from "../../src/platform/relay.ts";
+import { freePort } from "../support.ts";
 
 const address = "127.0.0.1";
 
@@ -25,15 +26,6 @@ const echo = (marker: string) =>
       marker,
     ])
   );
-
-let nextPort = 21_300;
-
-const ownPort = () => {
-  const port = nextPort;
-  nextPort += 1;
-
-  return port;
-};
 
 const connected = async (port: number): Promise<Socket> => {
   const socket = connect({ host: address, port });
@@ -96,7 +88,7 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const marker = path.join(yield* scratch, "marker");
-        const port = ownPort();
+        const port = yield* freePort;
         const payload = randomBytes(4 * 1024 * 1024);
 
         yield* (yield* relaying).listen(
@@ -119,7 +111,7 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const marker = path.join(yield* scratch, "marker");
-        const port = ownPort();
+        const port = yield* freePort;
 
         yield* (yield* relaying).listen(
           address,
@@ -141,7 +133,7 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const marker = path.join(yield* scratch, "marker");
-        const port = ownPort();
+        const port = yield* freePort;
 
         const payloads = Array.from({ length: 24 }, () =>
           randomBytes(64 * 1024)
@@ -176,7 +168,7 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const marker = path.join(yield* scratch, "marker");
-        const port = ownPort();
+        const port = yield* freePort;
         const relays = yield* relaying;
 
         yield* relays.listen(
@@ -221,7 +213,7 @@ layer(NodeServices.layer)((it) => {
   it.effect("a port something else holds is Internal, naming the address", () =>
     Effect.gen(function* () {
       const marker = path.join(yield* scratch, "marker");
-      const port = ownPort();
+      const port = yield* freePort;
       const holder = createServer();
 
       yield* Effect.acquireRelease(
@@ -256,7 +248,7 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const marker = path.join(yield* scratch, "marker");
-        const port = ownPort();
+        const port = yield* freePort;
         const relays = yield* relaying;
 
         const fiber = yield* Effect.forkChild(

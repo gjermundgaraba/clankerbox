@@ -56,7 +56,7 @@ import type {
 import { binary, scriptedMac } from "../../scripted-mac.ts";
 import type { ScriptedMac } from "../../scripted-mac.ts";
 import { scripted } from "../../scripted.ts";
-import { admitOn, eventually } from "../../support.ts";
+import { admitOn, eventually, suitePorts } from "../../support.ts";
 
 const failure = (error: HostError) => [error._tag, error.message];
 
@@ -1805,7 +1805,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 const operationsOn = (runtime: Interface) =>
   Layer.build(
     Operations.layer({ id: "mac", bases: new Map([["macos", "base"]]) }).pipe(
-      Layer.provide(Reach.layer({ first: 21_900, last: 21_909 })),
+      Layer.provide(Reach.layer(suitePorts.tart)),
       Layer.provideMerge(Layer.succeed(Runtime, runtime)),
       Layer.provide(
         Layer.merge(

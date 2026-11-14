@@ -28,7 +28,7 @@ import * as SmolCloud from "../../src/platform/smol-cloud/smol-cloud.ts";
 import { Runtime } from "../../src/runtime.ts";
 import type { Handle, Target } from "../../src/runtime.ts";
 import { Tailnet } from "../../src/tailnet.ts";
-import { hostConfig, loopbackServer } from "../support.ts";
+import { hostConfig, loopbackServer, suitePorts } from "../support.ts";
 import { liveHostId, liveMark } from "./marks.ts";
 import {
   ledgerOf,
@@ -822,7 +822,7 @@ const onHost = Effect.gen(function* () {
   );
 
   const config = {
-    ...hostConfig(state, { first: 21_950, last: 21_959 }, hostId),
+    ...hostConfig(state, suitePorts.liveSmolCloud, hostId),
     bases: new Map([["ubuntu", image]]),
   };
 

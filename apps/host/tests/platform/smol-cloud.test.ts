@@ -34,7 +34,12 @@ import { Tailnet } from "../../src/tailnet.ts";
 import { fakeSmolCloud } from "../fake-smol-cloud.ts";
 import type { FakeSmolCloud } from "../fake-smol-cloud.ts";
 import { runtimeContract } from "../runtime-contract.ts";
-import { hostConfig, loopbackServer, writeTailscaleStubs } from "../support.ts";
+import {
+  hostConfig,
+  loopbackServer,
+  suitePorts,
+  writeTailscaleStubs,
+} from "../support.ts";
 
 const key = "fake-key";
 
@@ -120,7 +125,7 @@ const onHost = (
 
     const config = hostConfig(
       path.join(dir, "state"),
-      { first: 21_300, last: 21_309 },
+      suitePorts.smolCloud,
       hostId
     );
 

@@ -7,7 +7,16 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { Context, Duration, Effect, Exit, Layer, Logger, Scope } from "effect";
+import {
+  Context,
+  Duration,
+  Effect,
+  Exit,
+  Layer,
+  Logger,
+  Predicate,
+  Scope,
+} from "effect";
 import { HttpClient, HttpServer } from "effect/http";
 import { expect } from "vite-plus/test";
 
@@ -37,13 +46,27 @@ export type { FakeRuntimeName } from "./fake-runtime.ts";
 
 export const image = "registry.example/ubuntu@sha256:00";
 
-const sharedPorts: PortRange = { first: 21_000, last: 21_099 };
+/**
+ * The machine ports of each suite whose hosts or relays listen on fixed ports, one range apiece, so
+ * suites that run at once never share one. A test that only needs some port to listen on takes
+ * `freePort` instead.
+ */
+export const suitePorts = {
+  shared: { first: 21_000, last: 21_099 },
+  tailnet: { first: 21_120, last: 21_129 },
+  routes: { first: 21_130, last: 21_139 },
+  host: { first: 21_140, last: 21_149 },
+  smolCloud: { first: 21_300, last: 21_309 },
+  operations: { first: 21_600, last: 21_609 },
+  tart: { first: 21_900, last: 21_909 },
+  liveSmolCloud: { first: 21_950, last: 21_959 },
+} as const satisfies Readonly<Record<string, PortRange>>;
 
 export const quiet = Duration.hours(1);
 
 export const hostConfig = (
   stateDir: string,
-  machinePorts = sharedPorts,
+  machinePorts: PortRange = suitePorts.shared,
   id = "smolvm"
 ): HostSettings => ({
   id,
@@ -207,6 +230,23 @@ export const accepts = (port: number) =>
       resume(Effect.succeed(false));
     });
   });
+
+/** A loopback port the OS found free, for a test that listens on it. */
+export const freePort = Effect.callback<number>((resume) => {
+  const server = createTcpServer();
+
+  server.listen({ host: "127.0.0.1", port: 0 }, () => {
+    const found = server.address();
+
+    server.close(() => {
+      resume(
+        found === null || Predicate.isString(found)
+          ? Effect.die(`a free port was answered as ${String(found)}`)
+          : Effect.succeed(found.port)
+      );
+    });
+  });
+});
 
 export const holding = (port: number) =>
   Effect.acquireRelease(

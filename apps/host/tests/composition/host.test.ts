@@ -20,9 +20,15 @@ import { hostLayer } from "../../src/composition/host.ts";
 import type { HostLayerConfig } from "../../src/composition/host.ts";
 import { fakeRuntime } from "../fake-runtime.ts";
 import type { FakeRuntimeName } from "../fake-runtime.ts";
-import { hostConfig, hostOn, loopbackServer, noHttp } from "../support.ts";
+import {
+  hostConfig,
+  hostOn,
+  loopbackServer,
+  noHttp,
+  suitePorts,
+} from "../support.ts";
 
-const started = hostOn({ first: 21_140, last: 21_149 });
+const started = hostOn(suitePorts.host);
 
 const refused = (
   settings: HostLayerConfig,
