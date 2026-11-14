@@ -129,7 +129,7 @@ export const mutationFlags = {
   timeout: Flag.String("timeout").pipe(
     Flag.withMetavar("DURATION"),
     Flag.withDescription(
-      "Stop waiting for the machine, checkpoint or build to rest after this long, such as 90s or 10m; unbounded by default. The request stays saved and still acts."
+      "Stop waiting after this long, for the reply and for the machine, checkpoint or build to rest together, such as 90s or 10m; unbounded by default. A request the control plane answered stays saved and still acts."
     ),
     Flag.optional
   ),

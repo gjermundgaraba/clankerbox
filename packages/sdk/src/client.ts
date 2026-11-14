@@ -1,6 +1,7 @@
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import {
+  Clock,
   Context,
   DateTime,
   Duration,
@@ -81,9 +82,11 @@ export type WaitErrorOf<N extends ServerAction> =
 
 export interface Options {
   /**
-   * How long a mutation may wait for its machine or checkpoint to rest, unbounded by default, as a
-   * template's build can take hours. A wait that outlasts it fails like a lost reply, and the
-   * request still acts on the server.
+   * How long a mutation may take, its reply and its wait for its machine, checkpoint or build to
+   * rest together, unbounded by default, as a template's build can take hours. One that outlasts it
+   * fails `Unavailable`: one whose reply hadn't come may have run, and one whose wait it cut is saved
+   * and still acts on the server. A read made on its own, and an exec, which has its own, take the
+   * reply timeout alone.
    */
   readonly timeout?: Duration.Duration | undefined;
   /** How long any call waits for the control plane's reply, `replyTimeout` by default. */
@@ -235,6 +238,7 @@ type Methods = {
 interface CallContext {
   readonly url: string;
   readonly timeout: Duration.Duration;
+  readonly timedOut: string;
   readonly readOnly: boolean;
   readonly what: string;
   readonly target: string | undefined;
@@ -320,13 +324,7 @@ const settle = <A, E>(
   call.pipe(
     Effect.timeoutOrElse({
       duration: context.timeout,
-      orElse: () =>
-        Effect.fail(
-          unanswered(
-            context,
-            `timed out after ${Duration.format(context.timeout)}`
-          )
-        ),
+      orElse: () => Effect.fail(unanswered(context, context.timedOut)),
     }),
     Effect.catchIf(isUndeclared, (error) =>
       Effect.fail(fromUndeclared(error, context))
@@ -499,6 +497,50 @@ const builtAt =
       : endedAt<Build>("ready", "build")(build);
   };
 
+interface MutationDeadline {
+  readonly atMillis: number;
+  readonly timeout: Duration.Duration;
+}
+
+const mutationDeadline = Context.Reference<MutationDeadline | undefined>(
+  "@gjermundgaraba/clankerbox-sdk/Client/mutationDeadline",
+  { defaultValue: () => undefined }
+);
+
+const timeLeft = Effect.gen(function* () {
+  const deadline = yield* mutationDeadline;
+
+  if (deadline === undefined) {
+    return undefined;
+  }
+
+  const now = yield* Clock.currentTimeMillis;
+
+  return {
+    left: Duration.millis(Math.max(0, deadline.atMillis - now)),
+    timeout: deadline.timeout,
+  };
+});
+
+const bounded = <A, E>(
+  wait: Effect.Effect<A, E>,
+  subject: string
+): Effect.Effect<A, E | Unavailable> =>
+  Effect.flatMap(timeLeft, (deadline) =>
+    deadline === undefined
+      ? wait
+      : Effect.timeoutOrElse(wait, {
+          duration: deadline.left,
+          orElse: () =>
+            Effect.fail(
+              saved(
+                subject,
+                `${subject} didn't rest within ${Duration.format(deadline.timeout)}`
+              )
+            ),
+        })
+  );
+
 /** A client of the control plane at `url`. It sends nothing until called. */
 export const make = (
   url: string,
@@ -526,12 +568,20 @@ export const make = (
       made?: string,
       timeout: Duration.Duration = reply
     ): Effect.Effect<Success<N>, ErrorOf<N>> =>
-      settle(methods[name](input), {
-        url,
-        timeout,
-        readOnly: actions[name].readOnly,
-        what: subject === undefined ? name : `${name} ${subject}`,
-        target: made ?? subject,
+      Effect.flatMap(timeLeft, (deadline) => {
+        const cut =
+          deadline !== undefined && Duration.isLessThan(deadline.left, timeout);
+
+        return settle(methods[name](input), {
+          url,
+          timeout: cut ? deadline.left : timeout,
+          timedOut: cut
+            ? `its timeout of ${Duration.format(deadline.timeout)} ran out`
+            : `timed out after ${Duration.format(timeout)}`,
+          readOnly: actions[name].readOnly,
+          what: subject === undefined ? name : `${name} ${subject}`,
+          target: made ?? subject,
+        });
       });
 
     const send = <N extends ServerAction>(
@@ -545,25 +595,31 @@ export const make = (
         Effect.mapError((error) => error.located({ action: name, id: subject }))
       );
 
-    const bounded = <A, E>(
-      wait: Effect.Effect<A, E>,
-      subject: string
-    ): Effect.Effect<A, E | Unavailable> => {
-      const { timeout } = options ?? {};
+    const deadlined = <A, E>(
+      mutation: Effect.Effect<A, E>
+    ): Effect.Effect<A, E> => {
+      const timeout = options?.timeout;
 
       return timeout === undefined
-        ? wait
-        : Effect.timeoutOrElse(wait, {
-            duration: timeout,
-            orElse: () =>
-              Effect.fail(
-                saved(
-                  subject,
-                  `${subject} didn't rest within ${Duration.format(timeout)}`
+        ? mutation
+        : Effect.flatMap(mutationDeadline, (set) =>
+            set === undefined
+              ? Effect.flatMap(Clock.currentTimeMillis, (now) =>
+                  Effect.provideService(mutation, mutationDeadline, {
+                    atMillis: now + Duration.toMillis(timeout),
+                    timeout,
+                  })
                 )
-              ),
-          });
+              : mutation
+          );
     };
+
+    const bounding =
+      <Args extends readonly unknown[], A, E>(
+        mutation: (...args: Args) => Effect.Effect<A, E>
+      ) =>
+      (...args: Args): Effect.Effect<A, E> =>
+        deadlined(mutation(...args));
 
     const polled = <A, B>(
       read: Effect.Effect<A, ClankerboxError>,
@@ -812,24 +868,26 @@ export const make = (
       getMachine: (input) => send("getMachine", input, input.id),
       getCheckpoint: (input) => send("getCheckpoint", input, input.id),
       getTemplate: (input) => send("getTemplate", input, input.id),
-      create,
-      ensure: (name, from) => ensuring(name, from, true),
       execMachine,
-      startMachine,
-      stopMachine: asking("stopMachine", "stopped"),
-      pauseMachine,
-      resizeMachine: (input) =>
+      create: bounding(create),
+      ensure: bounding((name, from) => ensuring(name, from, true)),
+      startMachine: bounding(startMachine),
+      stopMachine: bounding(asking("stopMachine", "stopped")),
+      pauseMachine: bounding(pauseMachine),
+      resizeMachine: bounding((input) =>
         Effect.flatMap(send("resizeMachine", input, input.id), (recorded) =>
           machineRest(recorded, "resize", "resizeMachine")
-        ),
-      forkMachine: (input) =>
+        )
+      ),
+      forkMachine: bounding((input) =>
         namingWhatMayExist(
           input.name,
           send("forkMachine", input, input.machine, input.name),
           (recorded) => machineRest(recorded, "running", "forkMachine")
-        ),
-      restoreMachine,
-      captureCheckpoint: (input) =>
+        )
+      ),
+      restoreMachine: bounding(restoreMachine),
+      captureCheckpoint: bounding((input) =>
         namingWhatMayExist(
           input.name,
           send("captureCheckpoint", input, input.machine, input.name),
@@ -843,8 +901,9 @@ export const make = (
                 recorded.id
               )
             )
-        ),
-      buildTemplate: (input) =>
+        )
+      ),
+      buildTemplate: bounding((input) =>
         Effect.flatMap(
           send("buildTemplate", input, input.template),
           (recorded) =>
@@ -857,10 +916,13 @@ export const make = (
                 recorded.id
               )
             )
-        ),
-      deleteTemplate: ({ id }) => deleting(send("deleteTemplate", { id }, id)),
-      deleteMachine,
-      deleteCheckpoint: ({ id }) =>
+        )
+      ),
+      deleteTemplate: bounding(({ id }) =>
+        deleting(send("deleteTemplate", { id }, id))
+      ),
+      deleteMachine: bounding(deleteMachine),
+      deleteCheckpoint: bounding(({ id }) =>
         deleting(
           Effect.andThen(
             send("deleteCheckpoint", { id }, id),
@@ -877,7 +939,8 @@ export const make = (
               )
             )
           )
-        ),
+        )
+      ),
     } satisfies Interface;
   });
 

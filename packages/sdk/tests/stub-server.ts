@@ -80,6 +80,10 @@ export interface StubServerOptions {
   readonly checkpoints?: readonly Checkpoint[];
   readonly templates?: readonly Template[];
   readonly refuse?: Refusals;
+  /** How long the control plane takes over each action before it answers, on the caller's clock. */
+  readonly answerAfter?: {
+    readonly [N in Client.ServerAction]?: Duration.Duration;
+  };
   readonly create?: (
     request: CreateRequest
   ) => Effect.Effect<Machine, Declared<"createMachine">>;
@@ -263,7 +267,13 @@ export const stubServer = (options: StubServerOptions = {}) => {
 
       calls.push(call);
 
-      return refusal === undefined ? work : Effect.fail(refusal);
+      const answer: Effect.Effect<A, E | Declared<N>> =
+        refusal === undefined ? work : Effect.fail(refusal);
+
+      return Effect.andThen(
+        Effect.sleep(options.answerAfter?.[action] ?? Duration.zero),
+        answer
+      );
     });
 
   const find = (id: string) => {

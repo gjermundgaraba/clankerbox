@@ -1030,6 +1030,104 @@ describe("client", () => {
     );
   });
 
+  describe("a mutation's timeout", () => {
+    it.effect(
+      "bounds the reply and the wait together, so a slow reply leaves the wait only what is left",
+      () =>
+        Effect.gen(function* () {
+          const stub = server({
+            machines: [machine("dev")],
+            answerAfter: { captureCheckpoint: Duration.seconds(10) },
+          });
+
+          stub.scriptCheckpoint(
+            "snap",
+            Array.from({ length: 10 }, () => "capturing" as const)
+          );
+
+          const { answer, elapsed } = yield* clocked(
+            withClient(
+              stub,
+              (client) =>
+                Effect.flip(
+                  client.captureCheckpoint({ machine: "dev", name: "snap" })
+                ),
+              { timeout: Duration.seconds(20), ...everyMinute }
+            )
+          );
+
+          expect(Duration.toSeconds(elapsed)).toBe(20);
+          expect(answer).toMatchObject({
+            _tag: "Unavailable",
+            readOnly: false,
+            made: "snap",
+          });
+          expect(answer.message).toContain("didn't rest within 20s");
+        })
+    );
+
+    it.effect(
+      "bounds a reply that never comes, which may have run, though the reply timeout is longer",
+      () =>
+        Effect.gen(function* () {
+          const error = yield* withClient(
+            new Silent(),
+            (client) =>
+              Effect.gen(function* () {
+                const capture = yield* Effect.forkChild(
+                  Effect.flip(
+                    client.captureCheckpoint({ machine: "dev", name: "snap" })
+                  )
+                );
+
+                yield* Effect.yieldNow;
+                yield* TestClock.adjust(Duration.seconds(5));
+
+                return yield* Fiber.join(capture);
+              }),
+            { timeout: Duration.seconds(5) }
+          );
+
+          expect(
+            Duration.isGreaterThan(replyTimeout, Duration.seconds(5))
+          ).toBe(true);
+          expect(error).toMatchObject({
+            _tag: "Unavailable",
+            readOnly: false,
+            made: "snap",
+          });
+          expect(error.message).toContain(
+            "(its timeout of 5s ran out); the action may have run"
+          );
+        })
+    );
+
+    it.effect("bounds the reads an ensure makes before it asks anything", () =>
+      Effect.gen(function* () {
+        const silent = new Silent();
+
+        const error = yield* withClient(
+          silent,
+          (client) =>
+            Effect.gen(function* () {
+              const ensured = yield* Effect.forkChild(
+                Effect.flip(client.ensure("dev", { spec }))
+              );
+
+              yield* silent.reached;
+              yield* TestClock.adjust(Duration.seconds(5));
+
+              return yield* Fiber.join(ensured);
+            }),
+          { timeout: Duration.seconds(5) }
+        );
+
+        expect(error).toMatchObject({ _tag: "Unavailable", readOnly: true });
+        expect(error.message).toContain("its timeout of 5s ran out");
+      })
+    );
+  });
+
   describe("the wait on a machine", () => {
     it.effect(
       "a mutation answers with the first rest it reads, sleeping for nothing",
