@@ -45,8 +45,8 @@ const encodeInvalid = Schema.encodeSync(Invalid);
 
 /**
  * Refuses a caller of another release than `own`, this package's by default, for a server of either
- * contract, before it reads anything, so a client never meets a trait value its release doesn't
- * know and a mutation it sends is never run.
+ * contract, before it reads anything, so a mutation it sends is never run under a contract it
+ * doesn't share.
  */
 export const versionCheck = (server: string, own: string = version) =>
   HttpRouter.middleware((handle) =>

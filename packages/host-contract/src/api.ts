@@ -225,7 +225,7 @@ export type Report = typeof Report.Type;
 
 /**
  * What the control plane needs to know of a host. `traits` are its runtime's, which the control
- * plane stamps on each row it makes there, `images` is the image each of `bases` names there, `boot` is new each time its process starts, `builds` tells a host that copies template
+ * plane reads as the host answers before each decision about what the host will do, `images` is the image each of `bases` names there, `boot` is new each time its process starts, `builds` tells a host that copies template
  * builds through the build store, and `sweeps`, on a host whose runtime marks the machines it makes
  * so a sweep can find each the store retired, is the longest its sweep takes to answer.
  */
