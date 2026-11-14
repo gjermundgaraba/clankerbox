@@ -27,7 +27,6 @@ import type { ChildProcessSpawner } from "effect/process";
 import { Box } from "../../box.ts";
 import type { Facts } from "../../box.ts";
 import { unkey } from "../../guest.ts";
-import type { ReservedPorts } from "../../machine-ports.ts";
 import {
   atLeast,
   CannotStart,
@@ -57,14 +56,6 @@ import { aloneOnBox, boxLock } from "./one-per-box.ts";
 import { traits } from "./traits.ts";
 
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
-
-/**
- * smolvm picks a fork's host port in 20000-31999.
- * https://github.com/smol-machines/smolvm/blob/v1.34.1/src/agent/fork.rs#L4511-L4513
- */
-export const reservedPorts: readonly ReservedPorts[] = [
-  { first: 20_000, last: 31_999, owner: "smolvm's fork ports" },
-];
 
 export const SmolvmSettings = Schema.Struct({
   prefix: Schema.String,

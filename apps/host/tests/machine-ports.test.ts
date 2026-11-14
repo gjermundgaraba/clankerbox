@@ -2,7 +2,6 @@ import { describe, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 import { expect } from "vite-plus/test";
 
-import { runtimes } from "../src/composition/runtimes.ts";
 import { defaultMachinePorts, PortProbe } from "../src/machine-ports.ts";
 import type { PortRange, Probe } from "../src/machine-ports.ts";
 import { defaultEphemeralPorts } from "../src/platform/box.ts";
@@ -66,19 +65,10 @@ it.effect(
 );
 
 describe("reserved ports", () => {
-  it("the default range lies below every reserved range, of any runtime", () => {
-    const reservedPorts = [
-      ...["linux", "darwin", "freebsd"].map(defaultEphemeralPorts),
-      ...Object.values(runtimes).flatMap((runtime) =>
-        "reservedPorts" in runtime ? runtime.reservedPorts : []
-      ),
-    ];
-
-    expect(reservedPorts.map(({ owner }) => owner)).toContain(
-      "smolvm's fork ports"
-    );
-
-    for (const reserved of reservedPorts) {
+  it("the default range lies below each platform's default ephemeral ports", () => {
+    for (const reserved of ["linux", "darwin", "freebsd"].map(
+      defaultEphemeralPorts
+    )) {
       expect(defaultMachinePorts.last).toBeLessThan(reserved.first);
     }
   });

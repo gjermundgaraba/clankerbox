@@ -535,11 +535,15 @@ as it is.
   --remove-port` before its first start.
 - smolvm's own fork ports come from 20000–31999: `CLONE_PORT_FLOOR` (20000) up
   to `CLONE_PORT_CEILING` (32000), which is excluded (`alloc_free_host_port`,
-  src/agent/fork.rs). The CLI allocates no other host port range. Ours:
-  the adapter's `reservedPorts` (`smolvm.ts`) holds that range, and a smolvm
-  host's config refuses a `machinePorts` that reaches into it or into its box's
-  ephemeral ports, which every host refuses (`ephemeralPorts`,
-  `machine-ports.ts`; 10000–19999 by default; `config.test.ts`).
+  src/agent/fork.rs), and a branch takes one only when it pins no `-p` and
+  its source publishes ports, one per port (`clone_rec.ports`, src/agent/fork.rs).
+  The CLI allocates no other host port range. Ours: every branch of a
+  machine passes `-p <port>:22`, and the freezer branch of a base pins none
+  from a base whose forwards its park removed, so smolvm picks no port of
+  its own, and a smolvm host's `machinePorts` may lie in that range; only
+  its box's ephemeral ports are refused (`ephemeralPorts`,
+  `machine-ports.ts`; 10000–19999 by default; `config.test.ts`). A bump
+  that has smolvm pick a port another way brings the refusal back.
 
 **Checkpoints, forks and identity**
 

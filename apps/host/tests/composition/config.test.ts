@@ -367,7 +367,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "machinePorts stays out of the ephemeral ports its box tells of on every host, and out of smolvm's fork ports on a smolvm host alone",
+    "machinePorts stays out of the ephemeral ports its box tells of, and nothing else, on every host",
     () =>
       Effect.gen(function* () {
         const tart = { tart: { binary: "/opt/homebrew/bin/tart" } };
@@ -390,6 +390,8 @@ layer(NodeServices.layer)((it) => {
           [config.runtime, linuxDefault, 61_000, 65_535],
           [config.runtime, macBox, 32_000, 49_151],
           [tart, macBox, 20_000, 31_999],
+          [config.runtime, linuxDefault, 20_000, 31_999],
+          [config.runtime, linuxDefault, 19_999, 32_767],
           [config.runtime, tuned, 40_000, 49_999],
           [config.runtime, tuned, 10_000, 14_999],
         ] as const) {
@@ -404,20 +406,6 @@ layer(NodeServices.layer)((it) => {
         }
 
         for (const [runtime, box, first, last, reserved] of [
-          [
-            config.runtime,
-            linuxDefault,
-            19_999,
-            20_000,
-            "20000-31999, smolvm's fork ports",
-          ],
-          [
-            config.runtime,
-            linuxDefault,
-            31_999,
-            32_000,
-            "20000-31999, smolvm's fork ports",
-          ],
           [
             config.runtime,
             linuxDefault,
@@ -437,7 +425,7 @@ layer(NodeServices.layer)((it) => {
             linuxDefault,
             1,
             65_535,
-            "20000-31999, smolvm's fork ports",
+            "32768-60999, Linux's default ephemeral ports",
           ],
           [
             config.runtime,

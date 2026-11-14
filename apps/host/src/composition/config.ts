@@ -14,12 +14,7 @@ import { defaultMachinePorts } from "../machine-ports.ts";
 import { BuildsSettings } from "../platform/s3.ts";
 import { TailnetSettings } from "../platform/tailscale.ts";
 import type { HostSettings } from "../settings.ts";
-import {
-  isRuntimeKey,
-  reservedPortsOf,
-  runtimes,
-  settingsOf,
-} from "./runtimes.ts";
+import { isRuntimeKey, runtimes, settingsOf } from "./runtimes.ts";
 import type { ChosenRuntime, RuntimeKey } from "./runtimes.ts";
 
 const MachinePorts = Schema.Struct({ first: Port, last: Port }).check(
@@ -117,14 +112,12 @@ const resolveConfig = (
     const machinePorts = decoded.machinePorts ?? defaultMachinePorts;
     const { port } = decoded.listen;
 
-    const reserved = [...reservedPortsOf(runtime.name), ephemeralPorts].find(
-      ({ first, last }) =>
-        machinePorts.first <= last && machinePorts.last >= first
-    );
-
-    if (reserved !== undefined) {
+    if (
+      machinePorts.first <= ephemeralPorts.last &&
+      machinePorts.last >= ephemeralPorts.first
+    ) {
       return yield* new Invalid({
-        message: `machinePorts: must stay out of ${reserved.first}-${reserved.last}, ${reserved.owner}`,
+        message: `machinePorts: must stay out of ${ephemeralPorts.first}-${ephemeralPorts.last}, ${ephemeralPorts.owner}`,
       });
     }
 
