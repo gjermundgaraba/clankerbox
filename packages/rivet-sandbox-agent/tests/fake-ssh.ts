@@ -92,19 +92,31 @@ forward.once("error", (error) => {
 });
 
 const opened = async () => {
-  bound = true;
-
   const printed = flagged("login-prints")
     ? readFileSync(path.join(dir, "login-prints"))
     : Buffer.alloc(0);
 
   if (flagged("login-refuses")) {
+    if (flagged("login-lingers")) {
+      spawn(
+        process.execPath,
+        [
+          "-e",
+          "setTimeout(() => process.stdout.write(process.argv[1]), Number(process.argv[2]))",
+          "printed late\n",
+          readFileSync(path.join(dir, "login-lingers"), "utf-8"),
+        ],
+        { stdio: ["ignore", "inherit", "ignore"] }
+      );
+    }
+
     process.stdout.write(printed, () => process.exit(1));
 
     return;
   }
 
   process.stdout.write(printed);
+  bound = true;
 
   for (const chunk of early) {
     await echo(chunk);

@@ -52,7 +52,11 @@ const Killed = Schema.Struct({
 
 const decodeKilled = Schema.decodeSync(Schema.fromJsonString(Killed));
 
-const Left = Schema.Struct({ url: Schema.String, dir: Schema.String });
+const Left = Schema.Struct({
+  url: Schema.String,
+  dir: Schema.String,
+  idle: Schema.Finite,
+});
 
 const decodeLeft = Schema.decodeSync(Schema.fromJsonString(Left));
 
@@ -68,6 +72,21 @@ const temporaryDirectory = async (length: number) => {
   await mkdir(padded);
 
   return padded;
+};
+
+const reached = async (port: number, host: string) => {
+  const tried = Promise.withResolvers<boolean>();
+  const socket = connect({ port, host });
+
+  socket.once("connect", () => {
+    socket.destroy();
+    tried.resolve(true);
+  });
+  socket.once("error", () => {
+    tried.resolve(false);
+  });
+
+  return await tried.promise;
 };
 
 const halfClosed = async (port: number, request: string) => {
@@ -102,6 +121,19 @@ const withTmpdir = async <A>(directory: string, use: () => Promise<A>) => {
       process.env["TMPDIR"] = was;
     }
   }
+};
+
+const openedAfter = async (
+  { dir, sandbox }: Awaited<ReturnType<typeof setup>>,
+  printed: string
+) => {
+  await writeFile(path.join(dir, "login-prints"), printed);
+
+  return await sandbox.getUrl("kept").then(
+    () => "opened",
+    (error: unknown) =>
+      error instanceof Internal ? error.message : String(error)
+  );
 };
 
 const socketBeyondTmpdir = "/clankerbox-tunnel-XXXXXX/agent.sock".length;
@@ -334,27 +366,19 @@ describe("tunnel", () => {
   });
 
   it("a tunnel whose guest's login ends before its echo fails with the last of what it printed, as nologin's refusal or a line that only starts like the echo", async () => {
-    const { dir, sandbox } = await setup({
-      machines: [reachable("kept")],
-    });
+    const set = await setup({ machines: [reachable("kept")] });
 
-    const printed = async (text: string) => {
-      await writeFile(path.join(dir, "login-prints"), text);
+    await writeFile(path.join(set.dir, "login-refuses"), "");
 
-      return await sandbox.getUrl("kept").then(
-        () => "opened",
-        (error: unknown) =>
-          error instanceof Internal ? error.message : String(error)
-      );
-    };
+    const long = `${"x".repeat(300_000)} the end`;
 
-    await writeFile(path.join(dir, "login-refuses"), "");
+    const refusal = await openedAfter(
+      set,
+      "This account is currently not available.\n"
+    );
 
-    const long = `${"x".repeat(5000)} the end`;
-
-    const refusal = await printed("This account is currently not available.\n");
-    const likeTheEcho = await printed("clankerbox-tunnel-opened\n");
-    const chatty = await printed(`${long}\n`);
+    const likeTheEcho = await openedAfter(set, "clankerbox-tunnel-opened\n");
+    const chatty = await openedAfter(set, `${long}\n`);
 
     expect([refusal, likeTheEcho, chatty]).toStrictEqual([
       'the tunnel to kept ended before it opened: the guest printed "This account is currently not available."',
@@ -362,6 +386,31 @@ describe("tunnel", () => {
       `the tunnel to kept ended before it opened: the guest printed "${`${long}\n`.slice(-600).trim()}"`,
     ]);
   });
+
+  it(
+    "a tunnel whose guest's login ends before its echo waits at most a second for what it printed that is still on its way",
+    async () => {
+      const set = await setup({ machines: [reachable("kept")] });
+
+      await writeFile(path.join(set.dir, "login-refuses"), "");
+      await writeFile(path.join(set.dir, "login-lingers"), "300");
+
+      const late = await openedAfter(set, "Goodbye\n");
+
+      await writeFile(path.join(set.dir, "login-lingers"), "8000");
+
+      const before = performance.now();
+      const held = await openedAfter(set, "Goodbye\n");
+      const waited = performance.now() - before;
+
+      expect([late, held]).toStrictEqual([
+        'the tunnel to kept ended before it opened: the guest printed "Goodbye\\nprinted late"',
+        'the tunnel to kept ended before it opened: the guest printed "Goodbye"',
+      ]);
+      expect(waited).toBeLessThan(6000);
+    },
+    testLimit
+  );
 
   it("a URL given out reaches its sandbox's agent alone: while the tunnel is down no other program can take its port and a prompt sent there reaches nothing, and ensureServer opens the tunnel again behind it", async () => {
     const { stub, sandbox, calls } = await setup({
@@ -436,16 +485,26 @@ describe("tunnel", () => {
     });
   });
 
-  it("a sandbox's port is its own until its consumer lets it go: a pause keeps it, a machine found gone keeps it, and a destroy and dispose let it go, dispose with its ssh and socket", async () => {
+  it("a sandbox's port is its own, on 127.0.0.1 alone, until its consumer lets it go: a pause keeps it, and refuses a request at once, a machine found gone keeps it, and a destroy and dispose let it go, dispose with its ssh, socket and hold on the process's exit", async () => {
     const { dir, stub, sandbox, calls, dispose } = await setup({
       machines: [reachable("kept"), reachable("lost"), reachable("left")],
     });
 
+    const exitListeners = process.listenerCount("exit");
     const kept = await sandbox.getUrl("kept");
+
+    expect(process.listenerCount("exit")).toBe(exitListeners + 1);
+    await expect(reached(portOf(kept), "127.0.0.2")).resolves.toBe(false);
 
     await sandbox.pause("kept");
 
     await expect(free(portOf(kept))).resolves.toBe(false);
+    await expect(
+      fetch(`${kept}${healthPath}`, { signal: AbortSignal.timeout(2000) }).then(
+        () => "answered",
+        (error: unknown) => (error instanceof Error ? error.name : "failed")
+      )
+    ).resolves.toBe("TypeError");
 
     await sandbox.reconnect("kept");
 
@@ -475,6 +534,7 @@ describe("tunnel", () => {
     await dispose();
 
     await expect(free(portOf(left))).resolves.toBe(true);
+    expect(process.listenerCount("exit")).toBe(exitListeners);
     expect(gone(tunnel.pid)).toBe(true);
     expect(existsSync(path.dirname(tunnel.socket))).toBe(false);
   });
@@ -534,13 +594,14 @@ describe("tunnel", () => {
     "a sandbox's port and tunnel, a request through them done, don't keep its program running, and leave no ssh, listener, socket or known-hosts file once it ends",
     async () => {
       const { code, stdout } = await run("leave-tunnel.ts", []);
-      const { url, dir } = decodeLeft(stdout);
+      const { url, dir, idle } = decodeLeft(stdout);
 
       cleanups.push(async () => {
         await rm(dir, { recursive: true, force: true });
       });
 
       expect(code).toBe(0);
+      expect(idle).toBeLessThan(1000);
 
       const made = await callsIn(dir);
       const tunnel = made.at(-1);

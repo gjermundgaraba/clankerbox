@@ -247,13 +247,7 @@ export const make = (options: Options, ssh = "ssh") => {
 
   const relayOf = (id: string, known: Sandbox) =>
     Effect.gen(function* () {
-      known.relay ??= yield* scoped(
-        listen(id, () =>
-          known.held?.value.running() === true
-            ? known.held.value.socket
-            : undefined
-        )
-      );
+      known.relay ??= yield* scoped(listen(id, () => known.held?.value.socket));
 
       return known.relay.value;
     });

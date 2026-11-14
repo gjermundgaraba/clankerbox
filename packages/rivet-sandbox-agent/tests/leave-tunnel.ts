@@ -11,4 +11,10 @@ const reply = await sent(`${url}${healthPath}`);
 
 await reply.json();
 
-console.log(JSON.stringify({ url, dir }));
+const done = performance.now();
+
+process.once("exit", () => {
+  console.log(
+    JSON.stringify({ url, dir, idle: Math.round(performance.now() - done) })
+  );
+});
