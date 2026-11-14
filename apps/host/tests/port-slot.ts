@@ -7,7 +7,6 @@ import type { PortRange } from "../src/machine-ports.ts";
 /** The variable the global setup sets to the first port of the slot it claims for the run. */
 export const testPortsVariable = "CLANKERBOX_TEST_PORTS";
 
-/** Above every fixed port a suite of `main` took before the table, so a run of either branch misses the other. */
 export const slotsFrom = 22_000;
 
 export const slotsTo = 32_000;

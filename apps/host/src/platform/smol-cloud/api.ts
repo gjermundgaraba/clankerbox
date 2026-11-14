@@ -76,7 +76,6 @@ const ExitFrame = Schema.fromJsonString(
   Schema.Struct({ exitCode: Schema.Int })
 );
 
-/** The provider answered `call` with a problem. */
 export class Refused extends Schema.TaggedError<
   Refused,
   { readonly brand: unique symbol }

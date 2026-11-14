@@ -281,7 +281,7 @@ export const endScript = [
   "exit 1",
 ].join("\n");
 
-/** How long an end may take: within the relay's `readTimeout`, so a cut exec still answers its caller. */
+/** How long an end may take: within the control plane's `readTimeout`, so a cut exec still answers its caller. */
 export const endTimeout = Duration.subtract(readTimeout, Duration.seconds(2));
 
 const attached = (

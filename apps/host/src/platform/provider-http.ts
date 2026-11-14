@@ -30,7 +30,6 @@ const answerWithin: Readonly<Record<Asked, Duration.Duration>> = {
   settle: Duration.minutes(5),
 };
 
-/** How long a step on a rented runtime may take, all its provider calls and polls together. */
 export const stepWithin = Duration.minutes(10);
 
 /**
@@ -132,10 +131,9 @@ export const retryAfter = (
     )
   );
 
-/** HTTP 429: the provider took nothing and asks to be waited out, unless its answer says there is no room. */
+/** The provider took nothing and asks to be waited out, unless its answer says there is no room. */
 export const tooManyRequests = 429;
 
-/** Fails `Busy` with the wait `response` asks, within the clamp, which `askedAgain` waits. */
 export const askedToWait = (
   call: string,
   response: HttpClientResponse.HttpClientResponse,
@@ -150,7 +148,6 @@ export const askedToWait = (
     )
   );
 
-/** Reads a provider's API key from `file`, a host that can't refusing to start. */
 export const apiKey = (
   provider: string,
   file: string
@@ -246,10 +243,8 @@ export const askedAgain =
       )
     );
 
-/** How many times a change whose answer is lost is sent, the resource read until it rests between sends. */
 export const triesAfterLoss = 3;
 
-/** Reads `read` a `poll` apart until what it answers `rests`, which it then answers. */
 export function untilRest<A, B extends A, E, R>(
   read: Effect.Effect<A, E, R>,
   rests: (found: A) => found is B,
@@ -272,7 +267,6 @@ export interface Change<A, S, E, F, G, R> {
   readonly send: Effect.Effect<S, E | Unanswered, R>;
   /** A refusal that may still have been taken, which is read for as a lost answer is. */
   readonly lost?: ((error: E) => boolean) | undefined;
-  /** Reads the resource until it rests. */
   readonly rested: Effect.Effect<A, F, R>;
   readonly holds: (rested: A) => boolean;
   /** The failure once `triesAfterLoss` sends went unanswered and the resource rests without the change. */

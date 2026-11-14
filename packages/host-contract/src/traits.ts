@@ -79,7 +79,6 @@ interface Offering {
   readonly traits: RuntimeTraits;
 }
 
-/** Whether a host creates from `base`: a base it names, or an image reference its runtime takes. */
 export const offers = ({ bases, traits }: Offering, base: string): boolean =>
   bases.includes(base) ||
   (traits.images === "references" && isImageReference(base));
@@ -307,11 +306,9 @@ export const pauseCapture = (
   return traits.pause === "stops" ? "after" : "never";
 };
 
-/** Whether a template build stops its builder before it captures its copy. */
 export const stopsBeforeCapture = (traits: RuntimeTraits): boolean =>
   traits.captureFrom === "stopped";
 
-/** Whether a host of `to`'s traits can take a copy of a checkpoint made on runtime `from`. */
 export const fetchable = (from: RuntimeName, to: RuntimeTraits): boolean =>
   from === to.runtime;
 

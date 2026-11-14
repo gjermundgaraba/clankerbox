@@ -35,7 +35,6 @@ export interface Reading<M, C> {
   readonly run: string;
   readonly ledgers: readonly Ledger[];
   readonly over: (ledger: Ledger) => boolean;
-  /** Runs the operator names as over, by `CLANKERBOX_LIVE_OVER`. */
   readonly named: ReadonlySet<string>;
   /** The run mark a machine carries, or undefined for one no live run made. */
   readonly runOf: (machine: M) => string | undefined;
@@ -168,7 +167,6 @@ export const namedOver: ReadonlySet<string> = new Set(
   (process.env["CLANKERBOX_LIVE_OVER"] ?? "").split(",").filter(liveRun)
 );
 
-/** Whether the sweep only lists what it would delete, by `CLANKERBOX_LIVE_LIST_ONLY=1`. */
 export const listOnly = process.env["CLANKERBOX_LIVE_LIST_ONLY"] === "1";
 
 const privateTo = (file: string, mends: string) => {
@@ -194,7 +192,6 @@ const privateTo = (file: string, mends: string) => {
   }
 };
 
-/** Makes `dir` a folder of the user's alone, refusing one found open to others. */
 export const privateFolder = (dir: string) => {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   privateTo(dir, "chmod 700 it");
@@ -233,7 +230,6 @@ const parsed = (file: string): Ledger => {
   };
 };
 
-/** Every run's ledger of `suite`, each refused when it is open to others. */
 export const ledgersIn = (dir: string, suite: string): readonly Ledger[] => {
   if (!existsSync(dir)) {
     return [];
@@ -297,7 +293,6 @@ export const ledgerOf = (dir: string, suite: string, run: string): Writer => {
   };
 };
 
-/** Ends a run's ledger once nothing it lists is left. */
 export const retired = (dir: string, suite: string, run: string) => {
   rmSync(fileOf(dir, suite, run), { force: true });
 };
