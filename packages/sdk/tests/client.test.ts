@@ -685,6 +685,57 @@ describe("client", () => {
     );
 
     it.effect(
+      "an environment name that isn't a variable's name, or a label key that isn't a name, is Invalid naming it, and sends nothing",
+      () =>
+        Effect.gen(function* () {
+          const stub = server({ machines: [machine("dev")] });
+
+          const errors = yield* withClient(stub, (client) =>
+            Effect.all([
+              Effect.flip(
+                client.execMachine({
+                  id: "dev",
+                  argv: ["true"],
+                  env: { OK: "1", "1BAD": "x" },
+                })
+              ),
+              Effect.flip(
+                client.execMachine({
+                  id: "dev",
+                  argv: ["true"],
+                  env: { "A-B": "x" },
+                })
+              ),
+              Effect.flip(
+                client.create("new", spec, { labels: { "Bad Key": "x" } })
+              ),
+              Effect.flip(
+                client.captureCheckpoint({
+                  machine: "dev",
+                  name: "snap",
+                  labels: { "2nd": "x" },
+                })
+              ),
+            ])
+          );
+
+          expect(errors.map(({ _tag }) => _tag)).toStrictEqual([
+            "Invalid",
+            "Invalid",
+            "Invalid",
+            "Invalid",
+          ]);
+          expect(errors.map(({ message }) => message)).toStrictEqual([
+            expect.stringContaining('"1BAD"'),
+            expect.stringContaining('"A-B"'),
+            expect.stringContaining('"Bad Key"'),
+            expect.stringContaining('"2nd"'),
+          ]);
+          expect(stub.calls).toStrictEqual([]);
+        })
+    );
+
+    it.effect(
       "a command whose argument, user or environment value holds a NUL byte is Invalid, and sends nothing",
       () =>
         Effect.gen(function* () {

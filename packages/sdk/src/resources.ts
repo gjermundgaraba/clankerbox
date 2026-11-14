@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Result, Schema } from "effect";
 
 import { Desired, HostError } from "./errors.ts";
 import { CheckpointName, HostId, Name } from "./ids.ts";
@@ -16,13 +16,36 @@ export const maxLabels = 16;
 
 const maxLabelLength = 63;
 
+const recordKeyedBy = <V extends Schema.Top>(
+  key: Schema.Codec<string>,
+  keyIs: string,
+  value: V
+) => {
+  const refusal = Schema.decodeUnknownResult(key);
+
+  return Schema.Record(Schema.String, value).check(
+    Schema.makeFilter((record: Readonly<Record<string, V["Type"]>>) => {
+      for (const name of Object.keys(record)) {
+        const refused = refusal(name);
+
+        if (Result.isFailure(refused)) {
+          return `${JSON.stringify(name)} isn't a ${keyIs}: ${refused.failure.message}`;
+        }
+      }
+
+      return true;
+    })
+  );
+};
+
 /**
  * What a caller tags a machine or checkpoint with, to find it again: at most `maxLabels` pairs,
  * each key a name and each value at most 63 characters. Set when the resource is made, and never
  * changed after.
  */
-export const Labels = Schema.Record(
+export const Labels = recordKeyedBy(
   Name,
+  "label key",
   Schema.String.check(Schema.isMaxLength(maxLabelLength))
 ).check(
   Schema.makeFilter(
@@ -505,15 +528,20 @@ const ArgumentText = Schema.String.check(
  * A command run in a running machine as `user`, root when it is left out, with `env` set for it,
  * `stdin` written whole, and ended with exit code 124 after `timeoutSeconds`. Nothing logs or
  * stores `env` or `stdin`: they can carry secrets. The command runs as long as the request does.
- * No argument, `user` or value of `env` holds a NUL byte.
+ * No argument, `user` or value of `env` holds a NUL byte, and each name in `env` is a variable's name.
  */
 export const ExecRequest = Schema.Struct({
   id: Name,
   argv: Schema.NonEmptyArray(ArgumentText),
   user: Schema.optionalKey(ArgumentText.check(Schema.isNonEmpty())),
   env: Schema.optionalKey(
-    Schema.Record(
-      Schema.String.check(Schema.isPattern(/^[A-Za-z_][A-Za-z0-9_]*$/u)),
+    recordKeyedBy(
+      Schema.String.check(
+        Schema.isPattern(/^[A-Za-z_][A-Za-z0-9_]*$/u, {
+          message: "it is a letter or '_', then letters, digits and '_'",
+        })
+      ),
+      "variable's name",
       ArgumentText
     )
   ),
