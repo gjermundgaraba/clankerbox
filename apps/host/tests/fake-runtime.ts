@@ -855,7 +855,7 @@ export const fakeRuntime = (options: FakeOptions) => {
   const endCommands = (machine: Target) =>
     Effect.forEach(
       commands.get(machine.name) ?? [],
-      (handle) => Effect.ignore(handle.kill()),
+      (handle) => Effect.ignore(handle.kill({ killSignal: "SIGKILL" })),
       {
         discard: true,
       }

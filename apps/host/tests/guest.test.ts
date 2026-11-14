@@ -1213,6 +1213,40 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     }
   );
 
+  for (const as of ["tart", "smolvm"] as const) {
+    it.effect(
+      `a stop of a fake ${as} machine ends an exec in flight whose command ignores TERM, as its VM going down does`,
+      () =>
+        Effect.gen(function* () {
+          const { runtime, fake, machine } = yield* madeOn(as);
+          const root = fake.root(machine.name) ?? "";
+
+          const exec = yield* Effect.forkChild(
+            runCommand(runtime, {
+              machine,
+              argv: [
+                "sh",
+                "-c",
+                `trap '' TERM; echo $$ >"$CLANKERBOX_ROOT/pid"; sleep 300`,
+              ],
+            })
+          );
+
+          const pid = Number(
+            (yield* waitFor(path.join(root, "pid"), "\n")).trim()
+          );
+
+          yield* runtime.stop(machine);
+
+          const ran = yield* Fiber.join(exec);
+
+          expect(ran.exitCode).not.toBe(0);
+          expect(statOf(pid)?.state ?? "gone").toMatch(/^(?:gone|Z)$/u);
+        }),
+      30_000
+    );
+  }
+
   it.effect(
     "a command that exits leaves running what it started with its output closed, and ends nothing",
     () =>
