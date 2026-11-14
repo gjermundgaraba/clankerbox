@@ -83,6 +83,7 @@ const startedByHook = async (setup: string, root: string) => {
     input: [
       'launched="$1"',
       "pgrep() { return 1; }",
+      "pkill() { return 0; }",
       "curl() { return 0; }",
       'su() { while [ "$1" != -c ]; do shift; done; eval "$2"; }',
       'setsid() { [ "$1" != -f ] || shift; printf "%s\\n" "$@" >"$launched"; }',
