@@ -15,6 +15,7 @@ import {
   Conflict,
   Internal,
   Missing,
+  PinMismatch,
   readTimeout,
   Unsizable,
   WrongState,
@@ -287,6 +288,27 @@ const capturing = (lines: string[]) =>
     );
   });
 
+const sweepLogged =
+  (lines: Array<readonly [string, string]>) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      Effect.provide(
+        Logger.layer([
+          Logger.make(({ logLevel, message }) => {
+            lines.push([
+              logLevel,
+              [message]
+                .flat()
+                .map(String)
+                .join(" ")
+                .replaceAll(/\((?:mach|ckpt|held)-[0-9a-z-]+\)/gu, "(handle)"),
+            ]);
+          }),
+        ])
+      ),
+      Effect.provideService(References.MinimumLogLevel, "All")
+    );
+
 const errorOf = (report: Report) => [report.status, report.error?._tag];
 
 const portOf = (report: Report) => report.outcome.endpoint?.port;
@@ -404,7 +426,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a sweep warns once of a retired instance whose delete fails or its provider refuses, naming its host, and logs each sweep after that leaves it at debug",
+    "a sweep warns once of a retired instance whose delete fails or its provider refuses, naming its host, logs each sweep after that leaves it at debug, and the one that deletes it at info",
     () => {
       const lines: Array<readonly [string, string]> = [];
 
@@ -452,11 +474,19 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* host.operations.sweep(retired);
 
         expect(
-          lines.filter(([level]) => level === "Warn" || level === "Debug")
+          lines.filter(([, line]) => line.startsWith("sweep:"))
         ).toStrictEqual([
+          [
+            "Info",
+            "sweep: deleting machine dev-instance (handle), which the control plane retired",
+          ],
           [
             "Warn",
             "sweep: couldn't delete machine dev-instance (handle), which stays at its provider until a sweep deletes it, so each sweep of host fixed tries again: EBUSY",
+          ],
+          [
+            "Info",
+            "sweep: deleting checkpoint snap-instance (handle), which the control plane retired",
           ],
           [
             "Warn",
@@ -473,25 +503,48 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             "sweep: still couldn't delete checkpoint snap-instance (handle) on host fixed: a machine restores from it",
           ],
           ["Debug", "sweep: deleting machine dev-instance (handle) again"],
+          [
+            "Info",
+            "sweep: deleted machine dev-instance (handle), which an earlier sweep couldn't",
+          ],
           ["Debug", "sweep: deleting checkpoint snap-instance (handle) again"],
+          [
+            "Info",
+            "sweep: deleted checkpoint snap-instance (handle), which an earlier sweep couldn't",
+          ],
         ]);
-      }).pipe(
-        Effect.provide(
-          Logger.layer([
-            Logger.make(({ logLevel, message }) => {
-              lines.push([
-                logLevel,
-                [message]
-                  .flat()
-                  .map(String)
-                  .join(" ")
-                  .replaceAll(/\((?:mach|ckpt)-[0-9a-f-]+\)/gu, "(handle)"),
-              ]);
-            }),
+      }).pipe(sweepLogged(lines));
+    }
+  );
+
+  it.effect(
+    "a sweep forgets the failed delete of an instance no longer retired, so it warns again once that instance is retired again",
+    () => {
+      const lines: Array<readonly [string, string]> = [];
+
+      return Effect.gen(function* () {
+        const host = yield* runner({ as: "fixed" });
+
+        keptByRuntime(host, "dev");
+
+        const retired = { machines: ["dev-instance"], checkpoints: [] };
+
+        host.fake.failNext("delete", new Internal({ message: "EBUSY" }));
+        yield* host.operations.sweep(retired);
+        yield* host.operations.sweep({
+          machines: ["other-instance"],
+          checkpoints: [],
+        });
+        host.fake.failNext("delete", new Internal({ message: "EBUSY" }));
+        yield* host.operations.sweep(retired);
+
+        expect(lines.filter(([level]) => level === "Warn")).toStrictEqual(
+          Array.from({ length: 2 }, () => [
+            "Warn",
+            "sweep: couldn't delete machine dev-instance (handle), which stays at its provider until a sweep deletes it, so each sweep of host fixed tries again: EBUSY",
           ])
-        ),
-        Effect.provideService(References.MinimumLogLevel, "All")
-      );
+        );
+      }).pipe(sweepLogged(lines));
     }
   );
 
@@ -1525,7 +1578,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           host.operations.exec({ machine: ref("other"), argv: ["true"] })
         );
 
-        expect(stopped).toBeInstanceOf(WrongState);
+        expect(stopped).toStrictEqual(
+          new WrongState({
+            message:
+              "machine dev is stopped, and a command runs only in a running machine: start it first",
+            machine: "dev",
+            state: "stopped",
+          })
+        );
         expect(unheld).toBeInstanceOf(Missing);
         expect(host.fake.calls).not.toContain("exec dev");
         expect(host.fake.calls).not.toContain("exec other");
@@ -1728,7 +1788,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         3
       );
 
-      expect(errorOf(report)).toStrictEqual(["failed", "PinMismatch"]);
+      expect(report.error).toStrictEqual(
+        new PinMismatch({
+          message:
+            "machine dev was paused under fake 0, and this host runs fake 1; it resumes only under the same one: delete it, or resume it under that one",
+        })
+      );
       expect(host.fake.calls).not.toContain("start dev");
     })
   );
@@ -1833,8 +1898,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
-  it.effect("a pause stops a VM booted under another pin instead", () =>
-    Effect.gen(function* () {
+  it.effect("a pause stops a VM booted under another pin instead", () => {
+    const lines: string[] = [];
+
+    return Effect.gen(function* () {
       const host = yield* runner();
 
       yield* finished(host, makes("dev"));
@@ -1849,8 +1916,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(host.fake.calls).toContain("stop dev");
       expect(host.fake.calls).not.toContain("pause dev");
       expect(host.fake.machines.get("dev")?.state).toBe("stopped");
-    })
-  );
+      expect(lines).toContain(
+        "pause dev: its VM booted under fake 0, and this host runs fake 1, so it stops it instead"
+      );
+    }).pipe(Effect.provide(Logger.layer([capturing(lines)])));
+  });
 
   it.effect("a pause under the host's pin saves the VM", () =>
     Effect.gen(function* () {

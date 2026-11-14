@@ -1463,7 +1463,16 @@ export const make = (
               ),
           work.pipe(
             inTime(`the ${traits.runtime} runtime's delete of ${what}`),
-            Effect.tap(() => Effect.sync(() => undeleted.delete(instance))),
+            Effect.tap(() =>
+              Effect.andThen(
+                Effect.sync(() => undeleted.delete(instance)),
+                again
+                  ? Effect.logInfo(
+                      `sweep: deleted ${what}, which an earlier sweep couldn't`
+                    )
+                  : Effect.void
+              )
+            ),
             Effect.as(true),
             Effect.catch((error) =>
               Effect.as(
