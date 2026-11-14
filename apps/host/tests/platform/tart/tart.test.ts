@@ -397,17 +397,24 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
-  it.effect("start of a running VM boots nothing", () =>
-    Effect.gen(function* () {
-      const { mac, runtime } = yield* runtimeOn();
-      const machine = machineOn("dev");
+  it.effect(
+    "start of a running VM boots nothing and sets its guest's clock",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const machine = machineOn("dev");
+        const vm = vmOf(machine);
 
-      mac.vms.set(vmOf(machine), "running");
+        yield* runtime.make(machine, fromImage("base"), unbound);
 
-      yield* runtime.start(machine, new Set());
+        const before = calls(mac).length;
 
-      expect(calls(mac)).toStrictEqual([]);
-    })
+        yield* runtime.start(machine, new Set());
+
+        expect(calls(mac).slice(before)).toStrictEqual([
+          `tart exec ${vm} sudo -n /bin/date -u <now>`,
+        ]);
+      })
   );
 
   it.effect(
@@ -1617,6 +1624,40 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a start of a running Tart machine sets its guest's clock again, so a start retried after a refused clock sets it",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const machine = machineOn("dev");
+        const vm = vmOf(machine);
+
+        yield* runtime.make(machine, fromImage("base"), unbound);
+        yield* runtime.stop(machine);
+        mac.hooks.clock = () => ({
+          exitCode: 1,
+          stderr: "sudo: a password is required\n",
+        });
+
+        const refused = yield* Effect.flip(runtime.start(machine, new Set()));
+
+        mac.hooks.clock = () => undefined;
+        const before = mac.clockSets.length;
+
+        yield* runtime.start(machine, new Set());
+
+        expect({
+          refused: refused._tag,
+          state: yield* runtime.observe([machine]),
+          setAgain: mac.clockSets.slice(before).map((each) => each.vm),
+        }).toStrictEqual({
+          refused: "Internal",
+          state: new Map([[machine.name, "running"]]),
+          setAgain: [vm],
+        });
+      })
+  );
+
+  it.effect(
     "a boot whose guest refuses the host's clock fails Internal naming the date, and a resume's says nothing of a locked session",
     () =>
       Effect.gen(function* () {
@@ -1978,7 +2019,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a VM a tart run outside its job runs reads running, however that run's executable is named: a start boots nothing, a capture or fork is refused, capacity counts it, and a stop shuts it down and waits for that run to end",
+    "a VM a tart run outside its job runs reads running, however that run's executable is named: a start boots nothing but sets its clock, a capture or fork is refused, capacity counts it, and a stop shuts it down and waits for that run to end",
     () =>
       Effect.gen(function* () {
         for (const executable of [
@@ -2030,6 +2071,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             used: 1,
           });
           expect(calls(mac).slice(before)).toStrictEqual([
+            `tart exec ${vm} sudo -n /bin/date -u <now>`,
             `tart exec ${vm} sudo -n /sbin/shutdown -h now`,
           ]);
           expect(yield* runtime.observe([machine])).toStrictEqual(

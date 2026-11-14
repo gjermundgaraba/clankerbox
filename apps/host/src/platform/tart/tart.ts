@@ -982,6 +982,10 @@ export const make = (
           if (observed === "paused") {
             yield* resume(machine);
           }
+
+          if (observed === "running") {
+            yield* clockSet(machine);
+          }
         })
       ),
       stop: Effect.fn("Tart.stop")(stop),
