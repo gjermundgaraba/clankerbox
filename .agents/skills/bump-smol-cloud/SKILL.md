@@ -145,7 +145,8 @@ Each is an assertion of the live suite, in the case named.
   machine by the hour, its base and vCPUs and RAM only while it runs, and
   100 µ$ a GB of disk an hour always. On a delete's 409, whatever its `retryable` says, the adapter lists the
   machines whose `parentMachineId` is the source, and when one is listed the
-  refusal stands at once: it stops a running source, fails naming the fork, warns
+  refusal stands at once: it stops a running source, a stop whose answer is
+  lost read back as any other act is, fails naming the fork, warns
   once and logs at debug after. It names the fork as clankerbox does when the
   adapter was handed it since the host started, by a make, a search or a read,
   by smol cloud's name otherwise, and a branch made by hand by its own name or
@@ -183,7 +184,10 @@ Each is an assertion of the live suite, in the case named.
   `autoStopSeconds` it is sent.
 - A checkpoint a living restore was made from refuses its delete with 409,
   so a delete whose machine went fails while it keeps one no row keeps, and
-  runs again at the next check (`smol-cloud.ts`'s `pruned`).
+  runs again at the next check (`smol-cloud.ts`'s `pruned`). A checkpoint
+  delete's 409 is `Conflict` at its one send, whatever its `retryable` says,
+  and only a lost answer sends it again, as a second delete does no more
+  (`api.ts`'s `deleteCheckpoint`; the checkpoint delete tests).
 - A deleted machine's checkpoints stay, listed with its `machineId` and
   `machineDeleted: true`, until each is deleted.
 - Through a host: a base machine joins the tailnet over exec, its sshd answers

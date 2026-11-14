@@ -12,15 +12,7 @@ import type {
   Sizing,
   Missing,
 } from "@gjermundgaraba/clankerbox-sdk";
-import {
-  Deferred,
-  Duration,
-  Effect,
-  Layer,
-  Schedule,
-  Schema,
-  Stream,
-} from "effect";
+import { Deferred, Duration, Effect, Layer, Schema, Stream } from "effect";
 import type { Scope, FileSystem } from "effect";
 import { Hex } from "effect/encoding";
 import type { HttpClient } from "effect/http";
@@ -46,7 +38,6 @@ import {
   apiKey,
   sentUntilHeld,
   triesAfterLoss,
-  triesPerCall,
   untilRest,
 } from "../provider-http.ts";
 import * as Api from "./api.ts";
@@ -530,7 +521,7 @@ export const make = (
           return Effect.succeed(`it stays ${state}`);
         }
 
-        return api.act(machine.handle, "stop").pipe(
+        return sent(machine, "stop", state).pipe(
           Effect.as(
             "it is stopped meanwhile, which smol cloud's price list bills for its disk alone"
           ),
@@ -1028,11 +1019,6 @@ export const make = (
       deleteCheckpoint: (checkpoint) =>
         api.deleteCheckpoint(checkpoint.handle).pipe(
           Effect.catchIf(isGone, () => Effect.void),
-          Effect.retry({
-            while: unknownOutcome,
-            schedule: Schedule.spaced(poll),
-            times: triesPerCall - 1,
-          }),
           Effect.mapError((error) =>
             isConflict(error)
               ? new Conflict({

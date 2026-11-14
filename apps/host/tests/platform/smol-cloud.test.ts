@@ -2289,6 +2289,49 @@ describe("a smol cloud delete a live fork holds", () => {
   );
 });
 
+describe("a smol cloud delete a live fork holds, whose stop's answer is lost", () => {
+  it.effect(
+    "reads the source until it rests, and says it is stopped once smol cloud took the stop",
+    () =>
+      Effect.gen(function* () {
+        let state = "started";
+
+        const { asked, client } = answering((route) => {
+          if (route === "DELETE /v1/machines/mach-1") {
+            return problem(
+              409,
+              "checkpoint has 1 live branch; delete its branches before deleting it"
+            );
+          }
+
+          if (route === "POST /v1/machines/mach-1/stop") {
+            state = "stopped";
+
+            return new Response("<html>bad gateway</html>", { status: 502 });
+          }
+
+          if (route === "GET /v1/machines/mach-1") {
+            return Response.json(recordIn(state));
+          }
+
+          return route === "GET /v1/machines"
+            ? Response.json([recordIn(state), forkOf("started")])
+            : undefined;
+        });
+
+        const runtime = yield* scriptedRuntime(client);
+
+        const ended = yield* endedWithin(
+          runtime.delete(dev1, new Set()),
+          "1 minute"
+        );
+
+        expect(String(failureOf(ended))).toContain("it is stopped meanwhile");
+        expect(asks(asked, "POST /v1/machines/mach-1/stop")).toBe(1);
+      })
+  );
+});
+
 describe("a smol cloud delete refused while a fork it lists is deleted", () => {
   it.effect(
     "takes the fork as gone, stops nothing, and goes through once smol cloud takes it",
@@ -2515,6 +2558,41 @@ describe("a smol cloud start refused in a way it sends again", () => {
 
           expect(counts).toStrictEqual([1, 2]);
           expect(ended !== undefined && Exit.isSuccess(ended)).toBe(true);
+        }
+      })
+  );
+});
+
+describe("a smol cloud checkpoint delete refused 409", () => {
+  it.effect(
+    "is Conflict at its one send, whether or not the refusal says it may be retried",
+    () =>
+      Effect.gen(function* () {
+        for (const retryable of [false, true]) {
+          const { asked, client } = answering((route) =>
+            route === "DELETE /v1/checkpoints/ckpt-1"
+              ? problem(409, "checkpoint has 1 live branch", retryable)
+              : undefined
+          );
+
+          const runtime = yield* scriptedRuntime(client);
+
+          const ended = yield* endedWithin(
+            runtime.deleteCheckpoint({
+              name: "snap",
+              instance: machineOf("snap").instance,
+              handle: Handle.make("ckpt-1"),
+            }),
+            "1 minute"
+          );
+
+          expect(failureOf(ended), `retryable ${retryable}`).toMatchObject({
+            _tag: "Conflict",
+          });
+          expect(
+            asks(asked, "DELETE /v1/checkpoints/ckpt-1"),
+            `retryable ${retryable}`
+          ).toBe(1);
         }
       })
   );

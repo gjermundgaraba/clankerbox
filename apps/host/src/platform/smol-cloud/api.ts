@@ -14,7 +14,7 @@ import {
   tooManyRequests,
   Unanswered,
 } from "../provider-http.ts";
-import type { Asked, Busy, Unreadable } from "../provider-http.ts";
+import type { Asked, Busy, Repeats, Unreadable } from "../provider-http.ts";
 
 export const MachineRecord = Schema.Struct({
   id: Handle,
@@ -224,7 +224,8 @@ const refusal = (
  * smol cloud's API, the routes the adapter uses. Requests are encoded exactly; answers are read
  * leniently, keeping only the fields the adapter reads, and `state` and `status` stay open strings.
  * A read is asked again after a lost answer and after a refusal smol cloud marks retryable, as a
- * 429 is; a change is sent again only after a 429, its caller reading the provider first otherwise.
+ * 429 is, and so is a checkpoint's delete, which does no more sent twice; any other change is sent
+ * again only after a 429, its caller reading the provider first otherwise.
  * A list fails on a record it can't read only if `ours` claims it by its marks.
  */
 export const make = (url: string, key: Redacted.Redacted) =>
@@ -239,7 +240,8 @@ export const make = (url: string, key: Redacted.Redacted) =>
       body: unknown,
       answered: (
         response: HttpClientResponse.HttpClientResponse
-      ) => Effect.Effect<A, Unanswered>
+      ) => Effect.Effect<A, Unanswered>,
+      repeats: Repeats = asked === "read" ? "idempotent" : "once"
     ): Effect.Effect<A, ApiError> => {
       const call = `${method} ${route}`;
 
@@ -265,7 +267,7 @@ export const make = (url: string, key: Redacted.Redacted) =>
               )
       );
 
-      return askedAgain(asked === "read" ? "idempotent" : "once")(
+      return askedAgain(repeats)(
         Effect.flatMap(exchange, (outcome) =>
           outcome.refused
             ? refusal(call, asked, outcome.response, outcome.text)
@@ -299,8 +301,9 @@ export const make = (url: string, key: Redacted.Redacted) =>
       method: HttpMethod.HttpMethod,
       route: string,
       asked: Asked,
-      body?: unknown
-    ) => send(method, route, asked, body, () => Effect.void);
+      body?: unknown,
+      repeats?: Repeats
+    ) => send(method, route, asked, body, () => Effect.void, repeats);
 
     const listed =
       <S extends Schema.Top & { readonly DecodingServices: never }>(
@@ -370,7 +373,13 @@ export const make = (url: string, key: Redacted.Redacted) =>
           "settle"
         ),
       deleteCheckpoint: (id: Handle) =>
-        done("DELETE", `/v1/checkpoints/${id}`, "change"),
+        done(
+          "DELETE",
+          `/v1/checkpoints/${id}`,
+          "change",
+          undefined,
+          "idempotent"
+        ),
       exec: (
         id: Handle,
         body: ExecBody
