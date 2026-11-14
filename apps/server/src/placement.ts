@@ -1,15 +1,13 @@
 import type { HostInfo } from "@clankerbox/host-contract";
 import {
   fitted,
+  formatSizes,
   givenSizes,
   offered,
   offers,
 } from "@clankerbox/host-contract/traits";
 import {
   buildId,
-  formatCpu,
-  formatGib,
-  formatMib,
   NotBuilt,
   NotOffered,
   Unavailable,
@@ -26,16 +24,13 @@ interface Miss {
   readonly cure?: "build" | "sizes";
 }
 
-const sized = ({ cpu, ramMib, diskGib }: Sizes) =>
-  `${formatCpu(cpu)}, ${formatMib(ramMib)} of RAM and ${formatGib(diskGib)} of disk`;
-
 const missed = (why: string): Miss => ({ why });
 
 const unsized = (info: HostInfo, sizes: Sizes): Miss => ({
   why:
     info.traits.sizes._tag === "classes"
-      ? `has no size class of ${sized(sizes)}, and gives ${givenSizes(info.traits)}`
-      : `gives ${givenSizes(info.traits)}, not ${sized(sizes)}`,
+      ? `has no size class of ${formatSizes(sizes)}, and gives ${givenSizes(info.traits)}`
+      : `gives ${givenSizes(info.traits)}, not ${formatSizes(sizes)}`,
   cure: "sizes",
 });
 

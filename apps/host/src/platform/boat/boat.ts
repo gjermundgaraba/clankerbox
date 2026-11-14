@@ -1,10 +1,7 @@
-import { givenSizes } from "@clankerbox/host-contract/traits";
+import { formatSizes, givenSizes } from "@clankerbox/host-contract/traits";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import {
   Capacity,
-  formatCpu,
-  formatGib,
-  formatMib,
   Internal,
   Missing,
   Unsizable,
@@ -410,7 +407,7 @@ export const make = (
       return type === undefined
         ? Effect.fail(
             new Unsizable({
-              message: `boat gives ${givenSizes(traits)}, and ${name} was asked ${formatCpu(sizes.cpu)}, ${formatMib(sizes.ramMib)} of RAM and ${formatGib(sizes.diskGib)} of disk`,
+              message: `boat gives ${givenSizes(traits)}, and ${name} was asked ${formatSizes(sizes)}`,
             })
           )
         : Effect.succeed(type);

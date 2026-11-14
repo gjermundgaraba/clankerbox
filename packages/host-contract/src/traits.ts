@@ -188,8 +188,7 @@ export const givenSizes = (traits: RuntimeTraits): string => {
   ].join(" ");
 };
 
-const sizesAsked = ({ cpu, ramMib, diskGib }: Sizes): string =>
-  `${formatCpu(cpu)}, ${formatMib(ramMib)} of RAM and ${formatGib(diskGib)} of disk`;
+export const formatSizes = (sizes: Sizes): string => listed(sizes);
 
 const resizedStates = ({ resize }: RuntimeTraits): string => {
   const taking = (["stopped", "running"] as const).filter(
@@ -226,7 +225,7 @@ export const resizeRefusal = (
   }
 
   const unfitted = new Unsizable({
-    message: `the ${runtime} runtime gives ${givenSizes(traits)}, and ${name} was asked ${sizesAsked(to)}`,
+    message: `the ${runtime} runtime gives ${givenSizes(traits)}, and ${name} was asked ${formatSizes(to)}`,
   });
 
   if (state === undefined) {

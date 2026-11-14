@@ -2,6 +2,7 @@ import type { MachineState } from "@clankerbox/host-contract";
 import {
   copySizable,
   fitted,
+  formatSizes,
   givenSizes,
   grownPast,
 } from "@clankerbox/host-contract/traits";
@@ -52,7 +53,7 @@ const copyRefusal = (
   const shrunkDisk = `machine ${name}'s disk of ${formatGib(spec.diskGib)} is below its source's ${formatGib(from.diskGib)}, and a disk only grows`;
 
   if (!fitted(traits, spec)) {
-    return `machine ${name}'s host gives ${givenSizes(traits)}, and it was asked ${formatCpu(spec.cpu)}, ${formatMib(spec.ramMib)} of RAM and ${formatGib(spec.diskGib)} of disk`;
+    return `machine ${name}'s host gives ${givenSizes(traits)}, and it was asked ${formatSizes(spec)}`;
   }
 
   switch (traits.copies) {
@@ -148,7 +149,7 @@ export const cloned = (
     spec.diskGib < from.diskGib
     ? Effect.fail(
         new Unsizable({
-          message: `machine ${name} takes at least build ${build}'s ${formatCpu(from.cpu)}, ${formatMib(from.ramMib)} of RAM and ${formatGib(from.diskGib)} of disk`,
+          message: `machine ${name} takes at least build ${build}'s ${formatSizes(from)}`,
         })
       )
     : copied(name, from, sizing, traits);
