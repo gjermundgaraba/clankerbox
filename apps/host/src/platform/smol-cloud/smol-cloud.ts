@@ -19,7 +19,7 @@ import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 import { Socket } from "effect/socket";
 
-import { CannotStart, missing, Runtime, timeoutFail } from "../../runtime.ts";
+import { CannotStart, missing, Runtime } from "../../runtime.ts";
 import type {
   Command,
   Execution,
@@ -36,6 +36,7 @@ import { KeyedApiUrl } from "../../settings.ts";
 import type { HostSettings } from "../../settings.ts";
 import {
   apiKey,
+  bounded,
   sentUntilHeld,
   triesAfterLoss,
   untilRest,
@@ -63,8 +64,6 @@ const idleStopSeconds = 86_400;
 const bodyLimit = 1024 * 1024;
 
 const unstageTimeout = Duration.seconds(30);
-
-const stepTimeout = Duration.minutes(10);
 
 const poll = Duration.seconds(1);
 
@@ -194,20 +193,6 @@ const waited = (error: ApiError) =>
   Effect.sleep(
     error._tag === "Refused" ? Duration.seconds(error.retryAfterSeconds) : poll
   );
-
-const bounded =
-  (what: string) =>
-  <A, E>(step: Effect.Effect<A, E>): Effect.Effect<A, E | Internal> =>
-    step.pipe(
-      timeoutFail(
-        stepTimeout,
-        () =>
-          new Internal({
-            message: `${what} didn't end at smol cloud within ${Duration.format(stepTimeout)}`,
-          })
-      ),
-      Effect.uninterruptible
-    );
 
 const targetOf = (machine: Identity, handle: Handle): Target => ({
   name: machine.name,
@@ -549,7 +534,10 @@ export const make = (
       });
 
     const settled = (machine: Target, goal: Goal) =>
-      bounded(`bringing ${machine.name} ${goal}`)(toward(machine, goal));
+      bounded(
+        "smol cloud",
+        `bringing ${machine.name} ${goal}`
+      )(toward(machine, goal));
 
     const byName = (name: string) =>
       Effect.map(listed, (all) => all.find((found) => found.name === name)?.id);
@@ -925,7 +913,7 @@ export const make = (
           }
 
           return { handle, sizes: sizesOf(found, machine) };
-        }).pipe(bounded(`make ${machine.name}`)),
+        }).pipe(bounded("smol cloud", `make ${machine.name}`)),
       start: (machine, keep) =>
         Effect.andThen(
           toward(machine, "running"),
@@ -936,7 +924,7 @@ export const make = (
               )
             )
           )
-        ).pipe(bounded(`start ${machine.name}`)),
+        ).pipe(bounded("smol cloud", `start ${machine.name}`)),
       stop: (machine) =>
         Effect.mapError(
           settled(machine, "stopped"),
@@ -956,7 +944,7 @@ export const make = (
           ),
           Effect.andThen(unkept(machine, keep)),
           Effect.catchTag("HeldByFork", (held) => heldUp(machine, held)),
-          bounded(`delete ${machine.name}`),
+          bounded("smol cloud", `delete ${machine.name}`),
           Effect.mapError((error) => new Internal({ message: error.message }))
         ),
       capture: (machine) =>
@@ -985,7 +973,7 @@ export const make = (
           }
 
           return checkpoint.id;
-        }).pipe(bounded(`capture ${machine.name}`)),
+        }).pipe(bounded("smol cloud", `capture ${machine.name}`)),
       resize: (machine, to) =>
         resized(machine, {
           cpus: to.cpu,
@@ -1002,7 +990,7 @@ export const make = (
                 : internal(`resize ${machine.name}`)(error)
             )
           ),
-          bounded(`resize ${machine.name}`)
+          bounded("smol cloud", `resize ${machine.name}`)
         ),
       sizes: (machine) =>
         Effect.map(
@@ -1026,7 +1014,7 @@ export const make = (
                 })
               : internal(`delete checkpoint ${checkpoint.name}`)(error)
           ),
-          bounded(`delete checkpoint ${checkpoint.name}`)
+          bounded("smol cloud", `delete checkpoint ${checkpoint.name}`)
         ),
       exec,
     };

@@ -1419,6 +1419,42 @@ const failureOf = <A, E>(ended: Exit.Exit<A, E> | undefined) =>
     ? Cause.squash(ended.cause)
     : undefined;
 
+describe("a boat step's bound", () => {
+  it.effect(
+    "ends a start whose every resume is lost while boat moves the sandbox for minutes, within 10 minutes, failed Internal",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          let movingFor = 0;
+
+          const { runtime } = yield* scriptedBoat((route) => {
+            if (route === "POST /sandboxes/bx1/resume") {
+              movingFor = 1100;
+
+              return new Response("<html>bad gateway</html>", { status: 502 });
+            }
+
+            if (route === "GET /sandboxes/bx1") {
+              movingFor = Math.max(0, movingFor - 1);
+
+              return sandboxIn(movingFor > 0 ? "provisioning" : "archived");
+            }
+
+            return undefined;
+          });
+
+          const ended = yield* endedWithin(
+            runtime.start(bx1, new Set()),
+            "10 minutes"
+          );
+
+          expect(ended, "ended within 10 minutes").toBeDefined();
+          expect(failureOf(ended)).toMatchObject({ _tag: "Internal" });
+        })
+      )
+  );
+});
+
 describe("a boat refusal that asks to be waited out", () => {
   it.effect(
     "is a bare 429, waited as its Retry-After asks, and the call sent again once that wait ends",

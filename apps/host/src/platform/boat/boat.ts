@@ -22,13 +22,7 @@ import type { FileSystem } from "effect";
 import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 
-import {
-  CannotStart,
-  Handle,
-  missing,
-  Runtime,
-  timeoutFail,
-} from "../../runtime.ts";
+import { CannotStart, Handle, missing, Runtime } from "../../runtime.ts";
 import type {
   Dial,
   Identity,
@@ -43,6 +37,7 @@ import { KeyedApiUrl } from "../../settings.ts";
 import type { HostSettings } from "../../settings.ts";
 import {
   apiKey,
+  bounded,
   sentUntilHeld,
   triesAfterLoss,
   untilRest,
@@ -166,8 +161,6 @@ const settled = new Set(["ready", "failed"]);
 const isType = Schema.is(Api.BoatType);
 
 const pollEvery = Duration.millis(500);
-
-const pollFor = Duration.minutes(10);
 
 const listedWithin = Duration.seconds(5);
 
@@ -308,34 +301,14 @@ export const make = (
           Effect.mapError(internal(`couldn't read machine ${machine.name}`))
         );
 
-    const toward = <G extends Goal>(machine: Target, goal: G, what: string) =>
-      untilRest(
-        Effect.map(read(machine), heldOf),
-        endsAt(goal),
-        pollEvery
-      ).pipe(
-        timeoutFail(
-          pollFor,
-          () =>
-            new Internal({
-              message: `boat didn't ${what} machine ${machine.name} within ${Duration.format(pollFor)}`,
-            })
-        )
-      );
+    const toward = <G extends Goal>(machine: Target, goal: G) =>
+      untilRest(Effect.map(read(machine), heldOf), endsAt(goal), pollEvery);
 
     const rested = (machine: Target) =>
       untilRest(
         Effect.map(read(machine), heldOf),
         (held) => held !== "moving",
         pollEvery
-      ).pipe(
-        timeoutFail(
-          pollFor,
-          () =>
-            new Internal({
-              message: `boat didn't bring machine ${machine.name} to rest within ${Duration.format(pollFor)}`,
-            })
-        )
       );
 
     const pinned = (machine: Target) =>
@@ -364,7 +337,7 @@ export const make = (
 
     const ready = (machine: Target, what: "make" | "start") =>
       Effect.gen(function* () {
-        const held = yield* toward(machine, "running", what);
+        const held = yield* toward(machine, "running");
 
         switch (held) {
           case "running": {
@@ -402,7 +375,7 @@ export const make = (
           Effect.mapError(internal(`couldn't stop ${machine.name}`))
         );
 
-        yield* toward(machine, "stopped", "stop");
+        yield* toward(machine, "stopped");
       });
 
     const typeFor = (sizes: Parameters<typeof typeOf>[1], name: string) => {
@@ -726,7 +699,7 @@ export const make = (
           yield* ready({ ...machine, handle }, "make");
 
           return { handle, sizes: types[type] };
-        }).pipe(Effect.uninterruptible),
+        }).pipe(bounded("boat", `make ${machine.name}`)),
       start: (machine, keep) =>
         Effect.gen(function* () {
           yield* sentUntilHeld({
@@ -776,19 +749,21 @@ export const make = (
               )
             )
           );
-        }).pipe(Effect.uninterruptible),
-      stop: (machine) => Effect.uninterruptible(stopped(machine)),
-      pause: (machine) => Effect.uninterruptible(stopped(machine)),
+        }).pipe(bounded("boat", `start ${machine.name}`)),
+      stop: (machine) =>
+        bounded("boat", `stop ${machine.name}`)(stopped(machine)),
+      pause: (machine) =>
+        bounded("boat", `pause ${machine.name}`)(stopped(machine)),
       delete: (machine, keep) =>
         Effect.gen(function* () {
           yield* prune(machine, keep);
           yield* api
             .remove(machine.handle)
             .pipe(Effect.mapError(internal(`couldn't delete ${machine.name}`)));
-          yield* toward(machine, "gone", "delete");
+          yield* toward(machine, "gone");
           yield* prune(machine, keep);
           pins.delete(machine.handle);
-        }).pipe(Effect.uninterruptible),
+        }).pipe(bounded("boat", `delete ${machine.name}`)),
       capture: (machine, checkpoint) =>
         Effect.gen(function* () {
           const name = snapshotName(checkpoint);
@@ -803,20 +778,14 @@ export const make = (
             Effect.mapError(failure(`capture ${machine.name}`))
           );
 
-          const snapshot = yield* api.saved(name).pipe(
-            Effect.mapError(internal(`couldn't read snapshot ${name}`)),
-            Effect.repeat({
-              until: (found) =>
-                found === undefined || settled.has(found.status),
-              schedule: Schedule.spaced(pollEvery),
-            }),
-            timeoutFail(
-              pollFor,
-              () =>
-                new Internal({
-                  message: `boat didn't save ${machine.name} as ${name} within ${Duration.format(pollFor)}`,
-                })
-            )
+          const snapshot = yield* untilRest(
+            api
+              .saved(name)
+              .pipe(
+                Effect.mapError(internal(`couldn't read snapshot ${name}`))
+              ),
+            (found) => found === undefined || settled.has(found.status),
+            pollEvery
           );
 
           if (snapshot?.status !== "ready") {
@@ -826,7 +795,7 @@ export const make = (
           }
 
           return Handle.make(name);
-        }).pipe(Effect.uninterruptible),
+        }).pipe(bounded("boat", `capture ${machine.name}`)),
       resize: (machine, to, live) =>
         Effect.gen(function* () {
           if (live) {
@@ -844,16 +813,8 @@ export const make = (
             machine.name
           );
 
-          yield* retyped(machine, type).pipe(
-            timeoutFail(
-              pollFor,
-              () =>
-                new Internal({
-                  message: `boat didn't resize machine ${machine.name} within ${Duration.format(pollFor)}`,
-                })
-            )
-          );
-        }).pipe(Effect.uninterruptible),
+          yield* retyped(machine, type);
+        }).pipe(bounded("boat", `resize ${machine.name}`)),
       sizes: (machine) =>
         Effect.flatMap(read(machine), (sandbox) =>
           Effect.map(sandboxType(machine, sandbox), (type) => types[type])
@@ -864,7 +825,8 @@ export const make = (
           .pipe(
             Effect.mapError(
               internal(`couldn't delete snapshot ${checkpoint.handle}`)
-            )
+            ),
+            bounded("boat", `delete checkpoint ${checkpoint.name}`)
           ),
       exec: (machine, command) =>
         channel.exec(

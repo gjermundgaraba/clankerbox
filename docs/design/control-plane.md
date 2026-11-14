@@ -182,7 +182,7 @@ Kept means the rule holds with its meaning unchanged, even when it moves to the 
 | What the VM is doing is always read, never stored | Kept | The control plane reads through the host, and reads `unknown` when it can't. |
 | Every machine is read at start, and every resting one at each recheck | Kept | The control plane does it through its host. |
 | One actor per machine | Changed | One loop per machine, in one place. A move would keep the same loop. |
-| A later request cuts a step short | Kept | By cancelling the operation. |
+| A later request cuts a step short | Kept | By cancelling the operation, on smolvm and Tart. A boat or smol cloud step is billed calls to the provider and runs whole, ten minutes at most, and the later request waits for it. |
 | A step cut short holds its lease until the VM is where the command takes it | Kept | The lease is released when the host reports the operation done, instead of when a local fiber ends. |
 | A request answers from where the machine rests | Changed | The server answers once the store has the desire. The client's wait answers from where the machine rests, and `store.advance` leaves rest in the same write, so `AnswerTrue` holds with no generation in the wait. |
 | Leases are in memory only, so a host's end drops them with the work | Changed | They are rows now. They survive a restart of the control plane, as the steps they guard do. |

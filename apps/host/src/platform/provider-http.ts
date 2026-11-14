@@ -1,3 +1,4 @@
+import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import {
   DateTime,
   Duration,
@@ -27,6 +28,27 @@ export const answerWithin: Readonly<Record<Asked, Duration.Duration>> = {
   change: Duration.minutes(1),
   settle: Duration.minutes(5),
 };
+
+/** How long a step on a rented runtime may take, all its provider calls and polls together. */
+export const stepWithin = Duration.minutes(10);
+
+/**
+ * Runs a step on a provider whole, its calls billed and uncut by a later request, which waits for
+ * it, and ends it failed `Internal` once it has taken `stepWithin`.
+ */
+export const bounded =
+  (provider: string, what: string) =>
+  <A, E, R>(step: Effect.Effect<A, E, R>): Effect.Effect<A, E | Internal, R> =>
+    step.pipe(
+      timeoutFail(
+        stepWithin,
+        () =>
+          new Internal({
+            message: `${what} didn't end at ${provider} within ${Duration.format(stepWithin)}`,
+          })
+      ),
+      Effect.uninterruptible
+    );
 
 /** No answer, a gateway's, or one that couldn't be read, so whether the request happened is unknown. */
 export class Unanswered extends Schema.TaggedError<
