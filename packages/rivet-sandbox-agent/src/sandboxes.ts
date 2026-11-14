@@ -108,18 +108,6 @@ const healthy = (
 const isLocal = (error: unknown): error is LocalTunnelError =>
   error instanceof LocalTunnelError;
 
-const scoped = <A, E, R>(make: Effect.Effect<A, E, R | Scope.Scope>) =>
-  Effect.gen(function* () {
-    const scope = yield* Scope.make();
-
-    const value = yield* make.pipe(
-      Scope.provide(scope),
-      Effect.onError(() => Scope.close(scope, Exit.void))
-    );
-
-    return { value, scope };
-  });
-
 const ended = <A>(was: Scoped<A> | undefined) =>
   was === undefined ? Effect.void : Scope.close(was.scope, Exit.void);
 
@@ -162,6 +150,7 @@ export const make = (options: Options, ssh = "ssh") => {
   }
 
   const sandboxes = new Map<string, Sandbox>();
+  const owned = Scope.makeUnsafe();
   const closing = Deferred.makeUnsafe<undefined>();
   const calls = new Set<Fiber.Fiber<unknown, unknown>>();
 
@@ -182,6 +171,18 @@ export const make = (options: Options, ssh = "ssh") => {
         Effect.andThen(Deferred.await(closing), Effect.fail(disposed()))
       )
     );
+
+  const scoped = <A, E, R>(acquire: Effect.Effect<A, E, R | Scope.Scope>) =>
+    Effect.gen(function* () {
+      const scope = yield* Scope.fork(owned);
+
+      const value = yield* acquire.pipe(
+        Scope.provide(scope),
+        Effect.onError(() => Scope.close(scope, Exit.void))
+      );
+
+      return { value, scope };
+    });
 
   const sandbox = (id: string): Sandbox => {
     const known = sandboxes.get(id) ?? {
@@ -433,6 +434,7 @@ export const make = (options: Options, ssh = "ssh") => {
       yield* Effect.forEach([...sandboxes.values()], released, {
         discard: true,
       });
+      yield* Scope.close(owned, Exit.void);
     }),
   };
 };
