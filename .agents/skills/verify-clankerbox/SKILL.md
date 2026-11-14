@@ -70,7 +70,8 @@ fleet's order and are named `<runtime>-<n>`, numbered per runtime: `fixed-1`,
 A host runs `apps/host/tests/<runtime>/serve.ts` where its runtime has one, and
 `apps/host/tests/serve.ts` otherwise. Each is a thin entry over
 `apps/host/tests/serving.ts`, which serves a host for the run's protocol and, for
-a provider, its fake API and the faults it takes.
+a provider, its fake API and the faults it takes, with the fake and the adapter's
+layer `apps/host/tests/providers.ts` defines for each provider.
 
 Each serve program reads its settings from the environment `launch.sh` and
 `fault.sh start-host` run it in. `CLANKERBOX_FAKE_TAILNET=1` has every host join
