@@ -1,5 +1,7 @@
+import { once } from "node:events";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import http, { createServer } from "node:http";
 import { connect } from "node:net";
 import path from "node:path";
 
@@ -7,7 +9,13 @@ import { Internal, WrongState } from "@gjermundgaraba/clankerbox-sdk";
 import { machine } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import { Schema } from "effect";
 import { SandboxDestroyedError } from "sandbox-agent";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import {
+  afterEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+} from "vite-plus/test";
 
 import { healthPath } from "../src/agent.ts";
 import { LocalTunnelError } from "../src/tunnel.ts";
@@ -130,6 +138,47 @@ describe("tunnel", () => {
     expect(requests(stub)).toStrictEqual(["machine.start"]);
     expect(third.args).toContain("Port=20022");
     await expect(sandbox.getUrl("kept")).resolves.toBe(opened);
+  });
+
+  it("ensureServer checks a sandbox's health through the provider's own agent, so a proxy Node's global agent takes never hears it, and a healthy sandbox's machine isn't started for it", async () => {
+    const proxied: string[] = [];
+
+    const proxy = createServer((request, reply) => {
+      proxied.push(`${request.method} ${request.url}`);
+      reply.writeHead(502).end("the proxy");
+    });
+
+    proxy.listen(0, "127.0.0.1");
+    await once(proxy, "listening");
+    cleanups.push(async () => {
+      proxy.close();
+    });
+
+    const { stub, sandbox, calls } = await setup({
+      machines: [reachable("kept")],
+    });
+
+    await sandbox.getUrl("kept");
+
+    const { pid } = liveTunnel(await calls());
+
+    const { port } = Schema.decodeUnknownSync(
+      Schema.Struct({ port: Schema.Finite })
+    )(proxy.address(), { onExcessProperty: "ignore" });
+
+    onTestFinished(
+      http.setGlobalProxyFromEnv({ HTTP_PROXY: `http://127.0.0.1:${port}` })
+    );
+    stub.calls.length = 0;
+
+    await sandbox.ensureServer("kept");
+    await sandbox.ensureServer("kept");
+
+    expect({
+      requests: requests(stub),
+      proxied,
+      tunnel: liveTunnel(await calls()).pid,
+    }).toStrictEqual({ requests: [], proxied: [], tunnel: pid });
   });
 
   it("a tunnel whose ssh fails says what ssh printed or why it couldn't run, and a machine without an endpoint is WrongState", async () => {

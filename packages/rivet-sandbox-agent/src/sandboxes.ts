@@ -82,9 +82,12 @@ interface Sandbox {
 
 const urlOf = (port: number) => `http://127.0.0.1:${port}`;
 
-const healthy = (url: string): Effect.Effect<boolean> =>
+const healthy = (
+  sent: typeof globalThis.fetch,
+  url: string
+): Effect.Effect<boolean> =>
   Effect.tryPromise(async (signal) => {
-    const reply = await fetch(`${url}${healthPath}`, { signal });
+    const reply = await sent(`${url}${healthPath}`, { signal });
 
     return await reply.json();
   }).pipe(
@@ -393,7 +396,10 @@ export const make = (options: Options, ssh = "ssh") => {
               )
             );
 
-            if (Option.isSome(port) && (yield* healthy(urlOf(port.value)))) {
+            if (
+              Option.isSome(port) &&
+              (yield* healthy(fetchOf(id), urlOf(port.value)))
+            ) {
               return;
             }
 
