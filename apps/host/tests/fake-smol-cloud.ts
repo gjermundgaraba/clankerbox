@@ -49,6 +49,8 @@ export interface FakeSmolCloudOptions {
   readonly dir: string;
   readonly key: string;
   readonly onCall?: ((call: string) => void) | undefined;
+  /** An exec's `PATH` after the fake's `bin`, the runner's own unless given. */
+  readonly guestPath?: string | undefined;
 }
 
 export type Dropping = Dropped | "capture" | "exec" | "resize";
@@ -646,7 +648,7 @@ export const fakeSmolCloud = (
               ...process.env,
               CLANKERBOX_ROOT: machine.root,
               CLANKERBOX_USER: body.user ?? "root",
-              PATH: `${bin}:${process.env["PATH"] ?? ""}`,
+              PATH: `${bin}:${options.guestPath ?? process.env["PATH"] ?? ""}`,
             }
           );
 
