@@ -39,6 +39,8 @@ const served = async (server: Server) => {
   return `http://127.0.0.1:${port}`;
 };
 
+const longRefusal = `bad gateway ${"x".repeat(10_000)} the end`;
+
 const servedAgent = async () => {
   const ended: string[] = [];
 
@@ -81,6 +83,13 @@ const servedAgent = async () => {
       case "/v1/acp/refused": {
         reply.writeHead(500, { "content-type": "text/plain" });
         reply.end("no agent");
+
+        return;
+      }
+
+      case "/v1/acp/refused-at-length": {
+        reply.writeHead(502, { "content-type": "text/plain" });
+        reply.end(longRefusal);
 
         return;
       }
@@ -276,6 +285,25 @@ describe("agentFetch", () => {
       settled(send("kept", "/v1/acp/refused"))
     ).resolves.toStrictEqual(failedPrompt("500 no agent"));
     expect(logged).not.toHaveBeenCalled();
+  });
+
+  it("quotes the first 600 characters of a refusal's body, in a request's error and in a lost notification's log", async () => {
+    const { send } = await servedAgent();
+    const because = `502 ${longRefusal.slice(0, 600)}`;
+
+    await expect(
+      settled(send("kept", "/v1/acp/refused-at-length"))
+    ).resolves.toStrictEqual(failedPrompt(because));
+    await expect(
+      settled(
+        send("kept", "/v1/acp/refused-at-length", {
+          message: { jsonrpc: "2.0", method: "session/cancel" },
+        })
+      )
+    ).resolves.toStrictEqual({ status: 202, body: "" });
+    expect(logged.mock.calls).toStrictEqual([
+      [`ACP write error: sandbox kept's agent: ${because}`],
+    ]);
   });
 
   it.each([

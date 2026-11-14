@@ -3,6 +3,8 @@ import { Readable } from "node:stream";
 
 import { Option, Schema } from "effect";
 
+import { quoted } from "./tunnel.ts";
+
 const bodiless = new Set([204, 205, 304]);
 
 const onAcpConnection = (pathname: string) => pathname.startsWith("/v1/acp/");
@@ -175,7 +177,7 @@ export const agentFetch = (
             statusText: reply.statusText,
             headers: reply.headers,
           })
-        : lost(body, `${reply.status} ${text}`);
+        : lost(body, `${reply.status} ${text.slice(0, quoted)}`);
     } catch (error) {
       return connection.aborted
         ? accepted()

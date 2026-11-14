@@ -23,7 +23,8 @@ const closeWait = Duration.seconds(5);
 
 const drainWait = Duration.seconds(1);
 
-const outputTail = 600;
+/** How much of what a guest or its agent said an error quotes. */
+export const quoted = 600;
 
 const prefix = "clankerbox-tunnel-";
 
@@ -272,7 +273,7 @@ const echoed = (child: ChildProcess): Echo => {
           resume(Effect.void);
         }
 
-        seen = seen.slice(-outputTail);
+        seen = seen.slice(-quoted);
       };
 
       child.stdout?.on("data", read);
@@ -434,7 +435,7 @@ export const open = (
     let stderr = "";
 
     child.stderr?.on("data", (chunk: string) => {
-      stderr = `${stderr}${chunk}`.slice(-outputTail);
+      stderr = `${stderr}${chunk}`.slice(-quoted);
     });
 
     const failure = (
