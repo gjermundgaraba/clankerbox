@@ -80,7 +80,6 @@ const info = {
     copies: "grow",
     resize: { running: "grow", stopped: "any" },
     sizes: { _tag: "free" },
-    stopsOnItsOwn: false,
   },
   version,
   runtimeVersion: "fake",

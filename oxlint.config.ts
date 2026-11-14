@@ -5,10 +5,11 @@ const adapterPackages = [
   "^effect(/(encoding|http|process|socket))?$",
   "^@effect/platform-node/",
   "^@gjermundgaraba/clankerbox-sdk$",
+  "^@clankerbox/host-contract/traits$",
 ];
 
 const adapterBecause =
-  "an adapter imports the domain files, platform's shared process.ts, and its own subfolder; never composition/ or another adapter";
+  "an adapter imports the domain files, platform's shared process.ts, its own subfolder and the runtime traits it states; never the host contract's API, composition/ or another adapter";
 
 const providerClients = [
   "apps/host/src/platform/boat/*.ts",
@@ -53,7 +54,7 @@ export default config({
               "^effect$",
               "^effect/encoding$",
               "^@gjermundgaraba/clankerbox-sdk$",
-              "^@clankerbox/host-contract$",
+              "^@clankerbox/host-contract(/traits)?$",
             ],
             because:
               "a host domain file imports only other domain files, effect, the SDK and the host contract; platform/, Node and effect/process are for composition/",
@@ -78,7 +79,7 @@ export default config({
               "^effect$",
               "^effect/encoding$",
               "^@gjermundgaraba/clankerbox-sdk$",
-              "^@clankerbox/host-contract$",
+              "^@clankerbox/host-contract(/traits)?$",
             ],
             because:
               "a server domain file imports only other domain files, effect, the SDK and the host contract; a host is reached through hosts.ts, and platform/ and Node are for composition/",

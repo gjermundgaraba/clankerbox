@@ -9,8 +9,8 @@ import {
 } from "effect";
 
 import { Desired, HostError } from "./errors.ts";
-import { CheckpointName, HostId, Name } from "./ids.ts";
-import { RuntimeName, RuntimeTraits, Size } from "./traits.ts";
+import { CheckpointName, HostId, Name, RuntimeName } from "./ids.ts";
+import { Size } from "./sizes.ts";
 
 const CheckpointKind = Schema.Literals(["ram", "disk"]);
 
@@ -191,7 +191,7 @@ export const templateRef = (
  * what the last request asked for, `phase` what the control plane is doing about it, and `error`
  * why the last step failed, until the next request. A request takes the row out of rest in the
  * write that records it, so a resting `phase` read after a request has seen it. `template` is the
- * build a create cloned. `runtime` names the runtime it was made on, whose traits are its hosts'. `hostKey`,
+ * build a create cloned. `runtime` names the runtime it was made on. `hostKey`,
  * `<type> <base64>`, is on a machine once preparation has read one from its sshd, which a machine
  * made from a base its host doesn't prepare may lack. `ssh` is the login sshd answers: it is only
  * on a machine with a `hostKey` and an endpoint, while it runs, or while its host can't be read
@@ -354,13 +354,12 @@ export const builtFrom = (
  * An operator's view of a host: `up` with what it reported, `draining` when placement passes it
  * over, `unreachable` with why, or `incompatible`, one that answers but of another release or in
  * another contract, with why, which the control plane uses for nothing. `runtime` names what it
- * drives, whose `traits` it answers, and `runtimeVersion` is that runtime's own version.
+ * drives, and `runtimeVersion` is that runtime's own version.
  */
 export const Host = Schema.Struct({
   id: HostId,
   state: Schema.Literals(["up", "draining", "unreachable", "incompatible"]),
   runtime: Schema.optionalKey(RuntimeName),
-  traits: Schema.optionalKey(RuntimeTraits),
   version: Schema.optionalKey(Schema.String),
   runtimeVersion: Schema.optionalKey(Schema.String),
   bases: Schema.Array(Schema.String),

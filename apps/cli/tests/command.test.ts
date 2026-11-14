@@ -5,10 +5,7 @@ import { describe, layer } from "@effect/vitest";
 import { Capacity, ScriptFailed } from "@gjermundgaraba/clankerbox-sdk";
 import { ticking } from "@gjermundgaraba/clankerbox-sdk/testing/clock";
 import { write, scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import {
-  machine,
-  stubTraits,
-} from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
+import { machine } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import type { StubServer } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import { Effect } from "effect";
 import { afterEach, expect } from "vite-plus/test";
@@ -96,10 +93,7 @@ describe("commands", () => {
               config,
             ],
             {
-              server: server({
-                traits: { ...stubTraits, images: "named" },
-                bases: ["macos"],
-              }),
+              server: server({ bases: ["macos"] }),
             }
           );
 

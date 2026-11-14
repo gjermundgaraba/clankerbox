@@ -5,7 +5,6 @@ import {
   HostError,
   Internal,
   Invalid,
-  RuntimeTraits,
   Machine,
   Missing,
   Name,
@@ -21,6 +20,8 @@ import {
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Schema } from "effect";
+
+import { RuntimeTraits } from "./traits.ts";
 
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
 

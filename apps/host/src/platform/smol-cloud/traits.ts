@@ -1,5 +1,5 @@
+import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
 import { RuntimeName } from "@gjermundgaraba/clankerbox-sdk";
-import type { RuntimeTraits } from "@gjermundgaraba/clankerbox-sdk";
 
 export const traits: RuntimeTraits = {
   runtime: RuntimeName.make("smol-cloud"),
@@ -11,5 +11,4 @@ export const traits: RuntimeTraits = {
   copies: "same",
   resize: { running: "grow", stopped: "grow" },
   sizes: { _tag: "free" },
-  stopsOnItsOwn: true,
 };

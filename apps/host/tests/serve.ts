@@ -124,7 +124,7 @@ runServe(
           );
         }
 
-        const { traits, owned } = presets[runtime];
+        const { stopsOnItsOwn, owned } = presets[runtime];
 
         return {
           url: host.url,
@@ -135,7 +135,7 @@ runServe(
             holdCapture: Effect.sync(() => {
               host.fake.holdNext("capture");
             }),
-            drift: traits.stopsOnItsOwn
+            drift: stopsOnItsOwn
               ? {
                   _tag: "by-name",
                   running: (machine) => {

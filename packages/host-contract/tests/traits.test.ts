@@ -10,7 +10,7 @@ import {
   pauseCapture,
   resizable,
   RuntimeTraits,
-} from "../src/index.ts";
+} from "../src/traits.ts";
 
 const Small = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 4 }));
 

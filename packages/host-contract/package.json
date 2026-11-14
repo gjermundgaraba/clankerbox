@@ -2,11 +2,12 @@
   "name": "@clankerbox/host-contract",
   "version": "0.0.0",
   "private": true,
-  "description": "What the control plane and a host share alone: the host contract, and the journal each serves its requests through",
+  "description": "What the control plane and a host share alone: the host contract, the runtime traits each decides by, and the journal each serves its requests through",
   "type": "module",
   "exports": {
     ".": "./src/api.ts",
-    "./journal": "./src/journal.ts"
+    "./journal": "./src/journal.ts",
+    "./traits": "./src/traits.ts"
   },
   "scripts": {
     "test": "vp test"

@@ -5,6 +5,7 @@ import type {
   Ref,
   Scope as Resource,
 } from "@clankerbox/host-contract";
+import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
 import { Missing, readTimeout } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   Capacity,
@@ -13,7 +14,6 @@ import type {
   Invalid,
   Reading,
   RuntimeName,
-  RuntimeTraits,
   Sizing,
   Unsizable,
   WrongState,

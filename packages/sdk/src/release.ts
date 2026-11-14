@@ -12,7 +12,7 @@ import { Invalid } from "./errors.ts";
 /** Also the version of the clankerbox CLI released with it. */
 export const version: string = packageJson.version;
 
-/** major.minor: releases that share it speak the same API, the runtime traits' values included. */
+/** major.minor: releases that share it speak the same API. */
 export const release = (of: string): string =>
   of.split(".").slice(0, 2).join(".");
 

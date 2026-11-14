@@ -1,36 +1,18 @@
+import {
+  formatCpu,
+  formatGib,
+  formatMib,
+  RuntimeName,
+  Sizes,
+} from "@gjermundgaraba/clankerbox-sdk";
 import { Schema } from "effect";
-
-import { formatCpu, formatGib, formatMib } from "./sizes.ts";
-
-/**
- * A runtime's name, as its host's config and its registry entry give it. The SDK holds no list of
- * runtimes: what a client may rely on of one is its `RuntimeTraits`.
- */
-export const RuntimeName = Schema.String.check(
-  Schema.isPattern(/^[a-z][a-z0-9-]{0,31}$/u, {
-    message:
-      "a runtime's name is 1 to 32 lowercase letters, digits and '-', starting with a letter",
-  })
-).pipe(Schema.brand("RuntimeName"));
-
-export type RuntimeName = typeof RuntimeName.Type;
-
-export const Size = Schema.Int.check(Schema.isGreaterThan(0));
-
-export const Sizes = Schema.Struct({
-  cpu: Size,
-  ramMib: Size,
-  diskGib: Size,
-});
-
-export type Sizes = typeof Sizes.Type;
 
 const Growth = Schema.Literals(["grow", "any", "none"]);
 
 /**
  * What every machine of a runtime does where runtimes differ, declared once in the runtime's own
- * folder on its host, and read from the host as it answers: a row the control plane keeps names its
- * runtime alone.
+ * folder on its host, and read from the host as it answers. A client sees only a runtime's name;
+ * the control plane and its hosts, of one release, decide by the rest.
  *
  * - `images`: `named` creates only from the host's named bases; `references` also from an image
  *   reference.
@@ -47,15 +29,6 @@ const Growth = Schema.Literals(["grow", "any", "none"]);
  *   only larger ones; `any`; or `none`, which refuses a machine in that state.
  * - `sizes`: `free`, any sizes, or `classes`, named sizes a machine's vCPUs, RAM and disk must
  *   together equal one of.
- * - `stopsOnItsOwn`: the runtime stops machines no request asked it to, which a client reads as a
- *   machine that may show `starting` unasked.
- *
- * Each field and each value is the client contract's, so they change only with a new major.minor,
- * which `versionCheck` refuses a client of another: a client decodes every trait it meets, and each
- * rule below decides on every value. A runtime added in a patch release declares values its release
- * knows; only its `runtime` name is new. The SDK's tests pin each release's in
- * `tests/runtime-traits/`, and fail when these differ from the newest, and a tag publishes only the
- * release the newest pins.
  */
 export const RuntimeTraits = Schema.Struct({
   runtime: RuntimeName,
@@ -74,7 +47,6 @@ export const RuntimeTraits = Schema.Struct({
       ),
     }),
   ]),
-  stopsOnItsOwn: Schema.Boolean,
 }).annotate({ identifier: "RuntimeTraits" });
 
 export type RuntimeTraits = typeof RuntimeTraits.Type;

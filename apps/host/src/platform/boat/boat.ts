@@ -1,10 +1,10 @@
+import { givenSizes } from "@clankerbox/host-contract/traits";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import {
   Capacity,
   formatCpu,
   formatGib,
   formatMib,
-  givenSizes,
   Internal,
   Missing,
   Unsizable,

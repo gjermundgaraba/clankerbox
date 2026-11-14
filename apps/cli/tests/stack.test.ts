@@ -301,14 +301,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
               id: "alpha",
               state: "up",
               runtime: "smolvm",
-              traits: { runtime: "smolvm", checkpoint: "ram" },
               bases: ["ubuntu"],
             },
             {
               id: "beta",
               state: "up",
               runtime: "smolvm",
-              traits: { runtime: "smolvm", checkpoint: "ram" },
               bases: ["ubuntu"],
             },
           ],
@@ -316,6 +314,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(
           (yield* decodeJson(HostsJson, json.stdout)).hosts.map(({ id }) => id)
         ).toStrictEqual(["alpha", "beta"]);
+
+        expect(json.stdout).not.toContain('"traits"');
+
         expect(capacity.code).toBe(0);
         expect(capacity.stdout).toMatch(/^alpha\s+ram\s+1G\s+-$/mu);
         expect(JSON.parse(parted.stdout)).toMatchObject({

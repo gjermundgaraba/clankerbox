@@ -1,6 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { presets } from "@gjermundgaraba/clankerbox-host/testing";
 import {
   Client,
   Conflict,
@@ -73,7 +72,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             id: "smolvm",
             state: "up",
             runtime: "smolvm",
-            traits: presets.smolvm.traits,
             version,
             runtimeVersion: "fake",
             bases: ["ubuntu"],
@@ -108,7 +106,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           id: "one",
           state: "up",
           runtime: "smolvm",
-          traits: presets.smolvm.traits,
         });
         expect(draining).toMatchObject({ id: "two", state: "draining" });
         expect(down).toMatchObject({

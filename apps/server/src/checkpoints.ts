@@ -1,10 +1,10 @@
 import type { Report } from "@clankerbox/host-contract";
+import { pauseCapture } from "@clankerbox/host-contract/traits";
 import {
   copyPrefixes,
   Internal,
   isResting,
   labelledWith,
-  pauseCapture,
   readTimeout,
   Unavailable,
   WrongState,

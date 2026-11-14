@@ -13,15 +13,15 @@ import type {
   Source,
   Step,
 } from "@clankerbox/host-contract";
+import { givenSizes, resizable } from "@clankerbox/host-contract/traits";
+import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
 import {
   Conflict,
   formatCpu,
   formatGib,
   formatMib,
-  givenSizes,
   Internal,
   PinMismatch,
-  resizable,
   timedOutExitCode,
   Unsizable,
   WrongState,
@@ -31,7 +31,6 @@ import type {
   HostError,
   Invalid,
   Missing,
-  RuntimeTraits,
   Sizing,
   TailnetStatus,
 } from "@gjermundgaraba/clankerbox-sdk";

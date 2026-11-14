@@ -15,8 +15,8 @@ import path from "node:path";
 import { presets } from "@gjermundgaraba/clankerbox-host/testing";
 import { traits as boat } from "@gjermundgaraba/clankerbox-host/testing/boat";
 import { traits as smolCloud } from "@gjermundgaraba/clankerbox-host/testing/smol-cloud";
-import { fitted, mibPerGib } from "@gjermundgaraba/clankerbox-sdk";
-import type { RuntimeTraits } from "@gjermundgaraba/clankerbox-sdk";
+import { mibPerGib } from "@gjermundgaraba/clankerbox-sdk";
+import type { Sizes } from "@gjermundgaraba/clankerbox-sdk";
 import { Schema } from "effect";
 import { Yaml } from "effect/encoding";
 import { describe, expect, it, onTestFinished } from "vite-plus/test";
@@ -157,7 +157,16 @@ const launched = async (name: Recipe, agentEnv?: string) => {
   };
 };
 
-const runtimesOf = new Map<string, readonly RuntimeTraits[]>([
+type Traits = typeof boat;
+
+const gives = ({ sizes: given }: Traits, sizes: Sizes): boolean =>
+  given._tag === "free" ||
+  given.classes.some(
+    ({ cpu, ramMib, diskGib }) =>
+      cpu === sizes.cpu && ramMib === sizes.ramMib && diskGib === sizes.diskGib
+  );
+
+const runtimesOf = new Map<string, readonly Traits[]>([
   ["agent.yaml", [presets.smolvm.traits, smolCloud]],
   ["agent-boat.yaml", [boat]],
   ["agent-mac.yaml", [presets.tart.traits]],
@@ -241,9 +250,7 @@ describe("recipes", { timeout: testLimit }, () => {
       const sizes = await sizesOf(file);
 
       for (const traits of runtimesOf.get(file) ?? []) {
-        expect(fitted(traits, sizes), `${file} on ${traits.runtime}`).toBe(
-          true
-        );
+        expect(gives(traits, sizes), `${file} on ${traits.runtime}`).toBe(true);
       }
     }
   });

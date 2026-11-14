@@ -5,8 +5,7 @@ import { layer } from "@effect/vitest";
 import { hostKeySetup } from "@gjermundgaraba/clankerbox-host/testing";
 import { startRentedHost } from "@gjermundgaraba/clankerbox-host/testing/rented";
 import type { RentedRuntime } from "@gjermundgaraba/clankerbox-host/testing/rented";
-import { fitted } from "@gjermundgaraba/clankerbox-sdk";
-import type { RuntimeTraits, Sizes } from "@gjermundgaraba/clankerbox-sdk";
+import type { Sizes } from "@gjermundgaraba/clankerbox-sdk";
 import * as NodeClient from "@gjermundgaraba/clankerbox-sdk/node";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { clientOf, running } from "@gjermundgaraba/clankerbox-server/testing";
@@ -17,16 +16,9 @@ import { expect } from "vite-plus/test";
 import { provider } from "../src/provider.ts";
 import { fakeSsh } from "./support.ts";
 
-const smallest: Sizes = { cpu: 1, ramMib: 1024, diskGib: 10 };
-
-const sizesFor = (traits: RuntimeTraits): Sizes => {
-  if (traits.sizes._tag === "free") {
-    return smallest;
-  }
-
-  const [{ cpu, ramMib, diskGib }] = traits.sizes.classes;
-
-  return { cpu, ramMib, diskGib };
+const sizesOn: Record<RentedRuntime, Sizes> = {
+  "smol-cloud": { cpu: 1, ramMib: 1024, diskGib: 10 },
+  boat: { cpu: 2, ramMib: 4096, diskGib: 80 },
 };
 
 const agentOn = (runtime: RentedRuntime) =>
@@ -44,10 +36,7 @@ const agentOn = (runtime: RentedRuntime) =>
     });
 
     const client = yield* clientOf(plane.url);
-    const { traits } = host;
-    const sizes = sizesFor(traits);
-
-    expect(fitted(traits, sizes)).toBe(true);
+    const sizes = sizesOn[runtime];
 
     yield* client.buildTemplate({
       template: "agent",

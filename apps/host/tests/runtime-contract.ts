@@ -1,11 +1,7 @@
 import type { Handle } from "@clankerbox/host-contract";
+import { fitted, resizable } from "@clankerbox/host-contract/traits";
 import { describe, it } from "@effect/vitest";
-import {
-  Capacity,
-  fitted,
-  resizable,
-  WrongState,
-} from "@gjermundgaraba/clankerbox-sdk";
+import { Capacity, WrongState } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Fiber, Schedule, Stream } from "effect";
 import type { Scope } from "effect";
 import { expect } from "vite-plus/test";

@@ -66,7 +66,7 @@ const encodeCapacity = Schema.encodeSync(CapacityReport);
 export const hosts = listCommand({
   name: "hosts",
   description:
-    "List every host, for an operator: whether it answers, with its runtime, versions and bases. With --json, each host that answers carries its runtime's traits.",
+    "List every host, for an operator: whether it answers, with its runtime, versions and bases.",
   key: "hosts",
   read: (client) => client.hosts,
   encode: encodeHost,

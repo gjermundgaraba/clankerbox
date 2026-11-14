@@ -25,8 +25,6 @@ import {
   NotBuilt,
   NotFound,
   NotOffered,
-  offered,
-  offers,
   RuntimeName,
   templateRef,
   version,
@@ -48,7 +46,6 @@ import type {
   Labels,
   Machine,
   Phase,
-  RuntimeTraits,
   Sizing,
   Template,
 } from "../src/index.ts";
@@ -73,7 +70,7 @@ export type Refusals = {
 
 export interface StubServerOptions {
   readonly bases?: readonly string[];
-  readonly traits?: RuntimeTraits;
+  readonly runtime?: RuntimeName;
   readonly runtimeVersion?: string;
   /** The clankerbox version the stub control plane runs, whose release it serves alone. */
   readonly version?: string;
@@ -95,22 +92,11 @@ export interface StubServerOptions {
   ) => Effect.Effect<Executed, Declared<"execMachine">>;
 }
 
-export const stubTraits: RuntimeTraits = {
-  runtime: RuntimeName.make("stub"),
-  images: "references",
-  checkpoint: "ram",
-  captureFrom: "running",
-  pause: "saves",
-  stop: "resumes",
-  copies: "grow",
-  resize: { running: "grow", stopped: "any" },
-  sizes: { _tag: "free" },
-  stopsOnItsOwn: false,
-};
+export const stubRuntime = RuntimeName.make("stub");
 
 export const machine = (id: string, fields?: Partial<Machine>): Machine => ({
   id,
-  runtime: stubTraits.runtime,
+  runtime: stubRuntime,
   createdAt: DateTime.makeUnsafe("2026-10-01T00:00:00Z"),
   base: "ubuntu",
   cpu: 1,
@@ -232,9 +218,8 @@ const noTemplate = (id: string) =>
  * name, cleared at once by a delete, and no machine to any other request.
  */
 export const stubServer = (options: StubServerOptions = {}) => {
-  const traits = options.traits ?? stubTraits;
+  const runtime = options.runtime ?? stubRuntime;
   const bases = options.bases ?? ["ubuntu"];
-  const offering = { bases, traits };
   const machines = new Map<string, Machine>();
   const checkpoints = new Map<string, Checkpoint>();
   const templates = new Map<string, Template>();
@@ -490,7 +475,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
 
   const notOffered = (base: string) =>
     new NotOffered({
-      message: `no host offers ${base}: the host offers ${offered(offering)}`,
+      message: `no host offers ${base}: the host offers ${bases.length > 0 ? bases.join(", ") : "no bases"}`,
       base,
     });
 
@@ -525,7 +510,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
         return yield* add(
           labelled(
             machine(request.id, {
-              runtime: traits.runtime,
+              runtime,
               base: ready.base,
               ...sized(ready, request),
               template: ready.id,
@@ -537,14 +522,14 @@ export const stubServer = (options: StubServerOptions = {}) => {
         );
       }
 
-      if (!offers(offering, request.base)) {
+      if (!bases.includes(request.base)) {
         return yield* notOffered(request.base);
       }
 
       return yield* add(
         labelled(
           machine(request.id, {
-            runtime: traits.runtime,
+            runtime,
             base: request.base,
             cpu: request.cpu,
             ramMib: request.ramMib,
@@ -567,7 +552,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
       add(
         labelled(
           machine(name, {
-            runtime: traits.runtime,
+            runtime,
             base: found.base,
             ...sized(found, sizes),
             state: "unknown",
@@ -677,8 +662,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
   const host: Host = {
     id: "stub",
     state: "up",
-    runtime: traits.runtime,
-    traits,
+    runtime,
     version,
     runtimeVersion: options.runtimeVersion ?? "0.0.0-test",
     bases,

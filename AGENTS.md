@@ -37,7 +37,7 @@ release. Add a tool name to select part of the graph. For example, run
 | Path                            | Holds                                                                  |
 | ------------------------------- | ---------------------------------------------------------------------- |
 | `packages/sdk/`                 | The client contract, its schemas and errors, the client                |
-| `packages/host-contract/`       | The host contract and the journal, private: the server's and host's    |
+| `packages/host-contract/`       | The host contract, the traits, the journal: the server's and host's    |
 | `apps/server/`                  | The control plane: rows, charts, leases, the loops, placement          |
 | `apps/host/`                    | A host: runs operations on one of the runtimes, and keeps no database  |
 | `apps/cli/`                     | The CLI: its commands, over the SDK                                    |
@@ -194,7 +194,11 @@ host over a runtime Layer and a server Layer it is given, with the config's
 tailnet and build store, if any.
 
 **Host contract** (`packages/host-contract/src`). `api.ts`: `HostHttp`, the
-`Step`s, `Operation`, `Report`, `HostInfo`. `journal.ts`: `journal`, what the
+`Step`s, `Operation`, `Report`, `HostInfo`. `traits.ts`, its `./traits` export:
+a runtime's `RuntimeTraits`, which `HostInfo` carries and each adapter states,
+and the pure rules each decision about a machine goes through, which the server
+calls before it writes a row and the host before it runs a step; a client sees
+only a runtime's name. `journal.ts`: `journal`, what the
 control plane's log and a host's hold of the requests each serves, one
 middleware for both, as both must log no secret a request carries: a request
 that answers `Internal` or fails as no action declares logs at error, with its
@@ -203,9 +207,8 @@ logs at debug.
 
 **SDK** (`packages/sdk/src`). A library. Its root modules are the client
 contract and the vocabulary everything else imports: `api.ts`, `resources.ts`,
-`traits.ts` (a runtime's `RuntimeTraits`, and the pure rules each decision about
-a machine goes through), `errors.ts`, `ids.ts`, `release.ts` (with `versionCheck`, for a server of either
-contract), `sizes.ts`, `describe.ts`. The rest are `client.ts`, `setup.ts`
+`errors.ts`, `ids.ts` (with `RuntimeName`), `release.ts` (with `versionCheck`, for a server of either
+contract), `sizes.ts` (with `Sizes`), `describe.ts`. The rest are `client.ts`, `setup.ts`
 and `ssh.ts`. The `.` entry loads no Node; `./node` (`node.ts`) holds what
 needs it.
 
@@ -281,11 +284,7 @@ the run.
 - **Property and model tests** cover IDs, units, the RAM budget, recipe
   packing, the rules of runtime traits, and the store's `advance` and leases, as models checked against
   SQLite; a chart, small enough, is checked with every event from every leaf.
-  Each states what is right without calling the code under test. The runtime
-  traits' JSON Schema is pinned per release in `packages/sdk/tests/runtime-traits/`:
-  a changed field or value takes a new file for the next minor, never an edit of
-  a pinned one, and `npm.yml` publishes a tag only for the release the newest
-  pins.
+  Each states what is right without calling the code under test.
 - **A chart is pure and runs inside the write.** `applied` rebuilds a snapshot
   from the row, runs `transition` once inside the transaction of `store.advance`,
   and drops it, so no snapshot outlives the write. A chart has no `invoke`, no
@@ -404,7 +403,8 @@ the run.
   them; `apps/server/src/hosts.ts` alone calls a host; the server's `composition/` and `main.ts` never load the
   host package; the server's only adapter is the `Store`, and a host's adapters
   can't import `node:sqlite`; a host adapter imports domain files, its own
-  folder and `platform/`'s `process.ts`, and the boat and smol cloud clients
+  folder, `platform/`'s `process.ts` and the host contract's `./traits`, never
+  its API, and the boat and smol cloud clients
   `provider-http.ts` too; the host contract
   imports `effect`, the SDK and effect-actions, but for `journal.ts`, which
   imports `effect` and its `http` alone, and the server's `composition/` takes

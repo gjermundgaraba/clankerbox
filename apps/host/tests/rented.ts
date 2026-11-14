@@ -2,9 +2,9 @@ import { createServer } from "node:net";
 import type { Server } from "node:net";
 import path from "node:path";
 
+import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { RuntimeTraits } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Context,
   Effect,

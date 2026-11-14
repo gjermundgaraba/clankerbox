@@ -1,5 +1,6 @@
 import { Endpoint, Handle, Step } from "@clankerbox/host-contract";
 import type { Retired } from "@clankerbox/host-contract";
+import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
 import {
   Build,
   Checkpoint,
@@ -10,12 +11,7 @@ import {
   RuntimeName,
   Sizing,
 } from "@gjermundgaraba/clankerbox-sdk";
-import type {
-  Conflict,
-  Internal,
-  Phase,
-  RuntimeTraits,
-} from "@gjermundgaraba/clankerbox-sdk";
+import type { Conflict, Internal, Phase } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, Schema, SchemaGetter } from "effect";
 import type {
   Array as Arr,

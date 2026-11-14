@@ -1,9 +1,9 @@
+import { isImageReference } from "@clankerbox/host-contract/traits";
 import {
   describeFileError,
   describeIssues,
   HostId,
   Invalid,
-  isImageReference,
   Port,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Address } from "@gjermundgaraba/clankerbox-sdk/node";

@@ -1,14 +1,16 @@
 import type { HostInfo } from "@clankerbox/host-contract";
 import {
+  fetchable,
+  offers,
+  stopsBeforeCapture,
+} from "@clankerbox/host-contract/traits";
+import {
   buildId,
   builtFrom,
   Conflict,
-  fetchable,
   Internal,
   keptBuilds,
   NotFound,
-  offers,
-  stopsBeforeCapture,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   Build,

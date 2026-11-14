@@ -14,6 +14,16 @@ const nameRule = `a name is 1 to ${maxNameLength} characters: it starts with a l
 const isName = (name: string): boolean =>
   name.length <= maxNameLength && namePattern.test(name);
 
+/** A runtime's name, as its host's config and its registry entry give it. */
+export const RuntimeName = Schema.String.check(
+  Schema.isPattern(/^[a-z][a-z0-9-]{0,31}$/u, {
+    message:
+      "a runtime's name is 1 to 32 lowercase letters, digits and '-', starting with a letter",
+  })
+).pipe(Schema.brand("RuntimeName"));
+
+export type RuntimeName = typeof RuntimeName.Type;
+
 export const HostId = Schema.String.check(
   Schema.isPattern(hostIdPattern, { message: hostIdRule })
 );

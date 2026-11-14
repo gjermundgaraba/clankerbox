@@ -1,5 +1,6 @@
+import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
 import { RuntimeName } from "@gjermundgaraba/clankerbox-sdk";
-import type { RuntimeTraits, Sizes } from "@gjermundgaraba/clankerbox-sdk";
+import type { Sizes } from "@gjermundgaraba/clankerbox-sdk";
 import { Array as Arr } from "effect";
 
 import type { BoatType } from "./api.ts";
@@ -42,5 +43,4 @@ export const traits = (
     _tag: "classes",
     classes: Arr.map(offered, (name) => ({ name, ...types[name] })),
   },
-  stopsOnItsOwn: true,
 });

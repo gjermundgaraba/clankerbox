@@ -109,7 +109,6 @@ export const listed = ({ member, info, problem }: Reached): Host =>
         id: member.id,
         state: member.draining ? "draining" : "up",
         runtime: info.traits.runtime,
-        traits: info.traits,
         version: info.version,
         runtimeVersion: info.runtimeVersion,
         bases: info.bases,

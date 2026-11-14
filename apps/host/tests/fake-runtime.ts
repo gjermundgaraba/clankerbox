@@ -19,17 +19,14 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 
+import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
 import {
   Capacity,
   Internal,
   RuntimeName,
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
-import type {
-  RuntimeTraits,
-  Sizing,
-  Unsizable,
-} from "@gjermundgaraba/clankerbox-sdk";
+import type { Sizing, Unsizable } from "@gjermundgaraba/clankerbox-sdk";
 import { Deferred, Effect, Layer, Schema, Scope, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
@@ -89,6 +86,8 @@ export interface Preset {
    * running, measured on each.
    */
   readonly cut: "ends" | "leaves";
+  /** Whether the runtime stops machines no request asked it to, as boat and smol cloud do. */
+  readonly stopsOnItsOwn: boolean;
 }
 
 export const fixed: RuntimeTraits = {
@@ -108,7 +107,6 @@ export const fixed: RuntimeTraits = {
       { name: "large", cpu: 4, ramMib: 8192, diskGib: 40 },
     ],
   },
-  stopsOnItsOwn: true,
 };
 
 export const presets = {
@@ -122,6 +120,7 @@ export const presets = {
     owned: undefined,
     relayed: false,
     cut: "ends",
+    stopsOnItsOwn: false,
   },
   tart: {
     traits: tart,
@@ -133,6 +132,7 @@ export const presets = {
     owned: undefined,
     relayed: true,
     cut: "leaves",
+    stopsOnItsOwn: false,
   },
   fixed: {
     traits: fixed,
@@ -144,6 +144,7 @@ export const presets = {
     owned: { checkpoints: "held" },
     relayed: false,
     cut: "leaves",
+    stopsOnItsOwn: true,
   },
 } as const satisfies Record<string, Preset>;
 

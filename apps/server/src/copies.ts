@@ -2,10 +2,13 @@ import type { MachineState } from "@clankerbox/host-contract";
 import {
   copySizable,
   fitted,
+  givenSizes,
+} from "@clankerbox/host-contract/traits";
+import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
+import {
   formatCpu,
   formatGib,
   formatMib,
-  givenSizes,
   NotBuilt,
   PinMismatch,
   templateRef,
@@ -15,7 +18,6 @@ import {
 import type {
   Internal,
   NotFound,
-  RuntimeTraits,
   Sizing,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Option } from "effect";

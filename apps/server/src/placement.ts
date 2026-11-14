@@ -1,15 +1,17 @@
 import type { HostInfo } from "@clankerbox/host-contract";
 import {
-  buildId,
   fitted,
+  givenSizes,
+  offered,
+  offers,
+} from "@clankerbox/host-contract/traits";
+import {
+  buildId,
   formatCpu,
   formatGib,
-  givenSizes,
   formatMib,
   NotBuilt,
   NotOffered,
-  offered,
-  offers,
   Unavailable,
   Unsizable,
 } from "@gjermundgaraba/clankerbox-sdk";

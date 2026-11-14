@@ -1,3 +1,15 @@
+import { Schema } from "effect";
+
+export const Size = Schema.Int.check(Schema.isGreaterThan(0));
+
+export const Sizes = Schema.Struct({
+  cpu: Size,
+  ramMib: Size,
+  diskGib: Size,
+});
+
+export type Sizes = typeof Sizes.Type;
+
 export const mibPerGib = 1024;
 
 /** Exactly, as a size flag takes it: `32G`, `1.5G`, `512M`, `1500M`. */
