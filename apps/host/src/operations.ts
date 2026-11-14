@@ -275,6 +275,33 @@ const apartFromItsRequest = <E>(
 
 type Make = Extract<Step, { readonly _tag: "make" }>;
 
+interface Accepted {
+  readonly sequence: number;
+  readonly id: string;
+  readonly leavesInstance: string | undefined;
+}
+
+const instanceLeftBy = (step: Step): string | undefined => {
+  switch (step._tag) {
+    case "make":
+    case "start":
+    case "stop":
+    case "pause":
+    case "resize":
+    case "join": {
+      return step.machine.instance;
+    }
+
+    case "remove":
+    case "capture":
+    case "deleteCheckpoint":
+    case "publish":
+    case "fetch": {
+      return undefined;
+    }
+  }
+};
+
 const namedBy = (step: Step): readonly Ref[] => {
   switch (step._tag) {
     case "make": {
@@ -373,7 +400,7 @@ export const make = (
     );
 
     const entries = new Map<string, Entry>();
-    const scopes = new Map<string, { sequence: number; id: string }>();
+    const scopes = new Map<string, Accepted>();
     const booting = new Map<string, MachineRef>();
 
     const found = (what: Resource["resource"], ref: Ref) =>
@@ -1175,7 +1202,11 @@ export const make = (
               fiber,
               progress,
             });
-            scopes.set(keyOf(scope), { sequence, id });
+            scopes.set(keyOf(scope), {
+              sequence,
+              id,
+              leavesInstance: instanceLeftBy(step),
+            });
 
             return reported(id, progress);
           })
@@ -1330,15 +1361,14 @@ export const make = (
         })
       );
 
-    const lastStepOn = (name: string) =>
-      scopes.get(keyOf({ resource: "machine", name }))?.id;
+    const reachable = ({ name, instance }: MachineRef) => {
+      const last = scopes.get(keyOf({ resource: "machine", name }));
+
+      return last === undefined || last.leavesInstance === instance;
+    };
 
     const adopt: Interface["adopt"] = (machines) =>
       Effect.gen(function* () {
-        const before = new Map(
-          machines.map(({ name }) => [name, lastStepOn(name)])
-        );
-
         const [adopted, unresolved] = yield* Effect.partition(
           machines,
           (machine) =>
@@ -1364,18 +1394,20 @@ export const make = (
         );
 
         const reached = yield* accepting.withPermits(1)(
-          reaches.adopt(
-            adopted.flatMap(({ machine, handle }) =>
-              handle === undefined ||
-              machine.endpoint === undefined ||
-              lastStepOn(machine.name) !== before.get(machine.name)
-                ? []
-                : [
-                    {
-                      machine: targetOf(machine, handle),
-                      port: machine.endpoint.port,
-                    },
-                  ]
+          Effect.suspend(() =>
+            reaches.adopt(
+              adopted.flatMap(({ machine, handle }) =>
+                handle === undefined ||
+                machine.endpoint === undefined ||
+                !reachable(machine)
+                  ? []
+                  : [
+                      {
+                        machine: targetOf(machine, handle),
+                        port: machine.endpoint.port,
+                      },
+                    ]
+              )
             )
           )
         );

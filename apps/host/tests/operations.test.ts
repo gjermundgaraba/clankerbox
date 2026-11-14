@@ -3605,6 +3605,39 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "an adopt the control plane sent before a remove that the host has since run and forgotten opens no relay for the deleted machine",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner({ relayed: true });
+        const made = yield* finished(host, makes("dev"));
+
+        const dev = ref("dev", {
+          ...reached(portOf(made) ?? 0),
+          ...(made.outcome.handle === undefined
+            ? {}
+            : { handle: made.outcome.handle }),
+        });
+
+        const removed = yield* finished(
+          host,
+          { _tag: "remove", machine: dev, keep: [] },
+          2
+        );
+
+        yield* host.operations.collect(made.id);
+        yield* host.operations.collect(removed.id);
+
+        const adoption = yield* host.operations.adopt([dev]);
+
+        expect([
+          removed.status,
+          adoption.adopted.map(({ name }) => name),
+          yield* accepts(portIn(dev)),
+        ]).toStrictEqual(["done", ["dev"], false]);
+      })
+  );
+
+  it.effect(
     "a make that fails natively opens no relay, and a made machine's relay stays through a stop and a failed delete, and ends once the delete is done",
     () =>
       Effect.gen(function* () {
