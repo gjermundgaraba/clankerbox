@@ -222,7 +222,9 @@ export builds a host over a fake runtime, its `./testing/smol-cloud` and
 `./testing/boat` serve a provider's fake API and give its traits, the server's `./testing` a control
 plane over such hosts with real HTTP between them, and the SDK's
 `./testing/stub-server` serves a stub control plane over an in-memory transport,
-beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
+beside `./testing/clock`, `./testing/files` and `./testing/keys`, and
+`./testing/equality`, which every package's tests load as a setup file, so two
+tagged errors compare equal only with the same message. None of the
 `./testing` exports is published.
 
 ## House style

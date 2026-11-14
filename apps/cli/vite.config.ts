@@ -17,5 +17,8 @@ export default defineConfig({
     minify: true,
     outputOptions: { codeSplitting: false },
   },
-  test: { include: ["tests/**/*.test.ts"] },
+  test: {
+    setupFiles: ["@gjermundgaraba/clankerbox-sdk/testing/equality"],
+    include: ["tests/**/*.test.ts"],
+  },
 });

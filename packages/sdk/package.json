@@ -17,6 +17,7 @@
     ".": "./src/index.ts",
     "./node": "./src/node.ts",
     "./testing/clock": "./tests/clock.ts",
+    "./testing/equality": "./tests/equality.ts",
     "./testing/files": "./tests/files.ts",
     "./testing/keys": "./tests/keys.ts",
     "./testing/stub-server": "./tests/stub-server.ts",

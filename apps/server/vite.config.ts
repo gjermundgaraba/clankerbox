@@ -7,5 +7,8 @@ export default defineConfig({
     platform: "node",
     dts: false,
   },
-  test: { include: ["tests/**/*.test.ts"] },
+  test: {
+    setupFiles: ["@gjermundgaraba/clankerbox-sdk/testing/equality"],
+    include: ["tests/**/*.test.ts"],
+  },
 });

@@ -100,7 +100,7 @@ const fileRefusals = [
     case: "YAML that isn't a mapping",
     name: "web.yaml",
     contents: "- ubuntu\n",
-    message: 'Expected object, got ["ubuntu"]',
+    message: "Expected object",
   },
 ];
 

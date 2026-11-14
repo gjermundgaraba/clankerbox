@@ -7,5 +7,8 @@ export default defineConfig({
     format: ["esm"],
     dts: { generator: "tsgo" },
   },
-  test: { include: ["tests/**/*.test.ts"] },
+  test: {
+    setupFiles: ["./tests/equality.ts"],
+    include: ["tests/**/*.test.ts"],
+  },
 });
