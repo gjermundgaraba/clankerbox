@@ -241,7 +241,8 @@ file, so two tagged errors compare equal only with the same message; the lint
 fence's tests, which compare no tagged errors, load none. None of the
 `./testing` exports is published. Every port a test of any package listens on
 is in one table, the host's `tests/port-slot.ts`, whose global setup the host's,
-the server's and the CLI's tests each run to claim a slot for the run.
+the server's, the CLI's and both providers' tests each run to claim a slot for
+the run.
 
 ## House style
 

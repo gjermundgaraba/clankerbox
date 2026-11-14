@@ -17,11 +17,6 @@ import { expect } from "vite-plus/test";
 import { provider } from "../src/provider.ts";
 import { fakeSsh } from "./support.ts";
 
-const portsOn = {
-  "smol-cloud": { first: 23_000, last: 23_009 },
-  boat: { first: 23_010, last: 23_019 },
-} as const;
-
 const smallest: Sizes = { cpu: 1, ramMib: 1024, diskGib: 10 };
 
 const sizesFor = (traits: RuntimeTraits): Sizes => {
@@ -41,7 +36,6 @@ const agentOn = (runtime: RentedRuntime) =>
     const host = yield* startRentedHost(path.join(dir, "host"), {
       runtime,
       id: runtime,
-      ports: portsOn[runtime],
     });
 
     const plane = yield* running({

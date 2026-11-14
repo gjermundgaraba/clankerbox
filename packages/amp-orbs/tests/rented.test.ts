@@ -26,11 +26,6 @@ import { expect } from "vite-plus/test";
 import { orbLabel, snapshotLabel } from "../src/dispatch.ts";
 import { run } from "../src/provider.ts";
 
-const portsOn = {
-  "smol-cloud": { first: 23_100, last: 23_109 },
-  boat: { first: 23_110, last: 23_119 },
-} as const;
-
 const image = "registry.example/amp/orb:latest";
 
 const orb = "amp-T-0199c2a3";
@@ -147,7 +142,6 @@ const orbsOn = Effect.fn("orbsOn")(function* (
   const host = yield* startRentedHost(path.join(dir, "host"), {
     runtime,
     id: runtime,
-    ports: portsOn[runtime],
     guestPath: imageBinApartFromTheRunner(dir, amp),
   });
 

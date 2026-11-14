@@ -1,3 +1,5 @@
+import { createServer } from "node:net";
+import type { Server } from "node:net";
 import path from "node:path";
 
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
@@ -22,6 +24,7 @@ import { fakeBoat, traits as boatTraits } from "./fake-boat.ts";
 import type { FakeBoat } from "./fake-boat.ts";
 import { fakeSmolCloud, traits as smolCloudTraits } from "./fake-smol-cloud.ts";
 import type { FakeSmolCloud } from "./fake-smol-cloud.ts";
+import { rentedRange, suitePorts } from "./port-slot.ts";
 import { hostConfig, image, loopbackServer } from "./support.ts";
 
 export type RentedApi =
@@ -40,17 +43,56 @@ export interface RentedHost {
 
 const smolCloudKey = "fake-smol-cloud-key";
 
+const guarded = (port: number): Effect.Effect<Server | undefined> =>
+  Effect.callback((resume) => {
+    const server = createServer();
+
+    server.once("error", () => {
+      resume(Effect.undefined);
+    });
+    server.listen({ port, host: "127.0.0.1", exclusive: true }, () => {
+      server.unref();
+      resume(Effect.succeed(server));
+    });
+  });
+
+const machinePorts: Effect.Effect<PortRange, never, Scope.Scope> = Effect.gen(
+  function* () {
+    const { rented } = suitePorts;
+
+    for (
+      let guard = rented.first;
+      guard + rentedRange - 1 <= rented.last;
+      guard += rentedRange
+    ) {
+      const held = yield* Effect.acquireRelease(guarded(guard), (server) =>
+        Effect.sync(() => server?.close())
+      );
+
+      if (held !== undefined) {
+        return { first: guard + 1, last: guard + rentedRange - 1 };
+      }
+    }
+
+    return yield* Effect.die(
+      new Error(
+        `every block of rented machine ports in ${rented.first}-${rented.last} is held by another host of this run`
+      )
+    );
+  }
+);
+
 /**
  * A host over the real adapter of a rented runtime, driving that provider's fake API in this
- * process, with `ubuntu` as the provider's image. It ends with the scope, or at `dispose`.
+ * process, with `ubuntu` as the provider's image. It ends with the scope, or at `dispose`. Its
+ * machine ports are a block of the run's `suitePorts.rented` after a guard port it listens on while
+ * it runs, so two hosts of the run, in test files side by side, never take the same ones.
  */
 export const startRentedHost = (
   dir: string,
   options: {
     readonly runtime: RentedRuntime;
     readonly id: string;
-    /** Its machines' ports, apart from every other suite's, as the suites run side by side. */
-    readonly ports: PortRange;
     /** On smol cloud, an exec's `PATH` after the fake's own stubs, the runner's own unless given. */
     readonly guestPath?: string | undefined;
   }
@@ -58,10 +100,13 @@ export const startRentedHost = (
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const apiDir = path.join(dir, "api");
+    const scope = yield* Scope.make();
+
+    yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
 
     const config = hostConfig(
       path.join(dir, "state"),
-      options.ports,
+      yield* Scope.provide(machinePorts, scope),
       options.id
     );
 
@@ -96,10 +141,6 @@ export const startRentedHost = (
               layer: fake.layer,
             })
           );
-
-    const scope = yield* Scope.make();
-
-    yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
 
     const context = yield* Layer.buildWithScope(
       hostLayer(
