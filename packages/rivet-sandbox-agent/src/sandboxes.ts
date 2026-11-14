@@ -198,13 +198,15 @@ export const make = (options: Options, ssh = "ssh") => {
   const locked = <A, E, R>(
     id: string,
     use: (known: Sandbox) => Effect.Effect<A, E, R>
-  ) =>
+  ): Effect.Effect<A, E, R> =>
     Effect.suspend(() => {
       const known = sandbox(id);
 
       return Semaphore.withPermit(
         known.lock,
-        Effect.suspend(() => use(known))
+        Effect.suspend(() =>
+          sandboxes.get(id) === known ? use(known) : locked(id, use)
+        )
       );
     });
 
@@ -368,6 +370,7 @@ export const make = (options: Options, ssh = "ssh") => {
               .deleteMachine({ id })
               .pipe(Effect.ensuring(closed(known)));
             yield* released(known);
+            sandboxes.delete(id);
           })
         )
       ),

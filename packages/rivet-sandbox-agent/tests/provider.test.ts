@@ -11,7 +11,7 @@ import {
   Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { checkpoint } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
-import { Effect, Schema } from "effect";
+import { Deferred, Effect, Schema } from "effect";
 import { SandboxAgent, SandboxDestroyedError } from "sandbox-agent";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
@@ -52,6 +52,23 @@ const made = (sshArguments: readonly string[]) => {
   } catch (error) {
     return error instanceof Invalid ? error.message : String(error);
   }
+};
+
+const gate = () => {
+  let entered = false;
+  const opened = Deferred.makeUnsafe<undefined>();
+
+  return {
+    held: Effect.suspend(() => {
+      entered = true;
+
+      return Deferred.await(opened);
+    }),
+    entered: () => entered,
+    open: () => {
+      Deferred.doneUnsafe(opened, Effect.undefined);
+    },
+  };
 };
 
 const refused = (arg: string, why: string) => `sshArguments: ${arg} ${why}`;
@@ -506,6 +523,51 @@ describe("provider", () => {
     );
 
     await Promise.all([sandbox.reconnect("kept"), sandbox.reconnect("kept")]);
+
+    expect(most).toBe(1);
+  });
+
+  it("a call that waited for a destroy takes turns with one that comes after the destroy", async () => {
+    let running = 0;
+    let most = 0;
+    const deletes = gate();
+    const starts = gate();
+
+    const { stub, sandbox } = await setup(
+      { machines: [reachable("kept")] },
+      {},
+      fakeSsh,
+      (client) => ({
+        ...client,
+        deleteMachine: (input) =>
+          Effect.andThen(deletes.held, client.deleteMachine(input)),
+        startMachine: (input) =>
+          Effect.acquireUseRelease(
+            Effect.sync(() => {
+              running += 1;
+              most = Math.max(most, running);
+            }),
+            () => Effect.andThen(starts.held, client.startMachine(input)),
+            () => Effect.sync(() => (running -= 1))
+          ),
+      })
+    );
+
+    const destroying = sandbox.destroy("kept");
+
+    await until("the delete to be sent", async () => deletes.entered());
+
+    const waited = sandbox.reconnect("kept");
+
+    deletes.open();
+    await destroying;
+    stub.hold(reachable("kept"));
+    await until("the waiting reconnect's start", async () => starts.entered());
+
+    const after = sandbox.reconnect("kept");
+
+    starts.open();
+    await Promise.all([waited, after]);
 
     expect(most).toBe(1);
   });
