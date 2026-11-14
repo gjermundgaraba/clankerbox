@@ -55,32 +55,44 @@ import {
   holdsPid,
 } from "../guest-processes.ts";
 import { runtimeContract } from "../runtime-contract.ts";
+import { stallingHttp } from "../stalling-http.ts";
 
 const services = Layer.mergeAll(
   NodeServices.layer,
   NodeHttpClient.layerNodeHttp
 );
 
-const onFakeBoatWith = (options: Omit<FakeBoatOptions, "dir">) =>
+const onFakeBoatOver = (
+  options: Omit<FakeBoatOptions, "dir">,
+  http: Layer.Layer<HttpClient.HttpClient>
+) =>
   Effect.gen(function* () {
     const dir = yield* scratch;
     const boat = yield* fakeBoat({ ...options, dir });
-    const context = yield* Layer.build(Layer.provide(boat.layer, services));
+
+    const context = yield* Layer.build(
+      Layer.provide(boat.layer, Layer.mergeAll(NodeServices.layer, http))
+    );
 
     return { boat, dir, runtime: Context.get(context, Runtime) };
   }).pipe(Effect.provide(NodeServices.layer), Effect.orDie);
 
-const onFakeBoat = onFakeBoatWith({});
+const onFakeBoatWith = (options: Omit<FakeBoatOptions, "dir">) =>
+  onFakeBoatOver(options, NodeHttpClient.layerNodeHttp);
 
 runtimeContract({
   name: "boat",
   image,
   sizes: types.small,
-  fixture: Effect.map(onFakeBoat, ({ boat, runtime }) => ({
-    runtime,
-    faults: boat.faults,
-    unmarked: boat.unmarked,
-  })),
+  fixture: Effect.suspend(() => {
+    const http = stallingHttp();
+
+    return Effect.map(onFakeBoatOver({}, http.layer), ({ boat, runtime }) => ({
+      runtime,
+      faults: { ...boat.faults, stall: http.stall },
+      unmarked: boat.unmarked,
+    }));
+  }),
 });
 
 const instanceOf = (seed: string) =>

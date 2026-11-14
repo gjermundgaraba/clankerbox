@@ -7,12 +7,13 @@ import {
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Fiber, Stream } from "effect";
-import type { Duration, Scope } from "effect";
+import type { Scope } from "effect";
 import { expect } from "vite-plus/test";
 
 import type {
   Bind,
   Execution,
+  Identity,
   Interface as Runtime,
   Origin,
   Sized,
@@ -28,21 +29,27 @@ export interface Faults {
   readonly quota: (on: boolean) => Effect.Effect<void>;
   readonly dropAnswer: (dropping: Dropped) => Effect.Effect<void>;
   /**
-   * Holds the provider call `after` calls from now for `hold`, at its start, before it does its
-   * work, or at its end, once it has; the effect it answers ends once that call is held, where a
-   * case cuts short what made it.
+   * Holds the provider call `after` calls from now at its start, before it does its work, or at
+   * its end, once it has, where a case cuts short what made it, as a later request or the host's
+   * end does; the call never answers. A case asks the step's fiber to end and then releases the
+   * call, which ends a step that masks the request as the host's end would.
    */
-  readonly stall?: (
-    after: number,
-    at: StallAt,
-    hold: Duration.Input
-  ) => Effect.Effect<Effect.Effect<void>>;
+  readonly stall?: (after: number, at: StallAt) => Effect.Effect<Stalled>;
 }
 
 export type Fault = keyof Faults;
 
 /** Where a stalled call is held: before it does its work, or once it has done it. */
 export type StallAt = "start" | "end";
+
+/**
+ * A held call: `reached` once it is held, and `release`, which ends it as a host that ends does,
+ * or disarms the stall when no call reached it.
+ */
+export interface Stalled {
+  readonly reached: Effect.Effect<void>;
+  readonly release: Effect.Effect<void>;
+}
 
 const stallsAt: readonly StallAt[] = ["start", "end"];
 
@@ -60,33 +67,49 @@ export interface Subject {
   readonly name: string;
   readonly image: string;
   readonly sizes: Sizes;
-  /**
-   * Each fault its fixture can't give, with why, so each case that needs it is skipped saying so;
-   * a provider's subject lacks only `stall` when left out.
-   */
+  /** Each fault its fixture can't give, with why, so each case that needs it is skipped saying so. */
   readonly lacks?: Readonly<Partial<Record<Fault, string>>>;
   readonly fixture: Effect.Effect<Fixture, never, Scope.Scope>;
 }
 
-const providerLacks: Readonly<Partial<Record<Fault, string>>> = {
-  stall: "its fixture holds no provider call part way",
-};
-
 const given = <A>(fault: A | undefined) =>
   Effect.orDie(Effect.fromNullishOr(fault));
 
-const stallHold = "100 millis";
-
 const stallCaseTimeout = 120_000;
+
+const heldOf = (runtime: Runtime, machine: Identity) =>
+  Effect.gen(function* () {
+    const found = yield* runtime.find("machine", machine);
+
+    const marked =
+      runtime.owned === undefined
+        ? []
+        : (yield* runtime.owned.machines)
+            .filter(({ instance }) => instance === machine.instance)
+            .map(({ handle }) => handle);
+
+    return { found, marked };
+  });
 
 const roundInstance = (at: StallAt, after: number) =>
   `${at === "start" ? "5" : "e"}${after.toString(16).padStart(7, "0")}${"ab".repeat(12)}`;
 
-const cutAt = <A, E>(reached: Effect.Effect<void>, call: Fiber.Fiber<A, E>) =>
+const cutAt = <A, E>(stalled: Stalled, call: Fiber.Fiber<A, E>) =>
   Effect.raceFirst(
-    Effect.as(reached, true),
+    Effect.as(stalled.reached, true),
     Effect.as(Fiber.await(call), false)
-  ).pipe(Effect.tap((cut) => (cut ? Fiber.interrupt(call) : Effect.void)));
+  ).pipe(
+    Effect.tap((cut) =>
+      cut
+        ? Effect.andThen(
+            Effect.sync(() => {
+              call.interruptUnsafe();
+            }),
+            Effect.andThen(stalled.release, Fiber.await(call))
+          )
+        : stalled.release
+    )
+  );
 
 let nextPort = 23_000;
 
@@ -126,7 +149,7 @@ const outOfCaptureState = (runtime: Runtime, machine: Sized) =>
     : runtime.stop(machine);
 
 export const runtimeContract = (subject: Subject): void => {
-  const lacking = subject.lacks ?? providerLacks;
+  const lacking = subject.lacks ?? {};
 
   const lacks = (fault: Fault) => lacking[fault] !== undefined;
 
@@ -660,7 +683,7 @@ export const runtimeContract = (subject: Subject): void => {
             for (const at of stallsAt) {
               for (let after = 0; ; after += 1) {
                 const machine = sized("cut", roundInstance(at, after));
-                const reached = yield* stall(after, at, stallHold);
+                const reached = yield* stall(after, at);
 
                 const making = yield* Effect.forkChild(
                   runtime.make(machine, fromImage, bindFor(runtime))
@@ -694,9 +717,9 @@ export const runtimeContract = (subject: Subject): void => {
                 );
 
                 expect(
-                  yield* runtime.find("machine", machine),
+                  yield* heldOf(runtime, machine),
                   `a make cut at the ${at} of its call ${after}`
-                ).toBeUndefined();
+                ).toStrictEqual({ found: undefined, marked: [] });
               }
             }
           })
@@ -717,7 +740,7 @@ export const runtimeContract = (subject: Subject): void => {
 
             for (const at of stallsAt) {
               for (let after = 0; ; after += 1) {
-                const reached = yield* stall(after, at, stallHold);
+                const reached = yield* stall(after, at);
                 const stopping = yield* Effect.forkChild(runtime.stop(machine));
                 const cut = yield* cutAt(reached, stopping);
 
@@ -760,7 +783,7 @@ export const runtimeContract = (subject: Subject): void => {
                   roundInstance(at, after)
                 );
 
-                const reached = yield* stall(after, at, stallHold);
+                const reached = yield* stall(after, at);
 
                 const deleting = yield* Effect.forkChild(
                   runtime.delete(machine, new Set())
@@ -771,9 +794,9 @@ export const runtimeContract = (subject: Subject): void => {
                 yield* runtime.delete(machine, new Set());
 
                 expect(
-                  yield* runtime.find("machine", machine),
+                  yield* heldOf(runtime, machine),
                   `a delete cut at the ${at} of its call ${after}`
-                ).toBeUndefined();
+                ).toStrictEqual({ found: undefined, marked: [] });
 
                 if (!cut) {
                   expect(after, "the calls it cut").toBeGreaterThan(0);

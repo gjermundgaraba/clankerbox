@@ -21,6 +21,10 @@ const onFake = (as: FakeRuntimeName, owned?: Preset["owned"]) => {
     name: `fake ${as}${owned === undefined ? "" : ` with ${owned.checkpoints} checkpoints`}`,
     image,
     sizes: { cpu: 1, ramMib: 1024, diskGib: 10 },
+    lacks: {
+      stall:
+        "the fake runtime is no adapter: it answers each call in memory, with no provider call to hold",
+    },
     fixture: Effect.gen(function* () {
       const dir = yield* scratch;
       const fake = fakeRuntime({ dir, as, owned });

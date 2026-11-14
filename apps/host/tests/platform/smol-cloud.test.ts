@@ -41,6 +41,7 @@ import {
   holdsPid,
 } from "../guest-processes.ts";
 import { runtimeContract } from "../runtime-contract.ts";
+import { stallingHttp } from "../stalling-http.ts";
 import {
   hostConfig,
   loopbackServer,
@@ -103,20 +104,18 @@ runtimeContract({
   sizes: { cpu: 1, ramMib: 1024, diskGib: 10 },
   fixture: Effect.gen(function* () {
     const { dir, fake, settings } = yield* provider;
+    const http = stallingHttp();
 
     const context = yield* Layer.build(
       SmolCloud.layer(
         settings,
         hostConfig(path.join(dir, "state"), undefined, hostId)
-      ).pipe(
-        Layer.provide(NodeHttpClient.layerNodeHttp),
-        Layer.provide(NodeServices.layer)
-      )
+      ).pipe(Layer.provide(http.layer), Layer.provide(NodeServices.layer))
     );
 
     return {
       runtime: Context.get(context, Runtime),
-      faults: fake.faults,
+      faults: { ...fake.faults, stall: http.stall },
       unmarked: unmarkedIn(fake),
     };
   }).pipe(provided, Effect.orDie),

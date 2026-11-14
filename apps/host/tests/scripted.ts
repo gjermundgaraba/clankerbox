@@ -1,8 +1,7 @@
-import { Deferred, Effect, Layer, Redacted, Sink, Stream } from "effect";
-import type { Duration } from "effect";
+import { Effect, Layer, Redacted, Sink, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-import type { StallAt } from "./runtime-contract.ts";
+import { callStalls } from "./call-stalls.ts";
 
 export interface Call {
   readonly file: string;
@@ -21,49 +20,9 @@ export interface Reply {
 
 const encoder = new TextEncoder();
 
-interface Stall {
-  after: number;
-  readonly at: StallAt;
-  readonly hold: Duration.Input;
-  readonly reached: Deferred.Deferred<undefined>;
-}
-
 export const scripted = (reply: (call: Call) => Reply | undefined) => {
   const calls: Call[] = [];
-  let stalled: Stall | undefined;
-
-  const stalledHere = () => {
-    if (stalled === undefined) {
-      return undefined;
-    }
-
-    if (stalled.after > 0) {
-      stalled.after -= 1;
-
-      return undefined;
-    }
-
-    const here = stalled;
-
-    stalled = undefined;
-
-    return here;
-  };
-
-  const holding = (stall: Stall | undefined, at: StallAt) =>
-    stall?.at === at
-      ? Effect.andThen(
-          Deferred.succeed(stall.reached, undefined),
-          Effect.sleep(stall.hold)
-        )
-      : Effect.void;
-
-  const stall = (after: number, at: StallAt, hold: Duration.Input) =>
-    Effect.map(Deferred.make<undefined>(), (reached) => {
-      stalled = { after, at, hold, reached };
-
-      return Deferred.await(reached);
-    });
+  const stalls = callStalls();
 
   const spawner = ChildProcessSpawner.make((command) =>
     Effect.gen(function* () {
@@ -86,9 +45,9 @@ export const scripted = (reply: (call: Call) => Reply | undefined) => {
         stdin,
       };
 
-      const here = stalledHere();
+      const held = stalls.next();
 
-      yield* holding(here, "start");
+      yield* held("start");
       calls.push(call);
 
       const answer = reply(call) ?? {};
@@ -101,10 +60,7 @@ export const scripted = (reply: (call: Call) => Reply | undefined) => {
           answer.hangs === true
             ? Effect.never
             : Effect.as(
-                Effect.andThen(
-                  answer.until ?? Effect.void,
-                  holding(here, "end")
-                ),
+                Effect.andThen(answer.until ?? Effect.void, held("end")),
                 ChildProcessSpawner.ExitCode(answer.exitCode ?? 0)
               ),
         isRunning: Effect.succeed(false),
@@ -122,7 +78,7 @@ export const scripted = (reply: (call: Call) => Reply | undefined) => {
 
   return {
     calls,
-    stall,
+    stall: stalls.stall,
     layer: Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
   };
 };
