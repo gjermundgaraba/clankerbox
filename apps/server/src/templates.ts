@@ -36,8 +36,9 @@ import { isPublished } from "./checkpoint-chart.ts";
 import type { CheckpointRow } from "./checkpoint-chart.ts";
 import { Checkpoints } from "./checkpoints.ts";
 import { apart } from "./driver.ts";
-import { Hosts } from "./hosts.ts";
+import { answering, Hosts } from "./hosts.ts";
 import type { Reached } from "./hosts.ts";
+import type { MachineRow } from "./machine-chart.ts";
 import { Machines } from "./machines.ts";
 import { builtUnder, outdated, placing } from "./placement.ts";
 import type { BuiltUnder } from "./placement.ts";
@@ -169,28 +170,50 @@ const shown = (row: TemplateRow, seen: Seen): Template => {
 const building = ({ builds }: TemplateRow) =>
   builds.find(({ phase }) => phase === "building");
 
+const revised = (
+  row: TemplateRow,
+  number: number,
+  patch: Partial<BuildRow>
+): Option.Option<TemplateRow> =>
+  row.builds.some((each) => each.number === number)
+    ? Option.some({
+        ...row,
+        builds: Arr.map(row.builds, (each) =>
+          each.number === number ? { ...each, ...patch } : each
+        ),
+      })
+    : Option.none();
+
 const ended = (
   row: TemplateRow,
   number: number,
   end: Pick<BuildRow, "phase" | "error">
-): Option.Option<TemplateRow> => {
-  const builds = row.builds.map((each) =>
-    each.number === number ? { ...each, ...end } : each
-  );
+): Option.Option<TemplateRow> =>
+  Option.flatMap(revised(row, number, end), ({ builds }) => {
+    const ready = new Set(
+      builds.filter(({ phase }) => phase === "ready").slice(-keptBuilds)
+    );
 
-  const ready = new Set(
-    builds.filter(({ phase }) => phase === "ready").slice(-keptBuilds)
-  );
+    const kept = builds.filter(
+      (each) => each.number === number || ready.has(each)
+    );
 
-  const kept = builds.filter(
-    (each) => each.number === number || ready.has(each)
-  );
+    return Arr.isReadonlyArrayNonEmpty(kept)
+      ? Option.some({ ...row, builds: kept })
+      : Option.none();
+  });
 
-  return Arr.isReadonlyArrayNonEmpty(kept) &&
-    kept.some((each) => each.number === number)
-    ? Option.some({ ...row, builds: kept })
-    : Option.none();
-};
+const imageOf = (host: HostInfo, base: string) => host.images[base] ?? base;
+
+const placedOn = (
+  { host, pin }: Pick<MachineRow, "host" | "pin">,
+  info: HostInfo,
+  base: string
+): Pick<BuildRow, "host" | "pin" | "image"> => ({
+  host,
+  pin,
+  image: imageOf(info, base),
+});
 
 const begun =
   (name: string, asked: Facts, host: HostInfo, now: DateTime.Utc) =>
@@ -221,7 +244,7 @@ const begun =
         error: undefined,
         host: host.id,
         pin: host.pin,
-        image: host.images[asked.base] ?? asked.base,
+        image: imageOf(host, asked.base),
       }),
     });
   };
@@ -305,22 +328,28 @@ export const make = (settings: {
         )
       );
 
-    const ending = (
+    const revising = (
       name: string,
       number: number,
-      end: Pick<BuildRow, "phase" | "error">
+      revise: (row: TemplateRow) => Option.Option<TemplateRow>
     ) =>
       store
         .advanceTemplate(name, (found) =>
           Result.fromOption(
-            Option.flatMap(found, (row) => ended(row, number, end)),
+            Option.flatMap(found, revise),
             () =>
               new Cause.NoSuchElementError(
-                `build ${buildId(name, number)} ended, and its template holds no such build`
+                `template ${name} holds no build ${buildId(name, number)}`
               )
           )
         )
         .pipe(Effect.catchTag("NoSuchElementError", Effect.die));
+
+    const ending = (
+      name: string,
+      number: number,
+      end: Pick<BuildRow, "phase" | "error">
+    ) => revising(name, number, (row) => ended(row, number, end));
 
     const tidied = Effect.gen(function* () {
       const recorded = yield* store.checkpoints;
@@ -345,7 +374,7 @@ export const make = (settings: {
       number: number,
       asked: Facts,
       script: string,
-      host: HostInfo
+      placed: Arr.NonEmptyReadonlyArray<HostInfo>
     ) =>
       Effect.gen(function* () {
         const { setupTimeoutSeconds: timeoutSeconds, ...spec } = asked;
@@ -387,10 +416,15 @@ export const make = (settings: {
                 ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
               },
             },
-            host.id
+            placed
           );
 
-          yield* atRest;
+          const made = yield* atRest;
+          const host = yield* answering(hosts, made.host);
+
+          yield* revising(name, number, (row) =>
+            revised(row, number, placedOn(made, host, spec.base))
+          );
 
           if (stopsBeforeCapture(host.traits)) {
             yield* machines.stop(builder);
@@ -446,7 +480,7 @@ export const make = (settings: {
           setupTimeoutSeconds: request.setup.timeoutSeconds,
         };
 
-        const [host] = yield* Effect.fromResult(
+        const placed = yield* Effect.fromResult(
           placing(yield* hosts.reachAll, base, {
             sizes: { cpu, ramMib, diskGib },
             host: on,
@@ -455,14 +489,14 @@ export const make = (settings: {
 
         const row = yield* store.advanceTemplate(
           name,
-          begun(name, asked, host, yield* DateTime.now)
+          begun(name, asked, Arr.headNonEmpty(placed), yield* DateTime.now)
         );
 
         const begin = Arr.lastNonEmpty(row.builds);
 
         yield* Effect.forkIn(
           apart({ template: name, build: buildId(name, begin.number) })(
-            run(name, begin.number, asked, request.setup.script, host)
+            run(name, begin.number, asked, request.setup.script, placed)
           ),
           scope
         );

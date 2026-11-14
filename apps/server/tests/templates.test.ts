@@ -8,6 +8,7 @@ import type {
   FakeRuntimeName,
 } from "@gjermundgaraba/clankerbox-host/testing";
 import {
+  Capacity,
   Conflict,
   Internal,
   isBuildCopy,
@@ -566,6 +567,69 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       expect(built.host).toBe("two");
     })
+  );
+
+  it.effect(
+    "a build whose first host has no room builds on the next, and is recorded as built there",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* running({
+          hosts: [
+            { id: "full" },
+            {
+              id: "roomy",
+              options: { bases: new Map([["ubuntu", "image/roomy"]]) },
+            },
+          ],
+        });
+
+        const client = yield* clientOf(served.url);
+        firstHost(served).fake.failNext(
+          "admit",
+          new Capacity({ message: "no room" })
+        );
+
+        const built = yield* client.buildTemplate(web());
+        const clone = yield* client.create("dev", { template: "web" });
+
+        expect(built).toMatchObject({
+          phase: "ready",
+          host: "roomy",
+          image: "image/roomy",
+        });
+        expect(
+          built.copies.filter(({ phase }) => phase === "ready")
+        ).toStrictEqual([{ host: "roomy", phase: "ready" }]);
+        expect(
+          served.hosts.map((host) => callsTo(host, "capture").length)
+        ).toStrictEqual([0, 1]);
+        expect(clone).toMatchObject({ phase: "settled", template: "web@1" });
+      })
+  );
+
+  it.effect(
+    "a build fails Capacity only once no host has room for its builder",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* running({
+          hosts: [{ id: "one" }, { id: "two" }],
+        });
+
+        const client = yield* clientOf(served.url);
+
+        for (const { fake } of served.hosts) {
+          fake.failNext("admit", new Capacity({ message: "no room" }));
+        }
+
+        const error = yield* Effect.flip(client.buildTemplate(web()));
+
+        expect(error._tag).toBe("Capacity");
+        expect(
+          served.hosts.map(({ fake }) =>
+            fake.calls.filter((call) => call.startsWith("admit "))
+          )
+        ).toStrictEqual([[expect.any(String)], [expect.any(String)]]);
+      })
   );
 
   it.effect(

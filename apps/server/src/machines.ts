@@ -36,7 +36,7 @@ import {
   Result,
   Schedule,
 } from "effect";
-import type { Scope } from "effect";
+import type { Array as Arr, Scope } from "effect";
 
 import { applied } from "./chart.ts";
 import { checkpointChart } from "./checkpoint-chart.ts";
@@ -100,11 +100,14 @@ export interface Interface {
   readonly create: (
     request: CreateRequest
   ) => Effect.Effect<Machine, Declared<"createMachine">>;
-  /** A machine for a template's build to capture, on `host`, deleted if the control plane restarts. */
+  /**
+   * A machine for a template's build to capture, deleted if the control plane restarts: on the
+   * first of `hosts`, and on `Capacity` on the next, as a create moves.
+   */
   readonly build: (
     name: string,
     spec: Spec & { readonly setup: Setup },
-    host: string
+    hosts: Arr.NonEmptyReadonlyArray<HostInfo>
   ) => Effect.Effect<void, Declared<"createMachine">>;
   readonly start: (
     id: string
@@ -636,16 +639,16 @@ export const make = (
     const create: Interface["create"] = (request) =>
       "template" in request ? fromTemplate(request) : fromBase(request);
 
-    const build: Interface["build"] = (name, spec, host) =>
+    const build: Interface["build"] = (name, spec, [first, ...rest]) =>
       Effect.gen(function* () {
-        const info = yield* answering(hosts, host);
+        const info = yield* answering(hosts, first.id);
 
         yield* born(
           name,
           { spec, labels: undefined, ephemeral: true },
-          { host, source: { kind: "base" } },
+          onBase(info),
           info,
-          { setup: spec.setup, untried: [] }
+          { setup: spec.setup, untried: rest.map(onBase) }
         );
       });
 
