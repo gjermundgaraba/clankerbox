@@ -513,11 +513,6 @@ export const make = (
     const pruned = (machine: Target, checkpoint: Handle) =>
       api.deleteCheckpoint(checkpoint).pipe(
         Effect.catchIf(isGone, () => Effect.void),
-        Effect.catchIf(isConflict, (error) =>
-          Effect.logWarning(
-            `smol cloud keeps checkpoint ${checkpoint} of ${machine.name}, which no row keeps, as it refused its delete: ${error.detail}`
-          )
-        ),
         Effect.mapError(
           internal(
             `delete checkpoint ${checkpoint} of ${machine.name}, which no row keeps`

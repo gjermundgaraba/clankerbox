@@ -564,38 +564,6 @@ describe("the smol cloud runtime on its host", () => {
     }
   );
 
-  it.live(
-    "logs by its handle a checkpoint the provider keeps for a living restore",
-    () => {
-      const logged: string[] = [];
-
-      return Effect.scoped(
-        Effect.gen(function* () {
-          const { fake, runtime } = yield* flaky;
-          const dev = yield* made(runtime, "dev");
-
-          const snap = yield* runtime.capture(dev, {
-            name: "snap",
-            instance: "snap-1",
-          });
-
-          yield* runtime.make(
-            machineOf("copy"),
-            {
-              _tag: "checkpoint",
-              checkpoint: { ...checkpointOf(snap), ...sizes },
-            },
-            { _tag: "none" }
-          );
-          yield* runtime.delete(dev, new Set());
-
-          expect(fake.checkpoints.has(snap)).toBe(true);
-          expect(logged.join("\n")).toContain(snap);
-        })
-      ).pipe(Effect.provide(Logger.layer([capturing(logged)])));
-    }
-  );
-
   it.live("stages stdin past a MiB on the guest's tmpfs and removes it", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -828,6 +796,52 @@ describe("the smol cloud runtime over an account without a card", () => {
           yield* runtime.delete(dev, new Set());
 
           expect([...fake.machines.keys()]).toStrictEqual([]);
+        })
+      )
+  );
+
+  it.live(
+    "a delete whose machine went but whose unkept checkpoint smol cloud keeps fails, and is done once nothing holds it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { fake, runtime } = yield* onCloud;
+          const dev = yield* made(runtime, "dev");
+
+          yield* runtime.start(dev, new Set());
+
+          const { id } = yield* Effect.promise(
+            async () =>
+              await posted(
+                `${fake.url}/v1/machines/${dev.handle}/checkpoints?wait=true`
+              )
+          );
+
+          yield* Effect.sleep("200 millis");
+
+          const restored = yield* Effect.promise(
+            async () =>
+              await posted(`${fake.url}/v1/checkpoints/${id}/restore`, {
+                name: "someone-elses-restore",
+              })
+          );
+
+          const refused = yield* Effect.flip(runtime.delete(dev, new Set()));
+
+          expect(fake.machines.has(dev.handle)).toBe(false);
+          expect(fake.checkpoints.has(id)).toBe(true);
+          expect(refused.message).toContain(id);
+
+          yield* Effect.promise(
+            async () =>
+              await fetch(`${fake.url}/v1/machines/${restored.id}`, {
+                method: "DELETE",
+                headers: { authorization: `Bearer ${key}` },
+              })
+          );
+          yield* runtime.delete(dev, new Set());
+
+          expect(fake.checkpoints.has(id)).toBe(false);
         })
       )
   );

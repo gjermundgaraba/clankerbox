@@ -137,7 +137,9 @@ Each is an assertion of the live suite, in the case named.
 - A restore answers `stopped`, carries its source's ports and resources, no
   labels and no expiry (`ttlSeconds` null), and takes the `network` and
   `autoStopSeconds` it is sent.
-- A checkpoint a living restore was made from refuses its delete with 409.
+- A checkpoint a living restore was made from refuses its delete with 409,
+  so a delete whose machine went fails while it keeps one no row keeps, and
+  runs again at the next check (`smol-cloud.ts`'s `pruned`).
 - A deleted machine's checkpoints stay, listed with its `machineId` and
   `machineDeleted: true`, until each is deleted.
 - Through a host: a base machine joins the tailnet over exec, its sshd answers
