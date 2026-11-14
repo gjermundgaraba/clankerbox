@@ -354,7 +354,7 @@ export const exec = Command.make(
     ),
     stdin: Flag.Boolean("stdin").pipe(
       Flag.withDescription(
-        "Send this command's stdin, read to its end, as the command's."
+        "Send this command's stdin, read to its end, as the command's: UTF-8 text, and anything else is refused."
       ),
       Flag.withDefault(false)
     ),
