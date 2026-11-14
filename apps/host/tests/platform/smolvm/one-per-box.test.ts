@@ -4,7 +4,7 @@ import type { Server } from "node:net";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { Effect, Layer, Schema } from "effect";
+import { Duration, Effect, Layer, Schema } from "effect";
 import { describe, expect } from "vite-plus/test";
 
 import * as NodeBox from "../../../src/platform/box.ts";
@@ -25,10 +25,15 @@ const started = (lock: string) =>
     )
   ).pipe(Effect.provide(NodeBox.layer));
 
-const squatted = (lock: string) =>
+const squatted = (lock: string, answer: (socket: Socket) => void = () => {}) =>
   Effect.acquireRelease(
     Effect.callback<ReturnType<typeof createServer>>((resume) => {
-      const server = createServer(() => undefined);
+      const server = createServer((socket) => {
+        socket.on("error", () => {
+          socket.destroy();
+        });
+        answer(socket);
+      });
 
       server.listen({ path: lock }, () => {
         resume(Effect.succeed(server));
@@ -144,6 +149,80 @@ describe.skipIf(process.platform !== "linux")(
       );
 
       it.effect(
+        "a holder's answer reaches the refusal without the control characters it holds",
+        () =>
+          Effect.gen(function* () {
+            const lock = `\0clankerbox-spoofed-test-${process.pid}`;
+
+            const refused = yield* Effect.scoped(
+              Effect.andThen(
+                squatted(lock, (socket) => {
+                  socket.end(
+                    "clankerbox smolvm host 4242 /state\u001B]0;owned\u0007\u202E\n"
+                  );
+                }),
+                Effect.flip(Effect.scoped(aloneOnBox(lock, "/state")))
+              )
+            );
+
+            expect(refused.message).toContain(
+              "PID 4242 with state dir /state]0;owned, and a box runs one"
+            );
+            expect(refused.message).not.toMatch(/[\p{Cc}\p{Cf}]/u);
+          })
+      );
+
+      it.effect(
+        "a holder that answers more than a host would isn't taken for one, and its answer stays out of the refusal",
+        () =>
+          Effect.gen(function* () {
+            const lock = `\0clankerbox-flooded-test-${process.pid}`;
+
+            const refused = yield* Effect.scoped(
+              Effect.andThen(
+                squatted(lock, (socket) => {
+                  socket.end(
+                    `clankerbox smolvm host 4242 /${"x".repeat(1_000_000)}\n`
+                  );
+                }),
+                Effect.flip(Effect.scoped(aloneOnBox(lock, "/state")))
+              )
+            );
+
+            expect(refused.message).toContain(
+              "a process that isn't a clankerbox host"
+            );
+            expect(refused.message).not.toContain("xxxx");
+          })
+      );
+
+      it.effect(
+        "a holder's answer of more than 4 KiB names no host, in however few characters or chunks it comes",
+        () =>
+          Effect.gen(function* () {
+            const lock = `\0clankerbox-long-answer-test-${process.pid}`;
+
+            const refusals = yield* Effect.forEach(
+              ["x".repeat(60_000), "é".repeat(3000)],
+              (dir) =>
+                Effect.scoped(
+                  Effect.andThen(
+                    squatted(lock, (socket) => {
+                      socket.end(`clankerbox smolvm host 4242 /${dir}\n`);
+                    }),
+                    Effect.flip(Effect.scoped(aloneOnBox(lock, "/state")))
+                  )
+                )
+            );
+
+            expect(refusals.map(({ message }) => message)).toStrictEqual([
+              `a process that isn't a clankerbox host holds @${lock.slice(1)}, the abstract socket a smolvm host holds to keep a box to one host, so this one can't tell whether another runs; ss -xlp | grep ${lock.slice(1)} names that process`,
+              `a process that isn't a clankerbox host holds @${lock.slice(1)}, the abstract socket a smolvm host holds to keep a box to one host, so this one can't tell whether another runs; ss -xlp | grep ${lock.slice(1)} names that process`,
+            ]);
+          })
+      );
+
+      it.effect(
         "a host takes its box when the lock's holder lets go of it as the host asks who holds it",
         () =>
           Effect.gen(function* () {
@@ -181,6 +260,37 @@ describe.skipIf(process.platform !== "linux")(
               `@${lock.slice(1)}, the abstract socket a smolvm host holds to keep a box to one host, was held each time this host tried to take it and had no listener each time it asked who holds it: a process holds it without listening on it, or keeps taking it, so this host can't tell whether another runs; ss -xap | grep ${lock.slice(1)} names that process`
             );
           })
+      );
+
+      it.effect(
+        "a holder that answers a byte at a time can't hold a start past the lock's deadline",
+        () =>
+          Effect.gen(function* () {
+            const lock = `\0clankerbox-trickled-test-${process.pid}`;
+
+            const [took, refused] = yield* Effect.scoped(
+              Effect.andThen(
+                squatted(lock, (socket) => {
+                  const trickle = setInterval(() => {
+                    socket.write("c");
+                  }, 200);
+
+                  socket.on("close", () => {
+                    clearInterval(trickle);
+                  });
+                }),
+                Effect.timed(
+                  Effect.flip(Effect.scoped(aloneOnBox(lock, "/state")))
+                )
+              )
+            );
+
+            expect(refused.message).toContain(
+              "a process that isn't a clankerbox host"
+            );
+            expect(Duration.toSeconds(took)).toBeLessThan(3);
+          }),
+        30_000
       );
 
       it.effect(

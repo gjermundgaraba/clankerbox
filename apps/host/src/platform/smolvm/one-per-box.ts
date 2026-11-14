@@ -16,7 +16,9 @@ export const boxLock = "\0clankerbox-smolvm-host";
 
 const said = /^clankerbox smolvm host (?<pid>\d+) (?<stateDir>.+)\n$/u;
 
-const answerWait = Duration.seconds(1);
+const answerDeadline = Duration.seconds(1);
+
+const answerLimitBytes = 4096;
 
 const closed = (server: Server): Effect.Effect<void> =>
   Effect.callback((resume) => {
@@ -29,25 +31,50 @@ const answerUnlessUnlistened = (
   lock: string
 ): Effect.Effect<Option.Option<string>> =>
   Effect.callback<Option.Option<string>>((resume) => {
-    let answer = "";
+    const chunks: Buffer[] = [];
+    let bytes = 0;
     let refused = false;
     const socket = connect({ path: lock });
 
-    socket.setEncoding("utf8");
-    socket.setTimeout(Duration.toMillis(answerWait), () => {
-      socket.destroy();
-    });
-    socket.on("data", (chunk: string) => {
-      answer += chunk;
+    socket.on("data", (chunk: Buffer) => {
+      bytes += chunk.length;
+
+      if (bytes > answerLimitBytes) {
+        socket.destroy();
+      } else {
+        chunks.push(chunk);
+      }
     });
     socket.on("close", () => {
-      resume(Effect.succeed(refused ? Option.none() : Option.some(answer)));
+      resume(
+        Effect.succeed(
+          refused
+            ? Option.none()
+            : Option.some(
+                bytes > answerLimitBytes
+                  ? ""
+                  : Buffer.concat(chunks).toString("utf8")
+              )
+        )
+      );
     });
     socket.on("error", (error: NodeJS.ErrnoException) => {
       refused = error.code === "ECONNREFUSED";
       socket.destroy();
     });
-  });
+
+    return Effect.sync(() => {
+      socket.destroy();
+    });
+  }).pipe(
+    Effect.timeoutOrElse({
+      duration: answerDeadline,
+      orElse: () => Effect.succeedSome(""),
+    })
+  );
+
+const printable = (text: string): string =>
+  text.replaceAll(/[\p{Cc}\p{Cf}]/gu, "");
 
 const shown = (lock: string): string => `@${lock.slice(1)}`;
 
@@ -58,7 +85,7 @@ const heldBy = (lock: string, answer: string): CannotStart => {
     message:
       host === undefined
         ? `a process that isn't a clankerbox host holds ${shown(lock)}, the abstract socket a smolvm host holds to keep a box to one host, so this one can't tell whether another runs; ss -xlp | grep ${lock.slice(1)} names that process`
-        : `another smolvm host runs on this box, PID ${host["pid"]} with state dir ${host["stateDir"]}, and a box runs one: smolvm counts every VM's uid up from the same base in each host's state, so two hosts would run VMs under the same uids; stop the other host first`,
+        : `another smolvm host runs on this box, PID ${host["pid"]} with state dir ${printable(host["stateDir"] ?? "")}, and a box runs one: smolvm counts every VM's uid up from the same base in each host's state, so two hosts would run VMs under the same uids; stop the other host first`,
   });
 };
 
