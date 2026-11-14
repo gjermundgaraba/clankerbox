@@ -639,9 +639,26 @@ export const make = (
       );
     };
 
-    const pruned = (machine: Target, checkpoint: Handle) =>
+    const checkpointAtRest = (checkpoint: Handle) =>
+      untilRest(
+        api.checkpoint(checkpoint),
+        ({ status }) => checkpointEnds.has(status),
+        poll
+      );
+
+    const checkpointDeleted = (checkpoint: Handle) =>
       api.deleteCheckpoint(checkpoint).pipe(
-        Effect.catchIf(isGone, () => Effect.void),
+        Effect.catchIf(isConflict, () =>
+          Effect.andThen(
+            checkpointAtRest(checkpoint),
+            api.deleteCheckpoint(checkpoint)
+          )
+        ),
+        Effect.catchIf(isGone, () => Effect.void)
+      );
+
+    const pruned = (machine: Target, checkpoint: Handle) =>
+      checkpointDeleted(checkpoint).pipe(
         Effect.mapError(
           internal(
             `delete checkpoint ${checkpoint} of ${machine.name}, which no row keeps`
@@ -670,11 +687,7 @@ export const make = (
     const available = (machine: Target, checkpoint: Handle) =>
       Effect.map(
         Effect.mapError(
-          untilRest(
-            api.checkpoint(checkpoint),
-            ({ status }) => checkpointEnds.has(status),
-            poll
-          ),
+          checkpointAtRest(checkpoint),
           internal(`capture ${machine.name}`)
         ),
         ({ status }) => status === "available"
@@ -1057,8 +1070,7 @@ export const make = (
           })
         ),
       deleteCheckpoint: (checkpoint) =>
-        api.deleteCheckpoint(checkpoint.handle).pipe(
-          Effect.catchIf(isGone, () => Effect.void),
+        checkpointDeleted(checkpoint.handle).pipe(
           Effect.mapError((error) =>
             isConflict(error)
               ? new Conflict({

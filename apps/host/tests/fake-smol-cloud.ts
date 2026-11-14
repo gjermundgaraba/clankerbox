@@ -63,6 +63,11 @@ export interface FakeFaults extends Faults {
    * once it reads `started`, as smol cloud's start does.
    */
   readonly holdStarts: Effect.Effect<Effect.Effect<void>>;
+  /**
+   * Has each capture, a pause's own included, read `creating` until the effect it answers runs, as
+   * smol cloud's capture of a pause can still run once the machine is resumed.
+   */
+  readonly holdCaptures: Effect.Effect<Effect.Effect<void>>;
 }
 
 export interface FakeSmolCloud {
@@ -240,6 +245,7 @@ export const fakeSmolCloud = (
     let losingResizes = 0;
 
     let startsHeld: Promise<void> | undefined;
+    let capturesHeld: FakeCheckpoint[] | undefined;
     const lateMakes = lateLandings();
     let quotaOn = false;
     const malformed: object[] = [];
@@ -363,7 +369,11 @@ export const fakeSmolCloud = (
 
       checkpoints.set(id, checkpoint);
       setTimeout(() => {
-        checkpoint.status = "available";
+        if (capturesHeld === undefined) {
+          checkpoint.status = "available";
+        } else {
+          capturesHeld.push(checkpoint);
+        }
       }, 100);
 
       return checkpoint;
@@ -557,6 +567,14 @@ export const fakeSmolCloud = (
     const deleteCheckpoint = async (
       checkpoint: FakeCheckpoint
     ): Promise<Answer> => {
+      if (checkpoint.status === "creating") {
+        return problem(
+          409,
+          "conflict",
+          "checkpoint capture is still in progress"
+        );
+      }
+
       const holder = [...machines.values()].find(
         (machine) =>
           machine.restoredFrom === checkpoint.id ||
@@ -991,6 +1009,19 @@ export const fakeSmolCloud = (
         return Effect.sync(() => {
           startsHeld = undefined;
           held.resolve(undefined);
+        });
+      }),
+      holdCaptures: Effect.sync(() => {
+        const held: FakeCheckpoint[] = [];
+
+        capturesHeld = held;
+
+        return Effect.sync(() => {
+          capturesHeld = undefined;
+
+          for (const checkpoint of held) {
+            checkpoint.status = "available";
+          }
         });
       }),
     };

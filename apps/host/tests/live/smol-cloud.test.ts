@@ -619,11 +619,44 @@ describe.runIf(live)("the smol cloud API, as the adapter relies on it", () => {
         expect((yield* checkpointsOf(id)).map((found) => found.id)).toContain(
           paused
         );
-        expectStatus(
-          yield* call("DELETE", `/v1/checkpoints/${paused}`),
-          204,
-          "a delete of a pause's own checkpoint once its machine runs again"
+
+        const resumedDelete = yield* call(
+          "DELETE",
+          `/v1/checkpoints/${paused}`
         );
+
+        if (resumedDelete.status === 409) {
+          const { status } = decoded(Checkpoint)(
+            yield* call("GET", `/v1/checkpoints/${paused}`)
+          );
+
+          answered(
+            "a delete of a pause's own checkpoint right after its resume refused 409, and the checkpoint then reads",
+            { problem: problemOf(resumedDelete), status }
+          );
+
+          yield* call("GET", `/v1/checkpoints/${paused}`).pipe(
+            Effect.map(decoded(Checkpoint)),
+            Effect.repeat({
+              schedule: Schedule.spaced(Duration.seconds(1)),
+              until: (found) =>
+                found.status === "available" || found.status === "failed",
+              times: 120,
+            })
+          );
+
+          expectStatus(
+            yield* call("DELETE", `/v1/checkpoints/${paused}`),
+            204,
+            "a delete of a pause's own checkpoint refused 409, sent again once the checkpoint rests"
+          );
+        } else {
+          expectStatus(
+            resumedDelete,
+            204,
+            "a delete of a pause's own checkpoint once its machine runs again"
+          );
+        }
 
         const restoredName = `${prefix}${run}-b`;
 

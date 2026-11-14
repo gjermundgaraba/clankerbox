@@ -563,6 +563,57 @@ describe("the smol cloud runtime on its host", () => {
     }
   );
 
+  it.live(
+    "a start or remove that meets a pause's checkpoint smol cloud still captures waits for the capture to end, then deletes it",
+    () => {
+      const logged: string[] = [];
+
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const { runtime, fake } = yield* onHost();
+
+          for (const ending of ["start", "remove"] as const) {
+            const dev = yield* made(runtime, `dev-${ending}`);
+            const release = yield* fake.faults.holdCaptures;
+
+            yield* runtime.pause(dev);
+
+            const own =
+              [...fake.checkpoints.values()].find(
+                ({ machineId }) => machineId === dev.handle
+              )?.id ?? "";
+
+            const ended = yield* Effect.forkChild(
+              ending === "start"
+                ? runtime.start(dev, new Set())
+                : runtime.delete(dev, new Set())
+            );
+
+            yield* Effect.repeat(
+              Effect.sync(() => fake.calls),
+              {
+                until: (calls) =>
+                  calls.includes(`DELETE /v1/checkpoints/${own} 409`),
+                schedule: Schedule.spaced("10 millis"),
+              }
+            );
+
+            expect(ended.pollUnsafe(), `the ${ending} waits`).toBeUndefined();
+
+            yield* release;
+            yield* Fiber.join(ended);
+
+            expect(
+              fake.checkpoints.has(own),
+              `the ${ending} deletes the checkpoint`
+            ).toBe(false);
+            expect(logged.join("\n")).not.toContain(own);
+          }
+        })
+      ).pipe(Effect.provide(Logger.layer([capturing(logged)])));
+    }
+  );
+
   it.live("stages stdin past a MiB on the guest's tmpfs and removes it", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -2713,26 +2764,35 @@ describe("a smol cloud start refused in a way it sends again", () => {
   );
 });
 
+const checkpointIn = (status: string) =>
+  Response.json({ id: "ckpt-1", machineId: "mach-1", status });
+
+const snap1 = {
+  name: "snap",
+  instance: machineOf("snap").instance,
+  handle: Handle.make("ckpt-1"),
+};
+
 describe("a smol cloud checkpoint delete refused 409", () => {
   it.effect(
-    "is Conflict at its one send, whether or not the refusal says it may be retried",
+    "is Conflict when sent again once the checkpoint rests, whether or not the refusal says it may be retried",
     () =>
       Effect.gen(function* () {
         for (const retryable of [false, true]) {
-          const { asked, client } = answering((route) =>
-            route === "DELETE /v1/checkpoints/ckpt-1"
-              ? problem(409, "checkpoint has 1 live branch", retryable)
-              : undefined
-          );
+          const { asked, client } = answering((route) => {
+            if (route === "DELETE /v1/checkpoints/ckpt-1") {
+              return problem(409, "checkpoint has 1 live branch", retryable);
+            }
+
+            return route === "GET /v1/checkpoints/ckpt-1"
+              ? checkpointIn("available")
+              : undefined;
+          });
 
           const runtime = yield* scriptedRuntime(client);
 
           const ended = yield* endedWithin(
-            runtime.deleteCheckpoint({
-              name: "snap",
-              instance: machineOf("snap").instance,
-              handle: Handle.make("ckpt-1"),
-            }),
+            runtime.deleteCheckpoint(snap1),
             "1 minute"
           );
 
@@ -2742,8 +2802,55 @@ describe("a smol cloud checkpoint delete refused 409", () => {
           expect(
             asks(asked, "DELETE /v1/checkpoints/ckpt-1"),
             `retryable ${retryable}`
-          ).toBe(1);
+          ).toBe(2);
         }
+      })
+  );
+
+  it.effect(
+    "while smol cloud still captures it waits for the capture to end, and is sent again",
+    () =>
+      Effect.gen(function* () {
+        let deletes = 0;
+        let reads = 0;
+
+        const { asked, client } = answering((route) => {
+          if (route === "DELETE /v1/checkpoints/ckpt-1") {
+            deletes += 1;
+
+            return deletes === 1
+              ? problem(409, "checkpoint capture is still in progress")
+              : new Response(null, { status: 204 });
+          }
+
+          if (route === "GET /v1/checkpoints/ckpt-1") {
+            reads += 1;
+
+            return checkpointIn(reads < 4 ? "creating" : "available");
+          }
+
+          return undefined;
+        });
+
+        const runtime = yield* scriptedRuntime(client);
+
+        const running = yield* Effect.forkChild(
+          runtime.deleteCheckpoint(snap1)
+        );
+
+        yield* TestClock.adjust("1500 millis");
+        expect(
+          running.pollUnsafe(),
+          "it waits while the capture runs"
+        ).toBeUndefined();
+
+        yield* TestClock.adjust("1 minute");
+
+        const ended = running.pollUnsafe();
+
+        expect(ended !== undefined && Exit.isSuccess(ended)).toBe(true);
+        expect(asks(asked, "DELETE /v1/checkpoints/ckpt-1")).toBe(2);
+        expect(reads, "it read the checkpoint until it rested").toBe(4);
       })
   );
 });
