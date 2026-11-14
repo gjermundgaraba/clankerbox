@@ -98,6 +98,20 @@ Each line names where the code holds it and how to check it again.
 - `/sshkey` answers the host key sshd serves now, after a cold start and
   after the guest's identity script re-keys; a key sent twice is written
   once. (`ssh.ts` re-pins from it when a host key is refused; live suite.)
+- An exec runs over `ssh` with no terminal, so ending it ends only the local
+  `ssh`: in the guest a command that writes a line a second is gone within
+  5 seconds, and a silent one runs on 30 seconds after the cut, whether its
+  caller went away or its host-side timeout fired (fix round 2's exec-cut
+  probe). boat's API ends only a command it started detached
+  (`DELETE /sandboxes/{id}/commands/{processId}`: SIGTERM to it and all it
+  started, SIGKILL after 5 s), which the adapter doesn't use. The fake runs
+  the command in its guest, in a process group of its own that a cut leaves
+  running and only a stop, a delete or the fake's end ends, with what it left
+  in the background; its stdio reaches the local `ssh` over FIFOs a cut
+  closes, so the command's next write dies of SIGPIPE, as a writer did on
+  boat. (`ssh.ts`'s `exec`; `fake-boat.ts`'s `fakeBoatSsh`,
+  `guest-groups.ts`, and the tests of an exec cut short and of what one
+  leaves in the background.)
 - Machine types: `small` 2 vCPUs 4 GiB, `default` 4 and 8, `large` 8 and 16,
   `xlarge` 16 and 32, with the disk the guest's block device reads: 80 GiB
   on `small` and `default`, 149 GiB on `large`. `xlarge` is the docs' 251,

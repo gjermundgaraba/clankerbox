@@ -111,8 +111,14 @@ Each is an assertion of the live suite, in the case named.
   `{exitCode}`. The fake runs each exec in a process group of its own, which
   only a stop, a delete or the fake's end ends, with what the command left in
   the background, as a VM's stop ends all it runs; a caller that goes away
-  leaves it running. (`guest-groups.ts`, and the tests of an exec cut short
-  and of what one leaves in the background.)
+  leaves it running, as smol cloud does: an exec whose caller goes away, or
+  whose host-side timeout fires, runs on in the guest, silent or writing a
+  line a second, 30 seconds after the cut, in fix round 2's exec-cut probe.
+  Its API ends a running command only as a job (`POST .../jobs`, then
+  `POST .../jobs/{id}/cancel`, SIGTERM). The exec body also takes a
+  `timeoutSeconds` the docs don't describe, whose effect is unmeasured and
+  which the adapter doesn't send. (`guest-groups.ts`, and the tests of an
+  exec cut short and of what one leaves in the background.)
 - The tunnel, `wss://.../v1/machines/{id}/tunnel/22`, takes the key in
   `Authorization`, carries raw TCP to sshd, and doesn't wake a stopped machine.
 - Memory, vCPUs and disk grow on a running machine and on a stopped one;
