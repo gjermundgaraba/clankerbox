@@ -14,6 +14,7 @@ import type {
 } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import {
   ConfigProvider,
+  Duration,
   Effect,
   Layer,
   Runtime,
@@ -102,9 +103,12 @@ export interface CliOptions {
   readonly stdio?: Layer.Layer<Stdio.Stdio>;
 }
 
-const dial = Layer.succeed(Dial, (host, port) =>
-  NodeSocket.makeNet({ host, port })
-);
+export const testAnswersWithin = Duration.seconds(1);
+
+const dial = Layer.succeed(Dial, {
+  open: (host, port) => NodeSocket.makeNet({ host, port }),
+  answersWithin: testAnswersWithin,
+});
 
 export const cli = (
   args: readonly string[],

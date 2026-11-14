@@ -171,6 +171,8 @@ layer(NodeServices.layer)((it) => {
           "-o",
           "Port=10022",
           "-o",
+          "ConnectTimeout=15",
+          "-o",
           "HostKeyAlias=dev",
           "-o",
           `UserKnownHostsFile=${knownHosts}`,

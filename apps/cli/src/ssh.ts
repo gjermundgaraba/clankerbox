@@ -5,7 +5,15 @@ import {
   Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { SshTarget } from "@gjermundgaraba/clankerbox-sdk";
-import { Console, Context, Duration, Effect, Stdio, Stream } from "effect";
+import {
+  Console,
+  Context,
+  Deferred,
+  Duration,
+  Effect,
+  Stdio,
+  Stream,
+} from "effect";
 import type { PlatformError } from "effect";
 import { Argument, Command } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -21,9 +29,17 @@ import {
 } from "./command.ts";
 import { machineDomain } from "./ssh-config.ts";
 
+/**
+ * How the CLI reaches a machine's SSH endpoint: `open` connects, and the endpoint must send its first
+ * bytes, as sshd speaks first, within `answersWithin`, since a relay whose host doesn't answer may
+ * take the connection and send nothing.
+ */
 export class Dial extends Context.Service<
   Dial,
-  (host: string, port: number) => Effect.Effect<Socket.Socket>
+  {
+    readonly open: (host: string, port: number) => Effect.Effect<Socket.Socket>;
+    readonly answersWithin: Duration.Duration;
+  }
 >()("@gjermundgaraba/clankerbox/Dial") {}
 
 const machineOf = (destination: string): string =>
@@ -107,14 +123,20 @@ export const ssh = Command.make(
   )
 );
 
-const bridge = (socket: Socket.Socket) =>
+const bridge = (
+  socket: Socket.Socket,
+  answersWithin: Duration.Duration,
+  silent: () => Unavailable
+) =>
   Effect.gen(function* () {
     const stdio = yield* Stdio.Stdio;
+    const answered = yield* Deferred.make<true>();
 
-    yield* stdio.stdin.pipe(
+    const carried = stdio.stdin.pipe(
       Stream.pipeThroughChannel(
         Socket.toChannelWith<PlatformError.PlatformError>()(socket)
       ),
+      Stream.tap(() => Deferred.succeed(answered, true)),
       Stream.catchIf(
         (error) =>
           Socket.isSocketError(error) &&
@@ -124,6 +146,16 @@ const bridge = (socket: Socket.Socket) =>
       ),
       Stream.run(stdio.stdout())
     );
+
+    const heard = Deferred.await(answered).pipe(
+      Effect.timeoutOrElse({
+        duration: answersWithin,
+        orElse: () => Effect.fail(silent()),
+      }),
+      Effect.andThen(Effect.never)
+    );
+
+    yield* Effect.raceFirst(carried, heard);
   });
 
 export const sshProxy = Command.make(
@@ -138,16 +170,25 @@ export const sshProxy = Command.make(
         );
 
         const { host, port } = target.login;
-        const socket = yield* (yield* Dial)(host, port);
+        const dial = yield* Dial;
+        const socket = yield* dial.open(host, port);
 
-        yield* bridge(socket).pipe(
-          Effect.mapError(
-            (error) =>
-              new Unavailable({
-                message: `the connection to ${target.id} at ${host}:${port} failed: ${error.message}`,
-                readOnly: true,
-                id: target.id,
-              })
+        const silent = () =>
+          new Unavailable({
+            message: `the SSH endpoint of ${target.id} at ${host}:${port} sent nothing within ${Duration.format(dial.answersWithin)}: its host may not be answering; see clankerbox get ${target.id}`,
+            readOnly: true,
+            id: target.id,
+          });
+
+        yield* bridge(socket, dial.answersWithin, silent).pipe(
+          Effect.mapError((error) =>
+            error instanceof Unavailable
+              ? error
+              : new Unavailable({
+                  message: `the connection to ${target.id} at ${host}:${port} failed: ${error.message}`,
+                  readOnly: true,
+                  id: target.id,
+                })
           )
         );
       })

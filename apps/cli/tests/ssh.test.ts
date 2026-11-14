@@ -16,6 +16,7 @@ import type {
   StubServerOptions,
 } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import {
+  Duration,
   Effect,
   Layer,
   PlatformError,
@@ -33,6 +34,7 @@ import {
   cli,
   decodeJsonError,
   fakeSpawner,
+  testAnswersWithin,
   writeConfig,
 } from "./support.ts";
 
@@ -187,6 +189,7 @@ describe("ssh", () => {
             "dev ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample\n"
           );
           expect(spawned?.args.slice(0, 2)).toStrictEqual(["-l", "admin"]);
+          expect(spawned?.args).toContain("ConnectTimeout=15");
           expect(spawned?.args.slice(-4)).toStrictEqual([
             "100.64.0.7",
             "-L",
@@ -377,6 +380,35 @@ describe("ssh", () => {
           expect(code).toBe(0);
           expect(received).toBe("SSH-2.0-machine\r\necho SSH-2.0-client");
         })
+    );
+
+    it.effect(
+      "ssh-proxy to an endpoint that takes the connection and sends nothing fails in its bound, naming the machine and the endpoint, also while ssh sends its banner",
+      () =>
+        Effect.gen(function* () {
+          const [took, { code, stderr }] = yield* Effect.timed(
+            proxied(
+              (socket) => {
+                socket.on("data", () => {});
+              },
+              Stream.concat(
+                Stream.make(
+                  new TextEncoder().encode("SSH-2.0-OpenSSH_9.9\r\n")
+                ),
+                Stream.never
+              )
+            )
+          );
+
+          expect(code).toBe(1);
+          expect(stderr).toMatch(
+            /Unavailable: the SSH endpoint of dev at 127\.0\.0\.1:\d+ sent nothing within 1s: its host may not be answering; see clankerbox get dev/u
+          );
+          expect(Duration.toMillis(took)).toBeLessThan(
+            Duration.toMillis(testAnswersWithin) + 3000
+          );
+        }),
+      10_000
     );
 
     it.effect("ssh-proxy reaches the machine a .cbx destination names", () =>

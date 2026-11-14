@@ -69,6 +69,10 @@ layer(NodeServices.layer)((it) => {
     );
   });
 
+  it("leaves the bound of a dial to ssh-proxy, which names the machine, since a ConnectTimeout of ssh's runs from the proxy's start and would end ssh, naming no machine, while the proxy still reads it", () => {
+    expect(renderSshConfig("/bin/zsh")).not.toMatch(/ConnectTimeout/iu);
+  });
+
   it("the include goes after everything else once, and comes out leaving the file as it was", () => {
     const included = withInclude(mine);
 

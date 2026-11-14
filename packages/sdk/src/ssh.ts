@@ -1,9 +1,15 @@
-import { Effect, FileSystem, Path } from "effect";
+import { Duration, Effect, FileSystem, Path } from "effect";
 import type { PlatformError, Scope } from "effect";
 
 import { WrongState } from "./errors.ts";
 import { isResting, stateLabel } from "./resources.ts";
 import type { Machine, SshLogin } from "./resources.ts";
+
+/**
+ * How long a client waits for a machine's SSH endpoint to connect and send its banner before it
+ * gives up on it: a relay whose host doesn't answer may take the connection and send nothing.
+ */
+export const sshAnswersWithin = Duration.seconds(15);
 
 export interface SshTarget {
   readonly id: string;
@@ -85,6 +91,8 @@ const sshArguments = (
   user,
   "-o",
   `Port=${target.login.port}`,
+  "-o",
+  `ConnectTimeout=${Duration.toSeconds(sshAnswersWithin)}`,
   "-o",
   `HostKeyAlias=${target.id}`,
   "-o",
