@@ -309,7 +309,9 @@ const madeOn = (as: FakeRuntimeName) =>
     const { handle } = yield* runtime.make(
       dev,
       { _tag: "image", image },
-      { _tag: "forward", port: 2222 }
+      runtime.reach._tag === "relayed"
+        ? { _tag: "none" }
+        : { _tag: "forward", port: 2222 }
     );
 
     return {

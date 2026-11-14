@@ -82,6 +82,7 @@ export interface Preset {
   readonly admits: boolean;
   readonly files: { readonly keyed: boolean } | undefined;
   readonly owned: { readonly checkpoints: "held" | "marked" } | undefined;
+  readonly relayed: boolean;
   /**
    * What the runtime does to a guest command when its exec is cut short: smolvm's agent ends it with
    * what it started, measured with 1.34.1, and a Tart guest, boat's ssh and smol cloud leave it
@@ -119,6 +120,7 @@ export const presets = {
     admits: true,
     files: { keyed: true },
     owned: undefined,
+    relayed: false,
     cut: "ends",
   },
   tart: {
@@ -129,6 +131,7 @@ export const presets = {
     admits: true,
     files: { keyed: false },
     owned: undefined,
+    relayed: true,
     cut: "leaves",
   },
   fixed: {
@@ -139,6 +142,7 @@ export const presets = {
     admits: false,
     files: undefined,
     owned: { checkpoints: "held" },
+    relayed: false,
     cut: "leaves",
   },
 } as const satisfies Record<string, Preset>;
@@ -532,6 +536,7 @@ export const fakeRuntime = (options: FakeOptions) => {
   const dropped = new Set<Dropped>();
   let quotaOn = false;
   let pin = options.pin ?? preset.pin;
+  const relayed = options.relayed ?? preset.relayed;
 
   const record = (entry: string) => {
     calls.push(entry);
@@ -912,18 +917,17 @@ export const fakeRuntime = (options: FakeOptions) => {
           return pin;
         },
         prepares: preset.prepares,
-        reach:
-          options.relayed === true
-            ? {
-                _tag: "relayed",
-                address: "127.0.0.1",
-                dial: (machine) => {
-                  record(`relay ${machine.name}`);
+        reach: relayed
+          ? {
+              _tag: "relayed",
+              address: "127.0.0.1",
+              dial: (machine) => {
+                record(`relay ${machine.name}`);
 
-                  return (input) => input;
-                },
-              }
-            : { _tag: "published", address: "127.0.0.1" },
+                return (input) => input;
+              },
+            }
+          : { _tag: "published", address: "127.0.0.1" },
         admission: preset.admits
           ? {
               admit: (activation: Activation) =>
@@ -1054,10 +1058,10 @@ export const fakeRuntime = (options: FakeOptions) => {
         observe,
         capacity,
         make: (machine, origin, bind) => {
-          if ((options.relayed === true) !== (bind._tag === "none")) {
+          if (relayed !== (bind._tag === "none")) {
             return Effect.die(
               new Error(
-                `make ${machine.name}: a ${options.relayed === true ? "relayed" : "published"} reach was given a ${bind._tag} bind`
+                `make ${machine.name}: a ${relayed ? "relayed" : "published"} reach was given a ${bind._tag} bind`
               )
             );
           }

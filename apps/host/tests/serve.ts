@@ -106,7 +106,6 @@ runServe(
             as: runtime,
             ramBudgetMib,
             pin: process.env["CLANKERBOX_FAKE_PIN"],
-            relayed: runtime === "tart",
             onCall: (call) => {
               appendFileSync(
                 path.join(evidence, "runtime-calls.txt"),

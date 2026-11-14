@@ -2,19 +2,85 @@ import { writeFileSync } from "node:fs";
 import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { describe, it } from "@effect/vitest";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { Context, Effect, Layer } from "effect";
+import { expect } from "vite-plus/test";
 
 import { make as smolvm } from "../src/platform/smolvm/smolvm.ts";
 import { make as tart } from "../src/platform/tart/tart.ts";
 import { Runtime } from "../src/runtime.ts";
-import { fakeRuntime } from "./fake-runtime.ts";
+import type { Interface } from "../src/runtime.ts";
+import { fakeRuntime, presets } from "./fake-runtime.ts";
 import type { FakeRuntimeName, Preset } from "./fake-runtime.ts";
 import { runtimeContract } from "./runtime-contract.ts";
 import type { Faults } from "./runtime-contract.ts";
 import { scriptedMac } from "./scripted-mac.ts";
 import { prepared, smolvmModel } from "./smolvm-model.ts";
 import { image } from "./support.ts";
+
+const smolvmAdapter = Effect.gen(function* () {
+  const model = smolvmModel();
+
+  const runtime = yield* smolvm(yield* prepared(), model.box()).pipe(
+    Effect.provide(model.spawner.layer)
+  );
+
+  return { model, runtime };
+});
+
+const tartAdapter = Effect.gen(function* () {
+  const mac = scriptedMac(path.join(yield* scratch, "state"));
+
+  const runtime = yield* tart(mac.settings).pipe(
+    Effect.provide(mac.spawner.layer)
+  );
+
+  return { mac, runtime };
+});
+
+const facetsOf = (runtime: Interface) => ({
+  traits: runtime.traits,
+  guest: runtime.guest,
+  prepares: runtime.prepares,
+  pinned: runtime.pin !== undefined,
+  reach: runtime.reach._tag,
+  admits: runtime.admission !== undefined,
+  files: runtime.files !== undefined,
+  owned: runtime.owned !== undefined,
+});
+
+const presetFacets = (preset: Preset) => ({
+  traits: preset.traits,
+  guest: preset.guest,
+  prepares: preset.prepares,
+  pinned: preset.pin !== undefined,
+  reach: preset.relayed ? "relayed" : "published",
+  admits: preset.admits,
+  files: preset.files !== undefined,
+  owned: preset.owned !== undefined,
+});
+
+describe("the fake runtime's presets", () => {
+  it.effect(
+    "are shaped as the smolvm and Tart adapters are, traits, guest, reach and facets",
+    () =>
+      Effect.gen(function* () {
+        const adapters = {
+          smolvm: (yield* smolvmAdapter).runtime,
+          tart: (yield* tartAdapter).runtime,
+        };
+
+        expect({
+          smolvm: presetFacets(presets.smolvm),
+          tart: presetFacets(presets.tart),
+        }).toStrictEqual({
+          smolvm: facetsOf(adapters.smolvm),
+          tart: facetsOf(adapters.tart),
+        });
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  );
+});
 
 const onFake = (as: FakeRuntimeName, owned?: Preset["owned"]) => {
   runtimeContract({
@@ -65,11 +131,7 @@ runtimeContract({
   image: "registry.example/ubuntu@sha256:00",
   sizes: { cpu: 2, ramMib: 2048, diskGib: 20 },
   fixture: Effect.gen(function* () {
-    const model = smolvmModel();
-
-    const runtime = yield* smolvm(yield* prepared(), model.box()).pipe(
-      Effect.provide(model.spawner.layer)
-    );
+    const { model, runtime } = yield* smolvmAdapter;
 
     const faults: Partial<Faults> = {
       drift: (instance) =>
@@ -102,11 +164,7 @@ runtimeContract({
   image: "ghcr.io/cirruslabs/macos-sequoia-base:latest",
   sizes: { cpu: 4, ramMib: 8192, diskGib: 60 },
   fixture: Effect.gen(function* () {
-    const mac = scriptedMac(path.join(yield* scratch, "state"));
-
-    const runtime = yield* tart(mac.settings).pipe(
-      Effect.provide(mac.spawner.layer)
-    );
+    const { mac, runtime } = yield* tartAdapter;
 
     yield* runtime.startup;
 
