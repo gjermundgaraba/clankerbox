@@ -219,19 +219,6 @@ const bounded =
       Effect.uninterruptible
     );
 
-const read = <A>(
-  what: string,
-  call: Effect.Effect<A, ApiError>
-): Effect.Effect<A, Internal> =>
-  call.pipe(
-    Effect.retry({
-      while: unknownOutcome,
-      times: 3,
-      schedule: Schedule.spaced(poll),
-    }),
-    Effect.mapError(internal(what))
-  );
-
 const targetOf = (machine: Identity, handle: Handle): Target => ({
   name: machine.name,
   instance: machine.instance,
@@ -651,9 +638,9 @@ export const make = (
 
     const unkept = (machine: Target, keep: ReadonlySet<Handle>) =>
       Effect.flatMap(
-        read(
-          `the checkpoints of ${machine.name}`,
-          checkpointsOf(new Set([machine.handle]))
+        Effect.mapError(
+          checkpointsOf(new Set([machine.handle])),
+          internal(`the checkpoints of ${machine.name}`)
         ),
         (all) =>
           Effect.forEach(
@@ -669,13 +656,13 @@ export const make = (
 
     const available = (machine: Target, checkpoint: Handle) =>
       Effect.map(
-        read(
-          `capture ${machine.name}`,
+        Effect.mapError(
           untilRest(
             api.checkpoint(checkpoint),
             ({ status }) => checkpointEnds.has(status),
             poll
-          )
+          ),
+          internal(`capture ${machine.name}`)
         ),
         ({ status }) => status === "available"
       );
@@ -891,7 +878,10 @@ export const make = (
       admission: undefined,
       files: undefined,
       owned: {
-        machines: read("the machines this host made", marked),
+        machines: Effect.mapError(
+          marked,
+          internal("the machines this host made")
+        ),
         checkpoints: Effect.succeed([]),
       },
       sizable: () => Effect.void,
@@ -900,21 +890,21 @@ export const make = (
         what === "machine"
           ? Effect.andThen(
               told([ref]),
-              read(
-                `the search for machine ${ref.name}`,
-                byName(nameOf(ref.instance))
+              Effect.mapError(
+                byName(nameOf(ref.instance)),
+                internal(`the search for machine ${ref.name}`)
               )
             )
           : Effect.undefined,
       observe: (machines) =>
         Effect.andThen(
           told(machines),
-          read("the machines' states", observe(machines))
+          Effect.mapError(observe(machines), internal("the machines' states"))
         ),
       capacity: (machines) =>
         Effect.andThen(
           told(machines.map(({ machine }) => machine)),
-          read("the account's capacity", capacity)
+          Effect.mapError(capacity, internal("the account's capacity"))
         ),
       make: (machine, origin) =>
         Effect.gen(function* () {
@@ -935,9 +925,9 @@ export const make = (
 
           yield* toward(targetOf(machine, handle), "running");
 
-          const found = yield* read(
-            `the read of ${machine.name}`,
-            record(handle)
+          const found = yield* Effect.mapError(
+            record(handle),
+            internal(`the read of ${machine.name}`)
           );
 
           if (found === undefined) {
@@ -1026,7 +1016,10 @@ export const make = (
         ),
       sizes: (machine) =>
         Effect.map(
-          read(`the read of ${machine.name}`, api.machine(machine.handle)),
+          Effect.mapError(
+            api.machine(machine.handle),
+            internal(`the read of ${machine.name}`)
+          ),
           (found): Sizing => ({
             cpu: found.resources.cpus,
             ramMib: found.resources.memoryMb,

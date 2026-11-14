@@ -122,21 +122,29 @@ export const waitedOut = (
 export const triesPerCall = 6;
 
 /**
- * Sends `call` again, backing off, while it fails with one of `tags`, at most `triesPerCall` sends
- * in all; a call still asked to be waited out at its last send fails saying so.
+ * Whether sending a call twice does no more than sending it once, as a read, or a delete, does.
+ * Only such a call is sent again after a lost answer; any other only once the provider said it
+ * took nothing, and its caller reads what the provider holds before it sends it again.
+ */
+export type Repeats = "idempotent" | "once";
+
+/**
+ * Sends `call` again, backing off, while the provider asks to be waited out, and while its answer
+ * is lost if it is `idempotent`, at most `triesPerCall` sends in all; a call still asked to be
+ * waited out at its last send fails saying so.
  */
 export const askedAgain =
-  (tags: ReadonlySet<string>) =>
-  <A, E extends { readonly _tag: string }, R>(
-    call: Effect.Effect<A, E, R>
-  ): Effect.Effect<A, E | Busy, R> =>
+  (repeats: Repeats) =>
+  <A, E, R>(call: Effect.Effect<A, E, R>): Effect.Effect<A, E | Busy, R> =>
     Effect.retry(call, {
-      while: (error) => tags.has(error._tag),
+      while: (error) =>
+        error instanceof Busy ||
+        (repeats === "idempotent" && error instanceof Unanswered),
       schedule: Schedule.exponential(Duration.millis(250)),
       times: triesPerCall - 1,
     }).pipe(
       Effect.catchIf(
-        (error): error is E & Busy => error instanceof Busy && tags.has("Busy"),
+        (error): error is E & Busy => error instanceof Busy,
         (busy) =>
           Effect.fail(
             new Busy({

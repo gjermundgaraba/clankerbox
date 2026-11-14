@@ -26,12 +26,12 @@ const counted = <E>(failure: () => E) => {
 
 describe("a provider's call asked again", () => {
   it.effect(
-    "is sent six times in all while it is lost or asked to be waited out",
+    "is sent six times in all while it is lost, if idempotent, or asked to be waited out",
     () =>
       Effect.gen(function* () {
         const busy = counted(() => new Busy({ message: "wait" }));
         const lost = counted(() => new Unanswered({ message: "lost" }));
-        const retried = askedAgain(new Set(["Busy", "Unanswered"]));
+        const retried = askedAgain("idempotent");
 
         const ended = yield* Effect.forkChild(
           Effect.all([
@@ -55,7 +55,7 @@ describe("a provider's call asked again", () => {
         const lost = counted(() => new Unanswered({ message: "lost" }));
 
         yield* Effect.forkChild(
-          Effect.exit(askedAgain(new Set(["Unanswered"]))(lost.call)),
+          Effect.exit(askedAgain("idempotent")(lost.call)),
           { startImmediately: true }
         );
 
@@ -75,16 +75,16 @@ describe("a provider's call asked again", () => {
       })
   );
 
-  it.effect("is sent once when it fails in a way not asked again", () =>
-    Effect.gen(function* () {
-      const lost = counted(() => new Unanswered({ message: "lost" }));
+  it.effect(
+    "is sent once when its answer is lost and it isn't idempotent",
+    () =>
+      Effect.gen(function* () {
+        const lost = counted(() => new Unanswered({ message: "lost" }));
 
-      const ended = yield* Effect.exit(
-        askedAgain(new Set(["Busy"]))(lost.call)
-      );
+        const ended = yield* Effect.exit(askedAgain("once")(lost.call));
 
-      expect([Exit.isFailure(ended), lost.sends()]).toStrictEqual([true, 1]);
-    })
+        expect([Exit.isFailure(ended), lost.sends()]).toStrictEqual([true, 1]);
+      })
   );
 });
 

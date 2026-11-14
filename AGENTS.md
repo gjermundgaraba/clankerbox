@@ -173,7 +173,9 @@ cloud and boat clients keep with their provider's API: each request's bound by
 what it asks, a gateway's 5xx and an unanswered request as a lost answer, a
 refusal that asks to be waited out waited as `Retry-After` says, in seconds or
 to a date, within 1 and 30 seconds and outside the request's bound, and sent
-again, six sends in all, a change whose answer was lost read
+again, six sends in all, a lost answer to a read, or to a change that does no
+more sent twice, as boat's stop, delete, unsave and SSH key, asked again the
+same way, any other change whose answer was lost read
 until its resource rests and sent again only when that doesn't hold it, three
 sends in all, and a list read one record at a time, which one of the host's
 own that it can't read fails. `tests/fake-smol-cloud.ts` and `tests/fake-boat.ts` serve each

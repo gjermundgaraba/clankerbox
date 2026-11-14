@@ -176,10 +176,9 @@ type Exchanged<A> =
       readonly text: string;
     };
 
-const busy: ReadonlySet<ApiError["_tag"]> = new Set(["Busy"]);
-
 const refusal = (
   call: string,
+  asked: Asked,
   response: HttpClientResponse.HttpClientResponse,
   text: string
 ): Effect.Effect<never, ApiError> => {
@@ -195,6 +194,10 @@ const refusal = (
 
   if (response.status === tooManyRequests) {
     return waitedOut(call, response, `HTTP 429 ${problem?.code ?? ""}`.trim());
+  }
+
+  if (asked === "read" && problem?.retryable === true) {
+    return waitedOut(call, response, `${response.status} ${problem.code}`);
   }
 
   const code = problem?.code ?? "unknown";
@@ -217,6 +220,8 @@ const refusal = (
 /**
  * smol cloud's API, the routes the adapter uses. Requests are encoded exactly; answers are read
  * leniently, keeping only the fields the adapter reads, and `state` and `status` stay open strings.
+ * A read is asked again after a lost answer and after a refusal smol cloud marks retryable, as a
+ * 429 is; a change is sent again only after a 429, its caller reading the provider first otherwise.
  * A list fails on a record it can't read only if `ours` claims it by its marks.
  */
 export const make = (url: string, key: Redacted.Redacted) =>
@@ -261,10 +266,10 @@ export const make = (url: string, key: Redacted.Redacted) =>
           within(asked, call)
         );
 
-      return askedAgain(busy)(
+      return askedAgain(asked === "read" ? "idempotent" : "once")(
         Effect.flatMap(exchange, (outcome) =>
           outcome.refused
-            ? refusal(call, outcome.response, outcome.text)
+            ? refusal(call, asked, outcome.response, outcome.text)
             : Effect.succeed(outcome.value)
         )
       );

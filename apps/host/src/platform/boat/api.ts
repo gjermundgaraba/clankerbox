@@ -13,7 +13,7 @@ import {
   waitedOut,
   within,
 } from "../provider-http.ts";
-import type { Busy, Unreadable } from "../provider-http.ts";
+import type { Busy, Repeats, Unreadable } from "../provider-http.ts";
 
 export const BoatType = Schema.Literals([
   "small",
@@ -140,13 +140,6 @@ const asksToWait = new Set([
   "save_in_progress",
   "ssh_host_key_unavailable",
 ]);
-
-const lostOrBusy: ReadonlySet<ApiError["_tag"]> = new Set([
-  "Unanswered",
-  "Busy",
-]);
-
-const busy: ReadonlySet<ApiError["_tag"]> = new Set(["Busy"]);
 
 interface Answer<A> {
   readonly status: number;
@@ -298,14 +291,14 @@ export const make = (settings: Settings) =>
     const call = <A>(
       request: HttpClientRequest.HttpClientRequest,
       decode: Schema.Decoder<A>,
-      asked: ReadonlySet<ApiError["_tag"]> = lostOrBusy
-    ) => askedAgain(asked)(once(request, decode));
+      repeats: Repeats = "idempotent"
+    ) => askedAgain(repeats)(once(request, decode));
 
     const done = <A>(
       request: HttpClientRequest.HttpClientRequest,
       decode: Schema.Decoder<A>,
-      asked: ReadonlySet<ApiError["_tag"]> = lostOrBusy
-    ) => Effect.map(call(request, decode, asked), ({ body }) => body);
+      repeats: Repeats = "idempotent"
+    ) => Effect.map(call(request, decode, repeats), ({ body }) => body);
 
     const found = <A>(
       request: HttpClientRequest.HttpClientRequest,
@@ -363,7 +356,7 @@ export const make = (settings: Settings) =>
       limits: done(HttpClientRequest.get("/limits"), Limits),
       create: (body: Body, idempotencyKey: string) =>
         Effect.map(
-          done(keyed("/sandboxes", body, idempotencyKey), Created, busy),
+          done(keyed("/sandboxes", body, idempotencyKey), Created, "once"),
           ({ sandbox }) => sandbox
         ),
       fork: (source: string, body: Body, idempotencyKey: string) =>
@@ -371,7 +364,7 @@ export const make = (settings: Settings) =>
           done(
             keyed(`/sandboxes/${source}/fork`, body, idempotencyKey),
             Created,
-            busy
+            "once"
           ),
           ({ sandbox }) => sandbox
         ),
@@ -383,11 +376,11 @@ export const make = (settings: Settings) =>
       sandboxes: list,
       resume: (id: string) =>
         Effect.map(
-          call(resumeOf(id, undefined), Schema.Unknown, busy),
+          call(resumeOf(id, undefined), Schema.Unknown, "once"),
           resumed
         ),
       retype: (id: string, type: BoatType) =>
-        Effect.map(call(resumeOf(id, type), Schema.Unknown, busy), resumed),
+        Effect.map(call(resumeOf(id, type), Schema.Unknown, "once"), resumed),
       stop: (id: string) =>
         Effect.asVoid(
           done(
@@ -420,7 +413,7 @@ export const make = (settings: Settings) =>
               HttpClientRequest.bodyJsonUnsafe({ sandboxId: id, name })
             ),
             Schema.Unknown,
-            busy
+            "once"
           )
         ),
       saved: (name: string) =>

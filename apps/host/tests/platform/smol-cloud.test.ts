@@ -1701,6 +1701,55 @@ describe("a smol cloud answer a gateway gives", () => {
   );
 });
 
+describe("a smol cloud read whose answer is lost", () => {
+  it.effect(
+    "is asked again, so a make the provider took is made, whichever of its reads a gateway answers",
+    () =>
+      Effect.gen(function* () {
+        for (const lostAt of [1, 2, 3]) {
+          let reads = 0;
+
+          const { asked, client } = answering((route) => {
+            if (route === "POST /v1/machines") {
+              return Response.json(recordIn("stopped"), { status: 201 });
+            }
+
+            if (route === "POST /v1/machines/mach-1/start") {
+              return Response.json(recordIn("started"));
+            }
+
+            if (route === "GET /v1/machines/mach-1") {
+              reads += 1;
+
+              return reads === lostAt
+                ? new Response("<html>bad gateway</html>", { status: 502 })
+                : Response.json(recordIn(reads === 1 ? "stopped" : "started"));
+            }
+
+            return undefined;
+          });
+
+          const runtime = yield* scriptedRuntime(client);
+
+          const ended = yield* endedWithin(
+            runtime.make(
+              machineOf("dev"),
+              { _tag: "image", image },
+              { _tag: "none" }
+            ),
+            "1 minute"
+          );
+
+          expect(
+            ended !== undefined && Exit.isSuccess(ended),
+            `read ${lostAt} lost: ${String(failureOf(ended))}`
+          ).toBe(true);
+          expect(asks(asked, "POST /v1/machines"), `read ${lostAt}`).toBe(1);
+        }
+      })
+  );
+});
+
 describe("a smol cloud create whose every answer is lost", () => {
   it.effect(
     "is sent five times in all, each looked for by its name a poll after, then fails",

@@ -103,7 +103,11 @@ Each is an assertion of the live suite, in the case named.
   `send`). A 429, never provoked, is waited as its `Retry-After` asks, in
   seconds or until an HTTP date, within `provider-http.ts`'s clamp of 1 to
   30 seconds, and sent again, six sends in all; each send has its own bound,
-  and the wait is outside it. (`api.ts`'s `send`; the 429 tests.)
+  and the wait is outside it. A read whose answer is lost, or that the
+  provider refuses `retryable`, is asked again the same way; a change whose
+  answer is lost is left to its caller, which reads the machine first.
+  (`api.ts`'s `send`; the 429 tests and the test of a read whose answer is
+  lost.)
 - A create answers 201 `stopped`; a start answers `started`.
 - `POST /exec/stream` refuses an empty argument with 400, answers a missing
   user with an error, takes string `stdin`, and sends each output line as a
