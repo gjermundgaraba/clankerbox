@@ -87,7 +87,12 @@ Each line names where the code holds it and how to check it again.
   once the sandbox is gone; the fake's `landSaveDuringDelete`.)
 - A resume within minutes of a stop answers 200 with the same machine, host
   key and address, and counts no start; past that, or with a `type`, it
-  answers 202 and counts one. (`api.ts`'s `resume`; live suite.)
+  answers 202 and counts one. A resume of a sandbox that runs answers 200,
+  `status: running`, and counts no start (measured in fix round 2's probe).
+  A start whose answer was lost reads the sandbox until it rests and sends
+  the resume again only while boat holds it stopped, three sends in all.
+  (`api.ts`'s `resume`, `boat.ts`'s `start` over `provider-http.ts`'s
+  `sentUntilHeld`; live suite.)
 - A delete sent twice answers 202 both times; only a read answers 404.
   (`boat.ts`'s `delete` polls the read; live suite.)
 - `/sshkey` answers the host key sshd serves now, after a cold start and

@@ -200,8 +200,8 @@ const resumeOf = (id: string, type: BoatType | undefined) =>
 
 /**
  * boat's API, the routes the adapter uses. A call asks again after a refusal whose code says it
- * passes once waited out, and after a lost answer, but for a create, a fork, a resume onto another
- * type and a save, whose callers read what boat holds before they send one again. The saved-snapshot
+ * passes once waited out, and after a lost answer, but for a create, a fork, a resume and a save,
+ * whose callers read what boat holds before they send one again. The saved-snapshot
  * list reads of each snapshot only its name and the sandbox it was saved from, and fails on one it
  * can't read only when `ours` claims its name: that snapshot may be held by a sandbox being
  * deleted, and a delete that went on past it would leave it billed with nothing to find it again.
@@ -382,7 +382,10 @@ export const make = (settings: Settings) =>
         ),
       sandboxes: list,
       resume: (id: string) =>
-        Effect.map(call(resumeOf(id, undefined), Schema.Unknown), resumed),
+        Effect.map(
+          call(resumeOf(id, undefined), Schema.Unknown, busy),
+          resumed
+        ),
       retype: (id: string, type: BoatType) =>
         Effect.map(call(resumeOf(id, type), Schema.Unknown, busy), resumed),
       stop: (id: string) =>

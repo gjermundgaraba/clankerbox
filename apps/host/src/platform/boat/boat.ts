@@ -41,7 +41,7 @@ import type {
 } from "../../runtime.ts";
 import { KeyedApiUrl } from "../../settings.ts";
 import type { HostSettings } from "../../settings.ts";
-import { triesAfterLoss, untilRest } from "../provider-http.ts";
+import { sentUntilHeld, triesAfterLoss, untilRest } from "../provider-http.ts";
 import * as Api from "./api.ts";
 import type { ApiError, ListedSnapshot, Sandbox, SshKey } from "./api.ts";
 import * as Ssh from "./ssh.ts";
@@ -307,6 +307,21 @@ export const make = (
           () =>
             new Internal({
               message: `boat didn't ${what} machine ${machine.name} within ${Duration.format(pollFor)}`,
+            })
+        )
+      );
+
+    const rested = (machine: Target) =>
+      untilRest(
+        Effect.map(read(machine), heldOf),
+        (held) => held !== "moving",
+        pollEvery
+      ).pipe(
+        timeoutFail(
+          pollFor,
+          () =>
+            new Internal({
+              message: `boat didn't bring machine ${machine.name} to rest within ${Duration.format(pollFor)}`,
             })
         )
       );
@@ -704,29 +719,45 @@ export const make = (
         }).pipe(Effect.uninterruptible),
       start: (machine, keep) =>
         Effect.gen(function* () {
-          const answer = yield* api.resume(machine.handle).pipe(
-            Effect.mapError((error) => {
-              if (error._tag === "Refused" && error.status === 404) {
-                return missing(traits.runtime, machine);
-              }
+          yield* sentUntilHeld({
+            send: api.resume(machine.handle).pipe(
+              Effect.catchTag(
+                ["Refused", "Busy", "Unreadable"],
+                (
+                  error
+                ): Effect.Effect<never, Missing | Capacity | Internal> => {
+                  if (error._tag === "Refused" && error.status === 404) {
+                    return Effect.fail(missing(traits.runtime, machine));
+                  }
 
-              if (
-                error._tag === "Refused" &&
-                error.code === "snapshot_data_expired"
-              ) {
-                return new Missing({
-                  message: `boat dropped machine ${machine.name}'s disk after its long stop; delete it`,
-                  machine: machine.name,
-                });
-              }
+                  if (
+                    error._tag === "Refused" &&
+                    error.code === "snapshot_data_expired"
+                  ) {
+                    return Effect.fail(
+                      new Missing({
+                        message: `boat dropped machine ${machine.name}'s disk after its long stop; delete it`,
+                        machine: machine.name,
+                      })
+                    );
+                  }
 
-              return failure(`start ${machine.name}`)(error);
-            })
-          );
-
-          yield* Effect.logInfo(
-            `start ${machine.name}: boat ${answer === "kept" ? "gave back the machine it kept" : "started a machine"}`
-          );
+                  return Effect.fail(failure(`start ${machine.name}`)(error));
+                }
+              ),
+              Effect.flatMap((answer) =>
+                Effect.logInfo(
+                  `start ${machine.name}: boat ${answer === "kept" ? "gave back the machine it kept" : "started a machine"}`
+                )
+              )
+            ),
+            rested: rested(machine),
+            holds: (held) => held === "running",
+            unheld: (held) =>
+              new Internal({
+                message: `boat answered none of ${triesAfterLoss} starts of ${machine.name}, and holds it ${held}`,
+              }),
+          });
           yield* ready(machine, "start");
           yield* prune(machine, keep).pipe(
             Effect.catch((error) =>

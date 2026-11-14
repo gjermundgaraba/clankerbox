@@ -20,6 +20,7 @@ import {
   Effect,
   Exit,
   Layer,
+  Logger,
   Option,
   Schema,
   Stream,
@@ -1395,6 +1396,118 @@ describe("a boat refusal that asks to be waited out", () => {
           const ended = yield* endedWithin(made(runtime, "dev"), "1 minute");
 
           expect(failureOf(ended)).toMatchObject({ _tag: "Capacity" });
+        })
+      )
+  );
+});
+
+describe("a boat saved-snapshot list holding a record the host can't read", () => {
+  it.effect(
+    "names it by its name, or as one with none, and quotes nothing of its body",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const planted = "PLANTED-TOKEN-7f3a";
+          const logged: string[] = [];
+
+          const { runtime } = yield* scriptedBoat((route) => {
+            if (route === "GET /saved-snapshots") {
+              return Response.json({
+                snapshots: [
+                  { secretEnv: { API_TOKEN: planted } },
+                  { name: 7, secret: planted },
+                ],
+              });
+            }
+
+            return route === "GET /sandboxes"
+              ? Response.json({ sandboxes: [] })
+              : undefined;
+          });
+
+          yield* (runtime.owned?.machines ?? Effect.void).pipe(
+            Effect.provide(
+              Logger.layer([
+                Logger.make(({ message }) => {
+                  logged.push(String(message));
+                }),
+              ])
+            )
+          );
+
+          expect(logged.filter((line) => line.includes(planted))).toStrictEqual(
+            []
+          );
+          expect(logged.map((line) => line.split(", which")[0])).toStrictEqual([
+            "GET /saved-snapshots answered saved snapshot a record with no name",
+          ]);
+        })
+      )
+  );
+});
+
+const resumes = (asked: readonly string[]) =>
+  asked.filter((route) => route === "POST /sandboxes/bx1/resume");
+
+const lostStart = (takes: boolean) =>
+  Effect.gen(function* () {
+    let state = "archived";
+
+    const scripted = yield* scriptedBoat((route) => {
+      if (route === "POST /sandboxes/bx1/resume") {
+        state = takes ? "ready" : state;
+
+        return new Response("<html>bad gateway</html>", { status: 502 });
+      }
+
+      if (route === "GET /sandboxes/bx1") {
+        return sandboxIn(state);
+      }
+
+      return route === "POST /sandboxes/bx1/sshkey"
+        ? Response.json({
+            sshEndpoint: "127.0.0.1:2222",
+            hostKey: "ssh-ed25519 AAAA",
+          })
+        : undefined;
+    });
+
+    return {
+      ...scripted,
+      ended: yield* endedWithin(
+        scripted.runtime.start(bx1, new Set()),
+        "10 minutes"
+      ),
+    };
+  });
+
+describe("a boat start whose answer is lost", () => {
+  it.effect(
+    "reads the sandbox until it rests, and sends no resume again once it runs",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { asked, ended } = yield* lostStart(true);
+
+          expect(
+            ended !== undefined && Exit.isSuccess(ended),
+            String(failureOf(ended))
+          ).toBe(true);
+          expect(resumes(asked)).toHaveLength(1);
+        })
+      )
+  );
+
+  it.effect(
+    "sends the resume again while the sandbox rests stopped, three sends in all",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { asked, ended } = yield* lostStart(false);
+
+          expect(failureOf(ended)).toMatchObject({ _tag: "Internal" });
+          expect(String(failureOf(ended))).toContain("none of 3 starts");
+          expect(resumes(asked)).toHaveLength(3);
         })
       )
   );
