@@ -16,7 +16,7 @@ import {
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
-import { Duration, Effect, Fiber, Option, Result } from "effect";
+import { Duration, Effect, Exit, Fiber, Option, Result, Scope } from "effect";
 import { expect } from "vite-plus/test";
 
 import {
@@ -72,6 +72,23 @@ const hooksRun = (dir: string) =>
   );
 
 const portsOfHere = suitePorts.serverMachines;
+
+const heldElsewhere = (port: number) =>
+  Effect.acquireRelease(
+    Effect.callback<Server>((resume) => {
+      const server = createServer();
+
+      server.listen({ host: "127.0.0.1", port, exclusive: true }, () => {
+        resume(Effect.succeed(server));
+      });
+    }),
+    (server) =>
+      Effect.callback<undefined>((resume) => {
+        server.close(() => {
+          resume(Effect.undefined);
+        });
+      })
+  );
 
 const sizesOf = (machine: {
   readonly cpu: number;
@@ -2786,23 +2803,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "ports skip one that something else listens on, and concurrent creates get distinct ones",
     () =>
       Effect.gen(function* () {
-        yield* Effect.acquireRelease(
-          Effect.callback<Server>((resume) => {
-            const server = createServer();
-
-            server.listen(
-              { host: "127.0.0.1", port: portsOfHere.first, exclusive: true },
-              () => {
-                resume(Effect.succeed(server));
-              }
-            );
-          }),
-          (server) =>
-            Effect.callback<undefined>((resume) => {
-              server.close(() => {
-                resume(Effect.undefined);
-              });
-            })
+        yield* Scope.provide(
+          heldElsewhere(portsOfHere.first),
+          yield* Effect.scope
         );
 
         const { client, row } = yield* served({
@@ -2826,6 +2829,53 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           portsOfHere.first + 2,
           portsOfHere.first + 3,
         ]);
+      })
+  );
+
+  it.effect(
+    "a start of a stopped smolvm machine whose port another program holds fails Capacity, naming the port and the cure, with nothing sent to boot it, and starts once the port is free",
+    () =>
+      Effect.gen(function* () {
+        const { client, fake, machine, row } = yield* served({
+          runtime: { ports: portsOfHere },
+        });
+
+        yield* client.create("dev", request("dev"));
+        yield* client.stopMachine({ id: "dev" });
+
+        const port = (yield* row("dev")).endpoint?.port;
+
+        if (port === undefined) {
+          return yield* Effect.die("a made smolvm machine with no port");
+        }
+
+        const holding = yield* Scope.make();
+
+        yield* Scope.provide(heldElsewhere(port), holding);
+        fake.calls.length = 0;
+
+        const refused = yield* Effect.flip(client.startMachine({ id: "dev" }));
+        const failed = yield* machine("dev");
+
+        yield* Scope.close(holding, Exit.void);
+
+        const started = yield* client.startMachine({ id: "dev" });
+
+        expect([refused._tag, refused.message]).toStrictEqual([
+          "Capacity",
+          `startMachine dev needs port ${port} on 127.0.0.1, which another program on this host holds: free it, then ask again`,
+        ]);
+        expect([failed.state, failed.phase]).toStrictEqual([
+          "stopped",
+          "failed",
+        ]);
+        expect(
+          fake.calls.filter((call) => call.startsWith("start"))
+        ).toStrictEqual(["start dev"]);
+        expect([
+          started.state,
+          (yield* row("dev")).endpoint?.port,
+        ]).toStrictEqual(["running", port]);
       })
   );
 

@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 
-import type { MachineRef } from "@clankerbox/host-contract";
+import type { MachineRef, Step } from "@clankerbox/host-contract";
 import {
   copySizable,
   fitted,
@@ -36,6 +36,7 @@ import type { Facts } from "../../../src/box.ts";
 import { fetch, publish } from "../../../src/builds.ts";
 import { runCommand } from "../../../src/guest.ts";
 import { PortProbe } from "../../../src/machine-ports.ts";
+import type { Probe } from "../../../src/machine-ports.ts";
 import * as Operations from "../../../src/operations.ts";
 import * as Relay from "../../../src/platform/relay.ts";
 import {
@@ -138,13 +139,22 @@ const callsEnded: Pick<Facts, "uid" | "ended"> = {
   ended: () => Effect.succeed(true),
 };
 
+const everyPortFree: Probe = { free: () => Effect.succeed(true) };
+
 const runtimeOf = (
   settings: Settings,
   spawner: ReturnType<typeof scripted>,
-  box = callsEnded
+  box = callsEnded,
+  probe = everyPortFree
 ) =>
   make(settings, box).pipe(
-    Effect.provide(Layer.merge(NodeServices.layer, spawner.layer))
+    Effect.provide(
+      Layer.mergeAll(
+        NodeServices.layer,
+        spawner.layer,
+        Layer.succeed(PortProbe, probe)
+      )
+    )
   );
 
 const startupError = (
@@ -154,7 +164,13 @@ const startupError = (
 ) =>
   make(settings, { ...callsEnded, uid }).pipe(
     Effect.flip,
-    Effect.provide(Layer.merge(NodeServices.layer, spawner.layer))
+    Effect.provide(
+      Layer.mergeAll(
+        NodeServices.layer,
+        spawner.layer,
+        Layer.succeed(PortProbe, everyPortFree)
+      )
+    )
   );
 
 const sized = (ref: Identity & Sizes): Sized => ({
@@ -1558,9 +1574,10 @@ layer(NodeServices.layer)((it) => {
 
         const runtime = yield* make(settings, callsEnded).pipe(
           Effect.provide(
-            Layer.merge(
+            Layer.mergeAll(
               NodeServices.layer,
-              Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, failing)
+              Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, failing),
+              Layer.succeed(PortProbe, everyPortFree)
             )
           )
         );
@@ -3936,10 +3953,7 @@ const operationsOver = (runtime: Interface) =>
       Layer.provide(Reach.layer({ first: 10_100, last: 10_109 })),
       Layer.provideMerge(Layer.succeed(Runtime, runtime)),
       Layer.provide(
-        Layer.merge(
-          Layer.succeed(PortProbe, { free: () => Effect.succeed(true) }),
-          Relay.layer
-        )
+        Layer.merge(Layer.succeed(PortProbe, everyPortFree), Relay.layer)
       )
     )
   ).pipe(Effect.map(Context.get(Operations.Operations)));
@@ -4015,6 +4029,134 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             nativeName({ name: "web", instance: "web".padEnd(32, "0") })
           )
         ).toBe(true);
+      })
+  );
+
+  it.effect(
+    "a start, a resume or a stop that resumes, of a machine whose port another program holds, fails Capacity naming the port and the cure, with nothing sent to boot it, while a running machine's resize, whose VM holds its port, goes on",
+    () =>
+      Effect.gen(function* () {
+        const model = smolvmModel();
+
+        const runtime = yield* runtimeOf(
+          yield* prepared(),
+          model.spawner,
+          model.box(),
+          model.probe
+        );
+
+        const stopped = migrated("stopped", 10_000);
+        const paused = migrated("paused", 10_001);
+        const pausedToStop = migrated("parked", 10_002);
+        const grown = migrated("grown", 10_003);
+
+        const states = new Map([
+          [stopped, "stopped"],
+          [paused, "paused"],
+          [pausedToStop, "paused"],
+          [grown, "running"],
+        ] as const);
+
+        for (const [each, state] of states) {
+          model.vms.set(nativeName(each), {
+            state,
+            forwards: [`${each.port}:22`],
+          });
+
+          if (state !== "running") {
+            model.elsewhere.add(each.port ?? 0);
+          }
+        }
+
+        const operations = yield* operationsOver(runtime);
+        const onHost = [...states.keys()];
+        const before = model.spawner.calls.length;
+
+        const pinned = runtime.pin === undefined ? {} : { pin: runtime.pin };
+
+        const steps: ReadonlyArray<readonly [string, Step]> = [
+          [
+            stopped.name,
+            { _tag: "start", machine: stopped, keep: [], machines: onHost },
+          ],
+          [
+            paused.name,
+            {
+              _tag: "start",
+              machine: paused,
+              keep: [],
+              ...pinned,
+              machines: onHost,
+            },
+          ],
+          [
+            pausedToStop.name,
+            {
+              _tag: "stop",
+              machine: pausedToStop,
+              ...pinned,
+              machines: onHost,
+            },
+          ],
+          [
+            grown.name,
+            {
+              _tag: "resize",
+              machine: grown,
+              to: { ramMib: 1152 },
+              machines: onHost,
+            },
+          ],
+        ];
+
+        const reports = yield* Effect.forEach(steps, ([name, step]) =>
+          Effect.andThen(
+            operations.run({
+              id: `step-${name}`,
+              boot: operations.boot,
+              scope: { resource: "machine", name },
+              sequence: 1,
+              step,
+            }),
+            eventually(
+              operations.wait(`step-${name}`),
+              (report) => report.status !== "running"
+            )
+          )
+        );
+
+        expect(
+          reports.map((report) => [
+            report.status,
+            report.error?._tag,
+            report.error?.message,
+          ])
+        ).toStrictEqual([
+          [
+            "failed",
+            "Capacity",
+            "startMachine stopped needs port 10000 on 100.64.0.10, which another program on this host holds: free it, then ask again",
+          ],
+          [
+            "failed",
+            "Capacity",
+            "startMachine paused needs port 10001 on 100.64.0.10, which another program on this host holds: free it, then ask again",
+          ],
+          [
+            "failed",
+            "Capacity",
+            "stopMachine parked needs port 10002 on 100.64.0.10, which another program on this host holds: free it, then ask again",
+          ],
+          ["done", undefined, undefined],
+        ]);
+        expect(
+          smolvmArgs(model.spawner.calls.slice(before)).filter(
+            ([, command]) => command === "start" || command === "resume"
+          )
+        ).toStrictEqual([]);
+        expect(
+          onHost.map((each) => model.vms.get(nativeName(each))?.state)
+        ).toStrictEqual(["stopped", "paused", "paused", "running"]);
       })
   );
 });

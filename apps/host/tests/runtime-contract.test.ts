@@ -7,6 +7,7 @@ import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { Context, Effect, Layer } from "effect";
 import { expect } from "vite-plus/test";
 
+import { PortProbe } from "../src/machine-ports.ts";
 import { make as smolvm } from "../src/platform/smolvm/smolvm.ts";
 import { make as tart } from "../src/platform/tart/tart.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -23,7 +24,9 @@ const smolvmAdapter = Effect.gen(function* () {
   const model = smolvmModel();
 
   const runtime = yield* smolvm(yield* prepared(), model.box()).pipe(
-    Effect.provide(model.spawner.layer)
+    Effect.provide(
+      Layer.merge(model.spawner.layer, Layer.succeed(PortProbe, model.probe))
+    )
   );
 
   return { model, runtime };

@@ -136,7 +136,8 @@ domain file never imports `platform/` or `composition/`.
   its `prepares` (`always` where its images lack the login user, else
   `with-setup`), and the facets `admission`, `files` and `owned`, each present or
   absent as a whole,
-  `PortProbe` (`machine-ports.ts`), for a `published` runtime's port, `Box` (`box.ts`), what the box tells a host
+  `PortProbe` (`machine-ports.ts`), for a `published` runtime's port, at a make's
+  claim and at each boot its admission admits (`checkPort`), `Box` (`box.ts`), what the box tells a host
   beside its config: its uid, whether a process has ended, and its ephemeral
   ports, `Relays` (`reach.ts`), `Tailnet`
   (`tailnet.ts`), which mints a machine's tailnet key, provided only on a host

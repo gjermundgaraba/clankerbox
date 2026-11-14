@@ -9,6 +9,7 @@ import {
 import { Effect, FileSystem, Schema } from "effect";
 
 import type { Facts } from "../src/box.ts";
+import type { Probe } from "../src/machine-ports.ts";
 import { minimumVersion, templates } from "../src/platform/smolvm/smolvm.ts";
 import type { Settings } from "../src/platform/smolvm/smolvm.ts";
 import { scripted } from "./scripted.ts";
@@ -67,19 +68,29 @@ const guestPorts = (forwards: readonly string[]) =>
     .toSorted((one, other) => one - other)
     .join(",");
 
+const hostPort = (forward: string) => Number(forward.split(":")[0]);
+
 const inUse = (forward: string): Reply => ({
   exitCode: 1,
-  stderr: `Error: port ${forward.split(":")[0]} is already in use\n`,
+  stderr: `Error: port ${hostPort(forward)} is already in use\n`,
+});
+
+const heldElsewhereOn1341 = (forward: string): Reply => ({
+  exitCode: 1,
+  stderr: `Error: agent operation failed: start machine: agent operation failed: monitor agent: Error: agent operation failed: configure virtio-net: failed to start virtio network runtime: cannot publish host TCP 127.0.0.1:${hostPort(forward)} to guest TCP 22: Address already in use (os error 98) (boot process exited (code 1) before the agent was ready); guest console: {"level":"INFO","fields":{"message":"accepted connection"}}\n`,
 });
 
 /**
  * smolvm's machine records as its CLI keeps them, for the calls a host makes: enough to follow a
  * build's base, the copies branched from it, and the host ports each holds. Each scope holds
- * `heldBytes`.
+ * `heldBytes`. `elsewhere` holds the host ports another program holds, which a VM's boot can't
+ * publish, and `probe` finds a port free as a bind would: neither held elsewhere nor by a VM that
+ * runs.
  */
 export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
   const vms = new Map<string, Vm>();
   const unrecorded = new Set<string>();
+  const elsewhere = new Set<number>();
 
   const record = (name: string, vm: Vm) => ({
     name,
@@ -173,16 +184,24 @@ export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
     return {};
   };
 
-  const start = (name: string, vm: Vm): Reply => {
-    const held = taken(name, vm.forwards);
+  const booted = (vm: Vm): Reply => {
+    const held = vm.forwards.find((forward) =>
+      elsewhere.has(hostPort(forward))
+    );
 
     if (held !== undefined) {
-      return inUse(held);
+      return heldElsewhereOn1341(held);
     }
 
     vm.state = "running";
 
     return {};
+  };
+
+  const start = (name: string, vm: Vm): Reply => {
+    const held = taken(name, vm.forwards);
+
+    return held === undefined ? booted(vm) : inUse(held);
   };
 
   const branch = (name: string, args: readonly string[]): Reply => {
@@ -333,9 +352,7 @@ export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
       }
 
       case "resume": {
-        vm.state = "running";
-
-        return {};
+        return booted(vm);
       }
 
       case "exec": {
@@ -380,7 +397,30 @@ export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
     ended: (pid) => Effect.sync(() => !running.has(pid)),
   });
 
-  return { vms, spawner, faults, orphanVmm, vmmsLeft, running, box };
+  const probe: Probe = {
+    free: (_address, port) =>
+      Effect.sync(
+        () =>
+          !elsewhere.has(port) &&
+          ![...vms.values()].some(
+            (vm) =>
+              live.has(vm.state) &&
+              vm.forwards.some((forward) => hostPort(forward) === port)
+          )
+      ),
+  };
+
+  return {
+    vms,
+    spawner,
+    faults,
+    orphanVmm,
+    vmmsLeft,
+    running,
+    box,
+    elsewhere,
+    probe,
+  };
 };
 
 /** Settings for a smolvm runtime over a scratch prefix holding `expanded`, its state on a short path for its sockets. */

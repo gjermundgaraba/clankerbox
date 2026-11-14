@@ -38,6 +38,8 @@ import {
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
+import { checkPort, PortProbe } from "../src/machine-ports.ts";
+import * as BindProbe from "../src/platform/bind-probe.ts";
 import { traits as smolvm } from "../src/platform/smolvm/traits.ts";
 import { traits as tart } from "../src/platform/tart/traits.ts";
 import {
@@ -871,6 +873,8 @@ export const fakeRuntime = (options: FakeOptions) => {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const layerScope = yield* Effect.scope;
       const bin = yield* Effect.sync(() => writeStubs(options.dir));
+      const probe = yield* Effect.provide(PortProbe, BindProbe.layer);
+      const address = "127.0.0.1";
 
       stubs = bin;
 
@@ -925,14 +929,14 @@ export const fakeRuntime = (options: FakeOptions) => {
         reach: relayed
           ? {
               _tag: "relayed",
-              address: "127.0.0.1",
+              address,
               dial: (machine) => {
                 record(`relay ${machine.name}`);
 
                 return (input) => input;
               },
             }
-          : { _tag: "published", address: "127.0.0.1" },
+          : { _tag: "published", address },
         admission: preset.admits
           ? {
               admit: (activation: Activation) =>
@@ -941,14 +945,19 @@ export const fakeRuntime = (options: FakeOptions) => {
                   call(
                     "admit",
                     activation.machine,
-                    options.ramBudgetMib === undefined
-                      ? Effect.void
-                      : checkRamBudget(
-                          options.ramBudgetMib,
-                          activation,
-                          states,
-                          0
-                        )
+                    Effect.andThen(
+                      relayed
+                        ? Effect.void
+                        : checkPort(probe, address, activation),
+                      options.ramBudgetMib === undefined
+                        ? Effect.void
+                        : checkRamBudget(
+                            options.ramBudgetMib,
+                            activation,
+                            states,
+                            0
+                          )
+                    )
                   )
                 ),
             }

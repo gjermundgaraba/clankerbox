@@ -6,6 +6,7 @@ import { layer } from "@effect/vitest";
 import { Duration, Effect, Exit, Layer, Option, Scope } from "effect";
 import { describe, expect, vi } from "vite-plus/test";
 
+import * as BindProbe from "../../../src/platform/bind-probe.ts";
 import * as NodeBox from "../../../src/platform/box.ts";
 import { aloneOnBox } from "../../../src/platform/smolvm/one-per-box.ts";
 import { layer as smolvmLayer } from "../../../src/platform/smolvm/smolvm.ts";
@@ -22,7 +23,7 @@ const started = (lock: string) =>
         lock
       )
     )
-  ).pipe(Effect.provide(NodeBox.layer));
+  ).pipe(Effect.provide(Layer.merge(NodeBox.layer, BindProbe.layer)));
 
 const connected = (lock: string) =>
   Effect.acquireRelease(

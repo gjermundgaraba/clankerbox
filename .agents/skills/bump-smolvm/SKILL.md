@@ -524,8 +524,20 @@ as it is.
 - `-p` binds loopback, or `SMOLVM_PUBLISH_ADDR`, which the VMM reads, and
   `[::1]` beside an address other than `0.0.0.0`; only a loopback bind refused
   for its port falls back to the wildcard, filtered by peer (`publish_addr`,
-  `bind_with`, crates/smolvm-network/src/publish_bind.rs). Ours:
-  `SMOLVM_PUBLISH_ADDR` is the host's `listen.address`.
+  `bind_with`, crates/smolvm-network/src/publish_bind.rs). The VMM binds
+  them at every boot, a `resume` included, which launches as a start does
+  (`resume_vm`, `launch_from_record`, src/embedded/control.rs): the IPv4 one
+  must bind, and a port another program holds there fails the boot "cannot
+  publish host TCP …: Address already in use" with the guest's console
+  (measured on 1.34.1 for a start), while the IPv6 one is skipped when it can't
+  (`bind_v6`). `machine update` moves a stopped machine's forwards (`-p`,
+  `--remove-port`) but refuses a paused one (`InvalidState`, `UpdateCmd`'s
+  `run`, src/cli/machine.rs). Ours: `SMOLVM_PUBLISH_ADDR` is the host's
+  `listen.address`; a make's claim probes the IPv4 address before the port
+  is given, and `admit` probes a machine's port before every boot of it but
+  a running resize's (`checkPort`, `machine-ports.ts`), answering
+  `Capacity` with no smolvm call where another program holds it, rather
+  than moving a port the VM of a paused machine can't leave.
 - Setting `SMOLVM_PUBLISH_ADDR` makes the egress floor strict by default; the
   values are `strict`, `metadata` and `off` (`floor_mode`,
   crates/smolvm-network/src/egress.rs), and no per-machine flag weakens strict

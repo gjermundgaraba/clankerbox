@@ -12,6 +12,7 @@ import type {
   HttpServerError,
 } from "effect/http";
 
+import type { PortProbe } from "../machine-ports.ts";
 import * as Operations from "../operations.ts";
 import * as BindProbe from "../platform/bind-probe.ts";
 import * as Relay from "../platform/relay.ts";
@@ -71,7 +72,10 @@ export const hostLayer = <E, R>(
 ): Layer.Layer<
   HttpServer.HttpServer | Operations.Operations | Reach.Reaches | Runtime,
   HostError | CannotStart | E,
-  R | FileSystem.FileSystem | Path.Path | HttpClient.HttpClient
+  | Exclude<R, PortProbe>
+  | FileSystem.FileSystem
+  | Path.Path
+  | HttpClient.HttpClient
 > =>
   HttpRouter.serve(routes(config), {
     disableLogger: true,
@@ -93,7 +97,7 @@ export const hostLayer = <E, R>(
     Layer.provide(
       Layer.mergeAll(BindProbe.layer, Relay.layer, startedUp(config))
     ),
-    Layer.provideMerge(runtime),
+    Layer.provideMerge(Layer.provide(runtime, BindProbe.layer)),
     Layer.provide(
       config.tailnet === undefined
         ? Layer.empty
