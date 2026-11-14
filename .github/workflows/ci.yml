@@ -28,6 +28,8 @@ jobs:
           cache-toolchain: true
           run-install: false
       - run: vp install --frozen-lockfile
+      - name: Install the guest shells the host's tests run the launcher under
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh busybox-static
       - run: vp run ready
       - name: Check that the build left the tree clean
         run: git diff --exit-code

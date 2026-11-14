@@ -2101,8 +2101,21 @@ const shellCases = (shell: readonly string[]) => {
   });
 };
 
-describe.each(guestShells)("under $name", ({ argv, installed }) => {
-  describe.skipIf(!installed)("where it is installed", () => {
-    shellCases(argv);
-  });
+const shellsRequired = process.env["CI"] !== undefined;
+
+describe.each(guestShells)("under $name", ({ name, argv, installed }) => {
+  describe.skipIf(!installed && !shellsRequired)(
+    "where it is installed, as CI requires",
+    () => {
+      layer(NodeServices.layer)((it) => {
+        it.effect("is installed", () =>
+          Effect.sync(() => {
+            expect(installed, `${name} is missing: install it`).toBe(true);
+          })
+        );
+      });
+
+      shellCases(argv);
+    }
+  );
 });
