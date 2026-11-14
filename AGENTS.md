@@ -37,7 +37,7 @@ release. Add a tool name to select part of the graph. For example, run
 | Path                            | Holds                                                                  |
 | ------------------------------- | ---------------------------------------------------------------------- |
 | `packages/sdk/`                 | The client contract, its schemas and errors, the client                |
-| `packages/host-contract/`       | The host contract, private: shared by the server and the host alone    |
+| `packages/host-contract/`       | The host contract and the journal, private: the server's and host's    |
 | `apps/server/`                  | The control plane: rows, charts, leases, the loops, placement          |
 | `apps/host/`                    | A host: runs operations on one of the runtimes, and keeps no database  |
 | `apps/cli/`                     | The CLI: its commands, over the SDK                                    |
@@ -108,9 +108,8 @@ the whole CLI span domains on purpose.
 `platform/sqlite.ts` is the `Store`, and loads each chart's `leaves` at runtime to
 validate `state`. `composition/`: `config.ts` reads the config file, `routes.ts`
 serves the client contract, and `server.ts`, the package's entry, builds the
-server over a server Layer it is given, with `journaled`, which logs a request
-only when it answers `Internal` or fails, and every other at debug. A domain file never imports `platform/`
-or `composition/`.
+server over a server Layer it is given, through the host contract's `journal`. A
+domain file never imports `platform/` or `composition/`.
 
 **Host** (`apps/host/src`). Domain files sit flat in `src/`:
 
@@ -172,13 +171,17 @@ accounts. A domain file never imports `platform/` or `composition/`.
 
 `composition/` assembles the host: `config.ts` reads the config file,
 `runtimes.ts` is the registry of runtimes, one entry each under the name a host
-config's `runtime` gives it, with its settings and its Layer, `routes.ts` serves the host contract, `journal.ts` is what its log holds of
-the requests it serves, and `host.ts` builds the
+config's `runtime` gives it, with its settings and its Layer, `routes.ts` serves the host contract, and `host.ts` builds the
 host over a runtime Layer and a server Layer it is given, with the config's
 tailnet and build store, if any.
 
 **Host contract** (`packages/host-contract/src`). `api.ts`: `HostHttp`, the
-`Step`s, `Operation`, `Report`, `HostInfo`.
+`Step`s, `Operation`, `Report`, `HostInfo`. `journal.ts`: `journal`, what the
+control plane's log and a host's hold of the requests each serves, one
+middleware for both, as both must log no secret a request carries: a request
+that answers `Internal` or fails as no action declares logs at error, with its
+method and URL, one its caller or the stop cuts logs nothing, and every other
+logs at debug.
 
 **SDK** (`packages/sdk/src`). A library. Its root modules are the client
 contract and the vocabulary everything else imports: `api.ts`, `resources.ts`,
@@ -361,7 +364,8 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
   host package; the server's only adapter is the `Store`, and a host's adapters
   can't import `node:sqlite`; a host adapter imports domain files, its own
   folder and `platform/`'s `process.ts`; the host contract
-  imports `effect`, the SDK and effect-actions; an app command imports only
+  imports `effect`, with its `http` for the journal, the SDK and effect-actions,
+  and the server's `composition/` takes only its journal; an app command imports only
   `effect` (with its `cli`, `encoding`, `http`, `process` and `socket`), the SDK
   and its siblings, so a client can't reach the host contract; the provider takes
   Node and `@effect/platform-node` only in `index.ts` and `tunnel.ts`, and the

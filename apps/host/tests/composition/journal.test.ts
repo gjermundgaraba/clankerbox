@@ -1,3 +1,4 @@
+import { journal } from "@clankerbox/host-contract/journal";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { version, versionHeader } from "@gjermundgaraba/clankerbox-sdk";
@@ -5,7 +6,6 @@ import { Cause, Effect, Logger, References, Schema } from "effect";
 import { HttpServerRequest } from "effect/http";
 import { expect } from "vite-plus/test";
 
-import { journal } from "../../src/composition/journal.ts";
 import { hostOn } from "../support.ts";
 
 const serve = hostOn({ first: 21_190, last: 21_199 });

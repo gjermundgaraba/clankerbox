@@ -1,3 +1,4 @@
+import { journal } from "@clankerbox/host-contract/journal";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Layer } from "effect";
@@ -19,7 +20,6 @@ import * as Tailscale from "../platform/tailscale.ts";
 import * as Reach from "../reach.ts";
 import { CannotStart, Runtime } from "../runtime.ts";
 import type { HostSettings } from "../settings.ts";
-import { journal } from "./journal.ts";
 import { routes } from "./routes.ts";
 
 export type ServerLayer = Layer.Layer<

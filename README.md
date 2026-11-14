@@ -172,7 +172,7 @@ One process runs from one JSON config file:
 clankerbox-server --config /etc/clankerbox/server.json
 ```
 
-The control plane exits 130 on SIGINT or SIGTERM and 1 when it fails. It stops at once: a write it began commits whole, and a request still open, an `exec` or a held read, is cut as a crash would cut it, so a mutation whose reply it cut answers `Unavailable` saying it may have run, and a read `Unavailable`, which a wait reads on through until it is back. A client reads a reverse proxy's 502, 503 or 504 in front of the control plane the same way. Its log holds what an operator acts on: a host that stops answering and answers again, a step a host refuses, a request that answers `Internal` or fails, a loop, recheck or build that fails, and an expiry. Each line of a machine's or checkpoint's own work names it, and the step it follows. An answered request, a refusal included, logs at debug, which `--log-level debug` shows.
+The control plane exits 130 on SIGINT or SIGTERM and 1 when it fails. It stops at once: a write it began commits whole, and a request still open, an `exec` or a held read, is cut as a crash would cut it, so a mutation whose reply it cut answers `Unavailable` saying it may have run, and a read `Unavailable`, which a wait reads on through until it is back. A client reads a reverse proxy's 502, 503 or 504 in front of the control plane the same way. Its log holds what an operator acts on: a host that stops answering and answers again, a step a host refuses, a request that answers `Internal` or fails as no action declares, a loop, recheck or build that fails, and an expiry. Each line of a machine's or checkpoint's own work names it, and the step it follows. An answered request, a refusal or a path no route takes included, logs at debug, which `--log-level debug` shows, and a request its client abandons or the stop cuts logs nothing.
 
 ### Upgrading from 0.40
 
@@ -198,7 +198,7 @@ What a client reads changes in a few places:
 - `hosts` shows `incompatible` for a host of another release or contract, which the control plane uses for nothing. `capacity` says of such a host that it is incompatible, and why, and of one that doesn't answer why; in `--json` and the SDK's `CapacityReport`, `unreported` lists each with its `host`, `state` and `problem`, replacing `unreachable`. An `exec` on a machine there answers `Unavailable`, saying why the host is incompatible, with `readOnly` set, since nothing reached it.
 - `pause --capture` on a host whose traits capture a stopped machine and stop it on a pause, as boat, pauses first and captures what the pause left, and on one that saves it, as a Mac, answers `WrongState`. A host that can't be read answers `Unavailable`.
 - A retired instance's day now runs from the first sweep that reached its host and left nothing of it, a provider whose deletes fail keeps the record until one succeeds, and the migration retires every row that already rested undone or failed, so its host's next sweep deletes what such a make left.
-- The control plane logs an answered request at debug, not at info.
+- The control plane logs an answered request at debug, not at info, a path no route takes at debug, not at error, and a request its client abandons or its stop cuts not at all.
 
 ### Upgrading from 0.30
 

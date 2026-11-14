@@ -144,6 +144,7 @@ export default config({
               "^\\.\\.?/[a-z-]+(/[a-z-]+)?\\.ts$",
               "^node:http$",
               "^@effect/platform-node/",
+              "^@clankerbox/host-contract/journal$",
               "^@gjermundgaraba/clankerbox-sdk(/node)?$",
               "^@gjermundgaraba/effect-actions/",
               "^effect$",
@@ -164,11 +165,12 @@ export default config({
             allow: [
               "^\\./[a-z-]+\\.ts$",
               "^effect$",
+              "^effect/http$",
               "^@gjermundgaraba/clankerbox-sdk$",
               "^@gjermundgaraba/effect-actions/",
             ],
             because:
-              "the host contract is schemas and actions, shared by the server and the host alone",
+              "the host contract is schemas and actions, and the journal of the requests each side serves, shared by the server and the host alone",
           },
         ],
       },

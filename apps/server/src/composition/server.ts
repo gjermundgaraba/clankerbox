@@ -1,14 +1,14 @@
+import { journal } from "@clankerbox/host-contract/journal";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Cause, Effect, Exit, Layer } from "effect";
+import { Effect, Layer } from "effect";
 import type { FileSystem, Path } from "effect";
-import { HttpRouter, HttpServerRequest } from "effect/http";
+import { HttpRouter } from "effect/http";
 import type {
   Etag,
   HttpClient,
   HttpPlatform,
   HttpServer,
   HttpServerError,
-  HttpServerResponse,
 } from "effect/http";
 
 import * as Checkpoints from "../checkpoints.ts";
@@ -29,49 +29,12 @@ export type ServerLayer = Layer.Layer<
   HttpServerError.ServeError
 >;
 
-const internalStatus = 500;
-
 /**
  * How the control plane's Node server stops: at once, cutting the requests still open. A write is
  * one SQLite transaction, which a stop never splits, and a request it cuts is one a crash would
  * cut: the client reads to see what a mutation did, and a wait reads on through the outage.
  */
 export const stopsAtOnce = { disablePreemptiveShutdown: true } as const;
-
-/**
- * The journal holds what an operator acts on: a request that answers `Internal` or fails as no
- * declared error does. An answer, a refusal included, is the client's, and logs at debug.
- */
-export const journaled = <E, R>(
-  app: Effect.Effect<
-    HttpServerResponse.HttpServerResponse,
-    E,
-    HttpServerRequest.HttpServerRequest | R
-  >
-) =>
-  Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
-    Effect.onExit(app, (exit) => {
-      const fields = { "http.method": request.method, "http.url": request.url };
-
-      if (Exit.isFailure(exit)) {
-        return Cause.hasInterruptsOnly(exit.cause)
-          ? Effect.void
-          : Effect.annotateLogs(
-              Effect.logError("a request failed", exit.cause),
-              fields
-            );
-      }
-
-      const status = { ...fields, "http.status": exit.value.status };
-
-      return exit.value.status === internalStatus
-        ? Effect.annotateLogs(
-            Effect.logError("a request answered Internal"),
-            status
-          )
-        : Effect.annotateLogs(Effect.logDebug("Sent HTTP response"), status);
-    })
-  );
 
 export const serverLayer = (
   config: ServerSettings,
@@ -88,7 +51,7 @@ export const serverLayer = (
 > =>
   HttpRouter.serve(routes, {
     disableLogger: true,
-    middleware: journaled,
+    middleware: journal,
   }).pipe(
     Layer.provideMerge(
       Layer.catchTag(server, "ServeError", (error) =>

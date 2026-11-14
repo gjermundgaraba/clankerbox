@@ -3,11 +3,9 @@ import path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { read, scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { Duration, Effect, Fiber, Logger, References, Schedule } from "effect";
-import { HttpServerRequest, HttpServerResponse } from "effect/http";
+import { Duration, Effect, Fiber, Logger, Schedule } from "effect";
 import { expect } from "vite-plus/test";
 
-import { journaled } from "../../src/composition/server.ts";
 import {
   clientOf,
   firstHost,
@@ -20,23 +18,6 @@ import {
 const heard = (lines: Array<readonly [string, string]>) =>
   Logger.make(({ logLevel, message }) => {
     lines.push([logLevel, String(message)]);
-  });
-
-const answering = (app: Effect.Effect<HttpServerResponse.HttpServerResponse>) =>
-  Effect.gen(function* () {
-    const lines: Array<readonly [string, string]> = [];
-
-    yield* journaled(app).pipe(
-      Effect.provideService(
-        HttpServerRequest.HttpServerRequest,
-        HttpServerRequest.fromWeb(new Request("http://plane/machines"))
-      ),
-      Effect.provideService(References.MinimumLogLevel, "All"),
-      Effect.provide(Logger.layer([heard(lines)])),
-      Effect.exit
-    );
-
-    return lines;
   });
 
 layer(NodeServices.layer, { excludeTestServices: true })(
@@ -59,25 +40,65 @@ layer(NodeServices.layer, { excludeTestServices: true })(
     );
 
     it.effect(
-      "logs an answer at debug, one of Internal and a failure no declared error is at error",
+      "logs no error for a refusal answered 503, which is its client's",
       () =>
         Effect.gen(function* () {
-          const said = yield* Effect.forEach(
-            [
-              Effect.succeed(HttpServerResponse.empty({ status: 200 })),
-              Effect.succeed(HttpServerResponse.empty({ status: 404 })),
-              Effect.succeed(HttpServerResponse.empty({ status: 500 })),
-              Effect.die("broken"),
-            ],
-            answering
+          const lines: Array<readonly [string, string]> = [];
+
+          const { client, host } = yield* withClient({ logger: heard(lines) });
+
+          yield* host.dispose;
+
+          const refused = yield* Effect.flip(
+            client.create("dev", request("dev"))
           );
 
-          expect(said).toStrictEqual([
-            [["Debug", "Sent HTTP response"]],
-            [["Debug", "Sent HTTP response"]],
-            [["Error", "a request answered Internal"]],
-            [["Error", "a request failed"]],
-          ]);
+          expect(refused).toMatchObject({ _tag: "Unavailable" });
+          expect(
+            lines.filter(([level]) => level === "Error" || level === "Fatal")
+          ).toStrictEqual([]);
+        })
+    );
+
+    it.effect(
+      "holds no error for a request no route takes, one its client abandons, or one the stop cuts",
+      () =>
+        Effect.gen(function* () {
+          const lines: Array<readonly [string, string]> = [];
+          const served = yield* running({ logger: heard(lines) });
+          const client = yield* clientOf(served.url);
+          const stopping = firstHost(served).fake.holdNext("stop");
+
+          const favicon = yield* Effect.promise(
+            async () => await fetch(new URL("/favicon.ico", served.url))
+          );
+
+          yield* client.create("dev", request("dev"));
+          yield* Effect.forkChild(
+            Effect.exit(client.stopMachine({ id: "dev" }))
+          );
+          yield* stopping.entered;
+
+          const abandoned = yield* Effect.forkChild(
+            client.getMachine({ id: "dev", holdSeconds: 5 })
+          );
+
+          yield* Effect.sleep(Duration.millis(300));
+          yield* Fiber.interrupt(abandoned);
+
+          const cut = yield* Effect.forkChild(
+            Effect.exit(client.getMachine({ id: "dev", holdSeconds: 5 }))
+          );
+
+          yield* Effect.sleep(Duration.millis(300));
+          yield* served.crash;
+          yield* Fiber.join(cut);
+          yield* stopping.release;
+
+          expect(favicon.status).toBe(404);
+          expect(
+            lines.filter(([level]) => level === "Error" || level === "Fatal")
+          ).toStrictEqual([]);
         })
     );
   }
