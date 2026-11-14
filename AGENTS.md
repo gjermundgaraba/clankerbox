@@ -180,7 +180,7 @@ tailnet and build store, if any.
 control plane's log and a host's hold of the requests each serves, one
 middleware for both, as both must log no secret a request carries: a request
 that answers `Internal` or fails as no action declares logs at error, with its
-method and URL, one its caller or the stop cuts logs nothing, and every other
+method and path, one its caller or the stop cuts logs nothing, and every other
 logs at debug.
 
 **SDK** (`packages/sdk/src`). A library. Its root modules are the client
