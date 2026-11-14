@@ -1102,7 +1102,7 @@ interface Failing {
   readonly account?: {
     answeredFirst?: number;
     times: number;
-    readonly answer: "gateway" | "refused";
+    readonly answer: "gateway" | "refused" | "unavailable";
   };
   readonly create?: string;
   readonly inUse?: { readonly machines: number; readonly started: number };
@@ -1155,6 +1155,15 @@ const scripted = (
           ) {
             if (failing?.account !== undefined) {
               failing.account.times -= 1;
+            }
+
+            if (failing?.account?.answer === "unavailable") {
+              return reply(503, {
+                code: "unavailable",
+                detail: "the account store is restarting",
+                retryable: true,
+                status: 503,
+              });
             }
 
             return failing?.account?.answer === "gateway"
@@ -1279,6 +1288,31 @@ describe("a smol cloud host's start", () => {
           "Internal",
           expect.stringMatching(/^couldn't read the account's plan: /u),
         ]);
+      })
+  );
+
+  it.effect(
+    "reads the plan again after a gateway's answer or a refusal smol cloud marks retryable, as every read is, and starts",
+    () =>
+      Effect.gen(function* () {
+        for (const answer of ["gateway", "unavailable"] as const) {
+          const starting = yield* Effect.forkChild(
+            scriptedRuntime(
+              scripted({ busy: 0 }, "started", undefined, {
+                account: { times: 2, answer },
+              })
+            )
+          );
+
+          yield* TestClock.adjust("1 minute");
+
+          const ended = starting.pollUnsafe();
+
+          expect(
+            ended !== undefined && Exit.isSuccess(ended),
+            `started past two ${answer} answers`
+          ).toBe(true);
+        }
       })
   );
 });
