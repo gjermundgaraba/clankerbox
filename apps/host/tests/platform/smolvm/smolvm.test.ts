@@ -2081,6 +2081,38 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
+    "a host removes only the seed builds smolvm names, sixteen hex digits of its key and then its PID, and leaves a VM named otherwise whose PID has ended",
+    () =>
+      Effect.gen(function* () {
+        const model = smolvmModel();
+        const seed = "image-seed-0123456789abcdef-4242";
+
+        const others = [
+          "image-seed-made-by-hand-4242",
+          "image-seed-0123456789abcde-4242",
+          "image-seed-0123456789ABCDEF-4242",
+          "image-seed-0123456789abcdef0-4242",
+        ];
+
+        for (const vm of [seed, ...others]) {
+          model.vms.set(vm, { state: "running", forwards: [] });
+        }
+
+        const runtime = yield* runtimeOf(
+          yield* prepared(),
+          model.spawner,
+          model.box()
+        );
+
+        yield* runtime.startup;
+
+        expect(
+          [seed, ...others].filter((vm) => model.vms.has(vm))
+        ).toStrictEqual(others);
+      })
+  );
+
+  it.effect(
     "a boot cut short or failed removes the seed build its smolvm call left, and keeps one whose call still runs",
     () =>
       Effect.gen(function* () {
