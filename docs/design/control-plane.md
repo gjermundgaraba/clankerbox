@@ -98,7 +98,7 @@ The client waits. The SDK's methods keep their shape: `client.stopMachine` polls
 - A machine's `phase` names the step it is in, or rests at `settled`, `failed` or `lost`.
 - `waiting` is read, never stored: a read that finds the VM `unknown` shows it, on any row that hasn't failed.
 - A client rides out a control plane outage of about 2 minutes (`outageLimit`).
-- A make that fails, in the copy or the setup, goes `undoing`, deletes the VM and rests `undone`. The row stays as `failed` with state `missing` and its error. Requests other than `get`, `delete` and `create` answer `NotFound`. It expires after `failedRowsLast`, one day.
+- A make that fails, in the copy or the setup, goes `undoing`, deletes the VM and rests `undone`. The row stays as `failed` with state `missing` and its error. Requests other than `get`, `delete` and `create` answer `NotFound` with its error. It expires after `failedRowsLast`, one day.
 - Fork, restore, capture and resize follow the same pattern. A template build answers a `Build`, which `getTemplate` reads with its template, and builds are rows (decision 16).
 - Polling is the default. A watch can come later.
 

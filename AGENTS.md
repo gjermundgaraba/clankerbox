@@ -78,7 +78,7 @@ the whole CLI span domains on purpose.
   requests, places a create and starts the recheck; `Checkpoints` captures,
   deletes, and keeps a build's copy. Each gives `driver` its reads and its writes.
 - `templates.ts`: the `Templates` service, with its `make` and `layer`. A build
-  makes a builder, runs its setup, copies it and deletes it, then ends the build
+  makes a builder, placed as a create is, runs its setup, copies it and deletes it, then ends the build
   in its template's row, keeping the last 2 ready builds; a create from a
   template is `Machines`'s. A host with a build store publishes the copy before
   the build ends ready, and a recheck has every other host of the runtime fetch each
@@ -372,7 +372,7 @@ the run.
   `undoing`, deletes the VM, again at each recheck while that fails, and rests
   `undone` with its error for `failedRowsLast`. A delete clears it at once and a
   create of the name replaces it. A `Capacity` failure moves the create to the
-  next host instead, for a template's the next that holds its build, once its VM is gone, while the control plane that took the create runs; after a restart it rests `undone`. So does a `Missing` that names the checkpoint a template's create restores, as each later host holds a copy of its own. Nothing ambiguous ever moves one.
+  next host instead, for a template's the next that holds its build, and for a build's builder the next that offers its base, once its VM is gone, while the control plane that took the create runs; after a restart it rests `undone`. So does a `Missing` that names the checkpoint a template's create restores, as each later host holds a copy of its own. Nothing ambiguous ever moves one.
 - **A checkpoint a make finds gone fails.** A runtime answers a make from a
   checkpoint it no longer holds `Missing`, naming the checkpoint, with nothing
   made, and the control plane then fails that checkpoint's row, if it is ready
