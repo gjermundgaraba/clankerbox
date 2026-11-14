@@ -117,11 +117,18 @@ const heldOf = (sandbox: Sandbox | undefined): Held => {
 
 type Goal = "running" | "stopped" | "gone";
 
-const ends: Readonly<Record<Goal, ReadonlySet<Held>>> = {
-  running: new Set(["running", "error", "cancelled", "gone"]),
-  stopped: new Set(["stopped", "error", "cancelled", "gone"]),
-  gone: new Set(["cancelled", "gone"]),
-};
+const ends = {
+  running: ["running", "error", "cancelled", "gone"],
+  stopped: ["stopped", "error", "cancelled", "gone"],
+  gone: ["cancelled", "gone"],
+} as const satisfies Readonly<Record<Goal, readonly Held[]>>;
+
+type End<G extends Goal> = (typeof ends)[G][number];
+
+const endsAt =
+  <G extends Goal>(goal: G) =>
+  (held: Held): held is End<G> =>
+    ends[goal].some((end: Held) => end === held);
 
 const stateOf = (sandbox: Sandbox | undefined): MachineState => {
   if ((sandbox?.dataExpiredAt ?? null) !== null) {
@@ -296,10 +303,10 @@ export const make = (
           Effect.mapError(internal(`couldn't read machine ${machine.name}`))
         );
 
-    const toward = (machine: Target, goal: Goal, what: string) =>
+    const toward = <G extends Goal>(machine: Target, goal: G, what: string) =>
       untilRest(
         Effect.map(read(machine), heldOf),
-        (held) => ends[goal].has(held),
+        endsAt(goal),
         pollEvery
       ).pipe(
         timeoutFail(
@@ -355,9 +362,7 @@ export const make = (
         const held = yield* toward(machine, "running", what);
 
         switch (held) {
-          case "running":
-          case "stopped":
-          case "moving": {
+          case "running": {
             yield* pinned(machine);
 
             return;

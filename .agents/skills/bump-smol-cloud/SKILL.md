@@ -79,10 +79,15 @@ Each is an assertion of the live suite, in the case named.
   that may take it, and a resize `Unsizable`. A start, or an exec that starts
   a machine, past `effectiveMaxConcurrentMachines` answers 422
   `unprocessable`, `concurrency limit reached: …` (measured in the first
-  round's probe). The adapter decides any 422 but the size one by reading
-  `GET /v1/account` and `GET /v1/capacity`: `Capacity` when the account holds
-  what its limits allow, running or kept, `Internal` otherwise or when that
-  read fails, since the provider also answers 422 to a body it won't take.
+  round's probe). The adapter decides any 422 but the size one, to a create, a
+  start or a capture, by reading `GET /v1/account` and `GET /v1/capacity`: `Capacity`
+  when the account holds what its limits allow, running or kept, `Internal`
+  otherwise or when that read fails, since the provider also answers 422 to
+  a body it won't take. A 422 to such a body while the account is full is
+  `Capacity` too, with the provider's detail kept: nothing in the answer
+  tells the two apart, and a create moved on fails the same way on the next
+  host. A stop, pause or delete refused is `Internal`, and a resize refused
+  400 or 422 `Unsizable`, whatever the account holds.
   (`smol-cloud.ts`'s `failed`; the fake's `quota` fault lowers the limits it
   reports to what the account holds.)
 - An exec request's body is at most 1 MiB (1048576 bytes) as sent: past it the

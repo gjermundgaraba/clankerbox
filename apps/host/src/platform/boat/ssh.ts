@@ -51,19 +51,19 @@ export const make = (dir: string) =>
     const identity = `${dir}/id_ed25519`;
     const env = { PATH: process.env["PATH"], HOME: process.env["HOME"] };
 
-    const ownerOnly = (path: string, mends: string) =>
+    const ownerOnly = (what: string, path: string, mends: string) =>
       Effect.gen(function* () {
         const { mode } = yield* files(`read ${path}`, fs.stat(path));
 
         if ((mode & 0o077) !== 0) {
           return yield* new CannotStart({
-            message: `the host's boat key ${path} has mode ${(mode & 0o777).toString(8)}, and the key it holds must be its owner's alone: ${mends}`,
+            message: `the host's boat ${what} ${path} has mode ${(mode & 0o777).toString(8)}, and the key must be its owner's alone: ${mends}`,
           });
         }
       });
 
     yield* (yield* files(`read ${dir}`, fs.exists(dir)))
-      ? ownerOnly(dir, `chmod 700 it`)
+      ? ownerOnly("key folder", dir, `chmod 700 it`)
       : files(
           `make ${dir}`,
           fs.makeDirectory(dir, { recursive: true, mode: 0o700 })
@@ -107,6 +107,7 @@ export const make = (dir: string) =>
 
     yield* (yield* files(`read ${identity}`, fs.exists(identity)))
       ? ownerOnly(
+          "key",
           identity,
           `OpenSSH takes no private key others can read, so chmod 600 it, or delete it and ${identity}.pub for a new one`
         )

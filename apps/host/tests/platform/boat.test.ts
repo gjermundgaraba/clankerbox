@@ -1855,10 +1855,26 @@ describe("the host's boat key", () => {
     () =>
       Effect.gen(function* () {
         for (const { folder, key, says } of [
-          { folder: 0o700, key: 0o644, says: ["mode 644", "chmod 600"] },
-          { folder: 0o700, key: 0o640, says: ["mode 640", "chmod 600"] },
-          { folder: 0o755, key: 0o600, says: ["mode 755", "chmod 700"] },
-          { folder: 0o750, key: undefined, says: ["mode 750", "chmod 700"] },
+          {
+            folder: 0o700,
+            key: 0o644,
+            says: ["boat key /", "mode 644", "chmod 600"],
+          },
+          {
+            folder: 0o700,
+            key: 0o640,
+            says: ["boat key /", "mode 640", "chmod 600"],
+          },
+          {
+            folder: 0o755,
+            key: 0o600,
+            says: ["boat key folder", "mode 755", "chmod 700"],
+          },
+          {
+            folder: 0o750,
+            key: undefined,
+            says: ["boat key folder", "mode 750", "chmod 700"],
+          },
         ]) {
           const refused = yield* Effect.scoped(
             Effect.gen(function* () {
