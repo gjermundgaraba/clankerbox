@@ -177,9 +177,6 @@ const stateOf = (record: MachineRecord | undefined): MachineState => {
   }
 };
 
-const unknownOutcome = (error: ApiError) =>
-  error._tag === "Unanswered" || (error._tag === "Refused" && error.retryable);
-
 const isGone = (error: ApiError) =>
   error._tag === "Refused" && error.status === 404;
 
@@ -582,33 +579,34 @@ export const make = (
 
     const created = (
       machine: Identity,
-      send: Effect.Effect<MachineRecord, ApiError>,
-      tries = 5
-    ): Effect.Effect<Handle, ApiError> =>
-      Effect.flatMap(Effect.result(send), (answered) => {
-        if (answered._tag === "Success") {
-          return Effect.succeed(answered.success.id);
-        }
+      send: Effect.Effect<MachineRecord, ApiError>
+    ): Effect.Effect<Handle, ApiError> => {
+      const named = byName(nameOf(machine.instance));
 
-        const error = answered.failure;
-
-        if (!unknownOutcome(error) && !isConflict(error)) {
-          return Effect.fail(error);
-        }
-
-        return Effect.andThen(
-          waited(error),
-          Effect.flatMap(byName(nameOf(machine.instance)), (handle) =>
-            Effect.fromNullishOr(handle).pipe(
-              Effect.catch(() =>
-                tries > 1 && unknownOutcome(error)
-                  ? created(machine, send, tries - 1)
-                  : Effect.fail(error)
-              )
+      return sentUntilHeld({
+        send: send.pipe(
+          Effect.catchIf(retryable, (refused) =>
+            Effect.andThen(waited(refused), Effect.fail(refused))
+          ),
+          Effect.map(({ id }) => id)
+        ),
+        lost: retryable,
+        rested: Effect.andThen(Effect.sleep(poll), named),
+        holds: (found): found is Handle => found !== undefined,
+        unheld: (_, last) => last,
+      }).pipe(
+        Effect.catchIf(isConflict, (conflict) =>
+          Effect.andThen(
+            waited(conflict),
+            Effect.filterOrFail(
+              named,
+              (handle): handle is Handle => handle !== undefined,
+              () => conflict
             )
           )
-        );
-      });
+        )
+      );
+    };
 
     const pruned = (machine: Target, checkpoint: Handle) =>
       api.deleteCheckpoint(checkpoint).pipe(

@@ -522,19 +522,14 @@ export const make = (
 
     const landed = (
       machine: Identity,
-      sent: Effect.Effect<Sandbox, ApiError>,
-      tries: number
+      sent: Effect.Effect<Sandbox, ApiError>
     ): Effect.Effect<Sandbox, ApiError> =>
-      sent.pipe(
-        Effect.catchTag("Unanswered", (lost) =>
-          listed(machine).pipe(
-            Effect.filterOrElse(
-              (found): found is Sandbox => found !== undefined,
-              () =>
-                tries > 1 ? landed(machine, sent, tries - 1) : Effect.fail(lost)
-            )
-          )
-        ),
+      sentUntilHeld({
+        send: sent,
+        rested: listed(machine),
+        holds: (found): found is Sandbox => found !== undefined,
+        unheld: (_, last) => last,
+      }).pipe(
         Effect.catchIf(
           (error): error is Api.Refused =>
             error._tag === "Refused" &&
@@ -736,7 +731,7 @@ export const make = (
                   key
                 );
 
-          const sandbox = yield* landed(machine, sent, triesAfterLoss).pipe(
+          const sandbox = yield* landed(machine, sent).pipe(
             Effect.mapError(failure(`make ${machine.name}`))
           );
 

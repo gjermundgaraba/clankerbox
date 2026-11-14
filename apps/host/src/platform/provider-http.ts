@@ -269,41 +269,51 @@ export function untilRest<A, E, R>(
   return Effect.repeat(read, { until: rests, schedule: Schedule.spaced(poll) });
 }
 
-export interface Change<A, E, F, G, R> {
-  readonly send: Effect.Effect<void, E | Unanswered, R>;
+export interface Change<A, S, E, F, G, R> {
+  readonly send: Effect.Effect<S, E | Unanswered, R>;
+  /** A refusal that may still have been taken, which is read for as a lost answer is. */
+  readonly lost?: ((error: E) => boolean) | undefined;
   /** Reads the resource until it rests. */
   readonly rested: Effect.Effect<A, F, R>;
   readonly holds: (rested: A) => boolean;
-  /** The failure once `triesAfterLoss` sends were lost and the resource rests without the change. */
-  readonly unheld: (rested: A) => G;
+  /** The failure once `triesAfterLoss` sends went unanswered and the resource rests without the change. */
+  readonly unheld: (rested: A, last: E | Unanswered) => G;
 }
 
 /**
  * Sends a change that may be taken though its answer is lost: after a lost answer it reads the
- * resource until it rests, is done when that holds the change, and sends it again otherwise, at
- * most `triesAfterLoss` times in all, so a change the provider took is never sent twice.
+ * resource until it rests, answers what it read when that holds the change, and sends it again
+ * otherwise, at most `triesAfterLoss` times in all, so a change the provider took is never sent
+ * twice.
  */
-export const sentUntilHeld = <A, E, F, G, R>(
-  change: Change<A, E, F, G, R>
-): Effect.Effect<void, E | F | G, R> => {
-  const sent = (tries: number): Effect.Effect<void, E | F | G, R> =>
-    Effect.catchIf(
+export function sentUntilHeld<A, H extends A, S, E, F, G, R>(
+  change: Change<A, S, E, F, G, R> & {
+    readonly holds: (rested: A) => rested is H;
+  }
+): Effect.Effect<S | H, E | F | G, R>;
+export function sentUntilHeld<A, S, E, F, G, R>(
+  change: Change<A, S, E, F, G, R>
+): Effect.Effect<S | A, E | F | G, R>;
+export function sentUntilHeld<A, S, E, F, G, R>(
+  change: Change<A, S, E, F, G, R>
+): Effect.Effect<S | A, E | F | G, R> {
+  const sent = (tries: number): Effect.Effect<S | A, E | F | G, R> => {
+    const read = (last: E | Unanswered) =>
+      Effect.filterOrElse(change.rested, change.holds, (found) =>
+        tries > 1 ? sent(tries - 1) : Effect.fail(change.unheld(found, last))
+      );
+
+    return Effect.catchIf(
       change.send,
       (error): error is Unanswered => error instanceof Unanswered,
-      () =>
-        Effect.flatMap(change.rested, (found) => {
-          if (change.holds(found)) {
-            return Effect.void;
-          }
-
-          return tries > 1
-            ? sent(tries - 1)
-            : Effect.fail(change.unheld(found));
-        })
+      read,
+      (refused) =>
+        change.lost?.(refused) === true ? read(refused) : Effect.fail(refused)
     );
+  };
 
   return sent(triesAfterLoss);
-};
+}
 
 export interface Records<A> {
   readonly call: string;

@@ -1796,7 +1796,7 @@ describe("a smol cloud read whose answer is lost", () => {
 
 describe("a smol cloud create whose every answer is lost", () => {
   it.effect(
-    "is sent five times in all, each looked for by its name a poll after, then fails",
+    "is sent three times in all, each looked for by its name a poll after, then fails",
     () =>
       Effect.gen(function* () {
         const { asked, client } = answering((route) => {
@@ -1831,7 +1831,7 @@ describe("a smol cloud create whose every answer is lost", () => {
           early,
           asks(asked, "POST /v1/machines"),
           asks(asked, "GET /v1/machines"),
-        ]).toStrictEqual([[1, 0], 5, 5]);
+        ]).toStrictEqual([[1, 0], 3, 3]);
       })
   );
 });
@@ -2010,7 +2010,7 @@ describe("a smol cloud step's deadline", () => {
     "ends a make whose retries ran and whose machine never starts in 10 minutes, failed Internal",
     () =>
       Effect.gen(function* () {
-        const making = yield* scriptedMake(3);
+        const making = yield* scriptedMake(2);
 
         yield* TestClock.adjust("10 minutes");
 
