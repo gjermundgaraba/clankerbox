@@ -6,6 +6,7 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   startHost,
+  suitePorts,
   writeTailscaleStubs,
   hostKeySetup,
 } from "@gjermundgaraba/clankerbox-host/testing";
@@ -13,6 +14,7 @@ import type {
   FakeRuntimeName,
   TestHost,
 } from "@gjermundgaraba/clankerbox-host/testing";
+import { planeRange } from "@gjermundgaraba/clankerbox-host/testing/port-slot";
 import { Client } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   CreateRequest,
@@ -232,17 +234,18 @@ export const services = (
     };
   });
 
-const planePorts = 21_100;
-
 let nextRange = 0;
 
 const portRange = () => {
+  const { planes } = suitePorts;
+
+  const first =
+    planes.first +
+    (nextRange % ((planes.last - planes.first + 1) / planeRange)) * planeRange;
+
   nextRange += 1;
 
-  return {
-    first: planePorts + nextRange * 20,
-    last: planePorts + nextRange * 20 + 19,
-  };
+  return { first, last: first + planeRange - 1 };
 };
 
 export const plane = (options?: {

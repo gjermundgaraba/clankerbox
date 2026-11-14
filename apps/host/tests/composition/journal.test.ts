@@ -6,9 +6,9 @@ import { Cause, Effect, Logger, References, Schema } from "effect";
 import { HttpServerRequest } from "effect/http";
 import { expect } from "vite-plus/test";
 
-import { hostOn } from "../support.ts";
+import { hostOn, suitePorts } from "../support.ts";
 
-const serve = hostOn({ first: 21_190, last: 21_199 });
+const serve = hostOn(suitePorts.journal);
 
 const secret = "TOKEN=hunter2-a5f1";
 

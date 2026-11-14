@@ -18,7 +18,8 @@
   "exports": {
     "./testing": "./tests/support.ts",
     "./testing/boat": "./tests/fake-boat.ts",
-    "./testing/smol-cloud": "./tests/fake-smol-cloud.ts"
+    "./testing/smol-cloud": "./tests/fake-smol-cloud.ts",
+    "./testing/port-slot": "./tests/port-slot.ts"
   },
   "publishConfig": {
     "exports": {

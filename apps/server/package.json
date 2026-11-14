@@ -16,7 +16,8 @@
   ],
   "type": "module",
   "exports": {
-    "./testing": "./tests/support.ts"
+    "./testing": "./tests/support.ts",
+    "./testing/port-slot": "./tests/port-slot.ts"
   },
   "publishConfig": {
     "exports": {

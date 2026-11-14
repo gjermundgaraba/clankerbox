@@ -6,7 +6,7 @@ import path from "node:path";
 import type { MachineState } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { presets } from "@gjermundgaraba/clankerbox-host/testing";
+import { presets, suitePorts } from "@gjermundgaraba/clankerbox-host/testing";
 import { Capacity, Internal, Unsizable } from "@gjermundgaraba/clankerbox-sdk";
 import type { Machine, Setup } from "@gjermundgaraba/clankerbox-sdk";
 import {
@@ -71,7 +71,7 @@ const hooksRun = (dir: string) =>
     (text) => text.split("\n").filter((line) => line !== "")
   );
 
-const portsOfHere = { first: 21_900, last: 21_909 };
+const portsOfHere = suitePorts.serverMachines;
 
 const sizesOf = (machine: {
   readonly cpu: number;

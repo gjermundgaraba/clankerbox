@@ -1,69 +1,158 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
+import { once } from "node:events";
+import { createServer } from "node:net";
+import type { Server } from "node:net";
 
-import { Predicate } from "effect";
+import type { PortRange } from "../src/machine-ports.ts";
 
-import { slotSize, slotsFrom, slotsTo, testPortsVariable } from "./support.ts";
+/** The variable the global setup sets to the first port of the slot it claims for the run. */
+export const testPortsVariable = "CLANKERBOX_TEST_PORTS";
 
-const claims = path.join(tmpdir(), "clankerbox-host-test-ports");
+/** Above every fixed port a suite of `main` took before the table, so a run of either branch misses the other. */
+export const slotsFrom = 22_000;
 
-const claimed = (file: string): number | undefined => {
-  const pid = Number(readFileSync(file, "utf8"));
+export const slotsTo = 32_000;
 
-  return Number.isInteger(pid) ? pid : undefined;
-};
+export const slotSize = 250;
 
-const alive = (pid: number | undefined) => {
-  if (pid === undefined) {
-    return false;
+/**
+ * The port of a slot a run listens on while it holds the slot. The kernel lets one process listen
+ * on a port and frees it the moment that process ends, so a claim is never stale and two runs never
+ * hold one slot.
+ */
+export const claimOffset = slotSize - 1;
+
+/** How many ports each host of a test control plane takes, `planes` cut into ranges this size. */
+export const planeRange = 20;
+
+/** How many ports each rented host of a test takes, `rented` cut into ranges this size. */
+export const rentedRange = 11;
+
+const slotFirst = () => {
+  const first = Number(process.env[testPortsVariable]);
+
+  if (!Number.isInteger(first) || first < slotsFrom) {
+    throw new Error(
+      `no slot of test ports is claimed: ${testPortsVariable} is unset, as only a test run's global setup, apps/host/tests/port-slot.ts, sets it`
+    );
   }
 
-  try {
-    process.kill(pid, 0);
-
-    return true;
-  } catch (error) {
-    return Predicate.hasProperty(error, "code") && error.code === "EPERM";
-  }
+  return first;
 };
 
-const claim = (file: string) => {
-  try {
-    writeFileSync(file, String(process.pid), { flag: "wx" });
+const inSlot = (offset: number, size = 10): PortRange => ({
+  first: slotFirst() + offset,
+  last: slotFirst() + offset + size - 1,
+});
 
-    return true;
+/**
+ * Every port range a test of any package listens on. `shared` sits outside the slots: the hosts
+ * that take it, and a host the verify skill serves, probe each port before they take it. Every other
+ * range lies within the slot the run claimed, at a fixed offset, so no other run on the machine
+ * holds it while this one lasts; each is read only once the slot is claimed.
+ */
+export const suitePorts = {
+  shared: { first: 21_000, last: 21_099 },
+  get tailnet() {
+    return inSlot(0);
+  },
+  get routes() {
+    return inSlot(10);
+  },
+  get host() {
+    return inSlot(20);
+  },
+  get smolCloud() {
+    return inSlot(30);
+  },
+  get operations() {
+    return inSlot(40);
+  },
+  get tart() {
+    return inSlot(50);
+  },
+  get liveSmolCloud() {
+    return inSlot(60);
+  },
+  get journal() {
+    return inSlot(70);
+  },
+  get serverMachines() {
+    return inSlot(80);
+  },
+  get planes() {
+    return inSlot(100, 4 * planeRange);
+  },
+  get rented() {
+    return inSlot(180, 4 * rentedRange);
+  },
+} as const satisfies Readonly<Record<string, PortRange>>;
+
+const listening = async (port: number): Promise<Server | undefined> => {
+  const server = createServer((socket) => {
+    socket.destroy();
+  });
+
+  server.listen({ host: "127.0.0.1", port, exclusive: true });
+
+  try {
+    await once(server, "listening");
+
+    return server;
   } catch {
-    if (alive(claimed(file))) {
+    return undefined;
+  }
+};
+
+const closed = async (server: Server) => {
+  server.close();
+  await once(server, "close");
+};
+
+const slotUnheld = async (first: number) => {
+  for (let port = first; port < first + claimOffset; port += 1) {
+    const probe = await listening(port);
+
+    if (probe === undefined) {
       return false;
     }
 
-    rmSync(file, { force: true });
-
-    return claim(file);
+    await closed(probe);
   }
+
+  return true;
 };
 
 /**
- * Claims a slot of the host's test ports for this run, so no other run on the machine, of another
- * checkout or another suite, takes the same ones while it lasts.
+ * Claims the first slot no other process holds, and on none of whose ports another listens, by
+ * listening on its claim port until `release`.
  */
-export default function setup() {
-  mkdirSync(claims, { recursive: true });
-
+export const claimSlot = async () => {
   for (let first = slotsFrom; first + slotSize <= slotsTo; first += slotSize) {
-    const file = path.join(claims, `${first}.pid`);
+    const claim = await listening(first + claimOffset);
 
-    if (claim(file)) {
-      process.env[testPortsVariable] = String(first);
-
-      return () => {
-        rmSync(file, { force: true });
+    if (claim !== undefined && !(await slotUnheld(first))) {
+      await closed(claim);
+    } else if (claim !== undefined) {
+      return {
+        first,
+        release: async () => {
+          claim.close();
+          await once(claim, "close");
+        },
       };
     }
   }
 
   throw new Error(
-    `every slot of the host's test ports in ${claims} is claimed by a live run`
+    `every slot of test ports from ${slotsFrom} to ${slotsTo} is claimed: a process listens on each one's port ${claimOffset} past its first`
   );
+};
+
+/** The global setup of each package whose tests listen: claims a slot for the run. */
+export default async function setup() {
+  const { first, release } = await claimSlot();
+
+  process.env[testPortsVariable] = String(first);
+
+  return release;
 }
