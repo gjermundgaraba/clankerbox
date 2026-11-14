@@ -268,8 +268,7 @@ const apartFromItsRequest = <E>(
       operation: id,
       step: step._tag,
       [scope.resource]: scope.name,
-    }),
-    Effect.provideService(References.CurrentLogSpans, [])
+    })
   );
 
 type Make = Extract<Step, { readonly _tag: "make" }>;
