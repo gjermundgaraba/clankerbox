@@ -10,6 +10,7 @@ import type {
   Capacity,
   Conflict,
   Internal,
+  Invalid,
   Reading,
   RuntimeName,
   RuntimeTraits,
@@ -251,11 +252,12 @@ export interface Interface {
   readonly capacity: (
     machines: readonly Held[]
   ) => Effect.Effect<readonly Reading[], RuntimeError>;
+  /** Makes the machine, from an image or a copy. A name the runtime can't give a VM is `Invalid`. */
   readonly make: (
     machine: Identity & Sizes,
     origin: Origin,
     bind: Bind
-  ) => Effect.Effect<Made, RoomError | StateError | Unsizable>;
+  ) => Effect.Effect<Made, RoomError | StateError | Unsizable | Invalid>;
   /**
    * Starts a stopped machine, or resumes a paused one. A runtime that holds checkpoints through its
    * machine deletes, once the machine runs, each of them whose handle `keep` lacks, so a pause's own

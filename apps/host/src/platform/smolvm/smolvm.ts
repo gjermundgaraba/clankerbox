@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   formatMib,
   Internal,
+  Invalid,
   isBuildCopy,
   Unsizable,
   WrongState,
@@ -333,13 +334,13 @@ const builderPrefixes = [
   { prefix: "init-bake-", builder: "the builder of its init layers" },
 ] as const;
 
-const takenForBuilder = (machine: Identity): Internal | undefined => {
+const takenForBuilder = (machine: Identity): Invalid | undefined => {
   const native = nativeName(machine);
   const taken = builderPrefixes.find(({ prefix }) => native.startsWith(prefix));
 
   return taken === undefined
     ? undefined
-    : new Internal({
+    : new Invalid({
         message: `a smolvm host makes no machine named ${machine.name}: smolvm takes a VM whose name begins ${taken.prefix} for ${taken.builder}, and deletes it once it is 30 minutes old`,
       });
 };

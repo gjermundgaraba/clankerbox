@@ -2189,6 +2189,11 @@ layer(NodeServices.layer)((it) => {
             )
         );
 
+        expect(refused.map(({ _tag }) => _tag)).toStrictEqual([
+          "Invalid",
+          "Invalid",
+          "Invalid",
+        ]);
         expect(refused.map(({ message }) => message)).toStrictEqual([
           "a smolvm host makes no machine named image-seed: smolvm takes a VM whose name begins image-seed- for the builder of its image seeds, and deletes it once it is 30 minutes old",
           "a smolvm host makes no machine named image-seed-x: smolvm takes a VM whose name begins image-seed- for the builder of its image seeds, and deletes it once it is 30 minutes old",
