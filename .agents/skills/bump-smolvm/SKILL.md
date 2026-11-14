@@ -483,7 +483,15 @@ as it is.
   after, when `/dev/shm` has room for 1.25 × the machine's RAM plus 1 GiB and
   `MemAvailable` is twice that (`capture_tmpfs_root`,
   `runtime_capture_dir_preferring_tmpfs`, src/portable_checkpoint.rs). Nothing
-  turns it off. Ours: that RAM is outside the RAM budget while a capture runs.
+  turns it off. The private directory is a `checkpoint-capture-` `TempDir`
+  of the CLI's, owned by the VM's uid, which the VMM writes the RAM image
+  into and the CLI removes as it drops it (`runtime_capture_dir_at`), so a
+  CLI killed mid-capture leaves it holding what was written (one was left
+  empty on 1.34.1 by a host's stop, measured). Ours: that RAM is outside the
+  RAM budget while a capture runs, and nothing removes a leftover: the path
+  is the box's whatever the data root, and each data root counts uids up
+  from the same base, so a host can't tell its own leftover from another
+  smolvm's capture that still runs. README tells the operator.
 - Each VMM sets its own `oom_score_adj`: −500 for a branchable machine
   (`SMOLVM_FORKABLE`, which `start --branchable` passes), +500 for a clone or
   a first boot from a restore (`SMOLVM_SNAPSHOT_DIR`, set while a restore is
