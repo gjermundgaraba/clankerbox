@@ -326,6 +326,11 @@ const settle = <A, E>(
       duration: context.timeout,
       orElse: () => Effect.fail(unanswered(context, context.timedOut)),
     }),
+    Effect.catchDefect((defect) =>
+      HttpClientError.isHttpClientError(defect)
+        ? Effect.fail(defect)
+        : Effect.die(defect)
+    ),
     Effect.catchIf(isUndeclared, (error) =>
       Effect.fail(fromUndeclared(error, context))
     )

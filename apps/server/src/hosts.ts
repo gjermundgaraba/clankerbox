@@ -11,7 +11,7 @@ import {
 import type { Host, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Brand, Context, Data, Duration, Effect, Layer, Schema } from "effect";
-import { HttpClient, HttpClientRequest } from "effect/http";
+import { HttpClient, HttpClientError, HttpClientRequest } from "effect/http";
 
 export type FreshBoot = Brand.Branded<string, "FreshBoot">;
 
@@ -186,9 +186,15 @@ export const make = (
           : bounded(
               host,
               run(api).pipe(
+                Effect.catchDefect((defect) =>
+                  HttpClientError.isHttpClientError(defect)
+                    ? Effect.fail(defect)
+                    : Effect.die(defect)
+                ),
                 Effect.catchIf(
-                  (error: E): error is Extract<E, HostError> =>
-                    isHostError(error),
+                  (
+                    error: E | HttpClientError.HttpClientError
+                  ): error is Extract<E, HostError> => isHostError(error),
                   Effect.fail,
                   (error) =>
                     Effect.fail(

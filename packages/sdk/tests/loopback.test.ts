@@ -177,6 +177,34 @@ describe("loopback", () => {
       })
   );
 
+  it.effect(
+    "a proxy's page at a status the action declares is Internal, or at 503 a control plane that didn't answer, through the Node transport",
+    () =>
+      Effect.gen(function* () {
+        for (const status of [400, 404, 500, 503] as const) {
+          const url = yield* answering((response) => {
+            response.writeHead(status, { "content-type": "text/html" });
+            response.end(`<html><body>${status}</body></html>`);
+          });
+
+          const error = yield* calling(url, (client) =>
+            Effect.flip(client.pauseMachine({ id: "dev" }))
+          );
+
+          expect(error, `${status}`).toMatchObject(
+            status === 503
+              ? { _tag: "Unavailable", readOnly: false }
+              : { _tag: "Internal" }
+          );
+          expect(error.message, `${status}`).toBe(
+            status === 503
+              ? "no reply from the control plane to pauseMachine dev (HTTP 503); the action may have run: read dev to see"
+              : `the control plane answered pauseMachine dev unexpectedly: Decode error (${status} POST ${url}/api/pauseMachine)`
+          );
+        }
+      }).pipe(Effect.scoped)
+  );
+
   it.effect("a reply that arrives whole and doesn't parse is Internal", () =>
     Effect.gen(function* () {
       const url = yield* answering((response) => {

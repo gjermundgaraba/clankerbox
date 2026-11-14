@@ -127,6 +127,34 @@ const stubHost = (
     })
   );
 
+const pageHost = (status: number) =>
+  Effect.acquireRelease(
+    Effect.callback<Server>((resume) => {
+      const server = createServer((_incoming, response) => {
+        response.writeHead(status, { "content-type": "text/html" });
+        response.end(`<html><body>${status}</body></html>`);
+      });
+
+      server.listen({ host: "127.0.0.1", port: 0 }, () => {
+        resume(Effect.succeed(server));
+      });
+    }),
+    (server) =>
+      Effect.callback<undefined>((resume) => {
+        server.close(() => {
+          resume(Effect.undefined);
+        });
+      })
+  ).pipe(
+    Effect.map((server) => {
+      const { port } = Schema.decodeUnknownSync(
+        Schema.Struct({ port: Schema.Finite })
+      )(server.address(), { onExcessProperty: "ignore" });
+
+      return `http://127.0.0.1:${port}`;
+    })
+  );
+
 const silentHost = Effect.acquireRelease(
   Effect.callback<Server>((resume) => {
     const server = createServer(() => {});
@@ -264,6 +292,31 @@ layer(NodeServices.layer, { excludeTestServices: true })(
             incompatible: true,
             unsent: true,
           });
+        })
+    );
+
+    it.effect(
+      "that answers with a page, as a proxy in front of it may, is named unreachable in capacity, with the status it answered",
+      () =>
+        Effect.gen(function* () {
+          for (const status of [400, 404, 500] as const) {
+            const url = yield* pageHost(status);
+
+            const served = yield* running({
+              members: [{ id: "paged", url, draining: false }],
+            });
+
+            const client = yield* clientOf(served.url);
+            const report = yield* client.capacity;
+
+            expect(
+              report.unreported.map(({ host, state }) => [host, state]),
+              `${status}`
+            ).toStrictEqual([["paged", "unreachable"]]);
+            expect(report.unreported[0]?.problem, `${status}`).toContain(
+              `${status} POST ${url}/host/readHost`
+            );
+          }
         })
     );
 
