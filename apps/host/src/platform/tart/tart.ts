@@ -250,11 +250,8 @@ export const testedVersion = "2.41.1";
 
 const release = /^\d+\.\d+\.\d+$/u;
 
-const notAfter = (reported: string): boolean =>
-  reported.localeCompare(testedVersion, "en", { numeric: true }) <= 0;
-
 export const supported = (reported: string): boolean =>
-  atLeast(minimumVersion)(reported) && notAfter(reported);
+  atLeast(minimumVersion)(reported) && atLeast(reported)(testedVersion);
 
 const releases = (floor: string, tested: string): string =>
   floor === tested
