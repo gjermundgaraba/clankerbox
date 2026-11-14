@@ -1108,7 +1108,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             Effect.succeed({
               output: Stream.make(
                 new TextEncoder().encode(
-                  "clankerbox: 3 processes of the command still ran when its end ran out of time\n"
+                  "clankerbox: 3 processes of the command still ran after 6 rounds of its end\n"
                 )
               ),
               exitCode: Effect.succeed(1),
@@ -1126,7 +1126,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           {
             _tag: "Internal",
             message:
-              "the command ran past its 1s timeout and couldn't then be ended, so it may still run in dev: it exited 1: clankerbox: 3 processes of the command still ran when its end ran out of time",
+              "the command ran past its 1s timeout and couldn't then be ended, so it may still run in dev: it exited 1: clankerbox: 3 processes of the command still ran after 6 rounds of its end",
           },
         ]);
         expect(Duration.toSeconds(took)).toBeGreaterThanOrEqual(
@@ -1137,7 +1137,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
         expect(logged.flat()).toStrictEqual([
           `couldn't end in dev the command of an exec that ended before its exit code, which may still run there: it didn't end within ${Duration.format(endTimeout)}`,
-          "couldn't end in dev the command of an exec that ended before its exit code, which may still run there: it exited 1: clankerbox: 3 processes of the command still ran when its end ran out of time",
+          "couldn't end in dev the command of an exec that ended before its exit code, which may still run there: it exited 1: clankerbox: 3 processes of the command still ran after 6 rounds of its end",
         ]);
       }).pipe(
         Effect.provide(

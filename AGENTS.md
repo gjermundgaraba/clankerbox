@@ -373,8 +373,8 @@ the run.
   its command exits and its output closes, by its limit, its request ending or
   the host's stop, runs `endScript` through the runtime's own `exec` before the
   scope's close goes on, bounded by `endTimeout`: TERM, then, 5 s later, STOP
-  until a listing finds nothing new and KILL until it finds nothing, for up to
-  2 s, to each process that holds the mark in its own arguments or environment,
+  until a listing finds nothing new and KILL until it finds nothing, for at
+  most 6 listings, to each process that holds the mark in its own arguments or environment,
   the exec's or another's, or descends from one. An end that leaves any running
   answers the caller `Internal`, saying so.
   Smolvm's agent ends a cut command too; a Tart guest, boat and smol cloud

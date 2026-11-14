@@ -176,7 +176,9 @@ const killGraceSeconds = 5;
 /** How long an end may take: within the control plane's `readTimeout`, so a cut exec still answers its caller. */
 export const endTimeout = Duration.subtract(readTimeout, Duration.seconds(2));
 
-const killSeconds = 2;
+const killRounds = { least: 3, most: 6 };
+
+const endScriptSeconds = Duration.toSeconds(endTimeout) - 1;
 
 // Linux's /proc/<pid>/stat holds the command's name in parentheses, which may hold any character,
 // then the state, the parent and, 19 fields on, the start time:
@@ -189,16 +191,18 @@ const killSeconds = 2;
  * Ends in the guest each process whose own arguments or environment hold the mark read from stdin,
  * the exec's or not, and what descends from one: TERM, then, after the grace, STOP to each it lists
  * until a listing finds none it hasn't stopped, and KILL to them all, again until a listing finds
- * none. Past 1 to 2 s of that, as `date +%s` counts whole seconds, it sends what it lists KILL once
- * more and exits 1, so it ends within `endTimeout`. A process found once is held by its start time,
- * so one whose parent ended while it cleared its environment is still found. It signals each pid
- * alone, never a group, pid 1 or itself. It records the mark first, so a launcher of it that begins
- * later runs nothing, and lets that record go once it has ended what it found, since what it found
- * holds the mark only once that one launcher has begun.
+ * none, for at least 3 listings and at most 6, and no more once `endScriptSeconds` have passed
+ * since it began, as `date +%s` counts them, after which it sends what it lists KILL once more and
+ * exits 1. A process found once is held by its start time, so one whose parent ended while it
+ * cleared its environment is still found. It signals each pid alone, never a group, pid 1 or
+ * itself. It records the mark first, so a launcher of it that begins later runs nothing, and lets
+ * that record go once it has ended what it found, since what it found holds the mark only once
+ * that one launcher has begun.
  */
 export const endScript = [
   "IFS= read -r mark || mark=",
   `case $mark in '' | *[!0-9a-f]*) echo "clankerbox: no mark to end" >&2; exit 2 ;; esac`,
+  `ends=$(($(date +%s) + ${endScriptSeconds}))`,
   `word="${markName}=$mark"`,
   `records="${endedRecords}"`,
   `mkdir -p "$records" && : >"$records/$mark" || echo "clankerbox: couldn't record that $mark ended, so a command of it that begins later runs" >&2`,
@@ -245,7 +249,7 @@ export const endScript = [
   "    while read -r pid ppid start m; do",
   `      case $pid in 1 | "$$") continue ;; esac`,
   `      case $members in *" $pid "*) continue ;; esac`,
-  `      case "$m$held$members" in 1* | *" $pid:$start "* | *" $ppid "*) ;; *) continue ;; esac`,
+  `      case $m in 1) ;; *) case "$held$members" in *" $pid:$start "* | *" $ppid "*) ;; *) continue ;; esac ;; esac`,
   `      members="$members$pid "`,
   `      case $held in *" $pid:$start "*) ;; *) held="$held$pid:$start " ;; esac`,
   "      grown=1",
@@ -294,8 +298,8 @@ export const endScript = [
   "done",
   "round",
   `[ "$members" != ' ' ] || ended`,
-  `ends=$(($(date +%s) + ${killSeconds}))`,
-  `while [ "$(date +%s)" -lt "$ends" ]; do`,
+  "rounds=0",
+  `while [ "$rounds" -lt ${killRounds.most} ] && { [ "$rounds" -lt ${killRounds.least} ] || [ "$(date +%s)" -lt "$ends" ]; }; do`,
   `  unsent "$stopped"`,
   `  if [ -n "$fresh" ]; then`,
   "    kill -s STOP $fresh 2>/dev/null || true",
@@ -306,9 +310,10 @@ export const endScript = [
   "  fi",
   "  round",
   `  [ "$members" != ' ' ] || ended`,
+  "  rounds=$((rounds + 1))",
   "done",
   "kill -s KILL $members 2>/dev/null || true",
-  `echo "clankerbox: $(echo $members | wc -w | tr -d ' ') processes of the command still ran when its end ran out of time" >&2`,
+  `echo "clankerbox: $(echo $members | wc -w | tr -d ' ') processes of the command still ran after $rounds rounds of its end" >&2`,
   "exit 1",
 ].join("\n");
 
