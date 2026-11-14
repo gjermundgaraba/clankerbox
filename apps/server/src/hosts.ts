@@ -131,6 +131,26 @@ export const answering = (
 const describe = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
+const httpApiClientUndeclaredStatus = "undeclared status code";
+
+const replied = (
+  reason:
+    | HttpClientError.StatusCodeError
+    | HttpClientError.DecodeError
+    | HttpClientError.EmptyBodyError
+) => {
+  const { status } = reason.response;
+
+  if (reason._tag === "EmptyBodyError") {
+    return `it replied HTTP ${status} with no body`;
+  }
+
+  return reason._tag === "DecodeError" &&
+    reason.description === httpApiClientUndeclaredStatus
+    ? `it replied HTTP ${status}, which the host contract doesn't declare`
+    : `it replied HTTP ${status} with a body the control plane couldn't read`;
+};
+
 const unusable = (host: string, error: unknown): Unreachable => {
   if (Schema.isSchemaError(error)) {
     return new Incompatible({
@@ -172,7 +192,7 @@ const unusable = (host: string, error: unknown): Unreachable => {
     case "EmptyBodyError": {
       return new Unanswered({
         host,
-        message: `host ${host} didn't answer as the host contract says: it replied HTTP ${error.reason.response.status}, which is no answer the contract declares`,
+        message: `host ${host} didn't answer as the host contract says: ${replied(error.reason)}`,
         logOnly,
       });
     }

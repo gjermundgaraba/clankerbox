@@ -183,6 +183,11 @@ const pageHost = (status: number) =>
     })
   );
 
+const declaredBy = {
+  readHost: new Set([400]),
+  execMachine: new Set([400, 500]),
+};
+
 const silentHost = Effect.acquireRelease(
   Effect.callback<Server>((resume) => {
     const server = createServer(() => {});
@@ -317,7 +322,7 @@ layer(NodeServices.layer, { excludeTestServices: true })(
     );
 
     it.effect(
-      "that answers with a page, as a proxy in front of it or a host stopping may, is named unreachable by its ID and the status it answered, never its URL, and an exec there may have run",
+      "that answers with a page, as a proxy in front of it or a host stopping may, is named unreachable by its ID and what it answered, a status the call doesn't declare or a body it can't read, never its URL, and an exec there may have run",
       () =>
         Effect.gen(function* () {
           for (const status of [400, 404, 500, 503] as const) {
@@ -342,12 +347,19 @@ layer(NodeServices.layer, { excludeTestServices: true })(
               `${status}`
             ).toStrictEqual([["paged", "unreachable"]]);
 
+            const replied = (declared: ReadonlySet<number>) =>
+              `host paged didn't answer as the host contract says: ${
+                declared.has(status)
+                  ? `it replied HTTP ${status} with a body the control plane couldn't read`
+                  : `it replied HTTP ${status}, which the host contract doesn't declare`
+              }`;
+
             expect(
               [report.unreported[0]?.problem, exec.message],
               `${status}`
             ).toStrictEqual([
-              `host paged didn't answer as the host contract says: it replied HTTP ${status}, which is no answer the contract declares`,
-              `host paged didn't answer as the host contract says: it replied HTTP ${status}, which is no answer the contract declares`,
+              replied(declaredBy.readHost),
+              replied(declaredBy.execMachine),
             ]);
             expect(exec, `${status}`).toMatchObject({
               _tag: "Unavailable",
