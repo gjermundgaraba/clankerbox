@@ -2847,9 +2847,9 @@ const shellCases = (shell: readonly string[]) => {
           expect(ended.stderr).toContain(
             "clankerbox: 2 processes of the command still ran at its last listing when its end's 1s ran out"
           );
-          expect(
-            yield* goneWithin(tree, Duration.seconds(1))
-          ).toStrictEqual([]);
+          expect(yield* goneWithin(tree, Duration.seconds(1))).toStrictEqual(
+            []
+          );
           expect(Duration.toSeconds(took)).toBeLessThan(3);
         }),
       endsTimeout(1, 1)
@@ -2906,9 +2906,9 @@ const shellCases = (shell: readonly string[]) => {
           expect(yield* Fiber.join(said)).toMatch(
             /clankerbox: its end was cut short, with \d+ processes of the command running at its last listing/u
           );
-          expect(
-            yield* goneWithin(tree, Duration.seconds(1))
-          ).toStrictEqual([]);
+          expect(yield* goneWithin(tree, Duration.seconds(1))).toStrictEqual(
+            []
+          );
         }),
       endsTimeout(1, 1)
     );

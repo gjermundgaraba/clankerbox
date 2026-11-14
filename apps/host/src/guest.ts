@@ -197,13 +197,16 @@ function add(pid, ppid, start, state) {
   if (state ~ /^[ZX]/ || pid == 1 || pid == self) return
   n++; P[n] = pid; PP[pid] = ppid; ST[pid] = start
 }
+BEGIN {
+  held = dir "/held"
+  while ((getline line < held) > 0) if (split(line, h, " ") == 3) { H[h[1]] = h[2]; F[h[1]] = h[3] }
+  close(held)
+}
 NR == 1 { word = $0; next }
-part == 0 && $0 == "." { part = 1; next }
-part == 0 { if (NF == 3) { H[$1] = $2; F[$1] = $3 }; next }
-proc && part == 1 && $0 == "." { part = 2; next }
-proc && part == 1 { split($0, p, "/"); M[p[3]] = 1; next }
-proc && part == 2 { for (i = 1; i <= NF; i++) D[++d] = $i; next }
-part == 1 { if (index(" " $0 " ", " " word " ")) M[$1] = 1; add($1, $2, $3 $4 $5 $6 $7, $8) }
+proc && part == 0 && $0 == "." { part = 1; next }
+proc && part == 0 { split($0, p, "/"); M[p[3]] = 1; next }
+proc && part == 1 { for (i = 1; i <= NF; i++) D[++d] = $i; next }
+{ if (index(" " $0 " ", " " word " ")) M[$1] = 1; add($1, $2, $3 $4 $5 $6 $7, $8) }
 END {
   for (i = 1; i <= d; i++) {
     f = D[i] "/stat"
@@ -221,19 +224,19 @@ END {
       if (!(pid in K) && ((pid in M) || ((pid in H) && H[pid] == ST[pid]) || (PP[pid] in K))) { K[pid] = 1; grown = 1 }
     }
   }
+  fresh = dir "/fresh"; all = dir "/all"
+  printf "" > fresh; printf "" > all; printf "" > held
   for (i = 1; i <= n; i++) {
     pid = P[i]
     if (!(pid in K)) continue
     count++
-    sent[pid] = ((pid in H) && H[pid] == ST[pid]) ? F[pid] : "-"
+    sent = ((pid in H) && H[pid] == ST[pid]) ? F[pid] : "-"
+    if (!index(sent, signal)) { printf " %s", pid > fresh; sent = sent signal }
+    printf " %s", pid > all
+    printf "%s %s %s\n", pid, ST[pid], sent > held
   }
+  close(fresh); close(all); close(held)
   printf "%d\n", count
-  for (pid in sent) if (!index(sent[pid], signal)) printf " %s", pid
-  printf "\n"
-  for (pid in sent) printf " %s", pid
-  printf "\n"
-  for (pid in sent) { if (!index(sent[pid], signal)) sent[pid] = sent[pid] signal; printf "%s %s %s\n", pid, ST[pid], sent[pid] }
-  print "."
 }
 `;
 
@@ -242,8 +245,9 @@ END {
  * the exec's or not, and what descends from one. It reads the mark and its deadline in seconds,
  * then TERMs what it lists, and once at least the grace has passed, or nothing it TERMed runs, STOPs
  * what it lists until a listing finds none it hasn't stopped, and KILLs them all, again until a
- * listing finds none. Each listing is one `grep`, or `ps`, and one `awk` pass, so its cost grows
- * with the guest's processes and not with their square. It begins no listing once its deadline
+ * listing finds none. Each listing is one `grep`, or `ps`, and one `awk` pass, which writes what it
+ * found to files in a directory of the end's own that the shell reads whole, so its cost grows with
+ * the guest's processes and not with their square, under every shell. It begins no listing once its deadline
  * has passed, as `date +%s` counts it, nor the grace past it, and then, or when a TERM, HUP or INT
  * cuts it short, sends KILL and then CONT to every process it last listed, so none is left stopped,
  * and exits 1, saying how many there were: only a listing that finds none confirms the end. A
@@ -262,10 +266,7 @@ export const endScript = [
   `records="${endedRecords}"`,
   `mkdir -p "$records" && : >"$records/$mark" || echo "clankerbox: couldn't record that $mark ended, so a command of it that begins later runs" >&2`,
   `find "$records" -type f -mmin +${recordMinutes} -exec rm -f {} + 2>/dev/null || true`,
-  "nl='",
-  "'",
   `program='${membersProgram.replaceAll("'", String.raw`'\''`)}'`,
-  "held=",
   "all=",
   "count=0",
   "release() {",
@@ -275,11 +276,14 @@ export const endScript = [
   "}",
   `trap 'release "its end was cut short, with $count processes of the command running at its last listing"' HUP INT TERM`,
   "trap '' PIPE",
+  `listing=$(mktemp -d 2>/dev/null) || release "couldn't make a directory for its listings"`,
+  `trap 'rm -rf "$listing"' EXIT`,
+  `: >"$listing/held"`,
   "if [ -r /proc/self/stat ]; then proc=1; else proc=0; fi",
   "round() {",
   `  [ "$(date +%s)" -lt "$ends" ] || release "$count processes of the command still ran at its last listing when its end's \${seconds}s ran out"`,
-  "  listed=$(",
-  `    { printf '%s\\n%s\\n.\\n' "$word" "$held"`,
+  "  count=$(",
+  `    { printf '%s\\n' "$word"`,
   `      if [ "$proc" = 1 ]; then`,
   `        grep -ls -e "${markName}[=]$mark" /proc/[0-9]*/cmdline /proc/[0-9]*/environ`,
   "        echo .",
@@ -287,16 +291,11 @@ export const endScript = [
   "      else",
   "        ps -axEww -o pid=,ppid=,lstart=,state=,command=",
   "      fi",
-  `    } | awk -v signal="$1" -v self="$$" -v proc="$proc" "$program"`,
+  `    } | awk -v signal="$1" -v self="$$" -v proc="$proc" -v dir="$listing" "$program"`,
   "  )",
-  `  case \${listed%%"$nl"*} in '' | *[!0-9]*) release "couldn't list the guest's processes, with /proc or ps, and awk" ;; esac`,
-  `  count=\${listed%%"$nl"*}`,
-  `  listed=\${listed#*"$nl"}`,
-  `  fresh=\${listed%%"$nl"*}`,
-  `  listed=\${listed#*"$nl"}`,
-  `  all=\${listed%%"$nl"*}`,
-  `  held=\${listed#*"$nl"}`,
-  "  held=${held%.}",
+  `  case $count in '' | *[!0-9]*) release "couldn't list the guest's processes, with /proc or ps, and awk" ;; esac`,
+  `  fresh=$(cat "$listing/fresh")`,
+  `  all=$(cat "$listing/all")`,
   "}",
   "alive() {",
   `  if [ "$proc" = 1 ]; then`,
