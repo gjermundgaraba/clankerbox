@@ -62,7 +62,9 @@ layer(NodeServices.layer, { excludeTestServices: true })(
           expect(
             lines.filter((line) => line.startsWith("host "))
           ).toStrictEqual([
-            expect.stringContaining("host smolvm: "),
+            expect.stringMatching(
+              /^host smolvm didn't answer: the connection to it failed \(Transport error .+\)$/u
+            ),
             "host smolvm answers again",
           ]);
         })
@@ -232,10 +234,10 @@ layer(NodeServices.layer, { excludeTestServices: true })(
     );
 
     it.effect(
-      "that answers with a page, as a proxy in front of it may, is named unreachable in capacity, with the status it answered",
+      "that answers with a page, as a proxy in front of it or a host stopping may, is named unreachable by its ID and the status it answered, never its URL, and an exec there may have run",
       () =>
         Effect.gen(function* () {
-          for (const status of [400, 404, 500] as const) {
+          for (const status of [400, 404, 500, 503] as const) {
             const url = yield* pageHost(status);
 
             const served = yield* running({
@@ -245,14 +247,57 @@ layer(NodeServices.layer, { excludeTestServices: true })(
             const client = yield* clientOf(served.url);
             const report = yield* client.capacity;
 
+            yield* client.create("dev", request("dev", { host: "smolvm" }));
+            yield* patched(served.store, "dev", { host: "paged" });
+
+            const exec = yield* Effect.flip(
+              client.execMachine({ id: "dev", argv: ["true"] })
+            );
+
             expect(
               report.unreported.map(({ host, state }) => [host, state]),
               `${status}`
             ).toStrictEqual([["paged", "unreachable"]]);
-            expect(report.unreported[0]?.problem, `${status}`).toContain(
-              `${status} POST ${url}/host/readHost`
-            );
+            expect(
+              [report.unreported[0]?.problem, exec.message],
+              `${status}`
+            ).toStrictEqual([
+              `host paged didn't answer as the host contract says: it replied HTTP ${status}, which is no answer the contract declares`,
+              `host paged didn't answer as the host contract says: it replied HTTP ${status}, which is no answer the contract declares`,
+            ]);
+            expect(exec, `${status}`).toMatchObject({
+              _tag: "Unavailable",
+              readOnly: false,
+            });
           }
+        })
+    );
+
+    it.effect(
+      "that refuses the connection is named by its ID alone, in capacity and in an exec's answer",
+      () =>
+        Effect.gen(function* () {
+          const served = yield* running({
+            members: [
+              { id: "gone", url: "http://127.0.0.1:1", draining: false },
+            ],
+          });
+
+          const client = yield* clientOf(served.url);
+
+          yield* client.create("dev", request("dev", { host: "smolvm" }));
+          yield* patched(served.store, "dev", { host: "gone" });
+
+          const report = yield* client.capacity;
+
+          const exec = yield* Effect.flip(
+            client.execMachine({ id: "dev", argv: ["true"] })
+          );
+
+          expect([report.unreported[0]?.problem, exec.message]).toStrictEqual([
+            "host gone didn't answer: the connection to it failed",
+            "host gone didn't answer: the connection to it failed",
+          ]);
         })
     );
 

@@ -28,6 +28,7 @@ export interface Member {
 interface Failed {
   readonly host: string;
   readonly message: string;
+  readonly logOnly?: string;
 }
 
 /** A host gave no usable answer, so nothing can tell what became of a mutation it was sent. */
@@ -130,6 +131,54 @@ export const answering = (
 const describe = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
+const unusable = (host: string, error: unknown): Unreachable => {
+  if (Schema.isSchemaError(error)) {
+    return new Incompatible({
+      host,
+      message: `host ${host} answers in another contract than this control plane's: ${error.message.replaceAll(/\s*\n\s*/gu, " ")}`,
+    });
+  }
+
+  if (!HttpClientError.isHttpClientError(error)) {
+    return new Unanswered({
+      host,
+      message: `host ${host} didn't answer`,
+      logOnly: describe(error),
+    });
+  }
+
+  const logOnly = error.message;
+
+  switch (error.reason._tag) {
+    case "EncodeError":
+    case "InvalidUrlError": {
+      return new Unsent({
+        host,
+        message: `host ${host} wasn't called: the control plane couldn't make the request`,
+        logOnly,
+      });
+    }
+
+    case "TransportError": {
+      return new Unanswered({
+        host,
+        message: `host ${host} didn't answer: the connection to it failed`,
+        logOnly,
+      });
+    }
+
+    case "StatusCodeError":
+    case "DecodeError":
+    case "EmptyBodyError": {
+      return new Unanswered({
+        host,
+        message: `host ${host} didn't answer as the host contract says: it replied HTTP ${error.reason.response.status}, which is no answer the contract declares`,
+        logOnly,
+      });
+    }
+  }
+};
+
 const isHostError = Schema.is(HostError);
 
 const bounded = <A, E>(
@@ -171,7 +220,7 @@ export const make = (
           : Effect.void
       );
 
-    const unanswering = ({ host, message }: Unreachable) =>
+    const unanswering = ({ host, message, logOnly }: Unreachable) =>
       Effect.suspend(() => {
         if (unanswered.has(host)) {
           return Effect.void;
@@ -179,7 +228,9 @@ export const make = (
 
         unanswered.add(host);
 
-        return Effect.logWarning(message);
+        return Effect.logWarning(
+          logOnly === undefined ? message : `${message} (${logOnly})`
+        );
       });
 
     const reaching = <A, E>(
@@ -211,18 +262,16 @@ export const make = (
                       error: E | HttpClientError.HttpClientError
                     ): error is Extract<E, HostError> => isHostError(error),
                     Effect.fail,
-                    (error) =>
-                      Effect.fail(
-                        Schema.isSchemaError(error)
-                          ? new Incompatible({
-                              host,
-                              message: `host ${host} answers in another contract than this control plane's: ${error.message.replaceAll(/\s*\n\s*/gu, " ")}`,
-                            })
-                          : new Unanswered({
-                              host,
-                              message: `host ${host}: ${describe(error)}`,
-                            })
-                      )
+                    (error) => {
+                      const failed = unusable(host, error);
+
+                      return Effect.andThen(
+                        failed.logOnly === undefined
+                          ? Effect.void
+                          : Effect.logDebug(`host ${host}: ${failed.logOnly}`),
+                        Effect.fail(failed)
+                      );
+                    }
                   )
                 ),
                 within

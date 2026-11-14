@@ -443,13 +443,19 @@ export const make = (settings: {
             ending(name, number, { phase: "ready", error: undefined }),
           onFailure: (cause) => {
             const error = Cause.findError(cause);
+            const id = buildId(name, number);
 
-            return ending(name, number, {
-              phase: "failed",
-              error: Result.isSuccess(error)
-                ? error.success
-                : new Internal({ message: Cause.pretty(cause) }),
-            });
+            return Result.isSuccess(error)
+              ? ending(name, number, { phase: "failed", error: error.success })
+              : Effect.andThen(
+                  Effect.logError(`build ${id} died:\n${Cause.pretty(cause)}`),
+                  ending(name, number, {
+                    phase: "failed",
+                    error: new Internal({
+                      message: `build ${id} ended in a fault of the control plane's, which its log holds`,
+                    }),
+                  })
+                );
           },
         }),
         Effect.andThen(tidied),
