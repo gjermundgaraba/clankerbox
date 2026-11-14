@@ -55,7 +55,7 @@ import * as Home from "./home.ts";
 import * as Launchd from "./launchd.ts";
 import * as Locks from "./locks.ts";
 import { names, tartRuns } from "./runs.ts";
-import { traits } from "./traits.ts";
+import { diskGibOf, traits } from "./traits.ts";
 
 export const TartSettings = Schema.Struct({
   binary: Schema.String,
@@ -173,10 +173,6 @@ const program = (binary: string, vm: string): readonly string[] => [
 // https://github.com/openai/tart/blob/2.41.1/Sources/tart/VMDirectory.swift#L287
 export const diskGb = (diskGib: number): number =>
   Math.ceil((diskGib * 1024 ** 3) / 1e9);
-
-// https://github.com/openai/tart/blob/2.41.1/Sources/tart/Commands/Get.swift#L36
-export const diskGibOf = (gb: number): number =>
-  Math.floor((gb * 1e9) / 1024 ** 3);
 
 const xml = (text: string): string =>
   text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");

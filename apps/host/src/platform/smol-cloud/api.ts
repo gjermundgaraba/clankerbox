@@ -91,6 +91,13 @@ export class Refused extends Schema.TaggedError<
 
 export type ApiError = Refused | Unanswered | Busy | Unreadable;
 
+export const apiErrors = [
+  "Refused",
+  "Unanswered",
+  "Busy",
+  "Unreadable",
+] as const satisfies ReadonlyArray<ApiError["_tag"]>;
+
 export interface Sizes {
   readonly cpus?: number | undefined;
   readonly memoryMb?: number | undefined;

@@ -48,6 +48,7 @@ import {
   untilRest,
 } from "../provider-http.ts";
 import * as Api from "./api.ts";
+import { apiErrors } from "./api.ts";
 import type { ApiError, MachineRecord, Refused } from "./api.ts";
 import { traits } from "./traits.ts";
 import { tunnel } from "./tunnel.ts";
@@ -113,8 +114,6 @@ const moves: Readonly<Record<Goal, Readonly<Record<string, Move>>>> = {
 const transitional = new Set(["creating", "pausing", "starting", "stopping"]);
 
 const checkpointEnds = new Set(["available", "failed"]);
-
-const apiErrors = ["Refused", "Unanswered", "Busy", "Unreadable"] as const;
 
 const fromApi = (error: { readonly _tag: string }): error is ApiError =>
   apiErrors.some((tag) => tag === error._tag);

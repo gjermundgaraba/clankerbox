@@ -45,7 +45,6 @@ import {
   checkpointName,
   dateStamp,
   diskGb,
-  diskGibOf,
   environment,
   jobsDir,
   machineName,
@@ -56,6 +55,7 @@ import {
 } from "../../../src/platform/tart/tart.ts";
 import * as Tart from "../../../src/platform/tart/tart.ts";
 import type { Settings } from "../../../src/platform/tart/tart.ts";
+import { diskGibOf } from "../../../src/platform/tart/traits.ts";
 import * as Reach from "../../../src/reach.ts";
 import { Runtime } from "../../../src/runtime.ts";
 import type {
