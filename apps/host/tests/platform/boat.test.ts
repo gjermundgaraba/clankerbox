@@ -1513,6 +1513,57 @@ describe("a boat start whose answer is lost", () => {
   );
 });
 
+describe("a boat resize refused as running while boat reads the sandbox archived", () => {
+  it.effect(
+    "waits a poll between tries, and fails after three, naming boat's refusal",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { runtime, asked } = yield* scriptedBoat((route) => {
+            if (route === "POST /sandboxes/bx1/resume") {
+              if (resumes(asked).length > 20) {
+                throw new Error("the resize sent its resume past 20 times");
+              }
+
+              return Response.json(
+                {
+                  error: {
+                    code: "sandbox_running_stop_first",
+                    message: "stop the sandbox first",
+                  },
+                },
+                { status: 409 }
+              );
+            }
+
+            return route === "GET /sandboxes/bx1"
+              ? sandboxIn("archived")
+              : undefined;
+          });
+
+          const resizing = yield* Effect.forkChild(
+            runtime.resize(
+              { ...bx1, ...types.small },
+              { cpu: 4, ramMib: 8192 },
+              false
+            )
+          );
+
+          yield* TestClock.adjust("100 millis");
+          expect(resumes(asked)).toHaveLength(1);
+
+          yield* TestClock.adjust("1 minute");
+
+          const failed = failureOf(resizing.pollUnsafe());
+
+          expect(failed).toMatchObject({ _tag: "Internal" });
+          expect(String(failed)).toContain("sandbox_running_stop_first");
+          expect(resumes(asked)).toHaveLength(3);
+        })
+      )
+  );
+});
+
 describe("boat's ssh endpoint", () => {
   it("reads a host and a port, an IPv6 host in brackets, and refuses one that names no port", () => {
     const hostKey = "ssh-ed25519 AAAA";
