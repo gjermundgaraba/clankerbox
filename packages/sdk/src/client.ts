@@ -16,6 +16,7 @@ import { HttpClient, HttpClientError, HttpClientRequest } from "effect/http";
 
 import {
   actionsByName as actions,
+  endTimeout,
   Http,
   longestHold,
   replyTimeout,
@@ -182,8 +183,8 @@ export interface Interface extends Calls {
     options: EnsureOptions
   ) => Effect.Effect<Machine, EnsureError>;
   /**
-   * `execMachine`, waiting `timeoutSeconds` and the reply timeout for the answer, or for as long as
-   * the command runs when there is none.
+   * `execMachine`, waiting `timeoutSeconds`, `endTimeout` and the reply timeout for the answer, or
+   * for as long as the command runs when there is none.
    */
   readonly execMachine: (
     input: Input<"execMachine">
@@ -881,7 +882,10 @@ export const make = (
         undefined,
         input.timeoutSeconds === undefined
           ? Duration.infinity
-          : Duration.sum(Duration.seconds(input.timeoutSeconds), reply)
+          : Duration.sum(
+              Duration.sum(Duration.seconds(input.timeoutSeconds), endTimeout),
+              reply
+            )
       );
 
     return {
