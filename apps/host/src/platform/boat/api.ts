@@ -97,11 +97,8 @@ const SavedList = Schema.Struct({ snapshots: Schema.Array(Schema.Unknown) });
 
 const Named = Schema.Struct({ name: Schema.String });
 
-const nameOf = (record: unknown): string =>
-  Option.match(Schema.decodeUnknownOption(Named)(record), {
-    onNone: () => JSON.stringify(record),
-    onSome: (named) => named.name,
-  });
+const nameOf = (record: unknown): Option.Option<string> =>
+  Option.map(Schema.decodeUnknownOption(Named)(record), ({ name }) => name);
 
 const SavedOne = Schema.Struct({ snapshot: SavedSnapshot });
 
@@ -437,8 +434,9 @@ export const make = (settings: Settings) =>
               call: "GET /saved-snapshots",
               what: "saved snapshot",
               read: Schema.decodeUnknownOption(ListedSnapshot),
-              ours: (record) => ours(nameOf(record)),
-              label: nameOf,
+              ours: (record) => Option.exists(nameOf(record), ours),
+              label: (record) =>
+                Option.getOrElse(nameOf(record), () => "a record with no name"),
             })
         ),
       unsave: (name: string) =>

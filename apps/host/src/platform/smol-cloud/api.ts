@@ -52,14 +52,18 @@ const InUse = Schema.Struct({
   startedMemoryMb: Schema.Int,
 });
 
-const Marks = Schema.Struct({
-  id: Schema.optionalKey(Schema.String),
-  name: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  machineId: Schema.optionalKey(Schema.String),
-});
+/** What a listed record carries that tells whose it is, each read from any record that has it. */
+export interface Marks {
+  readonly id?: string | undefined;
+  readonly name?: string | null | undefined;
+  readonly machineId?: string | undefined;
+}
 
-/** What a listed record carries that tells whose it is, read from any record that has it. */
-export type Marks = typeof Marks.Type;
+const Identified = Schema.Struct({ id: Schema.String });
+
+const Named = Schema.Struct({ name: Schema.String });
+
+const OfMachine = Schema.Struct({ machineId: Schema.String });
 
 const Problem = Schema.Struct({
   code: Schema.optionalKey(Schema.String),
@@ -125,7 +129,7 @@ const frameOf = ({ event, data }: Sse.Event): readonly Frame[] => {
       Option.match(Schema.decodeOption(ExitFrame)(data), {
         onNone: (): Frame => ({
           _tag: "error",
-          data: `an unreadable exit: ${data}`,
+          data: "an exit event it couldn't read",
         }),
         onSome: ({ exitCode }): Frame => ({ _tag: "exit", exitCode }),
       }),
@@ -145,8 +149,17 @@ const frames = <E>(
     Stream.flattenIterable
   );
 
-const marksOf = (record: unknown): Marks =>
-  Option.getOrElse(Schema.decodeUnknownOption(Marks)(record), () => ({}));
+const marksOf = (record: unknown): Marks => ({
+  ...Option.getOrElse(
+    Schema.decodeUnknownOption(Identified)(record),
+    () => ({})
+  ),
+  ...Option.getOrElse(Schema.decodeUnknownOption(Named)(record), () => ({})),
+  ...Option.getOrElse(
+    Schema.decodeUnknownOption(OfMachine)(record),
+    () => ({})
+  ),
+});
 
 const open = { mode: "open" };
 
@@ -262,7 +275,7 @@ export const make = (url: string, key: Redacted.Redacted) =>
               label: (record) => {
                 const marks = marksOf(record);
 
-                return marks.name ?? marks.id ?? JSON.stringify(record);
+                return marks.name ?? marks.id ?? "a record with no name or ID";
               },
             })
         );

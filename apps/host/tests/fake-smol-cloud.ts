@@ -67,7 +67,11 @@ export interface FakeSmolCloud {
   readonly url: string;
   readonly faults: FakeFaults;
   readonly holdCapture: Effect.Effect<void>;
-  readonly malformedMachine: (name: string) => Effect.Effect<void>;
+  /** Lists a machine whose `state` the provider answers null, under `id`, a fresh one by default. */
+  readonly malformedMachine: (
+    name: string,
+    id?: string | number
+  ) => Effect.Effect<void>;
   readonly calls: readonly string[];
   readonly machines: ReadonlyMap<string, FakeMachine>;
   readonly checkpoints: ReadonlyMap<string, FakeCheckpoint>;
@@ -959,9 +963,9 @@ export const fakeSmolCloud = (
       holdCapture: Effect.sync(() => {
         holdingCapture = true;
       }),
-      malformedMachine: (name: string) =>
+      malformedMachine: (name: string, id: string | number = idOf("mach")) =>
         Effect.sync(() => {
-          malformed.push({ id: idOf("mach"), name, state: null });
+          malformed.push({ id, name, state: null });
         }),
       calls,
       machines,

@@ -773,6 +773,26 @@ describe("the smol cloud runtime over an account without a card", () => {
   );
 
   it.live(
+    "fails a search when its own machine's record has an id it can't read, says whose, and asks no list again",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { fake, runtime } = yield* onCloud;
+          const dev = machineOf("dev");
+
+          yield* fake.malformedMachine(`cbx-${hostId}-${dev.instance}`, 7);
+
+          const failed = yield* Effect.flip(runtime.find("machine", dev));
+
+          expect(failed.message).toContain(`cbx-${hostId}-${dev.instance}`);
+          expect(
+            fake.calls.filter((call) => call === "GET /v1/machines 200")
+          ).toHaveLength(1);
+        })
+      )
+  );
+
+  it.live(
     "a resize whose answer was lost reads the machine, and ends done when it holds the sizes asked",
     () =>
       Effect.scoped(
@@ -1276,6 +1296,74 @@ describe("a smol cloud step's deadline", () => {
             Cause.squash(ended.cause)
         ).toMatchObject({ _tag: "Internal" });
       })
+  );
+});
+
+const planted = "PLANTED-TOKEN-7f3a";
+
+describe("what a smol cloud answer puts in a log or an error", () => {
+  it.effect(
+    "names a listed record the host can't read by its name or ID, or as one with neither, and quotes nothing of its body",
+    () =>
+      Effect.gen(function* () {
+        const logged: string[] = [];
+
+        const { client } = answering((route) =>
+          route === "GET /v1/machines"
+            ? Response.json([
+                recordIn("started"),
+                { secretEnv: { API_TOKEN: planted } },
+                { id: 7, state: 3, secret: planted },
+                { name: "someone-else", state: null, secret: planted },
+              ])
+            : undefined
+        );
+
+        const runtime = yield* scriptedRuntime(client);
+
+        yield* runtime
+          .observe([
+            dev1,
+            { ...dev1, name: "other", handle: Handle.make("mach-2") },
+          ])
+          .pipe(Effect.provide(Logger.layer([capturing(logged)])));
+
+        expect(logged.filter((line) => line.includes(planted))).toStrictEqual(
+          []
+        );
+        expect(logged.map((line) => line.split(", which")[0])).toStrictEqual([
+          "GET /v1/machines answered machine a record with no name or ID",
+          "GET /v1/machines answered machine someone-else",
+        ]);
+      })
+  );
+
+  it.effect("fails an exec whose exit it can't read without quoting it", () =>
+    Effect.gen(function* () {
+      const { client } = answering((route) =>
+        route === "POST /v1/machines/mach-1/exec/stream"
+          ? new Response(`event: exit\ndata: ${planted}\n\n`, {
+              headers: { "content-type": "text/event-stream" },
+            })
+          : undefined
+      );
+
+      const runtime = yield* scriptedRuntime(client);
+
+      const failed = yield* Effect.flip(
+        Effect.scoped(
+          Effect.flatMap(runtime.exec(dev1, { argv: ["true"] }), (execution) =>
+            Effect.andThen(
+              Stream.runDrain(execution.output),
+              execution.exitCode
+            )
+          )
+        )
+      );
+
+      expect(failed).toMatchObject({ _tag: "Internal" });
+      expect(failed.message).not.toContain(planted);
+    })
   );
 });
 
