@@ -1,5 +1,5 @@
 import type { Report } from "@clankerbox/host-contract";
-import { pauseCapture } from "@clankerbox/host-contract/traits";
+import { pauseCapture, pinRefusal } from "@clankerbox/host-contract/traits";
 import {
   copyPrefixes,
   Internal,
@@ -34,7 +34,7 @@ import type { Scope } from "effect";
 import { applied } from "./chart.ts";
 import { activityOf, checkpointChart, phaseOf } from "./checkpoint-chart.ts";
 import type { CheckpointEvent, CheckpointRow } from "./checkpoint-chart.ts";
-import { uncopiable, unpinned } from "./copies.ts";
+import { uncopiable } from "./copies.ts";
 import { apart, driver, untilRest } from "./driver.ts";
 import type { Heard } from "./driver.ts";
 import { answering, Hosts } from "./hosts.ts";
@@ -384,7 +384,7 @@ export const make = (settings: {
             onNone: () => undefined,
             onSome: ({ traits, pin }) =>
               uncopiable(found, seen, traits, "capture") ??
-              unpinned({ machine: found }, pin),
+              pinRefusal({ copy: found.name }, found.pin, pin),
           });
 
           if (refusal !== undefined) {
@@ -414,7 +414,7 @@ export const make = (settings: {
         }
 
         const { traits, pin } = yield* answering(hosts, found.host);
-        const unpinnedRefusal = unpinned({ machine: found }, pin);
+        const unpinnedRefusal = pinRefusal({ copy: id }, found.pin, pin);
 
         switch (pauseCapture(traits)) {
           case "never": {

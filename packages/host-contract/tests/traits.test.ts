@@ -8,6 +8,7 @@ import {
   offered,
   offers,
   pauseCapture,
+  pinRefusal,
   resizable,
   RuntimeTraits,
 } from "../src/traits.ts";
@@ -243,6 +244,41 @@ describe("pauseCapture", () => {
         expect(pauseCapture(traits)).toBe(
           traits.captureFrom === "running" ? "before" : after
         );
+      })
+  );
+});
+
+describe("pinRefusal", () => {
+  const Pin = Schema.UndefinedOr(
+    Schema.Literals(["smolvm 1 linux-x64", "smolvm 2 linux-x64"])
+  );
+
+  const Of = Schema.Union([
+    Schema.Struct({ copy: Schema.Literal("dev") }),
+    Schema.Struct({ restore: Schema.Literal("dev") }),
+    Schema.Struct({ resume: Schema.Literal("dev") }),
+  ]);
+
+  it.effect.prop(
+    "what was made under one pin is refused under any other, naming both, and taken under its own",
+    { of: Of, under: Pin, runs: Pin },
+    ({ of, under, runs }) =>
+      Effect.sync(() => {
+        const refusal = pinRefusal(of, under, runs);
+
+        if (under === runs) {
+          expect(refusal).toBeUndefined();
+        } else {
+          expect(refusal?._tag).toBe("PinMismatch");
+          expect(refusal?.message).toContain("dev");
+          expect(refusal?.message).toContain(
+            `this host runs ${runs ?? "no pin"}`
+          );
+
+          if (under !== undefined) {
+            expect(refusal?.message).toContain(under);
+          }
+        }
       })
   );
 });

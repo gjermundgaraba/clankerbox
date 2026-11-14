@@ -13,7 +13,11 @@ import type {
   Source,
   Step,
 } from "@clankerbox/host-contract";
-import { givenSizes, resizable } from "@clankerbox/host-contract/traits";
+import {
+  givenSizes,
+  pinRefusal,
+  resizable,
+} from "@clankerbox/host-contract/traits";
 import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
 import {
   Conflict,
@@ -21,7 +25,6 @@ import {
   formatGib,
   formatMib,
   Internal,
-  PinMismatch,
   timedOutExitCode,
   Unsizable,
   WrongState,
@@ -507,32 +510,14 @@ export const make = (
         })
       );
 
-    const resumable = (name: string, pin: string | undefined) =>
-      pin === runtime.pin
-        ? Effect.void
-        : Effect.fail(
-            new PinMismatch({
-              message: `machine ${name} was paused under ${pin ?? "no pin"}, and this host runs ${runtime.pin ?? "no pin"}; it resumes only under the same one: delete it, or resume it under that one`,
-            })
-          );
+    const pinned = (
+      of: Parameters<typeof pinRefusal>[0],
+      pin: string | undefined
+    ) => {
+      const refusal = pinRefusal(of, pin, runtime.pin);
 
-    const copyable = (name: string, pin: string | undefined) =>
-      pin === runtime.pin
-        ? Effect.void
-        : Effect.fail(
-            new PinMismatch({
-              message: `machine ${name}'s VM booted under ${pin ?? "an older host"}, and this host runs ${runtime.pin ?? "no pin"}, so a copy of its RAM would restore under the wrong one: stop it and start it again first`,
-            })
-          );
-
-    const restorable = (name: string, pin: string | undefined) =>
-      pin === runtime.pin
-        ? Effect.void
-        : Effect.fail(
-            new PinMismatch({
-              message: `checkpoint ${name} holds RAM state saved under ${pin ?? "no pin"}, and this host runs ${runtime.pin ?? "no pin"}; it restores only under the same one`,
-            })
-          );
+      return refusal === undefined ? Effect.void : Effect.fail(refusal);
+    };
 
     const originOf = (source: Source): Effect.Effect<Origin, HostError> =>
       Effect.gen(function* () {
@@ -546,7 +531,7 @@ export const make = (
         if (source._tag === "checkpoint") {
           const { checkpoint, pin } = source;
 
-          yield* restorable(checkpoint.name, pin);
+          yield* pinned({ restore: checkpoint.name }, pin);
 
           const { handle } = yield* checkpointTarget(checkpoint);
 
@@ -556,7 +541,7 @@ export const make = (
           } as const;
         }
 
-        yield* copyable(source.machine.name, source.pin);
+        yield* pinned({ copy: source.machine.name }, source.pin);
 
         return {
           _tag: "machine",
@@ -918,7 +903,7 @@ export const make = (
             }
 
             if (seen === "paused") {
-              yield* resumable(machine.name, pin);
+              yield* pinned({ resume: machine.name }, pin);
             }
 
             const { endpoint } = step.machine;
@@ -964,7 +949,7 @@ export const make = (
             const seen = yield* stateNow(machine, "stopped");
 
             if (seen === "paused") {
-              yield* resumable(machine.name, pin);
+              yield* pinned({ resume: machine.name }, pin);
 
               return yield* withRoom(
                 "stopMachine",
@@ -1032,7 +1017,7 @@ export const make = (
           return Effect.gen(function* () {
             const machine = yield* Effect.tapError(
               Effect.andThen(
-                copyable(step.machine.name, pin),
+                pinned({ copy: step.machine.name }, pin),
                 machineTarget(step.machine)
               ),
               () => cleared

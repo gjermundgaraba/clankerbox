@@ -1,4 +1,5 @@
 import type { HostInfo, MachineState, Report } from "@clankerbox/host-contract";
+import { pinRefusal } from "@clankerbox/host-contract/traits";
 import {
   buildId,
   Internal,
@@ -44,7 +45,6 @@ import {
   refusedBySource,
   sizedBy,
   uncopiable,
-  unpinned,
 } from "./copies.ts";
 import type { Spec } from "./copies.ts";
 import { driver, untilRest } from "./driver.ts";
@@ -637,7 +637,7 @@ export const make = (
 
         const refusal =
           uncopiable(from, yield* stateOf(hosts, from), info.traits, "fork") ??
-          unpinned({ machine: from }, info.pin);
+          pinRefusal({ copy: id }, from.pin, info.pin);
 
         if (refusal !== undefined) {
           return yield* refusal;
@@ -669,7 +669,12 @@ export const make = (
         const record = present.value;
 
         const info = yield* answering(hosts, record.host);
-        const refusal = unpinned({ checkpoint: record }, info.pin);
+
+        const refusal = pinRefusal(
+          { restore: checkpoint },
+          record.pin,
+          info.pin
+        );
 
         if (refusal !== undefined) {
           return yield* refusal;

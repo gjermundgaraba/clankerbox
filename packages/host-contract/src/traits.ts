@@ -2,6 +2,7 @@ import {
   formatCpu,
   formatGib,
   formatMib,
+  PinMismatch,
   RuntimeName,
   Sizes,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -176,3 +177,40 @@ export const stopsBeforeCapture = (traits: RuntimeTraits): boolean =>
 /** Whether a host of `to`'s traits can take a copy of a checkpoint made on runtime `from`. */
 export const fetchable = (from: RuntimeName, to: RuntimeTraits): boolean =>
   from === to.runtime;
+
+/**
+ * Why a host running runtime pin `runs` refuses what was made under `under`, none where they are
+ * the same: a machine's RAM is copied, a checkpoint's restored and a paused machine resumed only
+ * under the pin its VM booted or its state was saved under. The control plane asks it before it
+ * writes a row, and the host before it runs the step.
+ */
+export const pinRefusal = (
+  of:
+    | { readonly copy: string }
+    | { readonly restore: string }
+    | { readonly resume: string },
+  under: string | undefined,
+  runs: string | undefined
+): PinMismatch | undefined => {
+  if (under === runs) {
+    return undefined;
+  }
+
+  const host = runs ?? "no pin";
+
+  if ("copy" in of) {
+    return new PinMismatch({
+      message: `machine ${of.copy}'s VM booted under ${under ?? "an older host"}, and this host runs ${host}, so a copy of its RAM would restore under the wrong one: stop it and start it again first`,
+    });
+  }
+
+  if ("restore" in of) {
+    return new PinMismatch({
+      message: `checkpoint ${of.restore} holds RAM state saved under ${under ?? "no pin"}, and this host runs ${host}; it restores only under the same one`,
+    });
+  }
+
+  return new PinMismatch({
+    message: `machine ${of.resume} was paused under ${under ?? "no pin"}, and this host runs ${host}; it resumes only under the same one: delete it, or resume it under that one`,
+  });
+};

@@ -10,7 +10,6 @@ import {
   formatGib,
   formatMib,
   NotBuilt,
-  PinMismatch,
   templateRef,
   Unsizable,
   WrongState,
@@ -22,7 +21,6 @@ import type {
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Option } from "effect";
 
-import type { CheckpointRow } from "./checkpoint-chart.ts";
 import { phaseOf } from "./machine-chart.ts";
 import type { MachineRow } from "./machine-chart.ts";
 import { notFound } from "./store.ts";
@@ -110,35 +108,6 @@ export const uncopiable = (
         state: seen,
       })
     : undefined;
-};
-
-/**
- * Why a host running runtime pin `pin` refuses to copy a machine whose VM booted under another, or
- * to restore a checkpoint saved under another, as its host would, before a row is written.
- */
-export const unpinned = (
-  source:
-    | { readonly machine: MachineRow }
-    | { readonly checkpoint: CheckpointRow },
-  pin: string | undefined
-): PinMismatch | undefined => {
-  if ("machine" in source) {
-    const { name, pin: booted } = source.machine;
-
-    return booted === pin
-      ? undefined
-      : new PinMismatch({
-          message: `machine ${name}'s VM booted under ${booted ?? "an older host"}, and this host runs ${pin ?? "no pin"}, so a copy of its RAM would restore under the wrong one: stop it and start it again first`,
-        });
-  }
-
-  const { name, pin: saved } = source.checkpoint;
-
-  return saved === pin
-    ? undefined
-    : new PinMismatch({
-        message: `checkpoint ${name} holds RAM state saved under ${saved ?? "no pin"}, and this host runs ${pin ?? "no pin"}; it restores only under the same one`,
-      });
 };
 
 export const cloned = (
