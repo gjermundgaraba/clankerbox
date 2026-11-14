@@ -33,8 +33,6 @@ export type RentedRuntime = RentedApi["runtime"];
 export interface RentedHost {
   readonly id: string;
   readonly url: string;
-  /** The fake API's folder: on smol cloud, an exec's `PATH` begins with its `bin`. */
-  readonly apiDir: string;
   readonly api: RentedApi;
   readonly traits: RuntimeTraits;
   readonly dispose: Effect.Effect<void>;
@@ -53,6 +51,8 @@ export const startRentedHost = (
     readonly id: string;
     /** Its machines' ports, apart from every other suite's, as the suites run side by side. */
     readonly ports: PortRange;
+    /** On smol cloud, an exec's `PATH` after the fake's own stubs, the runner's own unless given. */
+    readonly guestPath?: string | undefined;
   }
 ) =>
   Effect.gen(function* () {
@@ -71,6 +71,7 @@ export const startRentedHost = (
             const fake = yield* fakeSmolCloud({
               dir: apiDir,
               key: smolCloudKey,
+              guestPath: options.guestPath,
             });
 
             const apiKeyFile = path.join(dir, "key");
@@ -118,7 +119,6 @@ export const startRentedHost = (
       url: HttpServer.formatAddress(
         Context.get(context, HttpServer.HttpServer).address
       ),
-      apiDir,
       api: rented.api,
       traits: rented.traits,
       dispose: Scope.close(scope, Exit.void),

@@ -1,4 +1,11 @@
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
@@ -47,14 +54,26 @@ const stub = (bin: string, name: string, body: string) => {
   chmodSync(file, 0o755);
 };
 
-const furnishImageForLogin = (host: RentedHost, amp: boolean) => {
-  const bin = path.join(host.apiDir, "bin");
+const imageTools = ["env", "sh", "cut", "mkdir", "setsid"];
 
-  stub(
-    bin,
-    "id",
-    'if [ "$1" = -un ]; then echo "$CLANKERBOX_USER"; else exec /usr/bin/id "$@"; fi'
-  );
+const imageBinApartFromTheRunner = (dir: string, amp: boolean) => {
+  const bin = path.join(dir, "image-bin");
+
+  mkdirSync(bin);
+
+  for (const tool of imageTools) {
+    const found = ["/usr/bin", "/bin"]
+      .map((folder) => path.join(folder, tool))
+      .find((file) => existsSync(file));
+
+    if (found === undefined) {
+      throw new Error(`the runner has no ${tool} to link into the image`);
+    }
+
+    symlinkSync(found, path.join(bin, tool));
+  }
+
+  stub(bin, "id", 'echo "$CLANKERBOX_USER"');
   stub(
     bin,
     "getent",
@@ -64,6 +83,7 @@ const furnishImageForLogin = (host: RentedHost, amp: boolean) => {
       'echo "$CLANKERBOX_USER:x:1000:1000::$home:/bin/sh"',
     ].join("\n")
   );
+  stub(bin, "pkill", 'echo "$*" >>"$CLANKERBOX_ROOT/pkilled"');
 
   if (amp) {
     stub(
@@ -72,6 +92,8 @@ const furnishImageForLogin = (host: RentedHost, amp: boolean) => {
       'printf "%s\\n" "$*" "user=$(id -un)" "ORB_TOKEN=$ORB_TOKEN" "AMP_URL=$AMP_URL" >"$HOME/amp-ran"'
     );
   }
+
+  return bin;
 };
 
 const ran = (host: RentedHost) => {
@@ -88,6 +110,17 @@ const ran = (host: RentedHost) => {
   });
 };
 
+const pkilled = (host: RentedHost) =>
+  host.api.runtime === "smol-cloud"
+    ? [...host.api.fake.machines.values()].flatMap(({ root }) => {
+        const file = path.join(root, "pkilled");
+
+        return existsSync(file)
+          ? readFileSync(file, "utf8").trim().split("\n")
+          : [];
+      })
+    : [];
+
 const tokens = (host: RentedHost) =>
   ran(host)
     .flatMap((said) => said.filter((line) => line.startsWith("ORB_TOKEN=")))
@@ -97,20 +130,6 @@ const eventually = <A>(read: () => A, expected: A) =>
   Effect.promise(async () => {
     await expect.poll(read, { timeout: 10_000 }).toStrictEqual(expected);
   });
-
-const hostPathWithoutAmp = Effect.acquireRelease(
-  Effect.sync(() => {
-    const kept = process.env["PATH"];
-
-    process.env["PATH"] = "/usr/bin:/bin";
-
-    return kept;
-  }),
-  (kept) =>
-    Effect.sync(() => {
-      process.env["PATH"] = kept;
-    })
-);
 
 const restoredFrom = (host: RentedHost) =>
   host.api.runtime === "smol-cloud"
@@ -129,9 +148,8 @@ const orbsOn = Effect.fn("orbsOn")(function* (
     runtime,
     id: runtime,
     ports: portsOn[runtime],
+    guestPath: imageBinApartFromTheRunner(dir, amp),
   });
-
-  furnishImageForLogin(host, amp);
 
   const plane = yield* running({
     hosts: [],
@@ -187,6 +205,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(spawned).toMatchObject({ code: 0, stderr: "" });
         expect(spawned.stdout).toContain(`machine ${orb} is running`);
+        expect(pkilled(host)).toStrictEqual([
+          `-u ${login} -f amp orb bootstra[p]`,
+        ]);
         yield* eventually(
           () => ran(host),
           [
@@ -265,8 +286,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a spawn into an image whose login user has no amp fails, saying so",
     () =>
       Effect.gen(function* () {
-        yield* hostPathWithoutAmp;
-
         const { dispatched } = yield* orbsOn("smol-cloud", { amp: false });
 
         const spawned = yield* dispatched(spawnEnv);
