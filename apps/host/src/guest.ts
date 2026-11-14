@@ -252,15 +252,14 @@ END {
  * line holds, or one `ps`, and one `awk` pass, and `awk` picks out each of its lines again, where
  * zsh's patterns take time that grows with the square of the listing, so its cost grows with the
  * guest's processes and not with their square, under every shell, and it writes no file. It begins
- * no listing once its deadline
- * has passed, as `date +%s` counts it, nor the grace past it, and then, or when a TERM, HUP or INT
- * cuts it short, sends KILL and then CONT to every process it last listed, so none is left stopped,
- * and exits 1, saying how many there were: only a listing that finds none confirms the end. A
- * process found once is held by its start time, so one whose parent ended while it cleared its
- * environment is still found. It signals each pid alone, never a group, pid 1 or itself. It records
- * the mark first, so a launcher of it that begins later runs nothing, lets that record go once it
- * has ended what it found, since what it found holds the mark only once that one launcher has
- * begun, and removes each record older than an hour.
+ * no listing once its deadline has passed, as `date +%s` counts it, nor the grace past it, and then,
+ * or when a TERM, HUP or INT cuts it short, sends KILL and then CONT to every process it last
+ * listed, so none is left stopped, and exits 1, saying how many there were: only a listing that
+ * finds none confirms the end. A process found once is held by its start time, so one whose parent
+ * ended while it cleared its environment is still found. It signals each pid alone, never a group,
+ * pid 1 or itself. It records the mark first, so a launcher of it that begins later runs nothing,
+ * lets that record go once it has ended what it found, since what it found holds the mark only
+ * once that one launcher has begun, and removes each record older than an hour.
  */
 export const endScript = [
   "IFS=' ' read -r mark seconds || mark=",
