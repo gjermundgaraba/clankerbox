@@ -23,6 +23,7 @@ import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import { Duration, Effect, Fiber, Logger, Option, References } from "effect";
 import { expect } from "vite-plus/test";
 
+import { Unanswered } from "../src/hosts.ts";
 import {
   callsTo,
   clientOf,
@@ -32,6 +33,7 @@ import {
   plane,
   restartedHost,
   running,
+  templatesOver,
   withClient,
 } from "./support.ts";
 import type { Plane, Started } from "./support.ts";
@@ -676,6 +678,32 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(read.builds).toMatchObject([
           { phase: "failed", host: "roomy", image: "image/roomy" },
         ]);
+      })
+  );
+
+  it.effect(
+    "a build whose setup succeeded ends ready though a read of its builder's host would fail",
+    () =>
+      Effect.gen(function* () {
+        const planned = yield* plane();
+
+        const served = yield* templatesOver(planned, (real) => ({
+          ...real,
+          read: (host) =>
+            Effect.fail(
+              new Unanswered({ host, message: `host ${host} didn't answer` })
+            ),
+        }));
+
+        yield* Effect.addFinalizer(() => served.crash);
+        yield* served.templates.build(web());
+
+        const read = yield* eventually(
+          served.templates.get("web"),
+          ({ state }) => state !== "building"
+        );
+
+        expect(read).toMatchObject({ state: "ready", current: "web@1" });
       })
   );
 

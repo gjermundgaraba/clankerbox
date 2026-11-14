@@ -244,6 +244,45 @@ export const services = (
     };
   });
 
+/**
+ * `planned`'s templates with no HTTP in front, where `templates` reaches its hosts through `hosts`
+ * around the real one, and every other service the real one, so a test can fail what a build alone
+ * asks of a host.
+ */
+export const templatesOver = (
+  planned: Pick<Plane, "settings">,
+  hosts: (real: Hosts.Interface) => Hosts.Interface
+) =>
+  Effect.gen(function* () {
+    const scope = yield* Scope.make();
+    const { settings } = planned;
+
+    const context = yield* Layer.buildWithScope(
+      Templates.layer(settings).pipe(
+        Layer.provide(
+          Layer.effect(
+            Hosts.Hosts,
+            Effect.gen(function* () {
+              return hosts(yield* Hosts.Hosts);
+            })
+          )
+        ),
+        Layer.provideMerge(Checkpoints.layer(settings)),
+        Layer.provideMerge(Machines.layer(settings)),
+        Layer.provideMerge(Hosts.layer(settings.hosts)),
+        Layer.provideMerge(Sqlite.layer(settings)),
+        Layer.provide(NodeHttpClient.layerNodeHttp),
+        Layer.provide(NodeServices.layer)
+      ),
+      scope
+    );
+
+    return {
+      templates: Context.get(context, Templates.Templates),
+      crash: Scope.close(scope, Exit.void),
+    };
+  });
+
 let nextRange = 0;
 
 const portRange = () => {

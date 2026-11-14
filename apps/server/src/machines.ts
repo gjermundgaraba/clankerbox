@@ -749,17 +749,13 @@ export const make = (
       "template" in request ? fromTemplate(request) : fromBase(request);
 
     const build: Interface["build"] = (name, spec, [first, ...rest], sending) =>
-      Effect.gen(function* () {
-        const info = yield* answering(hosts, first.id);
-
-        yield* born(
-          name,
-          { spec, labels: undefined, ephemeral: true },
-          onBase(info),
-          info,
-          { setup: spec.setup, untried: rest.map(onBase), sending }
-        );
-      });
+      born(
+        name,
+        { spec, labels: undefined, ephemeral: true },
+        onBase(first),
+        first,
+        { setup: spec.setup, untried: rest.map(onBase), sending }
+      ).pipe(Effect.asVoid);
 
     const fork = ({
       machine: id,

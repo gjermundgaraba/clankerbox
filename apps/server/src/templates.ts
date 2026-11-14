@@ -27,6 +27,7 @@ import {
   Effect,
   Layer,
   Option,
+  Ref,
   Result,
   Semaphore,
 } from "effect";
@@ -36,7 +37,7 @@ import { isPublished } from "./checkpoint-chart.ts";
 import type { CheckpointRow } from "./checkpoint-chart.ts";
 import { Checkpoints } from "./checkpoints.ts";
 import { apart } from "./driver.ts";
-import { answering, Hosts } from "./hosts.ts";
+import { Hosts } from "./hosts.ts";
 import type { Reached } from "./hosts.ts";
 import { Machines } from "./machines.ts";
 import { builtUnder, outdated, placing } from "./placement.ts";
@@ -402,9 +403,14 @@ export const make = (settings: {
           return resting.value;
         });
 
+        const lastSent = yield* Ref.make(Arr.headNonEmpty(placed));
+
         const sending = (host: HostInfo) =>
-          revising(name, number, (row) =>
-            revised(row, number, sentTo(host, spec.base))
+          Effect.andThen(
+            Ref.set(lastSent, host),
+            revising(name, number, (row) =>
+              revised(row, number, sentTo(host, spec.base))
+            )
           ).pipe(Effect.asVoid);
 
         yield* Effect.gen(function* () {
@@ -421,8 +427,9 @@ export const make = (settings: {
             sending
           );
 
-          const made = yield* atRest;
-          const host = yield* answering(hosts, made.host);
+          yield* atRest;
+
+          const host = yield* Ref.get(lastSent);
 
           if (stopsBeforeCapture(host.traits)) {
             yield* machines.stop(builder);
