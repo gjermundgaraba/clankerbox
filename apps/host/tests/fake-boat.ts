@@ -840,6 +840,12 @@ export const fakeBoat = (
         return expired(sandbox);
       }
 
+      if (sandbox.failed) {
+        sandbox.failed = false;
+        sandbox.running = false;
+        sandbox.stoppedAt = undefined;
+      }
+
       if (sandbox.running) {
         return asked === undefined
           ? resumed(sandbox)

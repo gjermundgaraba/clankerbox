@@ -93,8 +93,8 @@ const running = new Set(["ready", "idle", "running"]);
  * `cancelled`, `error` and `expired` as https://docs.boat.dev/openapi/boat-v1.yaml's
  * `Sandbox.state` and `dataExpiredAt`, and https://docs.boat.dev/llms-full.txt's "A sandbox is in
  * error", define them: a create or fork that got no machine, read once before a 404; a machine
- * boat lost or failed to start, unbilled, which a resume recovers; and a sandbox whose data boat
- * deleted 14 days into a stop, which no resume or fork can bring back.
+ * boat lost or failed to start, unbilled, which the docs say a resume recovers; and a sandbox whose
+ * data boat deleted 14 days into a stop, which no resume or fork can bring back.
  */
 type Held =
   | "running"
@@ -441,7 +441,7 @@ export const make = (
             case "error": {
               return Effect.fail(
                 new WrongState({
-                  message: `boat holds ${source.name} in error, which it copies from no snapshot: start it to recover it, or delete it`,
+                  message: `boat holds ${source.name} in error, which it copies from no snapshot: a start may recover it, or delete it`,
                   machine: source.name,
                   state: "error",
                 })
@@ -574,7 +574,7 @@ export const make = (
 
             case "error": {
               return yield* new Internal({
-                message: `boat holds ${machine.name} in error, which it resizes from no snapshot: start it to recover it, or delete it`,
+                message: `boat holds ${machine.name} in error, which it resizes from no snapshot: a start may recover it, or delete it`,
               });
             }
 

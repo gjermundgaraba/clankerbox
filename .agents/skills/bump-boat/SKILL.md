@@ -151,8 +151,10 @@ Each line names where the code holds it and how to check it again.
 - The states: `ready`, `idle` and `running` run; `archived` is stopped,
   and `archiving` reads stopped, a capture or fork waiting for it to rest;
   `error`, a machine boat lost or failed to start, is unbilled, read as
-  stopped, ends a stop at once, fails a start, and refuses a capture or fork
-  `WrongState` with the state `error`; `cancelled`, a create or fork boat
+  stopped, ends a stop at once, is resumed by a start, which the docs say
+  recovers it and the fake models, a start that finds it still in error
+  failing `Internal`, and refuses a capture or fork `WrongState` with the
+  state `error`; `cancelled`, a create or fork boat
   found no machine for, is read once and then answers 404, so a make that
   meets it answers `Capacity` and a start `Missing`, as a 404 does; a set
   `dataExpiredAt`, data boat deleted 14 days into a stop, reads missing,
