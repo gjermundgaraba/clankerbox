@@ -432,7 +432,7 @@ describe("client", () => {
     );
 
     it.effect(
-      "an exec with no timeout waits past the reply timeout, and one with a timeout gives up after it and the reply's",
+      "an exec with no timeout waits past the reply timeout, and one with a timeout gives up after it, the 15 s its host takes to end it, and the reply's",
       () =>
         Effect.gen(function* () {
           const silent = new Silent();
@@ -455,7 +455,7 @@ describe("client", () => {
 
               yield* Effect.yieldNow;
               yield* TestClock.adjust(
-                Duration.sum(replyTimeout, Duration.seconds(9))
+                Duration.sum(replyTimeout, Duration.seconds(10 + 15 - 1))
               );
 
               const polled = [unbounded.pollUnsafe(), bounded.pollUnsafe()];
