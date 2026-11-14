@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -364,9 +365,17 @@ const guestShells = [
       .status === 0,
 }));
 
-const aMark = "0123456789abcdef0123456789abcdef";
+const unsharedMark = () => randomBytes(16).toString("hex");
 
-const otherMark = "fedcba9876543210fedcba9876543210";
+const treeTimeout = Duration.seconds(5);
+
+const endsTimeout = (trees: number, ends: number) =>
+  Duration.toMillis(
+    Duration.sum(
+      Duration.times(treeTimeout, trees),
+      Duration.times(endTimeout, ends)
+    )
+  );
 
 const statOf = (pid: number) => {
   try {
@@ -415,45 +424,48 @@ interface Marked {
   readonly start: string | undefined;
 }
 
-const marked = (root: string, script: string, count: number, mark = aMark) =>
+const marked = (root: string, script: string, count: number, mark: string) =>
   Effect.gen(function* () {
-    const child = yield* Effect.acquireRelease(
-      Effect.sync(() =>
-        spawn("sh", ["-c", script], {
-          detached: true,
-          stdio: "ignore",
-          env: { ...process.env, CLANKERBOX_ROOT: root, [markName]: mark },
-        })
+    const held = new Map<number, string | undefined>();
+
+    const pid = yield* Effect.acquireRelease(
+      Effect.sync(
+        () =>
+          spawn("sh", ["-c", script], {
+            detached: true,
+            stdio: "ignore",
+            env: { ...process.env, CLANKERBOX_ROOT: root, [markName]: mark },
+          }).pid ?? 0
       ),
-      () => Effect.void
+      () =>
+        Effect.sync(() => {
+          for (const [each, start] of held) {
+            if (runs(each, start)) {
+              process.kill(each, "SIGKILL");
+            }
+          }
+        })
     );
 
-    const pid = child.pid ?? 0;
+    const tree = yield* Effect.sync(() => {
+      const found = descendantsOf(pid);
 
-    const tree = yield* Effect.sync(() => descendantsOf(pid)).pipe(
+      for (const each of found) {
+        if (!held.has(each)) {
+          held.set(each, statOf(each)?.start);
+        }
+      }
+
+      return found;
+    }).pipe(
       Effect.repeat({
         until: (found) => found.length >= count,
         schedule: Schedule.spaced(Duration.millis(50)),
       }),
-      Effect.timeout(Duration.seconds(5))
+      Effect.timeout(treeTimeout)
     );
 
-    const held = tree.map((each) => ({
-      pid: each,
-      start: statOf(each)?.start,
-    }));
-
-    yield* Effect.addFinalizer(() =>
-      Effect.sync(() => {
-        for (const { pid: each, start } of held) {
-          if (runs(each, start)) {
-            process.kill(each, "SIGKILL");
-          }
-        }
-      })
-    );
-
-    return held;
+    return tree.map((each): Marked => ({ pid: each, start: held.get(each) }));
   });
 
 const runningOf = (tree: readonly Marked[]) =>
@@ -474,7 +486,7 @@ const launched = (
   shell: readonly string[],
   invocation: Invocation,
   env?: Readonly<Record<string, string>>,
-  mark = aMark
+  mark = unsharedMark()
 ) => {
   const command = guestCommand(invocation, mark);
 
@@ -2480,23 +2492,24 @@ const shellCases = (shell: readonly string[]) => {
       () =>
         Effect.gen(function* () {
           const root = yield* scratch;
+          const mark = unsharedMark();
           const env = { CLANKERBOX_ROOT: root };
           const argv = ["sh", "-c", "echo $CLANKERBOX_EXEC; echo ran"] as const;
 
-          const before = yield* launched(shell, { argv }, env);
+          const before = yield* launched(shell, { argv }, env, mark);
 
           yield* mkdir(path.join(root, "var", "run", "clankerbox-ended"));
           yield* write(
-            path.join(root, "var", "run", "clankerbox-ended", aMark),
+            path.join(root, "var", "run", "clankerbox-ended", mark),
             ""
           );
 
-          const after = yield* launched(shell, { argv }, env);
+          const after = yield* launched(shell, { argv }, env, mark);
 
           expect(
             [before, after].map(({ code, stdout }) => ({ code, stdout }))
           ).toStrictEqual([
-            { code: 0, stdout: `${aMark}\nran\n` },
+            { code: 0, stdout: `${mark}\nran\n` },
             { code: 143, stdout: "" },
           ]);
         })
@@ -2507,16 +2520,23 @@ const shellCases = (shell: readonly string[]) => {
       () =>
         Effect.gen(function* () {
           const root = yield* scratch;
+          const mark = unsharedMark();
 
           const tree = yield* marked(
             root,
             "sleep 300 & setsid sleep 300 & env -i sh -c 'sleep 300 & wait' & wait",
-            5
+            5,
+            mark
           );
 
-          const other = yield* marked(root, "sleep 300 & wait", 2, otherMark);
+          const other = yield* marked(
+            root,
+            "sleep 300 & wait",
+            2,
+            unsharedMark()
+          );
 
-          const ended = yield* endUnder(shell, root, aMark);
+          const ended = yield* endUnder(shell, root, mark);
 
           expect(ended.code, ended.stderr).toBe(0);
           expect(yield* runningOf(tree)).toStrictEqual([]);
@@ -2525,8 +2545,9 @@ const shellCases = (shell: readonly string[]) => {
             yield* readDirectory(
               path.join(root, "var", "run", "clankerbox-ended")
             )
-          ).toStrictEqual([aMark]);
-        })
+          ).toStrictEqual([mark]);
+        }),
+      endsTimeout(2, 1)
     );
 
     it.effect(
@@ -2534,23 +2555,32 @@ const shellCases = (shell: readonly string[]) => {
       () =>
         Effect.gen(function* () {
           const root = yield* scratch;
-          const tree = yield* marked(root, "trap '' TERM; sleep 300 & wait", 2);
+          const mark = unsharedMark();
+
+          const tree = yield* marked(
+            root,
+            "trap '' TERM; sleep 300 & wait",
+            2,
+            mark
+          );
 
           const [took, ended] = yield* Effect.timed(
-            endUnder(shell, root, aMark)
+            endUnder(shell, root, mark)
           );
 
           const [tookNone, none] = yield* Effect.timed(
-            endUnder(shell, root, otherMark)
+            endUnder(shell, root, unsharedMark())
           );
 
           expect([ended.code, none.code]).toStrictEqual([0, 0]);
           expect(yield* runningOf(tree)).toStrictEqual([]);
           expect(Duration.toSeconds(took)).toBeGreaterThanOrEqual(4.5);
-          expect(Duration.toSeconds(took)).toBeLessThan(8);
+          expect(Duration.toSeconds(took)).toBeLessThan(
+            Duration.toSeconds(endTimeout)
+          );
           expect(Duration.toSeconds(tookNone)).toBeLessThan(2);
         }),
-      30_000
+      endsTimeout(1, 2)
     );
 
     it.effect(
@@ -2558,19 +2588,21 @@ const shellCases = (shell: readonly string[]) => {
       () =>
         Effect.gen(function* () {
           const root = yield* scratch;
+          const mark = unsharedMark();
 
           const tree = yield* marked(
             root,
             `trap 'exit 0' TERM; env -i sh -c 'trap "" TERM; sleep 300 & wait' & wait`,
-            3
+            3,
+            mark
           );
 
-          const ended = yield* endUnder(shell, root, aMark);
+          const ended = yield* endUnder(shell, root, mark);
 
           expect(ended.code, ended.stderr).toBe(0);
           expect(yield* runningOf(tree)).toStrictEqual([]);
         }),
-      30_000
+      endsTimeout(1, 1)
     );
 
     it.effect(
@@ -2578,7 +2610,13 @@ const shellCases = (shell: readonly string[]) => {
       () =>
         Effect.gen(function* () {
           const root = yield* scratch;
-          const tree = yield* marked(root, "sleep 300 & wait", 2);
+
+          const tree = yield* marked(
+            root,
+            "sleep 300 & wait",
+            2,
+            unsharedMark()
+          );
 
           const refused = yield* Effect.forEach(
             ["", "not-a-mark", "*"],
@@ -2599,7 +2637,8 @@ const shellCases = (shell: readonly string[]) => {
 
           expect(refused).toStrictEqual([2, 2, 2]);
           expect(yield* runningOf(tree)).toStrictEqual(tree);
-        })
+        }),
+      endsTimeout(1, 3)
     );
   });
 };
