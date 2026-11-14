@@ -44,6 +44,13 @@ export const readTimeout = Duration.seconds(10);
 /** How long a client waits on the control plane, past `readTimeout`, so a silent host gets named. */
 export const replyTimeout = Duration.seconds(15);
 
+/**
+ * How long a host takes, at most, past an exec's timeout, to end its command in the guest and
+ * answer. The control plane waits the timeout, this and `readTimeout` for a timed exec, and a client
+ * the timeout, this and `replyTimeout`, so each waits past the one it calls.
+ */
+export const endTimeout = Duration.seconds(15);
+
 /** The longest a read of a machine may be held for it to rest. */
 export const longestHold = Duration.seconds(5);
 

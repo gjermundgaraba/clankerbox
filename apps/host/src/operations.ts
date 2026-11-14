@@ -658,7 +658,7 @@ export const make = (
                 `${leaving} ${machine.name}: running its ${leaving} hook, if its guest has one and has taken its identity, for at most ${hook.timeoutSeconds}s`
               );
 
-              const { exitCode, output } = yield* leave(
+              const { exitCode, output, mayStillRun } = yield* leave(
                 runtime,
                 machine,
                 leaving,
@@ -671,8 +671,13 @@ export const make = (
                     ? `, past its ${hook.timeoutSeconds}s limit or by a timeout of its own`
                     : "";
 
+                const left =
+                  mayStillRun === undefined
+                    ? ""
+                    : `, and may still run in the guest: ${mayStillRun}`;
+
                 yield* Effect.logWarning(
-                  `${leaving} ${machine.name} goes on: its ${leaving} hook exited ${exitCode}${past}; its last output:\n${lastLines(output)}`
+                  `${leaving} ${machine.name} goes on: its ${leaving} hook exited ${exitCode}${past}${left}; its last output:\n${lastLines(output)}`
                 );
               }
             })

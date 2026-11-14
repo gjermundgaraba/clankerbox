@@ -635,12 +635,15 @@ export const timedOutExitCode = 124;
 /**
  * `output` is stdout and stderr together, as they arrived, cut to the last `outputLimit`
  * characters, and `truncated` when that dropped any. A runtime that fails to run the command answers
- * its own exit code, with its message in `output`.
+ * its own exit code, with its message in `output`. `mayStillRun` comes only with a timeout's 124,
+ * when the host couldn't confirm that the command and what it started had ended in the guest, and
+ * says why: some of it may still run there.
  */
 export const Executed = Schema.Struct({
   exitCode: Schema.Int,
   output: Schema.String,
   truncated: Schema.Boolean,
+  mayStillRun: Schema.optionalKey(Schema.String),
 }).annotate({ identifier: "Executed" });
 
 export type Executed = typeof Executed.Type;

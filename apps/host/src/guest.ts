@@ -1,10 +1,10 @@
 import type { ExecCommand } from "@clankerbox/host-contract";
 import {
+  endTimeout,
   Internal,
   Invalid,
   loginUser,
   outputLimit,
-  readTimeout,
   ScriptFailed,
   timedOutExitCode,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -173,12 +173,16 @@ export const guestCommand = (
 
 const killGraceSeconds = 5;
 
-/** How long an end may take: within the control plane's `readTimeout`, so a cut exec still answers its caller. */
-export const endTimeout = Duration.subtract(readTimeout, Duration.seconds(2));
+const endMargin = Duration.seconds(5);
 
-const killRounds = { least: 3, most: 6 };
+/**
+ * How long an end may list and signal, from its first listing, and begins no listing after: 5 s
+ * inside `endTimeout`, room for the runtime's exec of it, about 2 s on a rented host, and for the
+ * one listing it may begin just before its deadline.
+ */
+export const endDeadline = Duration.subtract(endTimeout, endMargin);
 
-const endScriptSeconds = Duration.toSeconds(endTimeout) - 1;
+const recordMinutes = 60;
 
 // Linux's /proc/<pid>/stat holds the command's name in parentheses, which may hold any character,
 // then the state, the parent and, 19 fields on, the start time:
@@ -187,134 +191,151 @@ const endScriptSeconds = Duration.toSeconds(endTimeout) - 1;
 // a newline in either as `\012`, so each process on a line of its own, and `lstart` as five words.
 // A stopped process forks nothing and keeps its children's parent, so what the end stops before it
 // kills can't add a process it doesn't list.
+const membersProgram = String.raw`
+function add(pid, ppid, start, state) {
+  rows++
+  if (state ~ /^[ZX]/ || pid == 1 || pid == self) return
+  n++; P[n] = pid; PP[pid] = ppid; ST[pid] = start
+}
+NR == 1 { word = $0; next }
+part == 0 && $0 == "." { part = 1; next }
+part == 0 { if (NF == 3) { H[$1] = $2; F[$1] = $3 }; next }
+proc && part == 1 && $0 == "." { part = 2; next }
+proc && part == 1 { split($0, p, "/"); M[p[3]] = 1; next }
+proc && part == 2 { for (i = 1; i <= NF; i++) D[++d] = $i; next }
+part == 1 { if (index(" " $0 " ", " " word " ")) M[$1] = 1; add($1, $2, $3 $4 $5 $6 $7, $8) }
+END {
+  for (i = 1; i <= d; i++) {
+    f = D[i] "/stat"
+    if ((getline line < f) > 0 && match(line, /\) [^)]*$/)) {
+      split(substr(line, RSTART + 2), s, " ")
+      add(substr(D[i], 7), s[2], s[20], s[1])
+    }
+    close(f)
+  }
+  if (rows == 0) { print "unlisted"; exit }
+  for (grown = 1; grown;) {
+    grown = 0
+    for (i = 1; i <= n; i++) {
+      pid = P[i]
+      if (!(pid in K) && ((pid in M) || ((pid in H) && H[pid] == ST[pid]) || (PP[pid] in K))) { K[pid] = 1; grown = 1 }
+    }
+  }
+  for (i = 1; i <= n; i++) {
+    pid = P[i]
+    if (!(pid in K)) continue
+    count++
+    sent[pid] = ((pid in H) && H[pid] == ST[pid]) ? F[pid] : "-"
+  }
+  printf "%d\n", count
+  for (pid in sent) if (!index(sent[pid], signal)) printf " %s", pid
+  printf "\n"
+  for (pid in sent) printf " %s", pid
+  printf "\n"
+  for (pid in sent) { if (!index(sent[pid], signal)) sent[pid] = sent[pid] signal; printf "%s %s %s\n", pid, ST[pid], sent[pid] }
+  print "."
+}
+`;
+
 /**
  * Ends in the guest each process whose own arguments or environment hold the mark read from stdin,
- * the exec's or not, and what descends from one: TERM, then, after the grace, STOP to each it lists
- * until a listing finds none it hasn't stopped, and KILL to them all, again until a listing finds
- * none, for at least 3 listings and at most 6, and no more once `endScriptSeconds` have passed
- * since it began, as `date +%s` counts them, after which it sends what it lists KILL once more and
- * exits 1. A process found once is held by its start time, so one whose parent ended while it
- * cleared its environment is still found. It signals each pid alone, never a group, pid 1 or
- * itself. It records the mark first, so a launcher of it that begins later runs nothing, and lets
- * that record go once it has ended what it found, since what it found holds the mark only once
- * that one launcher has begun.
+ * the exec's or not, and what descends from one. It reads the mark and its deadline in seconds,
+ * then TERMs what it lists, and once at least the grace has passed, or nothing it TERMed runs, STOPs
+ * what it lists until a listing finds none it hasn't stopped, and KILLs them all, again until a
+ * listing finds none. Each listing is one `grep`, or `ps`, and one `awk` pass, so its cost grows
+ * with the guest's processes and not with their square. It begins no listing once its deadline
+ * has passed, as `date +%s` counts it, nor the grace past it, and then, or when a TERM, HUP or INT
+ * cuts it short, sends KILL and then CONT to every process it last listed, so none is left stopped,
+ * and exits 1, saying how many there were: only a listing that finds none confirms the end. A
+ * process found once is held by its start time, so one whose parent ended while it cleared its
+ * environment is still found. It signals each pid alone, never a group, pid 1 or itself. It records
+ * the mark first, so a launcher of it that begins later runs nothing, lets that record go once it
+ * has ended what it found, since what it found holds the mark only once that one launcher has
+ * begun, and removes each record older than an hour.
  */
 export const endScript = [
-  "IFS= read -r mark || mark=",
+  "IFS=' ' read -r mark seconds || mark=",
   `case $mark in '' | *[!0-9a-f]*) echo "clankerbox: no mark to end" >&2; exit 2 ;; esac`,
-  `ends=$(($(date +%s) + ${endScriptSeconds}))`,
+  `case $seconds in '' | *[!0-9]*) echo "clankerbox: no deadline for the end of $mark" >&2; exit 2 ;; esac`,
+  "ends=$(($(date +%s) + seconds))",
   `word="${markName}=$mark"`,
   `records="${endedRecords}"`,
   `mkdir -p "$records" && : >"$records/$mark" || echo "clankerbox: couldn't record that $mark ended, so a command of it that begins later runs" >&2`,
-  `grace=${killGraceSeconds}`,
-  "held=' '",
-  "termed=' '",
-  "stopped=' '",
-  "rows() {",
-  "  if [ -r /proc/self/stat ]; then",
-  "    marked=' '",
-  `    for file in $(grep -ls -e "${markName}[=]$mark" /proc/[0-9]*/cmdline /proc/[0-9]*/environ); do`,
-  "      pid=${file#/proc/}",
-  `      marked="$marked\${pid%%/*} "`,
-  "    done",
-  "    for dir in /proc/[0-9]*; do",
-  `      { IFS= read -r stat <"$dir/stat"; } 2>/dev/null || continue`,
-  "      rest=${stat##*) }",
-  "      set -f",
-  "      set -- $rest",
-  "      set +f",
-  "      case $1 in Z | X) continue ;; esac",
-  "      pid=${dir#/proc/}",
-  `      case $marked in *" $pid "*) m=1 ;; *) m=0 ;; esac`,
-  `      echo "$pid $2 \${20} $m"`,
-  "    done",
-  "  else",
-  "    ps -axEww -o pid=,ppid=,lstart=,state=,command= | while IFS= read -r line; do",
-  "      set -f",
-  "      set -- $line",
-  "      set +f",
-  "      case $8 in Z*) continue ;; esac",
-  `      case " $line " in *" $word "*) m=1 ;; *) m=0 ;; esac`,
-  `      echo "$1 $2 $3$4$5$6$7 $m"`,
-  "    done",
-  "  fi",
+  `find "$records" -type f -mmin +${recordMinutes} -exec rm -f {} + 2>/dev/null || true`,
+  "nl='",
+  "'",
+  `program='${membersProgram.replaceAll("'", String.raw`'\''`)}'`,
+  "held=",
+  "all=",
+  "count=0",
+  "release() {",
+  `  [ -z "$all" ] || { kill -s KILL $all; kill -s CONT $all; } 2>/dev/null`,
+  `  echo "clankerbox: $1" >&2`,
+  "  exit 1",
   "}",
+  `trap 'release "its end was cut short, with $count processes of the command running at its last listing"' HUP INT TERM`,
+  "trap '' PIPE",
+  "if [ -r /proc/self/stat ]; then proc=1; else proc=0; fi",
   "round() {",
-  "  listed=$(rows)",
-  `  [ -n "$listed" ] || { echo "clankerbox: couldn't list the guest's processes, with /proc or ps" >&2; exit 1; }`,
-  "  members=' '",
-  "  grown=1",
-  `  while [ -n "$grown" ]; do`,
-  "    grown=",
-  "    while read -r pid ppid start m; do",
-  `      case $pid in 1 | "$$") continue ;; esac`,
-  `      case $members in *" $pid "*) continue ;; esac`,
-  `      case $m in 1) ;; *) case "$held$members" in *" $pid:$start "* | *" $ppid "*) ;; *) continue ;; esac ;; esac`,
-  `      members="$members$pid "`,
-  `      case $held in *" $pid:$start "*) ;; *) held="$held$pid:$start " ;; esac`,
-  "      grown=1",
-  "    done <<ROWS",
-  "$listed",
-  "ROWS",
-  "  done",
+  `  [ "$(date +%s)" -lt "$ends" ] || release "$count processes of the command still ran at its last listing when its end's \${seconds}s ran out"`,
+  "  listed=$(",
+  `    { printf '%s\\n%s\\n.\\n' "$word" "$held"`,
+  `      if [ "$proc" = 1 ]; then`,
+  `        grep -ls -e "${markName}[=]$mark" /proc/[0-9]*/cmdline /proc/[0-9]*/environ`,
+  "        echo .",
+  "        echo /proc/[0-9]*",
+  "      else",
+  "        ps -axEww -o pid=,ppid=,lstart=,state=,command=",
+  "      fi",
+  `    } | awk -v signal="$1" -v self="$$" -v proc="$proc" "$program"`,
+  "  )",
+  `  case \${listed%%"$nl"*} in '' | *[!0-9]*) release "couldn't list the guest's processes, with /proc or ps, and awk" ;; esac`,
+  `  count=\${listed%%"$nl"*}`,
+  `  listed=\${listed#*"$nl"}`,
+  `  fresh=\${listed%%"$nl"*}`,
+  `  listed=\${listed#*"$nl"}`,
+  `  all=\${listed%%"$nl"*}`,
+  `  held=\${listed#*"$nl"}`,
+  "  held=${held%.}",
   "}",
   "alive() {",
-  "  if [ -r /proc/self/stat ]; then",
+  `  if [ "$proc" = 1 ]; then`,
   `    { IFS= read -r stat <"/proc/$1/stat"; } 2>/dev/null || return 1`,
   "    case ${stat##*) } in Z* | X*) return 1 ;; esac",
   "  else",
   `    kill -0 "$1" 2>/dev/null || return 1`,
   "  fi",
   "}",
-  "unsent() {",
-  "  fresh=",
-  "  for pid in $members; do",
-  `    case $1 in *" $pid "*) ;; *) fresh="$fresh $pid" ;; esac`,
-  "  done",
-  "}",
-  "terminate() {",
-  `  unsent "$termed"`,
-  `  termed="$termed$fresh "`,
-  `  [ -z "$fresh" ] || kill -s TERM $fresh 2>/dev/null || true`,
-  "}",
   "ended() {",
   `  rm -f "$records/$mark"`,
   "  exit 0",
   "}",
-  "round",
-  `[ "$members" != ' ' ] || exit 0`,
-  "terminate",
-  "if sleep 0.2 2>/dev/null; then tick=0.2 ticks=$((grace * 5)); else tick=1 ticks=$grace; fi",
-  `while [ "$ticks" -gt 1 ]; do`,
+  "round T",
+  `[ "$count" -gt 0 ] || exit 0`,
+  `[ -z "$fresh" ] || kill -s TERM $fresh 2>/dev/null`,
+  `graced=$(($(date +%s) + ${killGraceSeconds}))`,
+  `[ "$graced" -lt "$ends" ] || graced=$ends`,
+  "if sleep 0.2 2>/dev/null; then tick=0.2; else tick=1; fi",
+  `while [ "$(date +%s)" -le "$graced" ]; do`,
   "  live=",
-  `  for pid in $members; do alive "$pid" && live=1 && break; done`,
+  `  for pid in $all; do alive "$pid" && live=1 && break; done`,
   `  if [ -z "$live" ]; then`,
-  "    round",
-  `    [ "$members" != ' ' ] || ended`,
-  "    terminate",
+  "    round T",
+  `    [ "$count" -gt 0 ] || ended`,
+  `    [ -z "$fresh" ] || kill -s TERM $fresh 2>/dev/null`,
   "  fi",
-  "  ticks=$((ticks - 1))",
   `  sleep "$tick"`,
   "done",
-  "round",
-  `[ "$members" != ' ' ] || ended`,
-  "rounds=0",
-  `while [ "$rounds" -lt ${killRounds.most} ] && { [ "$rounds" -lt ${killRounds.least} ] || [ "$(date +%s)" -lt "$ends" ]; }; do`,
-  `  unsent "$stopped"`,
+  "while :; do",
+  "  round S",
+  `  [ "$count" -gt 0 ] || ended`,
   `  if [ -n "$fresh" ]; then`,
-  "    kill -s STOP $fresh 2>/dev/null || true",
-  `    stopped="$stopped$fresh "`,
+  "    kill -s STOP $fresh 2>/dev/null",
   "  else",
-  "    kill -s KILL $members 2>/dev/null || true",
+  "    kill -s KILL $all 2>/dev/null",
   `    sleep "$tick"`,
   "  fi",
-  "  round",
-  `  [ "$members" != ' ' ] || ended`,
-  "  rounds=$((rounds + 1))",
   "done",
-  "kill -s KILL $members 2>/dev/null || true",
-  `echo "clankerbox: $(echo $members | wc -w | tr -d ' ') processes of the command still ran after $rounds rounds of its end" >&2`,
-  "exit 1",
 ].join("\n");
 
 const attached = (
@@ -362,7 +383,7 @@ const ended = (
         machine,
         {
           argv: ["/bin/sh", "-c", endScript, "clankerbox-end"],
-          stdin: `${mark}\n`,
+          stdin: `${mark} ${Duration.toSeconds(endDeadline)}\n`,
         },
         minted(),
         output
@@ -457,13 +478,6 @@ const drained = (
         ending._tag === "cut" && unended !== undefined
           ? { ...ending, _tag: "unended", why: unended.message }
           : ending
-      ),
-      Effect.mapError((error) =>
-        unended === undefined
-          ? error
-          : new Internal({
-              message: `${error.message}, and its command couldn't then be ended, so it may still run in ${machine.name}: ${unended.message}`,
-            })
       )
     );
   });
@@ -538,20 +552,19 @@ const ran = (
         : Duration.seconds(timeoutSeconds)
     );
 
+    const kept = { output: output.text(), truncated: output.truncated() };
+
     switch (ending._tag) {
-      case "exited":
+      case "exited": {
+        return { exitCode: ending.code, ...kept };
+      }
+
       case "cut": {
-        return {
-          exitCode: ending._tag === "exited" ? ending.code : timedOutExitCode,
-          output: output.text(),
-          truncated: output.truncated(),
-        };
+        return { exitCode: timedOutExitCode, ...kept };
       }
 
       case "unended": {
-        return yield* new Internal({
-          message: `the command ran past its ${Duration.format(ending.limit)} timeout and couldn't then be ended, so it may still run in ${machine.name}: ${ending.why}`,
-        });
+        return { exitCode: timedOutExitCode, ...kept, mayStillRun: ending.why };
       }
     }
   });

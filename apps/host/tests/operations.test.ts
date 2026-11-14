@@ -2476,6 +2476,42 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     }
   );
 
+  it.effect(
+    "a hook past its time limit whose end isn't confirmed logs that it may still run in the guest, and why, and the delete goes on",
+    () => {
+      const logged: string[] = [];
+
+      return Effect.gen(function* () {
+        const host = yield* runner();
+
+        yield* finished(host, makes("dev"));
+        yield* identified(host);
+        yield* guestHook(
+          host,
+          "delete",
+          `echo delete >>"${leftIn(host)}"\nexec sleep 30`
+        );
+
+        const operation = delivery(hooked(removing, 1), 2);
+
+        yield* deliver(host, operation);
+        yield* Effect.eventually(read(leftIn(host)));
+        host.fake.failNext(
+          "exec",
+          new Internal({ message: "the guest went away" })
+        );
+
+        const report = yield* ended(host, operation.id);
+
+        expect(report.status).toBe("done");
+        expect(stateOf(host)).toBe("missing");
+        expect(logged.join("\n")).toContain(
+          "delete dev goes on: its delete hook exited 124, past its 1s limit or by a timeout of its own, and may still run in the guest: the guest went away"
+        );
+      }).pipe(Effect.provide(Logger.layer([capturing(logged)])));
+    }
+  );
+
   for (const { guest, hooks, instance } of [
     {
       guest: "has no hook for its step",
