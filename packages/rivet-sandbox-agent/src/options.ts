@@ -27,7 +27,8 @@ export interface Options {
    * not hold `-f`, `-M`, `-N`, `-n`, `-O`, `-S`, `-s`, `-t` or `-W`, `-G`, `-Q` or `-V`, which
    * print and exit before ssh connects, `--`, or a word that isn't an option, which ssh would run
    * as the command. The provider refuses them as `Invalid` when it is made. A tunnel that fails to
-   * open quotes the last of what the guest's login printed and of ssh's own output, `-v`'s too.
+   * open quotes the last of what the guest's login printed and of ssh's own output, the debug lines
+   * `-v` or a `LogLevel` in ssh config asks for and what a `ProxyCommand` prints too.
    */
   readonly sshArguments?: readonly string[] | undefined;
   /** `/home/admin` by default, the login user's home, where the Ubuntu recipe runs the server. */
