@@ -586,7 +586,8 @@ const ArgumentText = Schema.String.check(
 
 /**
  * A command run in a running machine as `user`, root when it is left out, with `env` set for it,
- * `stdin` written whole, and ended with exit code 124 after `timeoutSeconds`. Nothing logs or
+ * `stdin` written whole, and ended with exit code 124 after `timeoutSeconds`, or `Internal` where it
+ * couldn't be ended. Nothing logs or
  * stores `env` or `stdin`: they can carry secrets. The command runs as long as the request does, and its end or its timeout ends what it started.
  * No argument, `user` or value of `env` holds a NUL byte, and each name in `env` is a variable's name;
  * the host answers `Invalid` to `CLANKERBOX_EXEC`, its mark of the command.

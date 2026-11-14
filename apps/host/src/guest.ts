@@ -173,16 +173,28 @@ export const guestCommand = (
 
 const killGraceSeconds = 5;
 
+/** How long an end may take: within the control plane's `readTimeout`, so a cut exec still answers its caller. */
+export const endTimeout = Duration.subtract(readTimeout, Duration.seconds(2));
+
+const killSeconds = 2;
+
 // Linux's /proc/<pid>/stat holds the command's name in parentheses, which may hold any character,
 // then the state, the parent and, 19 fields on, the start time:
 // https://man7.org/linux/man-pages/man5/proc_pid_stat.5.html
 // macOS's `ps -E` prints a process's environment after its arguments, also another user's to root,
 // a newline in either as `\012`, so each process on a line of its own, and `lstart` as five words.
+// A stopped process forks nothing and keeps its children's parent, so what the end stops before it
+// kills can't add a process it doesn't list.
 /**
- * Ends in the guest each process whose arguments or environment hold the mark read from stdin, and
- * what descends from one: TERM, then KILL to what still runs after the grace. A process found once
- * is held by its start time, so one whose parent ended while it cleared its environment is still
- * found. It signals one pid at a time, never a group, pid 1 or itself.
+ * Ends in the guest each process whose own arguments or environment hold the mark read from stdin,
+ * the exec's or not, and what descends from one: TERM, then, after the grace, STOP to each it lists
+ * until a listing finds none it hasn't stopped, and KILL to them all, again until a listing finds
+ * none. Past 1 to 2 s of that, as `date +%s` counts whole seconds, it sends what it lists KILL once
+ * more and exits 1, so it ends within `endTimeout`. A process found once is held by its start time,
+ * so one whose parent ended while it cleared its environment is still found. It signals each pid
+ * alone, never a group, pid 1 or itself. It records the mark first, so a launcher of it that begins
+ * later runs nothing, and lets that record go once it has ended what it found, since what it found
+ * holds the mark only once that one launcher has begun.
  */
 export const endScript = [
   "IFS= read -r mark || mark=",
@@ -193,6 +205,7 @@ export const endScript = [
   `grace=${killGraceSeconds}`,
   "held=' '",
   "termed=' '",
+  "stopped=' '",
   "rows() {",
   "  if [ -r /proc/self/stat ]; then",
   "    marked=' '",
@@ -249,12 +262,20 @@ export const endScript = [
   `    kill -0 "$1" 2>/dev/null || return 1`,
   "  fi",
   "}",
-  "terminate() {",
+  "unsent() {",
   "  fresh=",
   "  for pid in $members; do",
-  `    case $termed in *" $pid "*) ;; *) fresh="$fresh $pid" termed="$termed$pid " ;; esac`,
+  `    case $1 in *" $pid "*) ;; *) fresh="$fresh $pid" ;; esac`,
   "  done",
+  "}",
+  "terminate() {",
+  `  unsent "$termed"`,
+  `  termed="$termed$fresh "`,
   `  [ -z "$fresh" ] || kill -s TERM $fresh 2>/dev/null || true`,
+  "}",
+  "ended() {",
+  `  rm -f "$records/$mark"`,
+  "  exit 0",
   "}",
   "round",
   `[ "$members" != ' ' ] || exit 0`,
@@ -265,24 +286,31 @@ export const endScript = [
   `  for pid in $members; do alive "$pid" && live=1 && break; done`,
   `  if [ -z "$live" ]; then`,
   "    round",
-  `    [ "$members" != ' ' ] || exit 0`,
+  `    [ "$members" != ' ' ] || ended`,
   "    terminate",
   "  fi",
   "  ticks=$((ticks - 1))",
   `  sleep "$tick"`,
   "done",
   "round",
-  `[ "$members" != ' ' ] || exit 0`,
+  `[ "$members" != ' ' ] || ended`,
+  `ends=$(($(date +%s) + ${killSeconds}))`,
+  `while [ "$(date +%s)" -lt "$ends" ]; do`,
+  `  unsent "$stopped"`,
+  `  if [ -n "$fresh" ]; then`,
+  "    kill -s STOP $fresh 2>/dev/null || true",
+  `    stopped="$stopped$fresh "`,
+  "  else",
+  "    kill -s KILL $members 2>/dev/null || true",
+  `    sleep "$tick"`,
+  "  fi",
+  "  round",
+  `  [ "$members" != ' ' ] || ended`,
+  "done",
   "kill -s KILL $members 2>/dev/null || true",
-  `sleep "$tick"`,
-  "round",
-  `[ "$members" != ' ' ] || exit 0`,
-  `echo "clankerbox: $(echo $members | wc -w | tr -d ' ') processes of the command still run after KILL" >&2`,
+  `echo "clankerbox: $(echo $members | wc -w | tr -d ' ') processes of the command still ran when its end ran out of time" >&2`,
   "exit 1",
 ].join("\n");
-
-/** How long an end may take: within the control plane's `readTimeout`, so a cut exec still answers its caller. */
-export const endTimeout = Duration.subtract(readTimeout, Duration.seconds(2));
 
 const attached = (
   runtime: Pick<Runtime, "exec">,
@@ -319,7 +347,7 @@ const ended = (
   runtime: Pick<Runtime, "exec">,
   machine: Target,
   mark: string
-): Effect.Effect<void> => {
+): Effect.Effect<void, Internal> => {
   const output = keptOutput();
 
   return Effect.scoped(
@@ -352,14 +380,18 @@ const ended = (
               message: `it exited ${code}: ${lastLines(output.text())}`,
             })
           )
-    ),
-    Effect.catch((error) =>
-      Effect.logWarning(
-        `couldn't end in ${machine.name} the command of an exec that ended before its exit code, which may still run there: ${error.message}`
-      )
     )
   );
 };
+
+type Drained =
+  | { readonly _tag: "exited"; readonly code: number }
+  | { readonly _tag: "cut"; readonly limit: Duration.Duration }
+  | {
+      readonly _tag: "unended";
+      readonly limit: Duration.Duration;
+      readonly why: string;
+    };
 
 const drained = (
   runtime: Pick<Runtime, "exec">,
@@ -367,41 +399,69 @@ const drained = (
   invocation: Invocation,
   output: ReturnType<typeof keptOutput>,
   limit: Duration.Duration | undefined
-): Effect.Effect<Option.Option<number>, RuntimeError> =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const mark = minted();
-      const held = yield* Scope.make();
-      let finished = false;
+): Effect.Effect<Drained, RuntimeError> =>
+  Effect.suspend(() => {
+    let unended: Internal | undefined;
 
-      yield* Effect.addFinalizer((exit) =>
-        Effect.andThen(
-          finished ? Effect.void : ended(runtime, machine, mark),
-          Scope.close(held, exit)
-        )
-      );
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const mark = minted();
+        const held = yield* Scope.make();
+        let finished = false;
 
-      const execution = yield* Scope.provide(
-        attached(runtime, machine, invocation, mark, output),
-        held
-      );
+        yield* Effect.addFinalizer((exit) =>
+          Effect.andThen(
+            finished
+              ? Effect.void
+              : ended(runtime, machine, mark).pipe(
+                  Effect.catch((error) =>
+                    Effect.andThen(
+                      Effect.logWarning(
+                        `couldn't end in ${machine.name} the command of an exec that ended before its exit code, which may still run there: ${error.message}`
+                      ),
+                      Effect.sync(() => {
+                        unended = error;
+                      })
+                    )
+                  )
+                ),
+            Scope.close(held, exit)
+          )
+        );
 
-      const waited = Effect.asSome(
-        Effect.tap(execution.exitCode, () =>
-          Effect.sync(() => {
-            finished = true;
-          })
-        )
-      );
+        const execution = yield* Scope.provide(
+          attached(runtime, machine, invocation, mark, output),
+          held
+        );
 
-      return limit === undefined
-        ? yield* waited
-        : yield* Effect.timeoutOrElse(waited, {
-            duration: limit,
-            orElse: () => Effect.succeed(Option.none<number>()),
-          });
-    })
-  );
+        const exited = Effect.map(execution.exitCode, (code): Drained => {
+          finished = true;
+
+          return { _tag: "exited", code };
+        });
+
+        return limit === undefined
+          ? yield* exited
+          : yield* Effect.timeoutOrElse(exited, {
+              duration: limit,
+              orElse: () => Effect.succeed<Drained>({ _tag: "cut", limit }),
+            });
+      })
+    ).pipe(
+      Effect.map((ending): Drained =>
+        ending._tag === "cut" && unended !== undefined
+          ? { ...ending, _tag: "unended", why: unended.message }
+          : ending
+      ),
+      Effect.mapError((error) =>
+        unended === undefined
+          ? error
+          : new Internal({
+              message: `${error.message}, and its command couldn't then be ended, so it may still run in ${machine.name}: ${unended.message}`,
+            })
+      )
+    );
+  });
 
 const runInGuest = (
   runtime: Pick<Runtime, "exec">,
@@ -412,24 +472,44 @@ const runInGuest = (
 ): Effect.Effect<string, RuntimeError | ScriptFailed> =>
   Effect.gen(function* () {
     const output = keptOutput();
-    const code = yield* drained(runtime, machine, invocation, output, timeout);
+
+    const ending = yield* drained(
+      runtime,
+      machine,
+      invocation,
+      output,
+      timeout
+    );
+
     const text = output.text();
+    const tail = `its last output:\n${lastLines(text)}`;
 
-    if (Option.isNone(code)) {
-      return yield* new ScriptFailed({
-        message: `${script} ran past its ${Duration.format(timeout)} timeout; its last output:\n${lastLines(text)}`,
-        script,
-      });
+    switch (ending._tag) {
+      case "exited": {
+        if (ending.code === 0) {
+          return text;
+        }
+
+        return yield* new ScriptFailed({
+          message: `${script} exited ${ending.code}; ${tail}`,
+          script,
+        });
+      }
+
+      case "cut": {
+        return yield* new ScriptFailed({
+          message: `${script} ran past its ${Duration.format(ending.limit)} timeout; ${tail}`,
+          script,
+        });
+      }
+
+      case "unended": {
+        return yield* new ScriptFailed({
+          message: `${script} ran past its ${Duration.format(ending.limit)} timeout and couldn't then be ended, so it may still run in the guest: ${ending.why}; ${tail}`,
+          script,
+        });
+      }
     }
-
-    if (code.value !== 0) {
-      return yield* new ScriptFailed({
-        message: `${script} exited ${code.value}; its last output:\n${lastLines(text)}`,
-        script,
-      });
-    }
-
-    return text;
   });
 
 type GuestCommand = Omit<ExecCommand, "machine"> & {
@@ -443,7 +523,7 @@ const ran = (
   Effect.gen(function* () {
     const output = keptOutput();
 
-    const code = yield* drained(
+    const ending = yield* drained(
       runtime,
       machine,
       { argv, env, user, stdin },
@@ -453,11 +533,22 @@ const ran = (
         : Duration.seconds(timeoutSeconds)
     );
 
-    return {
-      exitCode: Option.getOrElse(code, () => timedOutExitCode),
-      output: output.text(),
-      truncated: output.truncated(),
-    };
+    switch (ending._tag) {
+      case "exited":
+      case "cut": {
+        return {
+          exitCode: ending._tag === "exited" ? ending.code : timedOutExitCode,
+          output: output.text(),
+          truncated: output.truncated(),
+        };
+      }
+
+      case "unended": {
+        return yield* new Internal({
+          message: `the command ran past its ${Duration.format(ending.limit)} timeout and couldn't then be ended, so it may still run in ${machine.name}: ${ending.why}`,
+        });
+      }
+    }
   });
 
 /** Runs a caller's command, refusing one that sets the mark's variable, which is the exec's own, as `Invalid`. */

@@ -335,7 +335,7 @@ export const exec = Command.make(
     limit: Flag.String("timeout").pipe(
       Flag.withMetavar("DURATION"),
       Flag.withDescription(
-        "End the command after this long, such as 90s or 30m, and exit 124; unbounded by default."
+        "End the command after this long, such as 90s or 30m, and exit 124 once it has ended, or fail Internal where some of it still runs; unbounded by default."
       ),
       Flag.optional
     ),
