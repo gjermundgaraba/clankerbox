@@ -266,7 +266,7 @@ Decided in the direction of none of these. Actors run on the control plane, see 
 
 | Option | Consequences |
 | --- | --- |
-| Control plane calls hosts | Hosts keep their HTTP routes and `ActionHttp.client` is reused. Needs a route to each host, which the tailnet gives. Hours-long creates hold an open request, as now. Timeouts stack: clients wait 10 s (`api.ts:35`) and a host bounds its reads at 9 s (`runtime.ts:64`), leaving 1 s for a hop and a fan-out, so one of those numbers must move. |
+| Control plane calls hosts | Hosts keep their HTTP routes and `ActionHttp.client` is reused. Needs a route to each host, which the tailnet gives. Hours-long creates hold an open request, as now. Timeouts stack: clients wait 10 s (`readTimeout` in `packages/sdk/src/api.ts`) and a host bounds its reads at 9 s (`stateReadWait` in `apps/host/src/runtime.ts`), leaving 1 s for a hop and a fan-out, so one of those numbers must move. |
 | Hosts dial the control plane | No listening API port on hosts. The connection doubles as membership and health. Needs request multiplexing, cancellation for hours-long work over one stream, and reconnect rules. `effect-actions` serves actions over Effect RPC on a protocol the server provides, and its `live-rpc` example is a WebSocket, but there the client dials. A host that dials and then serves needs the RPC server on the dialing end. Nothing in the repository does this, and I haven't tried it. |
 
 ### D3. Membership
