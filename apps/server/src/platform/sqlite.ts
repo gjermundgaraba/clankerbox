@@ -634,6 +634,10 @@ export const open = (
       "UPDATE retired SET told_at = ? WHERE host = ? AND resource = ? AND instance = ? AND told_at IS NULL"
     );
 
+    const untellRetired = yield* prepare(
+      "UPDATE retired SET told_at = NULL WHERE host = ? AND resource = ? AND instance = ?"
+    );
+
     const deleteRetired = yield* prepare(
       "DELETE FROM retired WHERE told_at < ?"
     );
@@ -852,16 +856,19 @@ export const open = (
           return { machines: of("machine"), checkpoints: of("checkpoint") };
         })
       ),
-      told: Effect.fn("Store.told")((host, { machines, checkpoints }, at) =>
+      told: Effect.fn("Store.told")((host, { gone, left }, at) =>
         transaction(db, `record what host ${host} was told it retired`, () => {
           const when = DateTime.formatIso(at);
 
-          for (const [resource, instances] of [
-            ["machine", machines],
-            ["checkpoint", checkpoints],
-          ] as const) {
-            for (const instance of instances) {
+          for (const resource of ["machine", "checkpoint"] as const) {
+            const of = resource === "machine" ? "machines" : "checkpoints";
+
+            for (const instance of gone[of]) {
               tellRetired.run(when, host, resource, instance);
+            }
+
+            for (const instance of left[of]) {
+              untellRetired.run(host, resource, instance);
             }
           }
         })

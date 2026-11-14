@@ -356,8 +356,9 @@ export const HostHttp = ActionHttp.make(
       ...write,
       error: [Invalid, Internal] as const,
       description:
-        "Delete what carries this host's mark at its provider whose instance is retired and named by no step the host holds. A machine goes alone, and every checkpoint it holds stays, since a row may still want one. A host whose runtime marks nothing answers at once.",
+        "Delete what carries this host's mark at its provider whose instance is retired and named by no step the host holds, and answer the retired instances it left there: each a step names, a delete failed, or the provider refused while something depends on it. A machine goes alone, and every checkpoint it holds stays, since a row may still want one. A host whose runtime marks nothing answers at once, having left nothing it can see.",
       input: Retired,
+      success: Retired,
     }),
     Action.make("runOperation", {
       ...write,

@@ -107,7 +107,7 @@ export interface Interface {
   ) => ReturnType<Runtime["Service"]["capacity"]>;
   readonly adopt: (machines: readonly MachineRef[]) => Effect.Effect<Adoption>;
   readonly find: (checkpoints: readonly Ref[]) => Effect.Effect<Finding>;
-  readonly sweep: (retired: Retired) => Effect.Effect<void, Internal>;
+  readonly sweep: (retired: Retired) => Effect.Effect<Retired, Internal>;
   readonly exec: (
     command: ExecCommand
   ) => Effect.Effect<Executed, Invalid | Missing | WrongState | Internal>;
@@ -1445,26 +1445,44 @@ export const make = (
     };
 
     const sweeping = yield* Semaphore.make(1);
+    const undeleted = new Set<string>();
 
     const swept = (
+      { instance }: Marked,
       what: string,
       work: Effect.Effect<void, HostError>
-    ): Effect.Effect<void> =>
-      Effect.andThen(
-        Effect.logInfo(
-          `sweep: deleting ${what}, which the control plane retired`
-        ),
-        work.pipe(
-          inTime(`the ${traits.runtime} runtime's delete of ${what}`),
-          Effect.catch((error) =>
-            error._tag === "Conflict"
-              ? Effect.void
-              : Effect.logWarning(
-                  `sweep: couldn't delete ${what}, so the next sweep tries again: ${error.message}`
-                )
+    ): Effect.Effect<boolean> =>
+      Effect.suspend(() => {
+        const again = undeleted.has(instance);
+
+        return Effect.andThen(
+          again
+            ? Effect.logDebug(`sweep: deleting ${what} again`)
+            : Effect.logInfo(
+                `sweep: deleting ${what}, which the control plane retired`
+              ),
+          work.pipe(
+            inTime(`the ${traits.runtime} runtime's delete of ${what}`),
+            Effect.tap(() => Effect.sync(() => undeleted.delete(instance))),
+            Effect.as(true),
+            Effect.catch((error) =>
+              Effect.as(
+                Effect.andThen(
+                  Effect.sync(() => undeleted.add(instance)),
+                  again
+                    ? Effect.logDebug(
+                        `sweep: still couldn't delete ${what} on host ${config.id}: ${error.message}`
+                      )
+                    : Effect.logWarning(
+                        `sweep: couldn't delete ${what}, which stays at its provider until a sweep deletes it, so each sweep of host ${config.id} tries again: ${error.message}`
+                      )
+                ),
+                false
+              )
+            )
           )
-        )
-      );
+        );
+      });
 
     const sweep: Interface["sweep"] = (retired) => {
       const { owned } = runtime;
@@ -1473,11 +1491,19 @@ export const make = (
         owned === undefined ||
         (retired.machines.length === 0 && retired.checkpoints.length === 0)
       ) {
-        return Effect.void;
+        return Effect.succeed({ machines: [], checkpoints: [] });
       }
 
       return sweeping.withPermits(1)(
         Effect.gen(function* () {
+          const still = new Set([...retired.machines, ...retired.checkpoints]);
+
+          for (const instance of undeleted) {
+            if (!still.has(instance)) {
+              undeleted.delete(instance);
+            }
+          }
+
           const [machines, checkpoints] = yield* Effect.all(
             [owned.machines, owned.checkpoints],
             { concurrency: "unbounded" }
@@ -1487,39 +1513,49 @@ export const make = (
 
           const named = namedBySteps();
 
-          const due = <M extends Marked>(
+          const left = <M extends Marked>(
             listed: readonly M[],
-            instances: readonly string[]
+            instances: readonly string[],
+            remove: (resource: M) => Effect.Effect<boolean>
           ) => {
             const wanted = new Set(instances);
 
-            return listed.filter(
-              (resource) => wanted.has(resource.instance) && !named(resource)
+            return Effect.map(
+              Effect.forEach(
+                listed.filter((resource) => wanted.has(resource.instance)),
+                (resource) =>
+                  named(resource)
+                    ? Effect.succeed([resource.instance])
+                    : Effect.map(remove(resource), (deleted) =>
+                        deleted ? [] : [resource.instance]
+                      )
+              ),
+              (kept) => kept.flat()
             );
           };
 
-          yield* Effect.forEach(
-            due(machines, retired.machines),
-            (machine) =>
+          return {
+            machines: yield* left(machines, retired.machines, (machine) =>
               swept(
+                machine,
                 `machine ${machine.instance} (${machine.handle})`,
                 runtime.delete(
                   markedTarget(machine),
                   new Set(machine.checkpoints)
                 )
-              ),
-            { discard: true }
-          );
-
-          yield* Effect.forEach(
-            due(checkpoints, retired.checkpoints),
-            (checkpoint) =>
-              swept(
-                `checkpoint ${checkpoint.instance} (${checkpoint.handle})`,
-                runtime.deleteCheckpoint(markedTarget(checkpoint))
-              ),
-            { discard: true }
-          );
+              )
+            ),
+            checkpoints: yield* left(
+              checkpoints,
+              retired.checkpoints,
+              (checkpoint) =>
+                swept(
+                  checkpoint,
+                  `checkpoint ${checkpoint.instance} (${checkpoint.handle})`,
+                  runtime.deleteCheckpoint(markedTarget(checkpoint))
+                )
+            ),
+          };
         })
       );
     };

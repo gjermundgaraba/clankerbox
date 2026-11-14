@@ -257,10 +257,14 @@ export interface Interface {
    * may delete what it names.
    */
   readonly retired: (host: string) => Effect.Effect<Retired, Internal>;
-  /** Records that a sweep of `host` that named `retired` reached it at `at`, for each not told before. */
+  /**
+   * Records what a sweep of `host` that reached it at `at` found: each instance it found `gone` is
+   * told at `at` unless told before, and each it `left` there, its delete failed or a step naming
+   * it, is untold, so its record lasts until a sweep finds it gone.
+   */
   readonly told: (
     host: string,
-    retired: Retired,
+    swept: { readonly gone: Retired; readonly left: Retired },
     at: DateTime.Utc
   ) => Effect.Effect<void, Internal>;
   /**

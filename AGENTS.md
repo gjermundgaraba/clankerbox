@@ -92,7 +92,8 @@ the whole CLI span domains on purpose.
   ready checkpoint row that has none, until it is found or its runtime keeps
   nothing of its own for it; then sends each host that answers the
   instances the store retired there, for its sweep, noting when a sweep first
-  reached it; and ends old failures and forgets retired instances a day after.
+  found each gone and keeping each it answers it left; and ends old failures and
+  forgets retired instances a day after.
 - `machine-view.ts`: what a client reads of a machine, and `waiting`, which a
   read tells.
 - `operations.ts`: plain functions of a step on its host. `poll` sends it when
@@ -116,7 +117,8 @@ or `composition/`.
 - `operations.ts`: the `Operations` service. It runs a step to its end, keeps its
   report until collected, fences by sequence, and tells a restart by `boot`. Its
   `sweep` deletes what the runtime's `owned` facet lists whose instance the
-  control plane retired and no step it holds names. Its `find` answers the
+  control plane retired and no step it holds names, and answers what it left.
+  Its `find` answers the
   handle of each checkpoint a row holds without one, in the time a read takes.
 - `guest.ts`: setup, preparation, and the hook a stop, pause or delete
   runs first, all run in the guest.
@@ -298,14 +300,16 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
   store retires an instance on a host in the write that ends its row's hold on
   it there: the row goes, moves to another host under a new instance, or rests
   undone or failed. The record outlives the row, and lasts a day of the control
-  plane's clock from the first sweep that reached its host, while one no sweep
-  has reached stays; no row takes the instance again. Each recheck,
-  after the adopts, sends each host the instances retired there, and the host
-  deletes those it lists that no step it holds names, a machine alone, leaving
-  every checkpoint it holds, and ignores a delete its provider refuses with
-  `Conflict`. The sweep deletes nothing for want of a claim, so a wiped or
-  second store sweeps nothing of another store's, and a make that lands a day
-  after its host was first told is left at its provider. A checkpoint a provider holds through its
+  plane's clock from the first sweep that reached its host and left nothing of
+  it, while one no sweep has reached, or the last sweep left, stays; no row takes
+  the instance again. Each recheck, after the adopts, sends each host the
+  instances retired there, and the host deletes those it lists that no step it
+  holds names, a machine alone, leaving every checkpoint it holds, and answers
+  each it left: one a step names, one whose delete failed, and one its provider
+  refuses with `Conflict` while something depends on it. The sweep deletes
+  nothing for want of a claim, so a wiped or second store sweeps nothing of
+  another store's, and a make that lands a day after a sweep first found it
+  gone is left at its provider. A checkpoint a provider holds through its
   machine has no mark: a `start` and a `remove` carry `keep`, every checkpoint
   handle the rows hold on the host, as a checkpoint row names its source by name
   alone, and the runtime deletes the machine's others, once a start runs it or

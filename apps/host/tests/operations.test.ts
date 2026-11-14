@@ -12,6 +12,7 @@ import type {
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import {
+  Conflict,
   Internal,
   Missing,
   readTimeout,
@@ -40,6 +41,7 @@ import {
   Logger,
   Redacted,
   Ref,
+  References,
   Scope,
 } from "effect";
 import { TestClock } from "effect/testing";
@@ -340,7 +342,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* Effect.forEach(reports, ({ id }) => host.operations.collect(id));
         yield* Effect.sleep(Duration.millis(5));
 
-        yield* host.operations.sweep({
+        const left = yield* host.operations.sweep({
           machines: ["gone-instance"],
           checkpoints: ["snap-instance", "gone-instance"],
         });
@@ -349,7 +351,147 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           host.fake.calls.filter((call) => call.startsWith("deleteCheckpoint"))
         ).toStrictEqual(["deleteCheckpoint snap-instance"]);
         expect(host.fake.machines.has("dev")).toBe(true);
+        expect(left).toStrictEqual({ machines: [], checkpoints: [] });
       })
+  );
+
+  it.effect(
+    "a sweep answers each retired instance whose delete failed or its provider refused, and nothing once a sweep deletes it",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner({
+          as: "fixed",
+          owned: { checkpoints: "marked" },
+        });
+
+        const made = yield* finished(host, makes("dev"));
+
+        const stopped = yield* finished(
+          host,
+          { _tag: "stop", machine: ref("dev"), machines: [] },
+          2
+        );
+
+        const captured = yield* finished(host, {
+          _tag: "capture",
+          machine: ref("dev"),
+          checkpoint: checkpoint("snap"),
+        });
+
+        yield* Effect.forEach([made, stopped, captured], ({ id }) =>
+          host.operations.collect(id)
+        );
+
+        const retired = {
+          machines: ["dev-instance"],
+          checkpoints: ["snap-instance"],
+        };
+
+        host.fake.failNext("delete", new Internal({ message: "EBUSY" }));
+        host.fake.failNext(
+          "deleteCheckpoint",
+          new Conflict({ message: "a machine restores from it" })
+        );
+
+        const failed = yield* host.operations.sweep(retired);
+        const then = yield* host.operations.sweep(retired);
+
+        expect(failed).toStrictEqual(retired);
+        expect(then).toStrictEqual({ machines: [], checkpoints: [] });
+        expect(host.fake.machines.has("dev")).toBe(false);
+      })
+  );
+
+  it.effect(
+    "a sweep warns once of a retired instance whose delete fails or its provider refuses, naming its host, and logs each sweep after that leaves it at debug",
+    () => {
+      const lines: Array<readonly [string, string]> = [];
+
+      return Effect.gen(function* () {
+        const host = yield* runner({
+          as: "fixed",
+          owned: { checkpoints: "marked" },
+        });
+
+        const made = yield* finished(host, makes("dev"));
+
+        const stopped = yield* finished(
+          host,
+          { _tag: "stop", machine: ref("dev"), machines: [] },
+          2
+        );
+
+        const captured = yield* finished(host, {
+          _tag: "capture",
+          machine: ref("dev"),
+          checkpoint: checkpoint("snap"),
+        });
+
+        yield* Effect.forEach([made, stopped, captured], ({ id }) =>
+          host.operations.collect(id)
+        );
+
+        const retired = {
+          machines: ["dev-instance"],
+          checkpoints: ["snap-instance"],
+        };
+
+        const refused = () => {
+          host.fake.failNext("delete", new Internal({ message: "EBUSY" }));
+          host.fake.failNext(
+            "deleteCheckpoint",
+            new Conflict({ message: "a machine restores from it" })
+          );
+        };
+
+        refused();
+        yield* host.operations.sweep(retired);
+        refused();
+        yield* host.operations.sweep(retired);
+        yield* host.operations.sweep(retired);
+
+        expect(
+          lines.filter(([level]) => level === "Warn" || level === "Debug")
+        ).toStrictEqual([
+          [
+            "Warn",
+            "sweep: couldn't delete machine dev-instance (handle), which stays at its provider until a sweep deletes it, so each sweep of host fixed tries again: EBUSY",
+          ],
+          [
+            "Warn",
+            "sweep: couldn't delete checkpoint snap-instance (handle), which stays at its provider until a sweep deletes it, so each sweep of host fixed tries again: a machine restores from it",
+          ],
+          ["Debug", "sweep: deleting machine dev-instance (handle) again"],
+          [
+            "Debug",
+            "sweep: still couldn't delete machine dev-instance (handle) on host fixed: EBUSY",
+          ],
+          ["Debug", "sweep: deleting checkpoint snap-instance (handle) again"],
+          [
+            "Debug",
+            "sweep: still couldn't delete checkpoint snap-instance (handle) on host fixed: a machine restores from it",
+          ],
+          ["Debug", "sweep: deleting machine dev-instance (handle) again"],
+          ["Debug", "sweep: deleting checkpoint snap-instance (handle) again"],
+        ]);
+      }).pipe(
+        Effect.provide(
+          Logger.layer([
+            Logger.make(({ logLevel, message }) => {
+              lines.push([
+                logLevel,
+                [message]
+                  .flat()
+                  .map(String)
+                  .join(" ")
+                  .replaceAll(/\((?:mach|ckpt)-[0-9a-f-]+\)/gu, "(handle)"),
+              ]);
+            }),
+          ])
+        ),
+        Effect.provideService(References.MinimumLogLevel, "All")
+      );
+    }
   );
 
   it.effect(
@@ -375,7 +517,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* Effect.forEach([made, stopped, captured], ({ id }) =>
           host.operations.collect(id)
         );
-        yield* host.operations.sweep({
+
+        const left = yield* host.operations.sweep({
           machines: ["dev-instance"],
           checkpoints: [],
         });
@@ -383,6 +526,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(
           host.fake.removals.map(([name, keep]) => [name, [...keep]])
         ).toStrictEqual([["dev-instance", [captured.outcome.handle]]]);
+        expect(left).toStrictEqual({ machines: [], checkpoints: [] });
       })
   );
 
@@ -407,19 +551,24 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const retired = { machines: ["dev-instance"], checkpoints: [] };
 
-        yield* host.operations.sweep(retired);
+        const named = yield* host.operations.sweep(retired);
 
         const whileHeld = counted(host.fake.calls, "delete dev-instance");
 
         yield* held.release;
         yield* ended(host, stop.id);
         yield* host.operations.collect(stop.id);
-        yield* host.operations.sweep(retired);
+
+        const collected = yield* host.operations.sweep(retired);
 
         expect([
           whileHeld,
           counted(host.fake.calls, "delete dev-instance"),
         ]).toStrictEqual([0, 1]);
+        expect([named, collected]).toStrictEqual([
+          retired,
+          { machines: [], checkpoints: [] },
+        ]);
       })
   );
 

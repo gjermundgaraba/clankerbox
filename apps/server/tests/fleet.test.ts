@@ -2,6 +2,7 @@ import { cpSync, rmSync } from "node:fs";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
+import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import type { BuildRequest } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Duration, Effect, Fiber } from "effect";
 import { expect } from "vite-plus/test";
@@ -315,6 +316,53 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(once.machines).toStrictEqual([]);
         expect(back.fake.calls).toContain("marked machines");
       })
+  );
+
+  it.effect(
+    "a retired instance outlives the sweeps whose delete of it fails, and is forgotten only once one deletes it",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* onFixed({ recheck: Duration.seconds(1) });
+        const longAfter = DateTime.makeUnsafe("2100-01-01T00:00:00Z");
+
+        yield* served.client.create("old", request("old"));
+
+        for (let failures = 0; failures < 3; failures += 1) {
+          served.host.fake.failNext(
+            "delete",
+            new Internal({ message: "EBUSY" })
+          );
+        }
+
+        yield* served.store.advance("machine", "old", () => ({
+          next: "removed",
+          finish: false,
+        }));
+        yield* eventually(
+          Effect.sync(() => callsTo(served.host, "delete").length),
+          (deletes) => deletes >= 2
+        );
+        yield* served.store.forgetRetired(longAfter);
+
+        const whileFailing = yield* served.store.retired("fixed");
+
+        yield* eventually(
+          Effect.sync(() => served.host.fake.machines.has("old")),
+          (kept) => !kept
+        );
+
+        const once = yield* eventually(
+          Effect.andThen(
+            served.store.forgetRetired(longAfter),
+            served.store.retired("fixed")
+          ),
+          ({ machines }) => machines.length === 0
+        );
+
+        expect(whileFailing.machines).toHaveLength(1);
+        expect(once.machines).toStrictEqual([]);
+      }),
+    20_000
   );
 
   it.effect(

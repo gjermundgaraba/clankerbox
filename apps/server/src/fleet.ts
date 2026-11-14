@@ -1,4 +1,4 @@
-import type { Adopted, Ref } from "@clankerbox/host-contract";
+import type { Adopted, Ref, Retired } from "@clankerbox/host-contract";
 import type {
   Internal,
   Unreported,
@@ -172,10 +172,21 @@ const located = (
   );
 
 /**
- * How long a store names an instance it retired, from the first sweep that reached its host. A make
- * that lands at its provider later than this is left there.
+ * How long a store names an instance it retired, from the first sweep that reached its host and left
+ * nothing of it. A make that lands at its provider later than this is left there.
  */
 export const retiredLast = Duration.days(1);
+
+const without = (instances: readonly string[], kept: readonly string[]) => {
+  const still = new Set(kept);
+
+  return instances.filter((instance) => !still.has(instance));
+};
+
+const goneOf = (retired: Retired, left: Retired): Retired => ({
+  machines: without(retired.machines, left.machines),
+  checkpoints: without(retired.checkpoints, left.checkpoints),
+});
 
 const swept = (store: Store, hosts: Hosts, host: string) =>
   Effect.gen(function* () {
@@ -185,22 +196,26 @@ const swept = (store: Store, hosts: Hosts, host: string) =>
       return;
     }
 
-    const reached = yield* hosts
+    const left = yield* hosts
       .call(host, (api) => api.sweepRetired(retired))
       .pipe(
-        Effect.as(true),
+        Effect.asSome,
         Effect.catch(({ message }) =>
           Effect.as(
             Effect.logWarning(
               `host ${host} couldn't sweep what the store retired, so the next recheck tries again: ${message}`
             ),
-            false
+            Option.none<Retired>()
           )
         )
       );
 
-    if (reached) {
-      yield* store.told(host, retired, yield* DateTime.now);
+    if (Option.isSome(left)) {
+      yield* store.told(
+        host,
+        { gone: goneOf(retired, left.value), left: left.value },
+        yield* DateTime.now
+      );
     }
   });
 

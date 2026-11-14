@@ -2001,7 +2001,11 @@ layer(NodeServices.layer)((it) => {
 
             const kept = yield* store.retired("linux");
 
-            yield* store.told("linux", retired, at);
+            yield* store.told(
+              "linux",
+              { gone: retired, left: { machines: [], checkpoints: [] } },
+              at
+            );
             yield* store.forgetRetired(
               DateTime.makeUnsafe("2100-01-01T00:00:00Z")
             );
@@ -2053,9 +2057,20 @@ layer(NodeServices.layer)((it) => {
 
             const untold = yield* store.retired("linux");
 
-            yield* store.told("linux", once, first);
+            yield* store.told(
+              "linux",
+              { gone: once, left: { machines: [], checkpoints: [] } },
+              first
+            );
             yield* removing(store, "m2");
-            yield* store.told("linux", yield* store.retired("linux"), later);
+            yield* store.told(
+              "linux",
+              {
+                gone: yield* store.retired("linux"),
+                left: { machines: [], checkpoints: [] },
+              },
+              later
+            );
             yield* store.forgetRetired(first);
 
             const toldAtFirst = yield* store.retired("linux");
@@ -2076,6 +2091,42 @@ layer(NodeServices.layer)((it) => {
           instance(2),
         ]);
         expect(read.forgotten.machines).toStrictEqual([instance(2)]);
+      })
+  );
+
+  it.effect(
+    "a retired instance a sweep left is untold, and outlives any forget until a sweep finds it gone",
+    () =>
+      Effect.gen(function* () {
+        const stateDir = yield* stateIn;
+        const first = DateTime.makeUnsafe("2026-10-05T00:00:00Z");
+        const later = DateTime.makeUnsafe("2026-10-06T00:00:00Z");
+        const longAfter = DateTime.makeUnsafe("2100-01-01T00:00:00Z");
+        const none = { machines: [], checkpoints: [] };
+
+        const read = yield* withStore(stateDir, (store) =>
+          Effect.gen(function* () {
+            yield* store.insertMachine(row("m1", { instance: instance(1) }));
+            yield* removing(store, "m1");
+
+            const retired = yield* store.retired("linux");
+
+            yield* store.told("linux", { gone: retired, left: none }, first);
+            yield* store.told("linux", { gone: none, left: retired }, later);
+            yield* store.forgetRetired(longAfter);
+
+            const left = yield* store.retired("linux");
+
+            yield* store.told("linux", { gone: retired, left: none }, later);
+            yield* store.forgetRetired(DateTime.addDuration(later, "1 milli"));
+
+            return { retired, left, forgotten: yield* store.retired("linux") };
+          })
+        );
+
+        expect(read.retired.machines).toStrictEqual([instance(1)]);
+        expect(read.left).toStrictEqual(read.retired);
+        expect(read.forgotten).toStrictEqual({ machines: [], checkpoints: [] });
       })
   );
 
