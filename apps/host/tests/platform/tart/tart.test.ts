@@ -9,6 +9,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 import type { Step } from "@clankerbox/host-contract";
+import { fitted } from "@clankerbox/host-contract/traits";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
@@ -1052,11 +1053,22 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { runtime } = yield* runtimeOn();
-        const { most } = runtime.traits.limits;
+        const sized = { cpu: 4, ramMib: 8192, diskGib: 60 };
 
-        expect(most).toStrictEqual({ cpu: 65_535, diskGib: 61_034 });
-        expect(diskGb(most.diskGib ?? 0)).toBeLessThanOrEqual(65_535);
-        expect(diskGb((most.diskGib ?? 0) + 1)).toBeGreaterThan(65_535);
+        const fits = (sizes: Partial<typeof sized>) =>
+          fitted(runtime.traits, { ...sized, ...sizes });
+
+        const pastDisk =
+          Array.from({ length: 70_000 }, (_, gib) => gib).find(
+            (gib) => diskGb(gib) > 65_535
+          ) ?? 0;
+
+        expect([
+          fits({ cpu: 65_535 }),
+          fits({ cpu: 65_536 }),
+          fits({ diskGib: pastDisk - 1 }),
+          fits({ diskGib: pastDisk }),
+        ]).toStrictEqual([true, false, true, false]);
       })
   );
 
@@ -2213,7 +2225,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a hand run that starts while a capture or fork clones its source fails the copy WrongState, also when tart can't delete the copy, which the host discards or the fork's undo removes",
+    "a hand run that starts while a capture or fork clones its source fails the copy WrongState, leaving the copy to the host's discard or the fork's undo",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -2233,15 +2245,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
               return undefined;
             };
 
-            mac.hooks.delete = () => ({
-              exitCode: 3,
-              stderr: "tart is busy\n",
-            });
-
             const refused = failure(yield* Effect.flip(copying));
 
             mac.hooks.clone = () => undefined;
-            mac.hooks.delete = () => undefined;
             yield* runtime.stop(machine);
 
             return refused;

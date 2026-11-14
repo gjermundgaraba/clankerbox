@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 
 import type { MachineRef } from "@clankerbox/host-contract";
+import { fitted, resizeRefusal } from "@clankerbox/host-contract/traits";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
@@ -2945,14 +2946,33 @@ layer(NodeServices.layer)((it) => {
         const arm = yield* runtimeOf({ ...settings, arch: "arm64" }, spawner);
         const before = spawner.calls.length;
 
-        expect(runtime.traits.limits).toStrictEqual({
-          least: { ramMib: 64 },
-          most: { cpu: 254, ramMib: 2 ** 32 - 1 },
-          live: { cpu: 16 },
-        });
-        expect(arm.traits.limits.most).toStrictEqual({
-          cpu: 255,
-          ramMib: 2 ** 32 - 1,
+        const fits = (on: typeof runtime, sizes: Partial<typeof machine>) =>
+          fitted(on.traits, { ...machine, ...sizes });
+
+        const grows = (cpu: number) =>
+          resizeRefusal(runtime.traits, "dev", "running", machine, {
+            ...machine,
+            cpu,
+          })?._tag;
+
+        expect({
+          ramMib: [
+            fits(runtime, { ramMib: 64 }),
+            fits(runtime, { ramMib: 63 }),
+          ],
+          mostRamMib: [
+            fits(runtime, { ramMib: 2 ** 32 - 1 }),
+            fits(runtime, { ramMib: 2 ** 32 }),
+          ],
+          x64: [fits(runtime, { cpu: 254 }), fits(runtime, { cpu: 255 })],
+          arm64: [fits(arm, { cpu: 255 }), fits(arm, { cpu: 256 })],
+          live: [grows(16), grows(17)],
+        }).toStrictEqual({
+          ramMib: [true, false],
+          mostRamMib: [true, false],
+          x64: [true, false],
+          arm64: [true, false],
+          live: [undefined, "Unsizable"],
         });
 
         const refused = [

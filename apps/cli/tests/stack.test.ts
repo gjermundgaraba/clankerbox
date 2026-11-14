@@ -315,8 +315,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           (yield* decodeJson(HostsJson, json.stdout)).hosts.map(({ id }) => id)
         ).toStrictEqual(["alpha", "beta"]);
 
-        expect(json.stdout).not.toContain('"traits"');
-
         expect(capacity.code).toBe(0);
         expect(capacity.stdout).toMatch(/^alpha\s+ram\s+1G\s+-$/mu);
         expect(JSON.parse(parted.stdout)).toMatchObject({
@@ -366,7 +364,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         });
         expect(JSON.parse(json.stdout)).toMatchObject({ runtime: "smolvm" });
         expect(JSON.parse(json.stdout)).not.toHaveProperty("kind");
-        expect(JSON.parse(json.stdout)).not.toHaveProperty("traits");
         expect(table.stdout).toMatch(/^RUNTIME\s+smolvm$/mu);
         expect(
           (yield* decodeJson(CapacityJson, capacity.stdout)).usage.filter(

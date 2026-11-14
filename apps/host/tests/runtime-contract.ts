@@ -20,7 +20,7 @@ export type Dropped = "make" | "delete";
 
 export interface Faults {
   readonly drift: (instance: string) => Effect.Effect<void>;
-  /** Fails the next make as though its answer were lost; the effect it answers lands its machine. */
+  /** Fails the next make, whose machine lands all the same once the effect it answers runs. */
   readonly landLate: Effect.Effect<Effect.Effect<void>>;
   readonly quota: (on: boolean) => Effect.Effect<void>;
   readonly dropAnswer: (dropping: Dropped) => Effect.Effect<void>;
