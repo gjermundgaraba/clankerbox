@@ -168,8 +168,9 @@ export interface Served {
 }
 
 /**
- * Serves one host of a verify run until it is killed: `hosts/<id>.url` and `.pid` name it, a host
- * started again takes the port it had, and each `USR2` answers the fault in `hosts/<id>.fault`.
+ * Serves one host of a verify run until it is stopped or killed: `hosts/<id>.url` and `.pid` name
+ * it, the `.pid` alone goes when it stops, so a host started again takes the port it had, and each
+ * `USR2` answers the fault in `hosts/<id>.fault`.
  */
 export const serveHost = <E, R>(
   run: string,
@@ -194,9 +195,7 @@ export const serveHost = <E, R>(
     );
 
     yield* Effect.addFinalizer(() =>
-      Effect.forEach([url, pid], (file) =>
-        fs.remove(file, { force: true })
-      ).pipe(Effect.ignore)
+      fs.remove(pid, { force: true }).pipe(Effect.ignore)
     );
 
     const answered = Effect.gen(function* () {

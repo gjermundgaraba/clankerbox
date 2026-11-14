@@ -146,8 +146,9 @@ launch a new run. A control plane that is down answers `Unavailable`, exit 1.
 
 `fault.sh <run> kill-server` sends `KILL` to the control plane and
 `fault.sh <run> start-server` starts it again on the same port and state.
-`fault.sh <run> kill-host <id>` kills a host, and `fault.sh <run> start-host <id>`
-starts it again on the same port under a new `boot`.
+`fault.sh <run> kill-host <id>` kills a host, `fault.sh <run> stop-host <id>`
+stops it with `TERM`, as its unit's stop does, and `fault.sh <run> start-host <id>`
+starts either again on the same port under a new `boot`.
 `fault.sh <run> freeze-host <id>` sends `STOP` to a host, so every call to it
 times out while it keeps its machines and steps, and `fault.sh <run> thaw-host
 <id>` sends `CONT`.

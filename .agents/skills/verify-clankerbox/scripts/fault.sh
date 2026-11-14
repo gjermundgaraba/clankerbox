@@ -2,7 +2,7 @@
 set -eu
 . "$(dirname "$0")/common.sh"
 use_run "$@"
-action=${2:?usage: fault.sh <run-dir> kill-server|start-server|kill-host <id>|start-host <id>|freeze-host <id>|thaw-host <id>|hold-capture <id>|drift <id> <machine>|land-late <id>|quota <id> on|off|drop-answer <id> make|delete|setup-go}
+action=${2:?usage: fault.sh <run-dir> kill-server|start-server|kill-host <id>|stop-host <id>|start-host <id>|freeze-host <id>|thaw-host <id>|hold-capture <id>|drift <id> <machine>|land-late <id>|quota <id> on|off|drop-answer <id> make|delete|setup-go}
 
 ask() {
   host=$1
@@ -46,6 +46,12 @@ case $action in
     kill -KILL "$pid"
     while kill -0 "$pid" 2>/dev/null; do sleep 0.05; done
     echo "host $3 killed" >>"$evidence/transcript.txt"
+    ;;
+  stop-host)
+    pid=$(host_pid "${3:?host id}")
+    kill -TERM "$pid"
+    while kill -0 "$pid" 2>/dev/null; do sleep 0.05; done
+    echo "host $3 stopped" >>"$evidence/transcript.txt"
     ;;
   start-host)
     start_host "${3:?host id}"
