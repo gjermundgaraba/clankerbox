@@ -5,7 +5,7 @@ export default defineConfig({
     entry: ["src/index.ts"],
     platform: "node",
     format: ["esm"],
-    dts: { generator: "oxc" },
+    dts: { generator: "tsgo" },
   },
   test: {
     setupFiles: ["@gjermundgaraba/clankerbox-sdk/testing/equality"],

@@ -7,6 +7,8 @@ import { provider } from "./provider.ts";
 
 export type { ClankerboxProvider, Options, Source } from "./options.ts";
 
+export { ProviderDisposedError } from "./sandboxes.ts";
+
 /**
  * Sandboxes on clankerbox machines, with IDs `clankerbox/<machine ID>`, so `sandboxId` reconnects
  * to a machine. A sandbox's tunnel and port end at its `destroy`, at `dispose`, or with the process.

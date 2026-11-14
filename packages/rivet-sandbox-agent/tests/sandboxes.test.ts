@@ -10,6 +10,7 @@ import { SandboxAgent } from "sandbox-agent";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { healthPath } from "../src/agent.ts";
+import { ProviderDisposedError } from "../src/index.ts";
 import type { ClankerboxProvider } from "../src/options.ts";
 import { LocalTunnelError } from "../src/tunnel.ts";
 import { testLimit } from "./child.ts";
@@ -482,6 +483,7 @@ describe("dispose", () => {
 
     for (const call of calls) {
       await expect(call).rejects.toMatchObject(disposed);
+      await expect(call).rejects.toBeInstanceOf(ProviderDisposedError);
     }
 
     await expect(sandbox.dispose()).resolves.toBeUndefined();
