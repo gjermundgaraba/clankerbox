@@ -101,12 +101,6 @@ const gone: CheckpointEvent = { type: "lost", error };
 
 const publish: CheckpointEvent = { type: "publish" };
 
-const found: CheckpointEvent = {
-  type: "found",
-  instance: "1",
-  handle: Handle.make("ckpt-found"),
-};
-
 const vanished: CheckpointEvent = {
   type: "missing",
   host: "linux",
@@ -126,7 +120,6 @@ const events = {
   cancelled,
   gone,
   publish,
-  found,
   vanished,
 };
 
@@ -139,7 +132,6 @@ const names = [
   "cancelled",
   "gone",
   "publish",
-  "found",
   "vanished",
 ] as const;
 
@@ -151,7 +143,6 @@ const edges: Readonly<
   "capturing.due": {
     removal: "deleting.due",
     read: "capturing.sent",
-    found: "capturing.due",
   },
   "capturing.sent": {
     removal: "deleting.draining",
@@ -159,12 +150,10 @@ const edges: Readonly<
     failed: "discarding.due",
     cancelled: "discarding.due",
     gone: "discarding.due",
-    found: "capturing.sent",
   },
   "fetching.due": {
     removal: "deleting.due",
     read: "fetching.sent",
-    found: "fetching.due",
   },
   "fetching.sent": {
     removal: "deleting.draining",
@@ -172,19 +161,16 @@ const edges: Readonly<
     failed: "discarding.due",
     cancelled: "discarding.due",
     gone: "discarding.due",
-    found: "fetching.sent",
   },
   ready: {
     removal: "deleting.due",
     publish: "publishing.due",
-    found: "ready",
     vanished: "failed",
   },
   "publishing.due": {
     removal: "deleting.due",
     read: "publishing.sent",
     awaited: "publishing.sent",
-    found: "publishing.due",
   },
   "publishing.sent": {
     removal: "deleting.draining",
@@ -192,13 +178,11 @@ const edges: Readonly<
     failed: "discarding.due",
     cancelled: "discarding.due",
     gone: "discarding.due",
-    found: "publishing.sent",
   },
   "discarding.due": {
     removal: "deleting.due",
     read: "discarding.sent",
     awaited: "discarding.sent",
-    found: "discarding.due",
   },
   "discarding.sent": {
     removal: "deleting.sent",
@@ -206,13 +190,11 @@ const edges: Readonly<
     failed: "discarding.held",
     cancelled: "discarding.due",
     gone: "discarding.due",
-    found: "discarding.sent",
   },
   "discarding.held": {
     removal: "deleting.due",
     read: "discarding.sent",
     awaited: "discarding.sent",
-    found: "discarding.held",
   },
   "deleting.draining": {
     removal: "deleting.draining",
@@ -220,13 +202,11 @@ const edges: Readonly<
     failed: "deleting.due",
     cancelled: "deleting.due",
     gone: "deleting.due",
-    found: "deleting.draining",
   },
   "deleting.due": {
     removal: "deleting.due",
     read: "deleting.sent",
     awaited: "deleting.sent",
-    found: "deleting.due",
   },
   "deleting.sent": {
     removal: "deleting.sent",
@@ -234,15 +214,13 @@ const edges: Readonly<
     failed: "deleting.held",
     cancelled: "deleting.due",
     gone: "deleting.due",
-    found: "deleting.sent",
   },
   "deleting.held": {
     removal: "deleting.due",
     read: "deleting.sent",
     awaited: "deleting.sent",
-    found: "deleting.held",
   },
-  failed: { removal: "removed", found: "failed" },
+  failed: { removal: "removed" },
 };
 
 const phases: Readonly<Record<Leaf, ShownPhase>> = {
@@ -602,24 +580,6 @@ describe("a delete", () => {
         undefined
       )
     ).toStrictEqual({ next: "removed", finish: false });
-  });
-});
-
-describe("a found handle", () => {
-  it("fills a row of its instance that has none, in any leaf, and nothing else", () => {
-    expect(after(rowAt("ready"), found)).toStrictEqual(
-      rowAt("ready", { handle: Handle.make("ckpt-found") })
-    );
-  });
-
-  it("leaves a row of another instance, or one that has a handle, as it is", () => {
-    const held = rowAt("ready", { handle: Handle.make("ckpt-kept") });
-    const other = rowAt("ready", { instance: "2" });
-
-    expect([go(held, found).next, go(other, found).next]).toStrictEqual([
-      held,
-      other,
-    ]);
   });
 });
 

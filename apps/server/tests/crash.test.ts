@@ -817,7 +817,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a checkpoint row an upgrade left with no handle, a build's copy or a capture, learns it at the next recheck, once, and a create or restore from it searches for it no more",
+    "a checkpoint row an upgrade left with no handle, a build's copy or a capture, keeps none, and a create or restore from it reaches it with no search, or is Missing once its files are gone",
     () =>
       Effect.gen(function* () {
         const served = yield* running({ recheck: Duration.millis(50) });
@@ -831,7 +831,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         });
         yield* client.create("dev", request("dev"));
         yield* client.captureCheckpoint({ machine: "dev", name: "snap" });
-        yield* client.captureCheckpoint({ machine: "dev", name: "broken" });
+        yield* client.captureCheckpoint({ machine: "dev", name: "gone" });
 
         const handles = Effect.map(served.store.checkpoints, (rows) =>
           rows.map(({ name, handle }) => [name, handle] as const)
@@ -839,65 +839,40 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const before = yield* handles;
 
-        host!.fake.failFind(
-          "broken",
-          new Internal({ message: "database is locked" })
-        );
-
-        for (const [name] of before) {
+        for (const [name, handle] of before) {
+          host!.fake.failFind(
+            name,
+            new Internal({ message: "database is locked" })
+          );
           yield* served.store.advance("checkpoint", name, (row) => ({
             next: { ...row, handle: undefined },
             finish: false,
           }));
+
+          if (name === "gone" && handle !== undefined) {
+            yield* host!.fake.lose(handle);
+          }
         }
 
-        host!.fake.searches.length = 0;
+        const created = yield* client.create("fast", { template: "web" });
 
-        const learned = yield* eventually(handles, (rows) =>
-          rows.every(
-            ([name, handle]) => name === "broken" || handle !== undefined
-          )
+        const restored = yield* client.restoreMachine({
+          checkpoint: "snap",
+          name: "copy",
+        });
+
+        const refused = yield* Effect.flip(
+          client.restoreMachine({ checkpoint: "gone", name: "other" })
         );
 
-        yield* Effect.sleep(Duration.millis(300));
-
-        const unfound = yield* handles;
-
-        host!.fake.mendFind("broken");
-
-        yield* eventually(handles, (rows) =>
-          rows.every(([, handle]) => handle !== undefined)
+        expect([created.phase, restored.phase]).toStrictEqual([
+          "settled",
+          "settled",
+        ]);
+        expect(refused).toMatchObject({ _tag: "Missing", checkpoint: "gone" });
+        expect(yield* handles).toStrictEqual(
+          before.map(([name]) => [name, undefined])
         );
-
-        const searched = [...host!.fake.searches].filter((search) =>
-          search.startsWith("checkpoint")
-        );
-
-        yield* client.create("fast", { template: "web" });
-        yield* client.restoreMachine({ checkpoint: "snap", name: "copy" });
-        yield* client.restoreMachine({ checkpoint: "broken", name: "other" });
-
-        expect(learned).toStrictEqual(
-          before.map(([name, handle]) => [
-            name,
-            name === "broken" ? undefined : handle,
-          ])
-        );
-        expect(
-          unfound.find(([name]) => name === "broken")?.[1]
-        ).toBeUndefined();
-        expect(
-          searched.filter((search) => search !== "checkpoint broken")
-        ).toStrictEqual(
-          before
-            .filter(([name]) => name !== "broken")
-            .map(([name]) => `checkpoint ${name}`)
-        );
-        expect(
-          host!.fake.searches.filter((search) =>
-            search.startsWith("checkpoint")
-          )
-        ).toStrictEqual(searched);
       }),
     30_000
   );

@@ -403,7 +403,7 @@ describe("the smol cloud runtime on its host", () => {
             { _tag: "none" }
           );
 
-          const found = yield* runtime.find("machine", fast);
+          const found = yield* runtime.find(fast);
 
           expect(found).toBeDefined();
 
@@ -755,7 +755,7 @@ describe("the smol cloud runtime over an account without a card", () => {
 
           yield* fake.malformedMachine(`cbx-${hostId}-${dev.instance}`, 7);
 
-          const failed = yield* Effect.flip(runtime.find("machine", dev));
+          const failed = yield* Effect.flip(runtime.find(dev));
 
           expect(failed.message).toContain(`cbx-${hostId}-${dev.instance}`);
           expect(

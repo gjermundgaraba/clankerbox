@@ -626,24 +626,18 @@ export const fakeRuntime = (options: FakeOptions) => {
     );
   };
 
-  const kept = (
-    what: Parameters<Interface["find"]>[0],
-    ref: Identity
-  ): Handle | undefined => {
-    if (what === "checkpoint") {
-      return owned
-        ? undefined
-        : [...checkpoints].find(
-            ([, held]) =>
-              held.name === ref.name && held.instance === ref.instance
-          )?.[0];
-    }
-
-    return machines
+  const kept = (ref: Identity): Handle | undefined =>
+    machines
       .values()
       .find((held) => held.name === ref.name && held.instance === ref.instance)
       ?.handle;
-  };
+
+  const checkpointHandle = (checkpoint: Identity): Handle | undefined =>
+    owned
+      ? undefined
+      : Handle.make(
+          `ckpt-${checkpoint.name}-${checkpoint.instance.slice(0, 8)}`
+        );
 
   const checkpointRoot = ({ instance }: Identity) =>
     path.join(options.dir, "checkpoints", instance);
@@ -673,7 +667,7 @@ export const fakeRuntime = (options: FakeOptions) => {
     checkpoint: Identity,
     of: Handle | undefined
   ): Handle => {
-    const handle = minted("ckpt");
+    const handle = checkpointHandle(checkpoint) ?? minted("ckpt");
 
     checkpoints.set(handle, {
       name: checkpoint.name,
@@ -852,7 +846,7 @@ export const fakeRuntime = (options: FakeOptions) => {
 
   const madeAgain = (machine: Identity & Sizes, what: string) =>
     Effect.suspend(() => {
-      const handle = kept("machine", machine);
+      const handle = kept(machine);
       const held = handle === undefined ? undefined : machines.get(handle);
 
       return held === undefined
@@ -1035,16 +1029,17 @@ export const fakeRuntime = (options: FakeOptions) => {
         startup: Effect.sync(() => {
           record("startup");
         }),
-        find: (what, ref) =>
+        find: (machine) =>
           Effect.suspend(() => {
-            searches.push(`${what} ${ref.name}`);
-            options.onCall?.(`find ${what} ${ref.name}`);
-            const failure = findFailures.get(ref.name);
+            searches.push(machine.name);
+            options.onCall?.(`find ${machine.name}`);
+            const failure = findFailures.get(machine.name);
 
             return failure === undefined
-              ? Effect.succeed(kept(what, ref))
+              ? Effect.succeed(kept(machine))
               : Effect.fail(failure);
           }),
+        checkpointHandle,
         observe,
         capacity,
         make: (machine, origin, bind) => {

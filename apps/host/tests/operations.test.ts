@@ -3972,95 +3972,50 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a find answers the handle of a checkpoint its runtime keeps as its own, none for one it holds through its machine, and names one whose search failed",
+    "a step whose checkpoint carries no handle reaches the one its runtime derives, with no search that could fail, and on a runtime that derives none a make from it is Missing",
     () =>
       Effect.gen(function* () {
-        const owning = yield* runner();
-
-        yield* finished(owning, makes("dev"));
-
-        const taken = yield* finished(owning, capturingSnap);
-
-        owning.fake.failFind("broken", locked);
-
-        const kept = yield* owning.operations.find([
-          { name: "snap", instance: "snap-instance" },
-          { name: "broken", instance: "broken-instance" },
-        ]);
-
-        const throughMachine = yield* runner({ as: "fixed" });
-
-        yield* finished(throughMachine, makes("dev"));
-        yield* finished(
-          throughMachine,
-          { _tag: "stop", machine: ref("dev"), machines: [] },
-          2
-        );
-        yield* finished(throughMachine, {
-          _tag: "capture",
-          machine: ref("dev"),
-          checkpoint: checkpoint("snap"),
-        });
-
-        const held = yield* throughMachine.operations.find([
-          { name: "snap", instance: "snap-instance" },
-        ]);
-
-        expect(taken.outcome.handle).toBeDefined();
-        expect(kept).toStrictEqual({
-          found: [
-            {
-              name: "snap",
-              instance: "snap-instance",
-              handle: taken.outcome.handle,
-            },
-          ],
-          unresolved: ["broken"],
-        });
-        expect(held).toStrictEqual({
-          found: [{ name: "snap", instance: "snap-instance" }],
-          unresolved: [],
-        });
-        expect(
-          [owning, throughMachine].map(({ fake }) =>
-            fake.searches.filter((search) => search.startsWith("checkpoint"))
-          )
-        ).toStrictEqual([
-          ["checkpoint snap", "checkpoint broken"],
-          ["checkpoint snap"],
-        ]);
-      })
-  );
-
-  it.effect(
-    "a find that outlasts a read answers what it found by then, and leaves the rest unresolved",
-    () =>
-      Effect.gen(function* () {
-        const host = yield* runner({
-          runtime: (fake) => ({
-            ...fake,
-            find: (what, searched) =>
-              searched.name.startsWith("slow")
-                ? Effect.andThen(Effect.never, fake.find(what, searched))
-                : fake.find(what, searched),
-          }),
-        });
+        const host = yield* runner();
 
         yield* finished(host, makes("dev"));
         yield* finished(host, capturingSnap);
+        host.fake.failFind("snap", locked);
 
-        const answer = yield* host.operations
-          .find([
-            { name: "snap", instance: "snap-instance" },
-            { name: "slow", instance: "slow-instance" },
-            { name: "slower", instance: "slower-instance" },
-          ])
-          .pipe(Effect.timeout(Duration.minutes(1)));
+        const restored = yield* finished(
+          host,
+          makes("copy", {
+            source: {
+              _tag: "checkpoint",
+              checkpoint: checkpoint("snap"),
+              pin: "fake 1",
+            },
+          })
+        );
 
-        expect(answer.found.map(({ name }) => name)).toStrictEqual(["snap"]);
-        expect(answer.unresolved).toStrictEqual(["slow", "slower"]);
-      }),
-    30_000
+        const deleted = yield* finished(
+          host,
+          { _tag: "deleteCheckpoint", checkpoint: checkpoint("snap") },
+          2
+        );
+
+        const rented = yield* runner({ as: "fixed" });
+
+        const refused = yield* finished(
+          rented,
+          makes("copy", {
+            source: { _tag: "checkpoint", checkpoint: checkpoint("snap") },
+          })
+        );
+
+        expect([restored.status, deleted.status]).toStrictEqual([
+          "done",
+          "done",
+        ]);
+        expect(yield* stored(host, "snap")).toBe(false);
+        expect(errorOf(refused)).toStrictEqual(["failed", "Missing"]);
+        expect(refused.error).toMatchObject({ checkpoint: "snap" });
+        expect(rented.fake.calls).not.toContain("restore copy");
+      })
   );
 
   it.effect(
@@ -4073,10 +4028,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           relayed: true,
           runtime: (fake) => ({
             ...fake,
-            find: (what, found) =>
-              found.name === "slow"
-                ? Effect.andThen(Deferred.await(gate), fake.find(what, found))
-                : fake.find(what, found),
+            find: (machine) =>
+              machine.name === "slow"
+                ? Effect.andThen(Deferred.await(gate), fake.find(machine))
+                : fake.find(machine),
           }),
         });
 

@@ -3,7 +3,6 @@ import type {
   MachineRef,
   MachineState,
   Ref,
-  Scope as Resource,
 } from "@clankerbox/host-contract";
 import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
 import { Missing, readTimeout } from "@gjermundgaraba/clankerbox-sdk";
@@ -249,9 +248,15 @@ export interface Interface {
   ) => Effect.Effect<void, Unsizable>;
   readonly startup: Effect.Effect<void, RuntimeError>;
   readonly find: (
-    what: Resource["resource"],
-    ref: Identity
+    machine: Identity
   ) => Effect.Effect<Handle | undefined, RuntimeError>;
+  /**
+   * The handle a checkpoint of `checkpoint`'s identity has on this host, a pure function of it and
+   * the host's ID, with no search: the handle its capture and its install answer. A step whose
+   * checkpoint carries no handle reaches it by this. It is undefined where the provider mints the
+   * handle, which every row of such a runtime holds.
+   */
+  readonly checkpointHandle: (checkpoint: Identity) => Handle | undefined;
   readonly observe: (
     machines: readonly Target[]
   ) => Effect.Effect<Observed, RuntimeError>;

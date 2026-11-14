@@ -1212,13 +1212,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "find answers the handle a make gave its instance, none for another instance of its name, and a captured checkpoint's",
+    "find answers the handle a make gave its instance and none for another instance of its name",
     () =>
       Effect.gen(function* () {
         const { runtime } = yield* runtimeOn();
         const machine = machineOn("dev");
         const later = { ...machine, instance: "76543210".repeat(4) };
-        const checkpoint = snapOf();
 
         const { handle } = yield* runtime.make(
           machine,
@@ -1226,31 +1225,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           unbound
         );
 
-        const uncaptured = yield* runtime.find("checkpoint", checkpoint);
-
-        yield* runtime.stop({ ...machine, handle });
-
-        const captured = yield* runtime.capture(
-          { ...machine, handle },
-          checkpoint
-        );
-
         expect({
-          machine: yield* runtime.find("machine", machine),
-          later: yield* runtime.find("machine", later),
-          uncaptured,
-          checkpoint: yield* runtime.find("checkpoint", checkpoint),
-          laterCheckpoint: yield* runtime.find("checkpoint", {
-            ...checkpoint,
-            instance: later.instance,
-          }),
-        }).toStrictEqual({
-          machine: handle,
-          later: undefined,
-          uncaptured: undefined,
-          checkpoint: captured,
-          laterCheckpoint: undefined,
-        });
+          machine: yield* runtime.find(machine),
+          later: yield* runtime.find(later),
+        }).toStrictEqual({ machine: handle, later: undefined });
       })
   );
 
@@ -2124,7 +2102,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const reads = yield* Effect.all([
           runtime.observe([growing, other]),
-          runtime.find("machine", growing),
+          runtime.find(growing),
         ]).pipe(Effect.timeoutOption(Duration.seconds(2)));
 
         yield* Deferred.succeed(release, undefined);
@@ -2691,7 +2669,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           `${vm}.plist`
         );
 
-        const found = runtime.find("machine", machine);
+        const found = runtime.find(machine);
 
         yield* runtime.make(machine, fromImage("base"), unbound);
 

@@ -1,7 +1,6 @@
 import type {
   Adoption,
   ExecCommand,
-  Finding,
   MachineRef,
   MachineState,
   Operation,
@@ -101,7 +100,6 @@ export interface Interface {
     machines: readonly MachineRef[]
   ) => ReturnType<Runtime["Service"]["capacity"]>;
   readonly adopt: (machines: readonly MachineRef[]) => Effect.Effect<Adoption>;
-  readonly find: (checkpoints: readonly Ref[]) => Effect.Effect<Finding>;
   readonly sweep: (retired: Retired) => Effect.Effect<Retired, Internal>;
   readonly exec: (
     command: ExecCommand
@@ -383,42 +381,45 @@ export const make = (
     const scopes = new Map<string, Accepted>();
     const booting = new Map<string, MachineRef>();
 
-    const found = (what: Resource["resource"], ref: Ref) =>
-      ref.handle === undefined
+    const found = (machine: Ref) =>
+      machine.handle === undefined
         ? runtime
-            .find(what, ref)
+            .find(machine)
             .pipe(
               inTime(
-                `the ${traits.runtime} runtime's search for ${what} ${ref.name}`
+                `the ${traits.runtime} runtime's search for machine ${machine.name}`
               )
             )
-        : Effect.succeed(ref.handle);
+        : Effect.succeed(machine.handle);
 
-    const ifFound = <E>(
-      what: Resource["resource"],
-      ref: Ref,
-      act: (target: Target) => Effect.Effect<void, E>
-    ) =>
-      Effect.flatMap(found(what, ref), (handle) =>
-        handle === undefined ? Effect.void : act(targetOf(ref, handle))
-      );
+    const checkpointHandle = (checkpoint: Ref) =>
+      checkpoint.handle ?? runtime.checkpointHandle(checkpoint);
 
     const machineTarget = (machine: MachineRef) =>
-      Effect.flatMap(found("machine", machine), (handle) =>
+      Effect.flatMap(found(machine), (handle) =>
         handle === undefined
           ? Effect.fail(missing(traits.runtime, machine))
           : Effect.succeed(sizedOf(machine, handle))
       );
 
-    const checkpointTarget = (checkpoint: Ref) =>
-      Effect.flatMap(found("checkpoint", checkpoint), (handle) =>
-        handle === undefined
-          ? Effect.fail(missingCheckpoint(traits.runtime, checkpoint))
-          : Effect.succeed(targetOf(checkpoint, handle))
-      );
+    const checkpointTarget = (checkpoint: Ref) => {
+      const handle = checkpointHandle(checkpoint);
+
+      return handle === undefined
+        ? Effect.fail(missingCheckpoint(traits.runtime, checkpoint))
+        : Effect.succeed(targetOf(checkpoint, handle));
+    };
+
+    const checkpointDeleted = (checkpoint: Ref) => {
+      const handle = checkpointHandle(checkpoint);
+
+      return handle === undefined
+        ? Effect.void
+        : runtime.deleteCheckpoint(targetOf(checkpoint, handle));
+    };
 
     const heldOf = (machine: MachineRef) =>
-      found("machine", machine).pipe(
+      found(machine).pipe(
         Effect.map((handle): Held[] =>
           handle === undefined
             ? []
@@ -941,8 +942,14 @@ export const make = (
           const keep = new Set(step.keep);
 
           return Effect.andThen(
-            ifFound("machine", step.machine, (machine) =>
-              Effect.andThen(
+            Effect.flatMap(found(step.machine), (handle) => {
+              if (handle === undefined) {
+                return Effect.void;
+              }
+
+              const machine = targetOf(step.machine, handle);
+
+              return Effect.andThen(
                 beforeLeaving(
                   machine,
                   "delete",
@@ -950,8 +957,8 @@ export const make = (
                   stateNow(machine, "given its delete hook")
                 ),
                 runtime.delete(machine, keep)
-              )
-            ),
+              );
+            }),
             reaches.close(step.machine)
           );
         }
@@ -966,7 +973,7 @@ export const make = (
           const { checkpoint, pin } = step;
 
           const discarded = Effect.andThen(
-            ifFound("checkpoint", checkpoint, runtime.deleteCheckpoint),
+            checkpointDeleted(checkpoint),
             cleared
           ).pipe(Effect.ignore);
 
@@ -1005,10 +1012,7 @@ export const make = (
                 })
               : Effect.void;
 
-          return Effect.andThen(
-            unpublished,
-            ifFound("checkpoint", checkpoint, runtime.deleteCheckpoint)
-          );
+          return Effect.andThen(unpublished, checkpointDeleted(checkpoint));
         }
 
         case "join": {
@@ -1252,7 +1256,7 @@ export const make = (
             .pipe(inTime(`the ${traits.runtime} runtime`));
 
     const readAlone = (machine: Ref) =>
-      Effect.flatMap(found("machine", machine), (handle) =>
+      Effect.flatMap(found(machine), (handle) =>
         handle === undefined
           ? Effect.succeed<MachineState>("missing")
           : Effect.map(observed([targetOf(machine, handle)]), (seen) =>
@@ -1313,7 +1317,7 @@ export const make = (
         const [adopted, unresolved] = yield* Effect.partition(
           machines,
           (machine) =>
-            found("machine", machine).pipe(
+            found(machine).pipe(
               Effect.tap((handle) =>
                 Effect.logInfo(
                   `adopt ${machine.name}: ${heldAs(machine, handle)}`
@@ -1367,45 +1371,6 @@ export const make = (
                 }),
           })),
           unresolved: unresolved.map(({ machine }) => machine.name),
-        };
-      });
-
-    const find: Interface["find"] = (checkpoints) =>
-      Effect.gen(function* () {
-        const searched = new Map<string, Ref>();
-
-        yield* Effect.forEach(
-          checkpoints,
-          (checkpoint) =>
-            found("checkpoint", checkpoint).pipe(
-              Effect.tap((handle) =>
-                Effect.sync(() => {
-                  searched.set(checkpoint.name, {
-                    name: checkpoint.name,
-                    instance: checkpoint.instance,
-                    ...(handle === undefined ? {} : { handle }),
-                  });
-                })
-              ),
-              Effect.tap((handle) =>
-                Effect.logInfo(
-                  `find ${checkpoint.name}: ${handle === undefined ? "the runtime keeps nothing of its own for it" : `held as ${handle}`}`
-                )
-              ),
-              Effect.catch((error) =>
-                Effect.logWarning(
-                  `find ${checkpoint.name}: couldn't find it, so the next find tries again: ${error.message}`
-                )
-              )
-            ),
-          { concurrency: 1, discard: true }
-        ).pipe(Effect.timeoutOption(stateReadWait));
-
-        return {
-          found: [...searched.values()],
-          unresolved: checkpoints
-            .filter(({ name }) => !searched.has(name))
-            .map(({ name }) => name),
         };
       });
 
@@ -1540,7 +1505,6 @@ export const make = (
           inTime(`the ${traits.runtime} runtime`)
         ),
       adopt,
-      find,
       sweep,
       exec: Effect.fn("Operations.exec")(exec),
     } satisfies Interface;

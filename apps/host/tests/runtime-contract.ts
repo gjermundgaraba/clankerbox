@@ -78,7 +78,7 @@ const stallCaseTimeout = 120_000;
 
 const heldOf = (runtime: Runtime, machine: Identity) =>
   Effect.gen(function* () {
-    const found = yield* runtime.find("machine", machine);
+    const found = yield* runtime.find(machine);
 
     const marked =
       runtime.owned === undefined
@@ -195,14 +195,14 @@ export const runtimeContract = (subject: Subject): void => {
             const target = { ...machine, handle: answer.handle };
 
             expect(fitted(runtime.traits, answer.sizes)).toBe(true);
-            expect(yield* runtime.find("machine", machine)).toBe(answer.handle);
+            expect(yield* runtime.find(machine)).toBe(answer.handle);
             expect(yield* stateOf(runtime, target)).toBe("running");
 
             yield* runtime.stop(target);
             yield* runtime.delete(target, new Set());
             yield* runtime.delete(target, new Set());
 
-            expect(yield* runtime.find("machine", machine)).toBeUndefined();
+            expect(yield* runtime.find(machine)).toBeUndefined();
           })
         )
     );
@@ -221,8 +221,8 @@ export const runtimeContract = (subject: Subject): void => {
           yield* runtime.delete(older, new Set());
 
           expect({
-            older: yield* runtime.find("machine", older),
-            newer: yield* runtime.find("machine", newer),
+            older: yield* runtime.find(older),
+            newer: yield* runtime.find(newer),
           }).toStrictEqual({ older: undefined, newer: newer.handle });
         })
       )
@@ -327,7 +327,7 @@ export const runtimeContract = (subject: Subject): void => {
             );
 
             expect(refused).toBeInstanceOf(WrongState);
-            expect(yield* runtime.find("machine", copy)).toBe(restored.handle);
+            expect(yield* runtime.find(copy)).toBe(restored.handle);
 
             yield* runtime.stop({ ...copy, handle: restored.handle });
             yield* runtime.delete(
@@ -336,6 +336,31 @@ export const runtimeContract = (subject: Subject): void => {
             );
             yield* runtime.deleteCheckpoint({ ...snap, handle });
             yield* runtime.deleteCheckpoint({ ...snap, handle });
+          })
+        )
+    );
+
+    it.live(
+      "answers a capture with the handle it derives from the checkpoint's identity, where it derives one, and a delete of a derived one it doesn't hold is done",
+      () =>
+        withFixture(({ runtime }) =>
+          Effect.gen(function* () {
+            const machine = yield* made(runtime, "dev");
+            const snap = { name: "snap", instance: second };
+            const unheld = { name: "other", instance: third };
+
+            yield* inCaptureState(runtime, machine);
+
+            const handle = yield* runtime.capture(machine, snap);
+            const absent = runtime.checkpointHandle(unheld);
+
+            if (absent !== undefined) {
+              yield* runtime.deleteCheckpoint({ ...unheld, handle: absent });
+            }
+
+            yield* runtime.deleteCheckpoint({ ...snap, handle });
+
+            expect(runtime.checkpointHandle(snap) ?? handle).toBe(handle);
           })
         )
     );
@@ -369,7 +394,7 @@ export const runtimeContract = (subject: Subject): void => {
 
             expect(refused).toBeInstanceOf(Missing);
             expect(refused).toMatchObject({ checkpoint: "snap" });
-            expect(yield* runtime.find("machine", copy)).toBeUndefined();
+            expect(yield* runtime.find(copy)).toBeUndefined();
           })
         )
     );
@@ -669,11 +694,9 @@ export const runtimeContract = (subject: Subject): void => {
 
             const machine = yield* made(runtime, "dev");
 
-            expect(yield* runtime.find("machine", machine)).toBe(
-              machine.handle
-            );
+            expect(yield* runtime.find(machine)).toBe(machine.handle);
             yield* runtime.delete(machine, new Set());
-            expect(yield* runtime.find("machine", machine)).toBeUndefined();
+            expect(yield* runtime.find(machine)).toBeUndefined();
           })
         )
     );
@@ -692,9 +715,7 @@ export const runtimeContract = (subject: Subject): void => {
             yield* quota(false);
 
             expect(refused).toBeInstanceOf(Capacity);
-            expect(
-              yield* runtime.find("machine", sized("dev"))
-            ).toBeUndefined();
+            expect(yield* runtime.find(sized("dev"))).toBeUndefined();
           })
         )
     );
@@ -727,12 +748,12 @@ export const runtimeContract = (subject: Subject): void => {
 
             yield* Effect.flip(made(runtime, "late"));
 
-            const before = yield* runtime.find("machine", sized("late"));
+            const before = yield* runtime.find(sized("late"));
 
             yield* land;
 
             expect(before).toBeUndefined();
-            expect(yield* runtime.find("machine", sized("late"))).toBeDefined();
+            expect(yield* runtime.find(sized("late"))).toBeDefined();
           })
         )
     );
@@ -748,7 +769,7 @@ export const runtimeContract = (subject: Subject): void => {
             yield* runtime.stop(machine);
             yield* runtime.delete(machine, new Set());
 
-            expect(yield* runtime.find("machine", machine)).toBeUndefined();
+            expect(yield* runtime.find(machine)).toBeUndefined();
           })
         )
     );
@@ -773,13 +794,13 @@ export const runtimeContract = (subject: Subject): void => {
                 );
 
                 if (!(yield* cutAt(reached, making))) {
-                  expect(yield* runtime.find("machine", machine)).toBeDefined();
+                  expect(yield* runtime.find(machine)).toBeDefined();
                   expect(after, "the calls it cut").toBeGreaterThan(0);
 
                   break;
                 }
 
-                const found = yield* runtime.find("machine", machine);
+                const found = yield* runtime.find(machine);
 
                 if (found !== undefined) {
                   yield* runtime.delete(

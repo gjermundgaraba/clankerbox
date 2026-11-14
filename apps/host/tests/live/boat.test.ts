@@ -689,12 +689,9 @@ describe.runIf(live)("boat, against the real account", () => {
         yield* runtime.delete(ci, new Set());
         yield* runtime.delete(copy, new Set());
 
-        const gone = yield* runtime.find("machine", ci);
+        const gone = yield* runtime.find(ci);
 
-        const snapshotGone = yield* runtime.find("checkpoint", {
-          name: "snap",
-          instance: snapshot.slice("cbx-".length),
-        });
+        const snapshotGone = yield* boat.saved(snapshot);
 
         yield* finding(
           `after two deletes the machine is ${gone === undefined ? "gone" : "still found"}, and its unkept snapshot is ${snapshotGone === undefined ? "gone" : "still found"}`

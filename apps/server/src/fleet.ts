@@ -1,4 +1,4 @@
-import type { Adopted, Ref, Retired } from "@clankerbox/host-contract";
+import type { Adopted, Retired } from "@clankerbox/host-contract";
 import type {
   Internal,
   Unreported,
@@ -7,11 +7,10 @@ import type {
 import { Cause, DateTime, Duration, Effect, Option } from "effect";
 
 import { applied } from "./chart.ts";
-import { checkpointChart, phaseOf } from "./checkpoint-chart.ts";
 import { unread } from "./hosts.ts";
 import type { Interface as Hosts } from "./hosts.ts";
 import { machineChart, stageOf } from "./machine-chart.ts";
-import { identityOf, mayHoldVm, refOf } from "./steps.ts";
+import { mayHoldVm, refOf } from "./steps.ts";
 import type { Interface as Store } from "./store.ts";
 
 export interface CapacityRead {
@@ -135,56 +134,6 @@ const adopted = (store: Store, hosts: Hosts, host: string, boot: string) =>
     }
   });
 
-const unheldKey = (host: string, { name, instance }: Ref) =>
-  `${host} ${name} ${instance}`;
-
-const handled = (store: Store, { name, instance, handle }: Ref) =>
-  handle === undefined
-    ? Effect.void
-    : store.advance("checkpoint", name, (found, op) =>
-        applied(checkpointChart, found, { type: "found", instance, handle }, op)
-      );
-
-const located = (
-  store: Store,
-  hosts: Hosts,
-  host: string,
-  unheld: Set<string>
-) =>
-  Effect.gen(function* () {
-    const unknown = (yield* store.checkpoints)
-      .filter(
-        (row) =>
-          row.host === host &&
-          row.handle === undefined &&
-          phaseOf(row.state) === "ready"
-      )
-      .map(identityOf)
-      .filter((ref) => !unheld.has(unheldKey(host, ref)));
-
-    if (unknown.length === 0) {
-      return;
-    }
-
-    const { found } = yield* hosts.call(host, (api) =>
-      api.findCheckpoints({ checkpoints: unknown })
-    );
-
-    for (const ref of found) {
-      if (ref.handle === undefined) {
-        unheld.add(unheldKey(host, ref));
-      }
-
-      yield* handled(store, ref);
-    }
-  }).pipe(
-    Effect.catch(({ message }) =>
-      Effect.logWarning(
-        `couldn't find the handles of host ${host}'s checkpoints, so the next recheck tries again: ${message}`
-      )
-    )
-  );
-
 /**
  * How long a store names an instance it retired, from the first sweep that reached its host and left
  * nothing of it. A make that lands at its provider later than this is left there.
@@ -233,18 +182,13 @@ const swept = (store: Store, hosts: Hosts, host: string, sweeps: boolean) =>
     }
   });
 
-/**
- * The recheck, which remembers across its runs the checkpoints a host said its runtime keeps
- * nothing of its own for, so it asks for each row's handle only until it is found or so answered.
- */
+/** The recheck: it gives each restarted host its machines, sweeps what the store retired, and ends old failures. */
 export const recheckHosts = (
   store: Store,
   hosts: Hosts,
   failedRowsLast: Duration.Duration
-): Effect.Effect<void> => {
-  const unheld = new Set<string>();
-
-  return Effect.gen(function* () {
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
     const reached = yield* hosts.reachAll;
 
     yield* Effect.forEach(
@@ -254,15 +198,6 @@ export const recheckHosts = (
           ? Effect.void
           : adopted(store, hosts, member.id, info.boot),
       { discard: true }
-    );
-
-    yield* Effect.forEach(
-      reached,
-      ({ member, info }) =>
-        info === undefined
-          ? Effect.void
-          : located(store, hosts, member.id, unheld),
-      { concurrency: "unbounded", discard: true }
     );
 
     yield* Effect.forEach(
@@ -283,4 +218,3 @@ export const recheckHosts = (
       Effect.logError(`the recheck failed:\n${Cause.pretty(cause)}`)
     )
   );
-};

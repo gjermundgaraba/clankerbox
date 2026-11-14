@@ -987,15 +987,11 @@ export const make = (
           fs.remove(home.fetching, { recursive: true, force: true })
         )
       ),
-      find: Effect.fn("Tart.find")(function* (what, ref) {
-        const handle = what === "machine" ? vmOf(ref) : checkpointVm(ref);
+      find: Effect.fn("Tart.find")(function* (machine) {
+        const handle = vmOf(machine);
 
         if ((yield* home.look(handle)) !== undefined) {
           return handle;
-        }
-
-        if (what === "checkpoint") {
-          return undefined;
         }
 
         const { plist: file, log } = job(handle);
@@ -1008,6 +1004,7 @@ export const make = (
 
         return undefined;
       }),
+      checkpointHandle: checkpointVm,
       observe: Effect.fn("Tart.observe")(states),
       capacity: Effect.fn("Tart.capacity")((machines) =>
         Effect.gen(function* () {

@@ -88,9 +88,7 @@ the whole CLI span domains on purpose.
 - `copies.ts`: a copy's spec, and why its source refuses it.
 - `fleet.ts`: capacity, and what a recheck does beyond each loop: tells a
   restarted host its machines, again until it finds each, and stores the handle
-  and endpoint it answers in each row; asks each host for the handle of each
-  ready checkpoint row that has none, until it is found or its runtime keeps
-  nothing of its own for it; then sends each host that answers and sweeps the
+  and endpoint it answers in each row; then sends each host that sweeps the
   instances the store retired there, for its sweep, noting when a sweep first
   found each gone and keeping each it answers it left, and notes those of a
   host that doesn't sweep gone at once; and ends old failures and forgets
@@ -118,8 +116,6 @@ domain file never imports `platform/` or `composition/`.
   report until collected, fences by sequence, and tells a restart by `boot`. Its
   `sweep` deletes each machine the runtime's `owned` facet lists whose instance
   the control plane retired and no step it holds names, and answers what it left.
-  Its `find` answers the
-  handle of each checkpoint a row holds without one, in the time a read takes.
 - `guest.ts`: setup, preparation, and the hook a stop, pause or delete
   runs first, all run in the guest, and the end of a command cut short.
 - `usage.ts`: the machines in use, and the RAM a runtime holds beside them, for the RAM budget and capacity.
@@ -145,11 +141,14 @@ domain file never imports `platform/` or `composition/`.
   that joins a tailnet, and `BuildStore` (`builds.ts`), provided only on a host
   with a `builds` setting. Each `Runtime` method that acts on a machine or
   checkpoint already made takes a `Target`, the runtime's own opaque `Handle`
-  beside the name and instance. `find` answers the handle for an instance while
-  the runtime keeps anything of it, also of one a delete removed only part way.
-  `make`, the one create, restore or fork, answers the handle it made, and
-  `capture` and `install` the handle of the checkpoint they make. `Operations`
-  resolves each target from its row's handle, else by `find`. `runtime.ts`
+  beside the name and instance. `find` answers the handle for a machine's
+  instance while the runtime keeps anything of it, also of one a delete removed
+  only part way. `make`, the one create, restore or fork, answers the handle it
+  made, and `capture` and `install` the handle of the checkpoint they make,
+  which `checkpointHandle` derives from its identity on every runtime but one
+  whose provider mints it. `Operations` resolves each target from its row's
+  handle, else a machine's by `find` and a checkpoint's by `checkpointHandle`,
+  with no search. `runtime.ts`
   states the two rules every adapter keeps, and `tests/runtime-contract.ts` is
   the suite each runtime passes over its own fake provider: the fake runtime's
   three presets, `smolvm`, `tart` and `fixed`, which is neither and has size

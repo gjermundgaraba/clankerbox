@@ -502,9 +502,9 @@ describe("the boat runtime over fake boat", () => {
           expect((yield* Effect.flip(made(runtime, "late")))._tag).toBe(
             "Capacity"
           );
-          expect(yield* runtime.find("machine", late)).toBeUndefined();
+          expect(yield* runtime.find(late)).toBeUndefined();
           yield* land;
-          expect(yield* runtime.find("machine", late)).toBeDefined();
+          expect(yield* runtime.find(late)).toBeDefined();
 
           const machine = yield* made(runtime, "dev");
 
@@ -1101,7 +1101,7 @@ describe("each boat goal from each state boat holds", () => {
                   {
                     observe: (yield* runtime.observe([read])).get(read.name),
                     find:
-                      (yield* runtime.find("machine", read)) === read.handle
+                      (yield* runtime.find(read)) === read.handle
                         ? "found"
                         : "none",
                     capture: yield* outcome(

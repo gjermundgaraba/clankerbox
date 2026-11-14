@@ -91,7 +91,7 @@ outlives its host as a real runtime's does) and `evidence/`.
 | `build.log`         | the build's output                                                    |
 | `server.log`        | the control plane's log, warnings included                            |
 | `host-<id>.log`     | that host's log                                                       |
-| `runtime-calls.txt` | one line per runtime call as it happens, such as `capture snap`; `find <machine or checkpoint> <name>` each time the host searches its runtime for a resource whose handle it wasn't given; and on `tart`, whose fake is relayed as Tart is, `relay <name>` each time a relay opens |
+| `runtime-calls.txt` | one line per runtime call as it happens, such as `capture snap`; `find <name>` each time the host searches its runtime for a machine whose handle it wasn't given; and on `tart`, whose fake is relayed as Tart is, `relay <name>` each time a relay opens |
 | `transcript.txt`    | each `cb.sh` command as a JSON argv, its output and `[exit N]`, and each fault |
 | `<provider>-calls.txt` | on `smol-cloud` or `boat`, one line per call the fake API answers, `METHOD /path STATUS` with no body, and on `boat` `dropped` where `drop-answer` lost the answer |
 | `boat-requests.jsonl` | on `boat`, the same calls, each with its JSON body, so a proof can show what reached the provider and what didn't |
@@ -186,8 +186,7 @@ host logs the answer as a `fault:` line in `host-<id>.log`, with its time, and
 name, and any host with no running machine of that name; one whose fake marks nothing refuses `land-late`, since nothing would
 sweep what landed; and `boat` refuses `hold-capture`, and `smol-cloud` and `boat` refuse `repin`. A host started with `CLANKERBOX_FAKE_FAIL_FIND` set to
 names, comma-separated, as by `start-host` or `upgrade.sh`, fails each search
-for a machine or a checkpoint of those names, as smolvm does when its database
-is locked.
+for a machine of those names, as smolvm does when its database is locked.
 
 What a kill catches decides the outcome:
 

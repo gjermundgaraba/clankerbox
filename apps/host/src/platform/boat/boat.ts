@@ -662,20 +662,14 @@ export const make = (
       },
       startup: Effect.void,
       sizable: (machine, _from, to) => Effect.asVoid(typeFor(to, machine.name)),
-      find: (what, ref) =>
-        what === "machine"
-          ? searched(ref).pipe(
-              Effect.map((sandbox) =>
-                sandbox === undefined ? undefined : Handle.make(sandbox.id)
-              ),
-              Effect.mapError(internal(`couldn't search for ${ref.name}`))
-            )
-          : api.saved(snapshotName(ref)).pipe(
-              Effect.map((snapshot) =>
-                snapshot === undefined ? undefined : Handle.make(snapshot.name)
-              ),
-              Effect.mapError(internal(`couldn't search for ${ref.name}`))
-            ),
+      find: (machine) =>
+        searched(machine).pipe(
+          Effect.map((sandbox) =>
+            sandbox === undefined ? undefined : Handle.make(sandbox.id)
+          ),
+          Effect.mapError(internal(`couldn't search for ${machine.name}`))
+        ),
+      checkpointHandle: (checkpoint) => Handle.make(snapshotName(checkpoint)),
       observe: (machines) =>
         api.sandboxes(mark).pipe(
           Effect.map((sandboxes): Observed => {

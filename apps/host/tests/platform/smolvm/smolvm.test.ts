@@ -1929,36 +1929,18 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "find answers the handle a make gave its instance, none for another instance of its name, and a captured checkpoint's",
+    "find answers the handle a make gave its instance and none for another instance of its name",
     () =>
       Effect.gen(function* () {
         const model = smolvmModel();
         const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
         const later = { ...machine, instance: "76543210".repeat(4) };
         const { handle } = yield* runtime.make(machine, fromImage, on(10_000));
-        const uncaptured = yield* runtime.find("checkpoint", ramCheckpoint);
-
-        const captured = yield* runtime.capture(
-          { ...machine, handle },
-          ramCheckpoint
-        );
 
         expect({
-          machine: yield* runtime.find("machine", machine),
-          later: yield* runtime.find("machine", later),
-          uncaptured,
-          checkpoint: yield* runtime.find("checkpoint", ramCheckpoint),
-          laterCheckpoint: yield* runtime.find("checkpoint", {
-            ...ramCheckpoint,
-            instance: later.instance,
-          }),
-        }).toStrictEqual({
-          machine: handle,
-          later: undefined,
-          uncaptured: undefined,
-          checkpoint: captured,
-          laterCheckpoint: undefined,
-        });
+          machine: yield* runtime.find(machine),
+          later: yield* runtime.find(later),
+        }).toStrictEqual({ machine: handle, later: undefined });
       })
   );
 
@@ -2427,7 +2409,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a delete of a build whose base won't go keeps the build for find, so a retry with no handle retires the base",
+    "a delete of a build whose base won't go keeps the build, so a retry retires the base",
     () =>
       Effect.gen(function* () {
         const model = smolvmModel();
@@ -2443,15 +2425,9 @@ layer(NodeServices.layer)((it) => {
 
         model.faults.reply = undefined;
 
-        const found = yield* runtime.find("checkpoint", {
-          name: buildRef.name,
-          instance: buildRef.instance,
-        });
-
         yield* runtime.deleteCheckpoint(buildRef);
 
         expect(refused.message).toContain("database is locked");
-        expect(found).toBe(buildRef.handle);
         expect(basesIn(model)).toStrictEqual([]);
       })
   );

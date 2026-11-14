@@ -1423,19 +1423,14 @@ export const make = (
         );
         yield* Effect.forkIn(settle, layerScope);
       }),
-      find: Effect.fn("Smolvm.find")((what, ref) => {
-        const handle = nativeName(ref);
+      find: Effect.fn("Smolvm.find")((machine) => {
+        const handle = nativeName(machine);
 
-        return Effect.map(
-          what === "machine"
-            ? Effect.map(status(handle), (recorded) => recorded !== "missing")
-            : files(
-                `couldn't check ${storedAt(handle)}`,
-                fs.exists(storedAt(handle))
-              ),
-          (kept) => (kept ? handle : undefined)
+        return Effect.map(status(handle), (recorded) =>
+          recorded === "missing" ? undefined : handle
         );
       }),
+      checkpointHandle: nativeName,
       observe: Effect.fn("Smolvm.observe")(observe),
       capacity: Effect.fn("Smolvm.capacity")((machines) =>
         Effect.map(inUse(machines, observe), ({ running, unread }) =>

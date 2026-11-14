@@ -42,8 +42,9 @@ const identity = {
 
 /**
  * A machine or checkpoint as a runtime knows it. `instance` tells it from an earlier one of its
- * name. `handle` is absent until a report, an adopt or a find that carries it is stored, and the
- * host then finds it by `instance`.
+ * name. `handle` is absent until a report or an adopt that carries it is stored, and on a row an
+ * upgrade from schema 6 left: the host then finds a machine by `instance`, and derives a checkpoint's
+ * from its identity.
  */
 export const Ref = Schema.Struct(identity);
 
@@ -98,8 +99,9 @@ const hooked = {
 /**
  * What a host runs. `pin` is the runtime pin a VM booted under, compared with the host's own, and
  * `machines` the host's other machines, which admission counts beside the one a step boots. A step
- * acts on the machine or checkpoint its ref's `handle` names, or the one the runtime finds by its
- * `instance`; a remove or a delete of a checkpoint that finds none is done. A make that finds its
+ * acts on the machine or checkpoint its ref's `handle` names, or else on the machine the runtime
+ * finds by its `instance` and the checkpoint whose handle the runtime derives from its identity; a
+ * remove or a delete of a checkpoint that finds none is done. A make that finds its
  * instance made answers that machine, keeps an endpoint its ref has, and gives a new one a port off
  * `taken`, every port the host's other machines hold. A step
  * that acts by what its VM is doing reads it from the runtime as it begins. A make's
@@ -273,19 +275,6 @@ export const Adoption = Schema.Struct({
 export type Adoption = typeof Adoption.Type;
 
 /**
- * What a find of checkpoints answers: each it searched, with the handle its runtime holds it by, or
- * none where the runtime keeps no resource of its own for it, as for one held through its machine or
- * one that is gone, and those whose search failed or didn't end in time, which a later find tries
- * again.
- */
-export const Finding = Schema.Struct({
-  found: Schema.Array(Ref),
-  unresolved: Schema.Array(Name),
-});
-
-export type Finding = typeof Finding.Type;
-
-/**
  * What a sweep may delete on a host: the instances of the machines the control plane's store
  * retired there, each one a make it began on that host that ended with no row keeping it. No row
  * takes a retired instance again, so a set read at any time, by any store, names nothing a row wants.
@@ -344,14 +333,6 @@ export const HostHttp = ActionHttp.make(
         "Give a host that started the machines it holds, so it reaches each again, and answer what it holds of each it could resolve.",
       input: Machines,
       success: Adoption,
-    }),
-    Action.make("findCheckpoints", {
-      ...read,
-      error: [Invalid] as const,
-      description:
-        "Find each checkpoint by its instance, as a row with no handle names it, and answer the handle the runtime holds it by. It answers in the time a read takes, and leaves what it hadn't found by then unresolved.",
-      input: Schema.Struct({ checkpoints: Schema.Array(Ref) }),
-      success: Finding,
     }),
     Action.make("sweepRetired", {
       ...write,

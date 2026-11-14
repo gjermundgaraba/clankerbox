@@ -865,16 +865,15 @@ export const make = (
       },
       sizable: () => Effect.void,
       startup: Effect.void,
-      find: (what, ref) =>
-        what === "machine"
-          ? Effect.andThen(
-              told([ref]),
-              Effect.mapError(
-                byName(nameOf(ref.instance)),
-                internal(`the search for machine ${ref.name}`)
-              )
-            )
-          : Effect.undefined,
+      find: (machine) =>
+        Effect.andThen(
+          told([machine]),
+          Effect.mapError(
+            byName(nameOf(machine.instance)),
+            internal(`the search for machine ${machine.name}`)
+          )
+        ),
+      checkpointHandle: () => undefined,
       observe: (machines) =>
         Effect.andThen(
           told(machines),
