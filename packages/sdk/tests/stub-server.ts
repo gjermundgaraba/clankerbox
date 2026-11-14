@@ -30,6 +30,7 @@ import {
   RuntimeName,
   templateRef,
   version,
+  versionCheck,
   versionHeader,
   WrongState,
 } from "../src/index.ts";
@@ -74,6 +75,8 @@ export interface StubServerOptions {
   readonly bases?: readonly string[];
   readonly traits?: RuntimeTraits;
   readonly runtimeVersion?: string;
+  /** The clankerbox version the stub control plane runs, whose release it serves alone. */
+  readonly version?: string;
   readonly hosts?: readonly Host[];
   readonly capacity?: CapacityReport;
   readonly machines?: readonly Machine[];
@@ -822,7 +825,9 @@ export const stubServer = (options: StubServerOptions = {}) => {
       ),
   });
 
-  const routes = ActionHttp.layer(Http, [app]);
+  const routes = ActionHttp.layer(Http, [app]).pipe(
+    Layer.provide(versionCheck("control plane", options.version).layer)
+  );
 
   const web = HttpRouter.toWebHandler(
     routes.pipe(Layer.provide(HttpServer.layerServices)),

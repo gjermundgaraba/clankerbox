@@ -1030,6 +1030,37 @@ describe("client", () => {
     );
   });
 
+  describe("a control plane of another release", () => {
+    it.effect(
+      "refuses each call Invalid, naming both versions, and runs no mutation it is sent",
+      () =>
+        Effect.gen(function* () {
+          const [major = "0", minor = "0"] = version.split(".");
+          const other = `${major}.${Number(minor) + 1}.0`;
+          const stub = server({ version: other, machines: [machine("dev")] });
+
+          const [read, made, paused] = yield* withClient(stub, (client) =>
+            Effect.all([
+              Effect.flip(client.getMachine({ id: "dev" })),
+              Effect.flip(client.create("new", spec)),
+              Effect.flip(client.pauseMachine({ id: "dev" })),
+            ])
+          );
+
+          for (const refused of [read, made, paused]) {
+            expect(refused).toMatchObject({ _tag: "Invalid" });
+            expect(refused.message).toBe(
+              `this control plane runs clankerbox ${other} and the caller is ${version}; their major.minor must match`
+            );
+          }
+
+          expect(stub.calls).toStrictEqual([]);
+          expect(stub.held()).toStrictEqual(["dev"]);
+          expect(stub.row("dev")?.desired).toBe("running");
+        })
+    );
+  });
+
   describe("a mutation's timeout", () => {
     it.effect(
       "bounds the reply and the wait together, so a slow reply leaves the wait only what is left",

@@ -21,21 +21,22 @@ export const versionHeader = "clankerbox-version";
 
 const refusal = (
   server: string,
+  own: string,
   sent: Option.Option<string>
 ): Option.Option<Invalid> =>
   Option.match(sent, {
     onNone: () =>
       Option.some(
         new Invalid({
-          message: `the request carries no ${versionHeader} header; this ${server} runs clankerbox ${version} and serves only callers of release ${release(version)}`,
+          message: `the request carries no ${versionHeader} header; this ${server} runs clankerbox ${own} and serves only callers of release ${release(own)}`,
         })
       ),
     onSome: (caller) =>
-      release(caller) === release(version)
+      release(caller) === release(own)
         ? Option.none()
         : Option.some(
             new Invalid({
-              message: `this ${server} runs clankerbox ${version} and the caller is ${caller}; their major.minor must match`,
+              message: `this ${server} runs clankerbox ${own} and the caller is ${caller}; their major.minor must match`,
             })
           ),
   });
@@ -43,14 +44,15 @@ const refusal = (
 const encodeInvalid = Schema.encodeSync(Invalid);
 
 /**
- * Refuses a caller of another release, for a server of either contract, before it reads anything,
- * so a client never meets a trait value its release doesn't know.
+ * Refuses a caller of another release than `own`, this package's by default, for a server of either
+ * contract, before it reads anything, so a client never meets a trait value its release doesn't
+ * know and a mutation it sends is never run.
  */
-export const versionCheck = (server: string) =>
+export const versionCheck = (server: string, own: string = version) =>
   HttpRouter.middleware((handle) =>
     Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
       Option.match(
-        refusal(server, Headers.get(request.headers, versionHeader)),
+        refusal(server, own, Headers.get(request.headers, versionHeader)),
         {
           onNone: () => handle,
           onSome: (error) =>

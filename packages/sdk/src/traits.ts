@@ -52,7 +52,9 @@ const Growth = Schema.Literals(["grow", "any", "none"]);
  * Each field and each value is the client contract's, so they change only with a new major.minor,
  * which `versionCheck` refuses a client of another: a client decodes every trait it meets, and each
  * rule below decides on every value. A runtime added in a patch release declares values its release
- * knows; only its `runtime` name is new.
+ * knows; only its `runtime` name is new. The SDK's tests pin each release's in
+ * `tests/runtime-traits/`, and fail when these differ from the newest, and a tag publishes only the
+ * release the newest pins.
  */
 export const RuntimeTraits = Schema.Struct({
   runtime: RuntimeName,

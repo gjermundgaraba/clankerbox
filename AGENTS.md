@@ -254,7 +254,11 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
 - **Property and model tests** cover IDs, units, the RAM budget, recipe
   packing, the rules of runtime traits, and the store's `advance` and leases, as models checked against
   SQLite; a chart, small enough, is checked with every event from every leaf.
-  Each states what is right without calling the code under test.
+  Each states what is right without calling the code under test. The runtime
+  traits' JSON Schema is pinned per release in `packages/sdk/tests/runtime-traits/`:
+  a changed field or value takes a new file for the next minor, never an edit of
+  a pinned one, and `npm.yml` publishes a tag only for the release the newest
+  pins.
 - **A chart is pure and runs inside the write.** `applied` rebuilds a snapshot
   from the row, runs `transition` once inside the transaction of `store.advance`,
   and drops it, so no snapshot outlives the write. A chart has no `invoke`, no

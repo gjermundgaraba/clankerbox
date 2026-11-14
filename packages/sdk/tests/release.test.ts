@@ -21,12 +21,12 @@ const answering = HttpRouter.add(
   HttpServerResponse.text("pong")
 );
 
-const asking = (headers: Record<string, string>) =>
+const asking = (headers: Record<string, string>, own?: string) =>
   Effect.acquireUseRelease(
     Effect.sync(() =>
       HttpRouter.toWebHandler(
         answering.pipe(
-          Layer.provide(versionCheck("control plane").layer),
+          Layer.provide(versionCheck("control plane", own).layer),
           Layer.provide(HttpServer.layerServices)
         ),
         { disableLogger: true }
@@ -84,6 +84,23 @@ describe("release", () => {
         expect(error.message).toContain(`no ${versionHeader} header`);
         expect(error.message).toContain("this control plane");
         expect(error.message).toContain(release(version));
+      })
+  );
+
+  it.effect(
+    "a control plane of 0.41 refuses a 0.40.1 caller, and one of 0.40.1 a caller of 0.41, before its handler runs",
+    () =>
+      Effect.gen(function* () {
+        const older = yield* asking({ [versionHeader]: "0.40.1" }, "0.41.0");
+        const newer = yield* asking({ [versionHeader]: "0.41.0" }, "0.40.1");
+
+        expect([older.status, newer.status]).toStrictEqual([400, 400]);
+        expect((yield* decodeInvalid(older.body)).message).toBe(
+          "this control plane runs clankerbox 0.41.0 and the caller is 0.40.1; their major.minor must match"
+        );
+        expect((yield* decodeInvalid(newer.body)).message).toBe(
+          "this control plane runs clankerbox 0.40.1 and the caller is 0.41.0; their major.minor must match"
+        );
       })
   );
 

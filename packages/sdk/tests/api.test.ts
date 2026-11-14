@@ -2,7 +2,15 @@ import * as Action from "@gjermundgaraba/effect-actions/Action";
 import { Schema } from "effect";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
-import { Http, Invalid, PublicKeys, Unavailable, Usage } from "../src/index.ts";
+import {
+  Http,
+  Invalid,
+  PublicKeys,
+  Unavailable,
+  Usage,
+  version,
+  versionHeader,
+} from "../src/index.ts";
 import { operatorKey } from "./keys.ts";
 import { stubServer } from "./stub-server.ts";
 import type { StubServer } from "./stub-server.ts";
@@ -19,7 +27,7 @@ const post = async (path: string, body: Schema.Json) => {
   const response = await server.handler(
     new Request(`http://cbx.test/api/${path}`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", [versionHeader]: version },
       body: JSON.stringify(body),
     })
   );
@@ -65,7 +73,10 @@ describe("api", () => {
     const response = await server.handler(
       new Request("http://cbx.test/api/createMachine", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          [versionHeader]: version,
+        },
         body: JSON.stringify(create),
       })
     );
