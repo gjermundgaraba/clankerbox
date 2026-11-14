@@ -223,8 +223,9 @@ export builds a host over a fake runtime, its `./testing/smol-cloud` and
 plane over such hosts with real HTTP between them, and the SDK's
 `./testing/stub-server` serves a stub control plane over an in-memory transport,
 beside `./testing/clock`, `./testing/files` and `./testing/keys`, and
-`./testing/equality`, which every package's tests load as a setup file, so two
-tagged errors compare equal only with the same message. None of the
+`./testing/equality`, which every app's and package's tests load as a setup
+file, so two tagged errors compare equal only with the same message; the lint
+fence's tests, which compare no tagged errors, load none. None of the
 `./testing` exports is published.
 
 ## House style
