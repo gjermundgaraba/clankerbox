@@ -9,11 +9,12 @@ import { setTimeout as delay } from "node:timers/promises";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { Effect, Fiber, Function } from "effect";
+import { Effect, Fiber, Option } from "effect";
 import { expect } from "vite-plus/test";
 
 import { cliIn } from "../../src/platform/process.ts";
 import { make as relaying } from "../../src/platform/relay.ts";
+import type { Dial } from "../../src/runtime.ts";
 import { freePort } from "../support.ts";
 
 const address = "127.0.0.1";
@@ -26,6 +27,20 @@ const echo = (marker: string) =>
       marker,
     ])
   );
+
+const relayingOn = (port: number, dial: Dial) =>
+  Effect.gen(function* () {
+    const bound = yield* (yield* relaying).bind(address, port);
+
+    const listener = yield* Option.match(bound, {
+      onNone: () => Effect.die(`port ${port} was taken`),
+      onSome: Effect.succeed,
+    });
+
+    yield* listener.relay(dial);
+
+    return listener;
+  });
 
 const connected = async (port: number): Promise<Socket> => {
   const socket = connect({ host: address, port });
@@ -91,11 +106,7 @@ layer(NodeServices.layer)((it) => {
         const port = yield* freePort;
         const payload = randomBytes(4 * 1024 * 1024);
 
-        yield* (yield* relaying).listen(
-          address,
-          port,
-          Function.constant(yield* echo(marker))
-        );
+        yield* relayingOn(port, yield* echo(marker));
 
         expect(
           (yield* Effect.promise(
@@ -113,11 +124,7 @@ layer(NodeServices.layer)((it) => {
         const marker = path.join(yield* scratch, "marker");
         const port = yield* freePort;
 
-        yield* (yield* relaying).listen(
-          address,
-          port,
-          Function.constant(yield* echo(marker))
-        );
+        yield* relayingOn(port, yield* echo(marker));
 
         const socket = yield* Effect.promise(async () => await connected(port));
 
@@ -139,11 +146,7 @@ layer(NodeServices.layer)((it) => {
           randomBytes(64 * 1024)
         );
 
-        yield* (yield* relaying).listen(
-          address,
-          port,
-          Function.constant(yield* echo(marker))
-        );
+        yield* relayingOn(port, yield* echo(marker));
 
         const echoed = yield* Effect.promise(
           async () =>
@@ -164,23 +167,13 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "listening twice keeps one listener, and closing it leaves open connections running",
+    "a port the relays hold binds no second time, and closing it leaves open connections running",
     () =>
       Effect.gen(function* () {
         const marker = path.join(yield* scratch, "marker");
         const port = yield* freePort;
-        const relays = yield* relaying;
-
-        yield* relays.listen(
-          address,
-          port,
-          Function.constant(yield* echo(marker))
-        );
-        yield* relays.listen(
-          address,
-          port,
-          Function.constant(yield* echo(marker))
-        );
+        const listener = yield* relayingOn(port, yield* echo(marker));
+        const again = yield* (yield* relaying).bind(address, port);
 
         const open = yield* Effect.promise(async () => await connected(port));
         const chunks: Buffer[] = [];
@@ -197,7 +190,7 @@ layer(NodeServices.layer)((it) => {
         yield* Effect.promise(async () => {
           await echoed;
         });
-        yield* relays.close(port);
+        yield* listener.close;
         expect(yield* refusal(port)).toHaveProperty("code", "ECONNREFUSED");
 
         open.end("still here");
@@ -206,13 +199,54 @@ layer(NodeServices.layer)((it) => {
         });
         open.destroy();
 
+        expect(Option.isNone(again)).toBe(true);
         expect(Buffer.concat(chunks).toString()).toBe("first, still here");
       })
   );
 
-  it.effect("a port something else holds is Internal, naming the address", () =>
+  it.effect(
+    "a bound port closes each connection until it relays, and carries each after",
+    () =>
+      Effect.gen(function* () {
+        const marker = path.join(yield* scratch, "marker");
+        const port = yield* freePort;
+        const bound = yield* (yield* relaying).bind(address, port);
+
+        const listener = yield* Option.match(bound, {
+          onNone: () => Effect.die(`port ${port} was taken`),
+          onSome: Effect.succeed,
+        });
+
+        const early = yield* Effect.promise(async () => {
+          const socket = await connected(port);
+          const chunks: Buffer[] = [];
+
+          socket.on("data", (chunk: Buffer) => {
+            chunks.push(chunk);
+          });
+          socket.on("error", () => {
+            socket.destroy();
+          });
+          await once(socket, "close");
+
+          return Buffer.concat(chunks);
+        });
+
+        yield* listener.relay(yield* echo(marker));
+
+        const relayed = yield* Effect.promise(
+          async () => await roundTrip(port, Buffer.from("now"))
+        );
+
+        expect([early.toString(), relayed.toString()]).toStrictEqual([
+          "",
+          "now",
+        ]);
+      })
+  );
+
+  it.effect("a port another program holds binds none", () =>
     Effect.gen(function* () {
-      const marker = path.join(yield* scratch, "marker");
       const port = yield* freePort;
       const holder = createServer();
 
@@ -230,43 +264,29 @@ layer(NodeServices.layer)((it) => {
           })
       );
 
-      const error = yield* Effect.flip(
-        (yield* relaying).listen(
-          address,
-          port,
-          Function.constant(yield* echo(marker))
-        )
+      expect(Option.isNone(yield* (yield* relaying).bind(address, port))).toBe(
+        true
       );
-
-      expect(error._tag).toBe("Internal");
-      expect(error.message).toContain(`${address}:${port}`);
     })
   );
 
   it.effect(
-    "a listen interrupted before it listens leaves the port free, and a later listen takes it",
+    "a bind interrupted before it listens leaves the port free, and a later bind takes it",
     () =>
       Effect.gen(function* () {
         const marker = path.join(yield* scratch, "marker");
         const port = yield* freePort;
         const relays = yield* relaying;
 
-        const fiber = yield* Effect.forkChild(
-          relays.listen(address, port, Function.constant(yield* echo(marker))),
-          {
-            startImmediately: true,
-          }
-        );
+        const fiber = yield* Effect.forkChild(relays.bind(address, port), {
+          startImmediately: true,
+        });
 
         yield* Fiber.interrupt(fiber);
 
         expect(yield* refusal(port)).toHaveProperty("code", "ECONNREFUSED");
 
-        yield* relays.listen(
-          address,
-          port,
-          Function.constant(yield* echo(marker))
-        );
+        yield* relayingOn(port, yield* echo(marker));
 
         expect(
           (yield* Effect.promise(

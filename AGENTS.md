@@ -125,15 +125,19 @@ domain file never imports `platform/` or `composition/`.
 - `settings.ts`: what a host runs on.
 - `builds.ts`: `publish`, `fetch` and `unpublish` of a checkpoint through the
   `BuildStore` port, objects by key and a manifest per build, written last.
-- `reach.ts`: the `Reaches` service. It picks a make's port, answers the
-  endpoint a client reaches it at, has a `published` runtime bind it, and opens,
-  closes and on adopt reopens the relays of a `relayed` runtime.
+- `reach.ts`: the `Reaches` service. It claims a make's port, answers the
+  endpoint a client reaches it at, and has a `published` runtime bind it, after
+  a probe finds it free. A `relayed` runtime's port it binds as it claims it, so
+  no other program takes it while the VM boots, and holds it for the machine
+  until a remove or a failed make lets it go; it relays it once the make has
+  made the VM, and on adopt binds it again, or another port where another
+  program took that one while the host was down, answering where.
 - Ports: `Runtime` (`runtime.ts`), with its `traits`, its `guest` (`debian` or
   `macos`, which picks the base `guest.ts` prepares), its `reach` (`published` or `relayed`)
   its `prepares` (`always` where its images lack the login user, else
   `with-setup`), and the facets `admission`, `files` and `owned`, each present or
   absent as a whole,
-  `PortProbe` (`machine-ports.ts`), `Box` (`box.ts`), what the box tells a host
+  `PortProbe` (`machine-ports.ts`), for a `published` runtime's port, `Box` (`box.ts`), what the box tells a host
   beside its config: its uid, whether a process has ended, and its ephemeral
   ports, `Relays` (`reach.ts`), `Tailnet`
   (`tailnet.ts`), which mints a machine's tailnet key, provided only on a host
@@ -154,8 +158,8 @@ domain file never imports `platform/` or `composition/`.
 
 Adapters live in `platform/`: `bind-probe.ts` (`PortProbe`), `box.ts` (`Box`,
 which reads Linux's `ip_local_port_range`), `relay.ts`
-(`Relays`, a TCP listener that carries each connection through a runtime's
-dial), `tailscale.ts` (`Tailnet`, over Tailscale's API), `s3.ts` (`BuildStore`,
+(`Relays`, a TCP listener bound at the claim, which closes each connection until
+it carries them through the machine's dial), `tailscale.ts` (`Tailnet`, over Tailscale's API), `s3.ts` (`BuildStore`,
 over S3, path-style and signed), the runtimes `smolvm/` (the lock that keeps
 a box to one smolvm host in `one-per-box.ts`), `tart/` (the Tart home's VM
 directories in `home.ts`, a VM's lock read through macOS's Perl in `locks.ts`,

@@ -4,10 +4,10 @@ import type { Server, Socket } from "node:net";
 import * as NodeStream from "@effect/platform-node/NodeStream";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, FiberSet, Function, Layer, Stream } from "effect";
-import type { Scope } from "effect";
+import type { Scope, Option } from "effect";
 
 import { Relays } from "../reach.ts";
-import type { RelaysInterface } from "../reach.ts";
+import type { Listener, RelaysInterface } from "../reach.ts";
 import type { Dial } from "../runtime.ts";
 
 const write = (socket: Socket, chunk: Uint8Array): Effect.Effect<void> =>
@@ -62,50 +62,50 @@ const connection = (
 export const make: Effect.Effect<RelaysInterface, never, Scope.Scope> =
   Effect.gen(function* () {
     const run = yield* FiberSet.makeRuntime<never, unknown, never>();
-    const listeners = new Map<number, Server>();
+    const servers = new Set<Server>();
 
-    const close = (port: number) =>
+    const closed = (server: Server) =>
       Effect.sync(() => {
-        listeners.get(port)?.close();
-        listeners.delete(port);
+        if (servers.delete(server)) {
+          server.close();
+        }
       });
 
     yield* Effect.addFinalizer(() =>
-      Effect.forEach([...listeners.keys()], close, { discard: true })
+      Effect.forEach([...servers], closed, { discard: true })
     );
 
-    const listen = (
+    const bind = (
       address: string,
-      port: number,
-      dialer: () => Dial
-    ): Effect.Effect<void, Internal> =>
+      port: number
+    ): Effect.Effect<Option.Option<Listener>, Internal> =>
       Effect.callback((resume) => {
-        if (listeners.has(port)) {
-          resume(Effect.void);
-
-          return;
-        }
-
         const server = createServer({ allowHalfOpen: true });
+        let carried: Dial | undefined;
 
-        const refused = (error: Error) => {
+        const refused = (error: NodeJS.ErrnoException) => {
           resume(
-            Effect.fail(
-              new Internal({
-                message: `the relay couldn't listen on ${address}:${port}: ${error.message}`,
-              })
-            )
+            error.code === "EADDRINUSE" || error.code === "EACCES"
+              ? Effect.succeedNone
+              : Effect.fail(
+                  new Internal({
+                    message: `the relay couldn't listen on ${address}:${port}: ${error.message}`,
+                  })
+                )
           );
         };
 
         server.once("error", refused);
 
         server.listen({ host: address, port, exclusive: true }, () => {
-          const dial = dialer();
-
           server.on("connection", (socket) => {
             socket.on("error", Function.constVoid);
-            run(connection(address, socket, port, dial));
+
+            if (carried === undefined) {
+              socket.destroy();
+            } else {
+              run(connection(address, socket, port, carried));
+            }
           });
           server.off("error", refused);
           server.on("error", (error) => {
@@ -113,18 +113,26 @@ export const make: Effect.Effect<RelaysInterface, never, Scope.Scope> =
               Effect.logWarning(`relay ${address}:${port}: ${error.message}`)
             );
           });
-          listeners.set(port, server);
-          resume(Effect.void);
+          servers.add(server);
+          resume(
+            Effect.succeedSome({
+              relay: (dial) =>
+                Effect.sync(() => {
+                  carried = dial;
+                }),
+              close: closed(server),
+            })
+          );
         });
 
         return Effect.sync(() => {
-          if (listeners.get(port) !== server) {
+          if (!servers.has(server)) {
             server.close();
           }
         });
       });
 
-    return { listen, close };
+    return { bind };
   });
 
 export const layer: Layer.Layer<Relays> = Layer.effect(Relays, make);

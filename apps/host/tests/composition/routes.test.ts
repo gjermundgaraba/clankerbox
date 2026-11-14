@@ -451,15 +451,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a machine whose relay adoptMachines couldn't listen on is logged, and its remove is done",
+    "a machine whose port another program took while its host was down is reached at another, which adoptMachines answers, and its remove closes it",
     () =>
       Effect.gen(function* () {
-        const logged: unknown[] = [];
-
-        const { url, fake } = yield* serve({
-          runtime: { relayed: true },
-          logger: Logger.make(({ message }) => logged.push(message)),
-        });
+        const { url, fake } = yield* serve({ runtime: { relayed: true } });
 
         const blocked = {
           ...dev,
@@ -469,7 +464,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         keptByRuntime(fake, blocked);
 
-        const [answer, report] = yield* Effect.scoped(
+        const [answer, listening, report] = yield* Effect.scoped(
           Effect.andThen(
             holding(blocked.endpoint.port),
             Effect.gen(function* () {
@@ -477,26 +472,29 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
                 machines: [blocked],
               });
 
+              const moved = yield* accepts(suitePorts.routes.first);
+
               yield* deliver(url, removed("op-1", blocked));
 
-              return [adopted, yield* finished(url, "op-1")] as const;
+              return [adopted, moved, yield* finished(url, "op-1")] as const;
             })
           )
         );
 
-        expect(answer.status).toBeLessThan(300);
-        expect(logged.flat()).toContainEqual(
-          expect.stringMatching(
-            new RegExp(
-              `^adopt: no relay for blocked: the relay couldn't listen on 127\\.0\\.0\\.1:${suitePorts.routes.last}: `,
-              "u"
-            )
-          )
-        );
+        expect(JSON.parse(answer.body)).toMatchObject({
+          adopted: [
+            {
+              name: "blocked",
+              endpoint: { host: "127.0.0.1", port: suitePorts.routes.first },
+            },
+          ],
+        });
         expect([
+          listening,
           report.status,
           fake.calls.includes("delete blocked"),
-        ]).toStrictEqual(["done", true]);
+          yield* accepts(suitePorts.routes.first),
+        ]).toStrictEqual([true, "done", true, false]);
       })
   );
 

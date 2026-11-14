@@ -79,6 +79,9 @@ export const suitePorts = {
   get serverMachines() {
     return inSlot(80);
   },
+  get reach() {
+    return inSlot(90);
+  },
   get planes() {
     return inSlot(100, 4 * planeRange);
   },

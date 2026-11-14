@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { createServer } from "node:http";
 import { connect, createServer as createTcpServer } from "node:net";
 import type { Server } from "node:net";
@@ -234,6 +235,41 @@ export const freePort = Effect.callback<number>((resume) => {
     });
   });
 });
+
+/** Whether another program could bind the loopback port now: it lets go of it at once. */
+export const strangerBinds = (port: number) =>
+  Effect.callback<boolean>((resume) => {
+    const server = createTcpServer();
+
+    server.once("error", () => {
+      resume(Effect.succeed(false));
+    });
+    server.listen({ host: "127.0.0.1", port, exclusive: true }, () => {
+      server.close(() => {
+        resume(Effect.succeed(true));
+      });
+    });
+  });
+
+/** What a loopback port echoes of the payload, once the client has sent it all. */
+export const roundTrip = (port: number, payload: string) =>
+  Effect.promise(async () => {
+    const socket = connect({ host: "127.0.0.1", port });
+    const chunks: Buffer[] = [];
+
+    await once(socket, "connect");
+    socket.on("data", (chunk: Buffer) => {
+      chunks.push(chunk);
+    });
+
+    const ended = once(socket, "end");
+
+    socket.end(payload);
+    await ended;
+    socket.destroy();
+
+    return Buffer.concat(chunks).toString();
+  });
 
 export const holding = (port: number) =>
   Effect.acquireRelease(

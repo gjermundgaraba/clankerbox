@@ -25,6 +25,8 @@ const probing = (busy: ReadonlySet<number>) => {
 
 const range: PortRange = { first: 10_000, last: 10_004 };
 
+const machine = { name: "dev", instance: "dev-instance" };
+
 const reachesOn = (probe: Probe, address: string) =>
   Reach.make({ _tag: "published", address }, range).pipe(
     Effect.provide(
@@ -33,13 +35,13 @@ const reachesOn = (probe: Probe, address: string) =>
   );
 
 it.effect(
-  "the first port in the range that no row holds and the probe finds free is picked",
+  "a published runtime's make claims the first port in the range that no row holds and the probe finds free",
   () =>
     Effect.gen(function* () {
       const { probe, probed } = probing(new Set([10_001]));
 
       const reaches = yield* reachesOn(probe, "127.0.0.1");
-      const port = yield* reaches.pick(new Set([10_000, 10_002]));
+      const { port } = yield* reaches.claim(machine, new Set([10_000, 10_002]));
 
       expect(port).toBe(10_003);
       expect(probed).toStrictEqual([10_001, 10_003]);
@@ -55,7 +57,7 @@ it.effect(
       const reaches = yield* reachesOn(probe, "100.64.0.10");
 
       const error = yield* Effect.flip(
-        reaches.pick(new Set([10_000, 10_001, 10_002]))
+        reaches.claim(machine, new Set([10_000, 10_001, 10_002]))
       );
 
       expect(error._tag).toBe("Capacity");

@@ -984,7 +984,7 @@ export const make = (
                 runtime.delete(machine, keep)
               )
             ),
-            reaches.close(step.machine.name)
+            reaches.close(step.machine)
           );
         }
 
@@ -1103,16 +1103,21 @@ export const make = (
           : []
       );
 
-    const picking = (progress: Progress, step: Make) =>
-      Effect.match(reaches.pick(new Set([...step.taken, ...heldPorts()])), {
-        onFailure: (error): Effect.Effect<void, HostError> =>
-          Effect.fail(error),
-        onSuccess: (port) => {
-          progress.outcome = { endpoint: reaches.endpoint(port) };
+    const claimed = (progress: Progress, step: Make) =>
+      Effect.match(
+        reaches.claim(step.machine, new Set([...step.taken, ...heldPorts()])),
+        {
+          onFailure: (error) => ({
+            work: Effect.fail<HostError>(error),
+            release: Effect.void,
+          }),
+          onSuccess: ({ port, release }) => {
+            progress.outcome = { endpoint: reaches.endpoint(port) };
 
-          return made(progress, step, port);
-        },
-      });
+            return { work: made(progress, step, port), release };
+          },
+        }
+      );
 
     const forgetting = (id: string) =>
       Effect.suspend(() => {
@@ -1137,13 +1142,13 @@ export const make = (
           error: undefined,
         };
 
-        const work =
-          step._tag === "make"
-            ? yield* picking(progress, step)
-            : perform(progress, step);
-
         return yield* Effect.uninterruptible(
           Effect.gen(function* () {
+            const { work, release } =
+              step._tag === "make"
+                ? yield* claimed(progress, step)
+                : { work: perform(progress, step), release: Effect.void };
+
             const fiber = yield* Effect.forkIn(
               apartFromItsRequest(
                 operation,
@@ -1154,7 +1159,11 @@ export const make = (
                         Effect.uninterruptible(forgetting(before)),
                         work
                       ),
-                  (exit) => ended(progress, id, name, exit)
+                  (exit) =>
+                    Effect.andThen(
+                      Exit.isSuccess(exit) ? Effect.void : release,
+                      ended(progress, id, name, exit)
+                    )
                 )
               ),
               hostScope
@@ -1354,7 +1363,7 @@ export const make = (
           { discard: true }
         );
 
-        yield* accepting.withPermits(1)(
+        const reached = yield* accepting.withPermits(1)(
           reaches.adopt(
             adopted.flatMap(({ machine, handle }) =>
               handle === undefined ||
@@ -1378,7 +1387,11 @@ export const make = (
             ...(handle === undefined ? {} : { handle }),
             ...(machine.endpoint === undefined
               ? {}
-              : { endpoint: reaches.endpoint(machine.endpoint.port) }),
+              : {
+                  endpoint: reaches.endpoint(
+                    reached.get(machine.name) ?? machine.endpoint.port
+                  ),
+                }),
           })),
           unresolved: unresolved.map(({ machine }) => machine.name),
         };

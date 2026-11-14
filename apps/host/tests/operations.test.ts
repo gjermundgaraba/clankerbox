@@ -62,7 +62,7 @@ import {
   fakeRuntime,
   writeTailscaleStubs,
 } from "./fake-runtime.ts";
-import type { FakeRuntimeName, Preset } from "./fake-runtime.ts";
+import type { FakeRuntime, FakeRuntimeName, Preset } from "./fake-runtime.ts";
 import {
   accepts,
   holding,
@@ -70,6 +70,8 @@ import {
   hostKeySetup,
   memoryBuildStore,
   pause,
+  roundTrip,
+  strangerBinds,
   suitePorts,
 } from "./support.ts";
 
@@ -85,6 +87,7 @@ const freePorts: ReadonlyMap<FakeRuntimeName, string> = new Map([
 ]);
 
 interface RunnerOptions {
+  readonly fake?: FakeRuntime;
   readonly builds?: Layer.Layer<BuildStore>;
   readonly as?: FakeRuntimeName;
   readonly pin?: string;
@@ -103,14 +106,16 @@ const runner = (options?: RunnerOptions) =>
     const dir = yield* scratch;
     const faked = options?.as ?? "smolvm";
 
-    const fake = fakeRuntime({
-      dir,
-      as: faked,
-      ramBudgetMib: options?.ramBudgetMib,
-      pin: options?.pin,
-      relayed: options?.relayed,
-      owned: options?.owned,
-    });
+    const fake =
+      options?.fake ??
+      fakeRuntime({
+        dir,
+        as: faked,
+        ramBudgetMib: options?.ramBudgetMib,
+        pin: options?.pin,
+        relayed: options?.relayed,
+        owned: options?.owned,
+      });
 
     const first = options?.relayed === true ? relayPorts : firstPort;
 
@@ -1304,10 +1309,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a delivery whose caller leaves during the pick records nothing, and can be sent again",
+    "a delivery whose caller leaves during the pick still runs once, and sending it again answers that operation",
     () =>
       Effect.gen(function* () {
         const probing = yield* Deferred.make<undefined>();
+        const go = yield* Deferred.make<undefined>();
         const held = yield* Ref.make(true);
 
         const host = yield* runner({
@@ -1317,7 +1323,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
                 hold
                   ? Effect.andThen(
                       Deferred.succeed(probing, undefined),
-                      Effect.never
+                      Effect.as(Deferred.await(go), true)
                     )
                   : Effect.succeed(true)
               ),
@@ -1328,16 +1334,19 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const leaving = yield* Effect.forkChild(deliver(host, operation));
 
         yield* Deferred.await(probing);
-        yield* Fiber.interrupt(leaving);
 
-        expect((yield* host.operations.wait(operation.id)).status).toBe(
-          "absent"
-        );
+        const left = yield* Effect.forkChild(Fiber.interrupt(leaving));
+
+        yield* Deferred.succeed(go, undefined);
+        yield* Fiber.join(left);
 
         const sent = yield* deliver(host, operation);
 
-        expect(sent.status).toBe("running");
-        expect((yield* ended(host, operation.id)).status).toBe("done");
+        expect([
+          (yield* ended(host, operation.id)).status,
+          sent.outcome.endpoint?.port,
+          counted(host.fake.calls, "create dev"),
+        ]).toStrictEqual(["done", firstPort, 1]);
       })
   );
 
@@ -3559,60 +3568,39 @@ const refusedListen = (port: number) =>
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
-    "a make on a relayed runtime listens on its port once the runtime's make has answered, and one whose port is held fails with the listen error and the handle of what it made, which its remove deletes",
+    "a make on a relayed runtime holds its port from the pick, so a program that binds it during the boot is refused and the machine ends reachable there, and a port another program holds is skipped",
     () =>
       Effect.gen(function* () {
         const host = yield* runner({ relayed: true });
 
-        const refused = yield* Effect.scoped(
+        const skipped = yield* Effect.scoped(
           Effect.andThen(holding(relayPorts), finished(host, makes("dev")))
         );
 
-        const { handle } = refused.outcome;
-
-        const removed = yield* finished(
-          host,
-          {
-            _tag: "remove",
-            keep: [],
-            machine: {
-              ...ref("dev"),
-              ...(handle === undefined ? {} : { handle }),
-            },
-          },
-          2
-        );
-
-        expect(errorOf(refused)).toStrictEqual(["failed", "Internal"]);
-        expect(refused.error?.message).toMatch(refusedListen(relayPorts));
-        expect(handle).toBeDefined();
-        expect([
-          counted(host.fake.calls, "create dev"),
-          removed.status,
-          host.fake.machines.has("dev"),
-        ]).toStrictEqual([1, "done", false]);
-
         const { release, entered } = host.fake.holdNext("create");
         const making = delivery(makes("app"));
+        const accepted = yield* deliver(host, making);
 
-        yield* deliver(host, making);
         yield* entered;
 
-        const early = yield* accepts(relayPorts);
+        const duringBoot = yield* strangerBinds(portOf(accepted) ?? 0);
 
         yield* release;
 
         const made = yield* ended(host, making.id);
 
-        expect([
-          early,
-          made.status,
-          portOf(made),
-          yield* accepts(relayPorts),
-        ]).toStrictEqual([false, "done", relayPorts, true]);
+        expect([duringBoot, made.status]).toStrictEqual([false, "done"]);
+        expect([skipped.status, portOf(skipped), portOf(made)]).toStrictEqual([
+          "done",
+          relayPorts + 1,
+          relayPorts,
+        ]);
+        expect(yield* roundTrip(relayPorts, "to the guest")).toBe(
+          "to the guest"
+        );
         expect(
           host.fake.calls.filter((call) => call.startsWith("relay"))
-        ).toStrictEqual(["relay app"]);
+        ).toStrictEqual(["relay dev", "relay app"]);
       })
   );
 
@@ -3674,14 +3662,19 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a start listens on its row's port before the runtime starts the machine, and one whose port is held fails before the runtime is called",
+    "a start on a host restarted since the make listens on its row's port before the runtime starts it, and one whose port is held fails before the runtime is called",
     () =>
       Effect.gen(function* () {
-        const host = yield* runner({ relayed: true });
+        const before = yield* runner({ relayed: true });
+        const made = yield* finished(before, makes("dev"));
+        const host = yield* runner({ relayed: true, fake: before.fake });
 
-        yield* finished(host, makes("dev"));
-
-        const blocked = ref("dev", reached(relayPorts + 5));
+        const blocked = ref("dev", {
+          ...reached(relayPorts + 5),
+          ...(made.outcome.handle === undefined
+            ? {}
+            : { handle: made.outcome.handle }),
+        });
 
         const refused = yield* Effect.scoped(
           Effect.andThen(
@@ -3735,71 +3728,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(errorOf(refused)).toStrictEqual(["failed", "Missing"]);
         expect(yield* accepts(portIn(ghost))).toBe(false);
-      })
-  );
-
-  it.effect(
-    "a fork or a restore whose port is held fails with the listen error once the runtime has made it, and reports what it made",
-    () =>
-      Effect.gen(function* () {
-        const host = yield* runner({ relayed: true, as: "tart" });
-        const src = ref("src", reached(relayPorts));
-
-        yield* finished(host, makes("src"));
-        yield* finished(host, { _tag: "stop", machine: src, machines: [] }, 2);
-
-        const snap = yield* finished(host, {
-          _tag: "capture",
-          machine: src,
-          checkpoint: checkpoint("snap"),
-        });
-
-        const refused = yield* Effect.scoped(
-          Effect.andThen(
-            holding(relayPorts + 1),
-            Effect.forEach(
-              [
-                makes("twin", {
-                  source: { _tag: "machine", machine: src },
-                  taken: [relayPorts],
-                }),
-                makes("copy", {
-                  source: {
-                    _tag: "checkpoint",
-                    checkpoint: {
-                      ...checkpoint("snap"),
-                      ...(snap.outcome.handle === undefined
-                        ? {}
-                        : { handle: snap.outcome.handle }),
-                    },
-                  },
-                  taken: [relayPorts],
-                }),
-              ],
-              (step) => finished(host, step)
-            )
-          )
-        );
-
-        expect(snap.status).toBe("done");
-
-        for (const report of refused) {
-          expect([
-            ...errorOf(report),
-            report.error?.message,
-            report.outcome.handle !== undefined,
-          ]).toStrictEqual([
-            "failed",
-            "Internal",
-            expect.stringMatching(refusedListen(relayPorts + 1)),
-            true,
-          ]);
-        }
-
-        expect([
-          counted(host.fake.calls, "fork twin"),
-          counted(host.fake.calls, "restore copy"),
-        ]).toStrictEqual([1, 1]);
       })
   );
 

@@ -1,17 +1,20 @@
-import { once } from "node:events";
-import { connect } from "node:net";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { Effect, Layer, Logger } from "effect";
 import { expect } from "vite-plus/test";
 
-import { defaultMachinePorts, PortProbe } from "../src/machine-ports.ts";
+import { PortProbe } from "../src/machine-ports.ts";
 import * as Relay from "../src/platform/relay.ts";
 import * as Reach from "../src/reach.ts";
 import { Handle } from "../src/runtime.ts";
 import type { Reach as RuntimeReach } from "../src/runtime.ts";
-import { accepts, freePort, holding } from "./support.ts";
+import {
+  accepts,
+  freePort,
+  holding,
+  roundTrip,
+  suitePorts,
+} from "./support.ts";
 
 const machineOn = (name: string): Effect.Effect<Reach.Reopened> =>
   Effect.map(freePort, (port) => ({
@@ -38,29 +41,8 @@ const reachesOf = (reach: RuntimeReach) =>
       )
     ),
     (context) =>
-      Reach.make(reach, defaultMachinePorts).pipe(
-        Effect.provideContext(context)
-      )
+      Reach.make(reach, suitePorts.reach).pipe(Effect.provideContext(context))
   );
-
-const roundTrip = (port: number, payload: string) =>
-  Effect.promise(async () => {
-    const socket = connect({ host: "127.0.0.1", port });
-    const chunks: Buffer[] = [];
-
-    await once(socket, "connect");
-    socket.on("data", (chunk: Buffer) => {
-      chunks.push(chunk);
-    });
-
-    const ended = once(socket, "end");
-
-    socket.end(payload);
-    await ended;
-    socket.destroy();
-
-    return Buffer.concat(chunks).toString();
-  });
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect("a relayed runtime's port carries bytes to its dial", () =>
@@ -76,63 +58,76 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     })
   );
 
-  it.effect("adopt reopens every relay of the machines given", () =>
-    Effect.gen(function* () {
-      const reaches = yield* reachesOf(relayed);
-      const [up, down] = [yield* machineOn("up"), yield* machineOn("down")];
+  it.effect(
+    "adopt reopens every relay of the machines given, and answers each one's port",
+    () =>
+      Effect.gen(function* () {
+        const reaches = yield* reachesOf(relayed);
+        const [up, down] = [yield* machineOn("up"), yield* machineOn("down")];
 
-      yield* reaches.adopt([up, down]);
+        const reached = yield* reaches.adopt([up, down]);
 
-      expect([
-        yield* accepts(up.port),
-        yield* accepts(down.port),
-      ]).toStrictEqual([true, true]);
-    })
-  );
-
-  it.effect("a port adopt can't listen on is logged and the rest served", () =>
-    Effect.gen(function* () {
-      const reaches = yield* reachesOf(relayed);
-
-      const [blocked, other] = [
-        yield* machineOn("dev"),
-        yield* machineOn("other"),
-      ];
-
-      const logged: unknown[] = [];
-
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          yield* holding(blocked.port);
-
-          yield* reaches
-            .adopt([blocked, other])
-            .pipe(
-              Effect.provide(
-                Logger.layer([
-                  Logger.make(({ message }) => logged.push(message)),
-                ])
-              )
-            );
-        })
-      );
-
-      expect(logged).toStrictEqual([
-        [
-          expect.stringMatching(
-            new RegExp(
-              `^adopt: no relay for dev: the relay couldn't listen on 127\\.0\\.0\\.1:${blocked.port}: `,
-              "u"
-            )
-          ),
-        ],
-      ]);
-      expect(yield* accepts(other.port)).toBe(true);
-    })
+        expect([
+          yield* accepts(up.port),
+          yield* accepts(down.port),
+          [...reached],
+        ]).toStrictEqual([
+          true,
+          true,
+          [
+            ["up", up.port],
+            ["down", down.port],
+          ],
+        ]);
+      })
   );
 
   it.effect(
-    "a close after adopt ends the relay, knowing the machine only by name, and one of a machine it never opened does nothing",
+    "a port another program took while the host was down moves its machine to a free one, which adopt answers and relays",
+    () =>
+      Effect.gen(function* () {
+        const reaches = yield* reachesOf(relayed);
+
+        const [taken, other] = [
+          yield* machineOn("dev"),
+          yield* machineOn("other"),
+        ];
+
+        const logged: unknown[] = [];
+
+        const reached = yield* Effect.scoped(
+          Effect.andThen(
+            holding(taken.port),
+            reaches
+              .adopt([taken, other])
+              .pipe(
+                Effect.provide(
+                  Logger.layer([
+                    Logger.make(({ message }) => logged.push(message)),
+                  ])
+                )
+              )
+          )
+        );
+
+        const moved = suitePorts.reach.first;
+
+        expect([...reached]).toStrictEqual([
+          ["dev", moved],
+          ["other", other.port],
+        ]);
+        expect(logged).toStrictEqual([
+          [
+            `adopt dev: another program holds port ${taken.port}, so it is reached at ${moved}`,
+          ],
+        ]);
+        expect(yield* roundTrip(moved, "moved")).toBe("moved");
+        expect(yield* accepts(other.port)).toBe(true);
+      })
+  );
+
+  it.effect(
+    "a close after adopt ends the relay, and one of a machine it never opened, or of another instance of its name, does nothing",
     () =>
       Effect.gen(function* () {
         const reaches = yield* reachesOf(relayed);
@@ -146,10 +141,17 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(yield* accepts(machine.port)).toBe(true);
 
-        yield* reaches.close(machine.machine.name);
-        yield* reaches.close(never.machine.name);
+        yield* reaches.close({ ...machine.machine, instance: "earlier" });
 
-        expect(yield* accepts(machine.port)).toBe(false);
+        const kept = yield* accepts(machine.port);
+
+        yield* reaches.close(machine.machine);
+        yield* reaches.close(never.machine);
+
+        expect([kept, yield* accepts(machine.port)]).toStrictEqual([
+          true,
+          false,
+        ]);
       })
   );
 
