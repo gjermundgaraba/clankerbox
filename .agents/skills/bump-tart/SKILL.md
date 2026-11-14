@@ -374,7 +374,17 @@ Each: what Tart does, where, and what of ours depends on it.
   Commands/Exec.swift): a raw 1 GiB upload peaked at 2+ GiB RSS in the
   host's `tart`. A killed `tart exec` leaves the guest's command (and over the
   relay its `nc` and `sshd-session`) until its session next writes (the
-  proxy in `executeThenClose`, ControlSocket.swift). Ours: bulk data goes
+  proxy in `executeThenClose`, ControlSocket.swift): measured on 2.41.1, a
+  silent command, one with a child and a writing loop's orphaned shell all
+  ran on 15 s after the client was killed by KILL, TERM or INT. Ours:
+  `guest.ts` ends a cut command through a second `tart exec`, which root's
+  `ps -axEww` serves, showing every user's environment and a newline as
+  `\012`: measured, it ended a silent command, a writing loop, a child, a
+  `setpgrp` child, a nested `sudo`'s children, an orphan and a TERM trap in
+  about 0.5 s, and one ignoring TERM by KILL; a `tart exec` sent beside a
+  running one saw its command in 20 of 20 tries. On a Tart upgrade, cut an
+  exec of `sleep 300` by killing its client and check that the end leaves
+  none of its processes. Bulk data goes
   over ssh through the relay (`tart exec -i <vm> nc 127.0.0.1 22`), whose
   window keeps it at about 20 MiB; the relay ends a connection by closing
   the exec's stdin.

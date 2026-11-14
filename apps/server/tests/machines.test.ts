@@ -1265,6 +1265,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "start dev",
           "exec dev",
           "exec dev",
+          "exec dev",
           "stop dev",
         ]);
       })
@@ -3547,6 +3548,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(fake.calls.filter((call) => call.endsWith(" box"))).toStrictEqual([
         "admit box",
         "restore box",
+        "exec box",
         "exec box",
         "exec box",
         "delete box",

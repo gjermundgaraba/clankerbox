@@ -383,8 +383,11 @@ as it is.
   exit trap and may leave its file in `/var/tmp` (`setupRunner` in
   `apps/host/src/guest.ts`); `start` scripts daemonize with `setsid -f`, and
   ours (tailscaled in `guest.ts`, the provider's recipe) redirect its output; a
-  guest script that passes its timeout, or a step cut short, ends the client,
-  so smolvm kills its command.
+  guest script that passes its timeout, or a step cut short, has `guest.ts`
+  end its command in the guest, TERM then KILL, and then ends the client, so
+  smolvm kills what is left: measured with 1.34.1, a client killed by TERM or
+  KILL, a host timeout and a host stop each left none of a cut command's
+  processes in the guest.
   Live on 1.31.1: a SIGTERM to the client ended it with 143 and the guest
   command with it; a `machine stop` or `machine pause` while an exec ran
   returned at once and ended the exec with exit 1, "io operation failed:

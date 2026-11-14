@@ -125,8 +125,9 @@ export interface Activation {
 
 /**
  * A command in a guest, as `guest.ts` alone makes one: `argv` is the same `/bin/sh` launcher on
- * every call, and what it runs, with its environment, rides at the head of `stdin`, which is text.
- * An adapter hands both on as they are, so no value a caller gave shows in a process's arguments.
+ * every call but for its last word, the exec's mark, and what it runs, with its environment, rides
+ * at the head of `stdin`, which is text. An adapter hands both on as they are, so no value a caller
+ * gave shows in a process's arguments, and runs it as `user`, or as the guest's root without one.
  */
 export interface Command {
   readonly argv: readonly string[];
@@ -288,6 +289,11 @@ export interface Interface {
   readonly deleteCheckpoint: (
     checkpoint: Target
   ) => Effect.Effect<void, RuntimeError | Conflict>;
+  /**
+   * Runs `command` beside any other of the machine while the scope is open. Closing the scope ends
+   * what the exec holds on this host; what that leaves running in the guest differs by runtime, so
+   * `guest.ts` ends a cut command there itself, through another exec.
+   */
   readonly exec: (
     machine: Target,
     command: Command

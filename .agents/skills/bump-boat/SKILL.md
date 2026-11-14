@@ -104,14 +104,15 @@ Each line names where the code holds it and how to check it again.
   caller went away or its host-side timeout fired (fix round 2's exec-cut
   probe). boat's API ends only a command it started detached
   (`DELETE /sandboxes/{id}/commands/{processId}`: SIGTERM to it and all it
-  started, SIGKILL after 5 s), which the adapter doesn't use. The fake runs
+  started, SIGKILL after 5 s), which the adapter doesn't use: the host ends a
+  cut command itself, over a second exec, as on every runtime. The fake runs
   the command in its guest, in a process group of its own that a cut leaves
-  running and only a stop, a delete or the fake's end ends, with what it left
-  in the background; its stdio reaches the local `ssh` over FIFOs a cut
-  closes, so the command's next write dies of SIGPIPE, as a writer did on
-  boat. (`ssh.ts`'s `exec`; `fake-boat.ts`'s `fakeBoatSsh`,
-  `guest-groups.ts`, and the tests of an exec cut short and of what one
-  leaves in the background.)
+  running, as boat does, until the host's end, a stop, a delete or the fake's
+  end ends it, with what it left in the background; its stdio reaches the
+  local `ssh` over FIFOs a cut closes, so the command's next write dies of
+  SIGPIPE, as a writer did on boat. (`ssh.ts`'s `exec`; `guest.ts`'s
+  `ended`; `fake-boat.ts`'s `fakeBoatSsh`, `guest-groups.ts`, and the
+  contract's case that ends a command whose exec is cut short.)
 - Machine types: `small` 2 vCPUs 4 GiB, `default` 4 and 8, `large` 8 and 16,
   `xlarge` 16 and 32, with the disk the guest's block device reads: 80 GiB
   on `small` and `default`, 149 GiB on `large`. `xlarge` is the docs' 251,

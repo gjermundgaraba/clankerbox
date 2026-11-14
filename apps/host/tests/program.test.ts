@@ -81,7 +81,7 @@ const post = (url: string, action: string, body: unknown) =>
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
-    "the host program told to stop with SIGTERM ends at once with an exec still running, and exits 130",
+    "the host program told to stop with SIGTERM ends at once with an exec still running, ending its command in the guest first, TERM first, and exits 130",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
@@ -95,6 +95,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const url = `http://127.0.0.1:${port}`;
         const config = path.join(dir, "host.json");
         const began = path.join(dir, "began");
+        const termed = path.join(dir, "termed");
 
         const { id: handle } = decodeMade(
           yield* cloud(fake.url, "machines", {
@@ -153,7 +154,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
               diskGib: 10,
               handle,
             },
-            argv: ["/bin/sh", "-c", `: >"${began}"; sleep 30`],
+            argv: [
+              "/bin/sh",
+              "-c",
+              `trap 'echo termed >"${termed}"; exit 0' TERM; : >"${began}"; sleep 30 & wait`,
+            ],
           })
         );
 
@@ -179,6 +184,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           Duration.toMillis(stopBound)
         );
         expect(yield* Fiber.join(exec)).not.toBe(200);
+        expect(yield* read(termed)).toBe("termed\n");
       }),
     120_000
   );

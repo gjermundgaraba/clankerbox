@@ -120,7 +120,7 @@ domain file never imports `platform/` or `composition/`.
   Its `find` answers the
   handle of each checkpoint a row holds without one, in the time a read takes.
 - `guest.ts`: setup, preparation, and the hook a stop, pause or delete
-  runs first, all run in the guest.
+  runs first, all run in the guest, and the end of a command cut short.
 - `usage.ts`: the machines in use, and the RAM a runtime holds beside them, for the RAM budget and capacity.
 - `settings.ts`: what a host runs on.
 - `builds.ts`: `publish`, `fetch` and `unpublish` of a checkpoint through the
@@ -344,6 +344,15 @@ the server's and the CLI's tests each run to claim a slot for the run.
   restart, as the steps they guard do. The build store is one lease too,
   `builds/`: a publish shares it, and the delete that unpublishes owns it, so its
   sweep of unreferenced objects never meets a publish that skipped one.
+- **A cut command is ended in its guest, the same on every runtime.** Each
+  guest command carries a fresh mark, `CLANKERBOX_EXEC`, in the launcher's
+  arguments and every process's environment. An exec whose scope closes before
+  its command exits and its output closes, by its limit, its request ending or
+  the host's stop, runs `endScript` through the runtime's own `exec` before the
+  scope's close goes on, bounded by `endTimeout`: TERM, then KILL 5 s later, to
+  each process that holds the mark or descends from one, and nothing else.
+  Smolvm's agent ends a cut command too; a Tart guest, boat and smol cloud
+  leave it running, measured on each, and the fake runtime's `cut` models each.
 - **Setup scripts stay in memory, on both sides, but for a macOS guest's
   disk.** They may carry secrets, and are never stored or logged. A make that
   hasn't reached its host when the control plane ends can't be sent again, and

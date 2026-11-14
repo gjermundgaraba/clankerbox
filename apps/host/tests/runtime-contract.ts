@@ -6,10 +6,11 @@ import {
   resizable,
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Fiber, Stream } from "effect";
+import { Effect, Fiber, Schedule, Stream } from "effect";
 import type { Scope } from "effect";
 import { expect } from "vite-plus/test";
 
+import { runCommand } from "../src/guest.ts";
 import type {
   Bind,
   Execution,
@@ -69,6 +70,8 @@ export interface Subject {
   readonly sizes: Sizes;
   /** Each fault its fixture can't give, with why, so each case that needs it is skipped saying so. */
   readonly lacks?: Readonly<Partial<Record<Fault, string>>>;
+  /** Why its guest runs no processes of the commands it is given, if it runs none. */
+  readonly runsNoGuest?: string | undefined;
   readonly fixture: Effect.Effect<Fixture, never, Scope.Scope>;
 }
 
@@ -401,6 +404,65 @@ export const runtimeContract = (subject: Subject): void => {
               ramMib: read.ramMib ?? from.ramMib,
               diskGib: read.diskGib ?? from.diskGib,
             }).toStrictEqual(to);
+          })
+        )
+    );
+
+    it.live.skipIf(subject.runsNoGuest !== undefined)(
+      `ends in the guest, with what it started, a command whose exec is cut short, and not one beside it${subject.runsNoGuest === undefined ? "" : `: ${subject.runsNoGuest}`}`,
+      () =>
+        withFixture(({ runtime }) =>
+          Effect.gen(function* () {
+            const machine = yield* made(runtime, "dev");
+
+            const inGuest = (script: string) =>
+              Effect.map(
+                runCommand(runtime, {
+                  machine,
+                  argv: ["/bin/sh", "-c", script],
+                }),
+                ({ output }) => output.split("\n").filter((line) => line !== "")
+              );
+
+            const started = (file: string, count: number) =>
+              Effect.gen(function* () {
+                const fiber = yield* Effect.forkChild(
+                  runCommand(runtime, {
+                    machine,
+                    argv: [
+                      "/bin/sh",
+                      "-c",
+                      `echo $$ >>"$CLANKERBOX_ROOT/${file}"; sleep 300 & echo $! >>"$CLANKERBOX_ROOT/${file}"; wait`,
+                    ],
+                  })
+                );
+
+                const pids = yield* inGuest(
+                  `cat "$CLANKERBOX_ROOT/${file}" 2>/dev/null`
+                ).pipe(
+                  Effect.repeat({
+                    until: (found) => found.length >= count,
+                    schedule: Schedule.spaced("20 millis"),
+                  })
+                );
+
+                return { fiber, pids };
+              });
+
+            const running = (pids: readonly string[]) =>
+              inGuest(
+                `for pid in ${pids.join(" ")}; do state=$(sed 's/.*) //' "/proc/$pid/stat" 2>/dev/null | cut -c1); [ -z "$state" ] || [ "$state" = Z ] || echo "$pid"; done`
+              );
+
+            const cut = yield* started("cut", 2);
+            const beside = yield* started("beside", 2);
+
+            yield* Fiber.interrupt(cut.fiber);
+
+            expect(yield* running(cut.pids)).toStrictEqual([]);
+            expect(yield* running(beside.pids)).toStrictEqual(beside.pids);
+
+            yield* Fiber.interrupt(beside.fiber);
           })
         )
     );

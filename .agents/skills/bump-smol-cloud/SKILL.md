@@ -117,8 +117,10 @@ Each is an assertion of the live suite, in the case named.
   Its API ends a running command only as a job (`POST .../jobs`, then
   `POST .../jobs/{id}/cancel`, SIGTERM). The exec body also takes a
   `timeoutSeconds` the docs don't describe, whose effect is unmeasured and
-  which the adapter doesn't send. (`guest-groups.ts`, and the tests of an
-  exec cut short and of what one leaves in the background.)
+  which the adapter doesn't send. The host ends a cut command itself, over a
+  second exec, as on every runtime, and the fake's group leaves it to that
+  end. (`guest.ts`'s `ended`, `guest-groups.ts`, and the contract's case
+  that ends a command whose exec is cut short.)
 - The tunnel, `wss://.../v1/machines/{id}/tunnel/22`, takes the key in
   `Authorization`, carries raw TCP to sshd, and doesn't wake a stopped machine.
 - Memory, vCPUs and disk grow on a running machine and on a stopped one;

@@ -91,7 +91,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a host told to stop ends an exec still running at once, rather than wait for it, and logs no error for it",
+    "a host told to stop ends an exec still running at once, rather than wait for it, ending its command in the guest first, TERM first, and logs no error for it",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
@@ -118,6 +118,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         };
 
         const began = path.join(dir, "began");
+        const termed = path.join(dir, "termed");
 
         host.fake.hold({
           state: "running",
@@ -138,7 +139,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
                 },
                 body: JSON.stringify({
                   machine,
-                  argv: ["/bin/sh", "-c", `: >"${began}"; sleep 30`],
+                  argv: [
+                    "/bin/sh",
+                    "-c",
+                    `trap 'echo termed >"${termed}"; exit 0' TERM; : >"${began}"; sleep 30 & wait`,
+                  ],
                 }),
               }).then(
                 (response) => response.status,
@@ -155,6 +160,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(Duration.toMillis(took)).toBeLessThan(1000);
         expect(yield* Fiber.join(exec)).not.toBe(200);
+        expect(yield* read(termed)).toBe("termed\n");
         expect(errors).toStrictEqual([]);
       })
   );

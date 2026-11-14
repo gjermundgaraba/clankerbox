@@ -29,7 +29,7 @@ import type {
   Sizing,
   Unsizable,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Deferred, Effect, Layer, Stream } from "effect";
+import { Deferred, Effect, Layer, Scope, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { traits as smolvm } from "../src/platform/smolvm/traits.ts";
@@ -81,6 +81,12 @@ export interface Preset {
   readonly admits: boolean;
   readonly files: { readonly keyed: boolean } | undefined;
   readonly owned: { readonly checkpoints: "held" | "marked" } | undefined;
+  /**
+   * What the runtime does to a guest command when its exec is cut short: smolvm's agent ends it with
+   * what it started, measured with 1.34.1, and a Tart guest, boat's ssh and smol cloud leave it
+   * running, measured on each.
+   */
+  readonly cut: "ends" | "leaves";
 }
 
 export const fixed: RuntimeTraits = {
@@ -112,6 +118,7 @@ export const presets = {
     admits: true,
     files: { keyed: true },
     owned: undefined,
+    cut: "ends",
   },
   tart: {
     traits: tart,
@@ -121,6 +128,7 @@ export const presets = {
     admits: true,
     files: { keyed: false },
     owned: undefined,
+    cut: "leaves",
   },
   fixed: {
     traits: fixed,
@@ -130,6 +138,7 @@ export const presets = {
     admits: false,
     files: undefined,
     owned: { checkpoints: "held" },
+    cut: "leaves",
   },
 } as const satisfies Record<string, Preset>;
 
@@ -819,6 +828,7 @@ export const fakeRuntime = (options: FakeOptions) => {
     Runtime,
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const layerScope = yield* Effect.scope;
       const bin = yield* Effect.sync(() => writeStubs(options.dir));
 
       stubs = bin;
@@ -1271,27 +1281,31 @@ export const fakeRuntime = (options: FakeOptions) => {
               const { root } = found;
               const [file = "/bin/sh", ...args] = command.argv;
 
-              const handle = yield* spawner
-                .spawn(
-                  ChildProcess.make(file, args, {
-                    env: {
-                      CLANKERBOX_ROOT: root,
-                      CLANKERBOX_USER: command.user ?? "root",
-                      PATH: `${bin}:${process.env["PATH"] ?? ""}`,
-                    },
-                    extendEnv: true,
-                    killSignal: "SIGKILL",
-                    stdin:
-                      command.stdin === undefined
-                        ? "ignore"
-                        : Stream.make(new TextEncoder().encode(command.stdin)),
-                  })
+              const spawned = spawner.spawn(
+                ChildProcess.make(file, args, {
+                  env: {
+                    CLANKERBOX_ROOT: root,
+                    CLANKERBOX_USER: command.user ?? "root",
+                    PATH: `${bin}:${process.env["PATH"] ?? ""}`,
+                  },
+                  extendEnv: true,
+                  killSignal: "SIGKILL",
+                  stdin:
+                    command.stdin === undefined
+                      ? "ignore"
+                      : Stream.make(new TextEncoder().encode(command.stdin)),
+                })
+              );
+
+              const handle = yield* (
+                preset.cut === "ends"
+                  ? spawned
+                  : Scope.provide(spawned, layerScope)
+              ).pipe(
+                Effect.mapError(
+                  (error) => new Internal({ message: error.message })
                 )
-                .pipe(
-                  Effect.mapError(
-                    (error) => new Internal({ message: error.message })
-                  )
-                );
+              );
 
               const running = commands.get(machine.name) ?? new Set();
 

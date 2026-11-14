@@ -1,8 +1,10 @@
 import type { ExecCommand } from "@clankerbox/host-contract";
 import {
+  Internal,
   Invalid,
   loginUser,
   outputLimit,
+  readTimeout,
   ScriptFailed,
   timedOutExitCode,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -14,6 +16,7 @@ import {
   Option,
   Redacted,
   Schema,
+  Scope,
   Stream,
 } from "effect";
 import { Hex } from "effect/encoding";
@@ -66,10 +69,17 @@ export interface Invocation {
   readonly env?: Readonly<Record<string, string>> | undefined;
   readonly user?: string | undefined;
   readonly stdin?: string | undefined;
-  readonly timeoutSeconds?: number | undefined;
 }
 
-const killGraceSeconds = 5;
+/** The name of the variable whose value, fresh for each guest command, marks every process it starts. */
+export const markName = "CLANKERBOX_EXEC";
+
+const markBytes = 16;
+
+const minted = (): string =>
+  Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(markBytes)));
+
+const endedRecords = "${CLANKERBOX_ROOT-}/var/run/clankerbox-ended";
 
 // dash's and bash's `read` take a pipe's input a byte at a time, so the command gets the rest:
 // https://git.kernel.org/pub/scm/utils/dash/dash.git/tree/src/miscbltin.c?h=v0.5.12#n151
@@ -81,13 +91,9 @@ const killGraceSeconds = 5;
 // A shell copies a string whole at each append and `"$@"` whole at each `set`, and bash 3.2 slows
 // with each variable it holds, so values wait in at most 1000 variables, named in strings of 100,
 // and a value's lines are joined 1000 at a time by `"$*"`, then its pieces at once.
-// A timed command runs under the guest's `timeout`, if it takes `-k`. GNU's, BSD's and uutils'
-// send TERM to the process group they run the command in, so its children end too; busybox's,
-// which takes `-k` from 1.35, signals the command alone:
-// https://github.com/coreutils/coreutils/blob/v9.5/src/timeout.c#L239
-// https://github.com/mirror/busybox/blob/1_36_0/coreutils/timeout.c#L130
 const launcher = [
   "set -e",
+  `[ ! -e "${endedRecords}/\${1#${markName}=}" ] || exit 143`,
   "nl='",
   "'",
   `join_lines() { IFS=$nl; joined="$*"; unset IFS; }`,
@@ -101,10 +107,7 @@ const launcher = [
   "  done",
   `  eval "join_lines $h$p"`,
   "}",
-  "read -r values pairs limit",
-  "timed=",
-  `if [ "$limit" -gt 0 ] && timeout -k 1 -- 1 true >/dev/null 2>&1; then timed="timeout -k ${killGraceSeconds} -- $limit"; fi`,
-  `if [ "$pairs" -eq 0 ]; then set -- $timed; else set --; fi`,
+  "read -r values pairs",
   "i=0",
   "j=0",
   "held=",
@@ -126,15 +129,13 @@ const launcher = [
   `  [ "$k" -eq 0 ] || { eval "join_lines $pieces"; value=$joined; }`,
   `  eval "v$j=\\$value"`,
   `  part="$part \\"\\$v$j\\""`,
-  `  if [ "$i" -eq "$pairs" ]; then part="$part $timed"; fi`,
   "  case $j in *00) held=$held$part part= ;; esac",
   `  if [ "$j" -eq 1000 ] || [ "$i" -eq "$values" ]; then`,
   `    eval "set -- \\"\\$@\\"$held$part"`,
   "    j=0 held= part=",
   "  fi",
   "done",
-  `if [ -n "$timed" ]; then skip=5; else skip=0; fi`,
-  `eval "first=\\\${$((pairs + skip + 1))}"`,
+  `eval "first=\\\${$((pairs + 2))}"`,
   `case $first in`,
   `  *=*) printf '%s: not run, as env takes a word holding = for a variable\\n' "$first" >&2; exit 127 ;;`,
   `  -) printf '%s: not run, as env takes a lone - for -i\\n' "$first" >&2; exit 127 ;;`,
@@ -146,56 +147,260 @@ const launcher = [
  * A guest command as the runtime runs it: one fixed `/bin/sh` launcher, with the command's env and
  * arguments at the head of its stdin, so no process's arguments on the host carry them. Each value
  * is its count of lines, then its lines; the launcher hands them to `env`, which sets the env and
- * runs the command, whatever the guest's `/bin/sh` makes of its own special names.
+ * runs the command, whatever the guest's `/bin/sh` makes of its own special names. Its one word of
+ * its own, `CLANKERBOX_EXEC=<mark>`, is in the launcher's arguments from its start and in the
+ * environment of the command and of every process it starts, so an end can find them.
  */
-export const guestCommand = ({
-  argv,
-  env,
-  user,
-  stdin,
-  timeoutSeconds,
-}: Invocation): Command => {
+export const guestCommand = (
+  { argv, env, user, stdin }: Invocation,
+  mark: string
+): Command => {
   const values = [
     ...Object.entries(env ?? {}).map(([name, value]) => `${name}=${value}`),
     ...argv,
   ];
 
   return {
-    argv: ["/bin/sh", "-c", launcher, "clankerbox"],
+    argv: ["/bin/sh", "-c", launcher, "clankerbox", `${markName}=${mark}`],
     user,
     stdin: [
-      `${values.length} ${values.length - argv.length} ${timeoutSeconds ?? 0}\n`,
+      `${values.length} ${values.length - argv.length}\n`,
       ...values.map((value) => `${value.split("\n").length} ${value}\n`),
       stdin ?? "",
     ].join(""),
   };
 };
 
+const killGraceSeconds = 5;
+
+// Linux's /proc/<pid>/stat holds the command's name in parentheses, which may hold any character,
+// then the state, the parent and, 19 fields on, the start time:
+// https://man7.org/linux/man-pages/man5/proc_pid_stat.5.html
+// macOS's `ps -E` prints a process's environment after its arguments, also another user's to root,
+// a newline in either as `\012`, so each process on a line of its own, and `lstart` as five words.
+/**
+ * Ends in the guest each process whose arguments or environment hold the mark read from stdin, and
+ * what descends from one: TERM, then KILL to what still runs after the grace. A process found once
+ * is held by its start time, so one whose parent ended while it cleared its environment is still
+ * found. It signals one pid at a time, never a group, pid 1 or itself.
+ */
+export const endScript = [
+  "IFS= read -r mark || mark=",
+  `case $mark in '' | *[!0-9a-f]*) echo "clankerbox: no mark to end" >&2; exit 2 ;; esac`,
+  `word="${markName}=$mark"`,
+  `records="${endedRecords}"`,
+  `mkdir -p "$records" && : >"$records/$mark" || echo "clankerbox: couldn't record that $mark ended, so a command of it that begins later runs" >&2`,
+  `grace=${killGraceSeconds}`,
+  "held=' '",
+  "termed=' '",
+  "rows() {",
+  "  if [ -r /proc/self/stat ]; then",
+  "    marked=' '",
+  `    for file in $(grep -ls -e "${markName}[=]$mark" /proc/[0-9]*/cmdline /proc/[0-9]*/environ); do`,
+  "      pid=${file#/proc/}",
+  `      marked="$marked\${pid%%/*} "`,
+  "    done",
+  "    for dir in /proc/[0-9]*; do",
+  `      { IFS= read -r stat <"$dir/stat"; } 2>/dev/null || continue`,
+  "      rest=${stat##*) }",
+  "      set -f",
+  "      set -- $rest",
+  "      set +f",
+  "      case $1 in Z | X) continue ;; esac",
+  "      pid=${dir#/proc/}",
+  `      case $marked in *" $pid "*) m=1 ;; *) m=0 ;; esac`,
+  `      echo "$pid $2 \${20} $m"`,
+  "    done",
+  "  else",
+  "    ps -axEww -o pid=,ppid=,lstart=,state=,command= | while IFS= read -r line; do",
+  "      set -f",
+  "      set -- $line",
+  "      set +f",
+  "      case $8 in Z*) continue ;; esac",
+  `      case " $line " in *" $word "*) m=1 ;; *) m=0 ;; esac`,
+  `      echo "$1 $2 $3$4$5$6$7 $m"`,
+  "    done",
+  "  fi",
+  "}",
+  "round() {",
+  "  listed=$(rows)",
+  `  [ -n "$listed" ] || { echo "clankerbox: couldn't list the guest's processes, with /proc or ps" >&2; exit 1; }`,
+  "  members=' '",
+  "  grown=1",
+  `  while [ -n "$grown" ]; do`,
+  "    grown=",
+  "    while read -r pid ppid start m; do",
+  `      case $pid in 1 | "$$") continue ;; esac`,
+  `      case $members in *" $pid "*) continue ;; esac`,
+  `      case "$m$held$members" in 1* | *" $pid:$start "* | *" $ppid "*) ;; *) continue ;; esac`,
+  `      members="$members$pid "`,
+  `      case $held in *" $pid:$start "*) ;; *) held="$held$pid:$start " ;; esac`,
+  "      grown=1",
+  "    done <<ROWS",
+  "$listed",
+  "ROWS",
+  "  done",
+  "}",
+  "alive() {",
+  "  if [ -r /proc/self/stat ]; then",
+  `    { IFS= read -r stat <"/proc/$1/stat"; } 2>/dev/null || return 1`,
+  "    case ${stat##*) } in Z* | X*) return 1 ;; esac",
+  "  else",
+  `    kill -0 "$1" 2>/dev/null || return 1`,
+  "  fi",
+  "}",
+  "terminate() {",
+  "  fresh=",
+  "  for pid in $members; do",
+  `    case $termed in *" $pid "*) ;; *) fresh="$fresh $pid" termed="$termed$pid " ;; esac`,
+  "  done",
+  `  [ -z "$fresh" ] || kill -s TERM $fresh 2>/dev/null || true`,
+  "}",
+  "round",
+  `[ "$members" != ' ' ] || exit 0`,
+  "terminate",
+  "if sleep 0.2 2>/dev/null; then tick=0.2 ticks=$((grace * 5)); else tick=1 ticks=$grace; fi",
+  `while [ "$ticks" -gt 1 ]; do`,
+  "  live=",
+  `  for pid in $members; do alive "$pid" && live=1 && break; done`,
+  `  if [ -z "$live" ]; then`,
+  "    round",
+  `    [ "$members" != ' ' ] || exit 0`,
+  "    terminate",
+  "  fi",
+  "  ticks=$((ticks - 1))",
+  `  sleep "$tick"`,
+  "done",
+  "round",
+  `[ "$members" != ' ' ] || exit 0`,
+  "kill -s KILL $members 2>/dev/null || true",
+  `sleep "$tick"`,
+  "round",
+  `[ "$members" != ' ' ] || exit 0`,
+  `echo "clankerbox: $(echo $members | wc -w | tr -d ' ') processes of the command still run after KILL" >&2`,
+  "exit 1",
+].join("\n");
+
+/** How long an end may take: within the relay's `readTimeout`, so a cut exec still answers its caller. */
+export const endTimeout = Duration.subtract(readTimeout, Duration.seconds(2));
+
+const attached = (
+  runtime: Pick<Runtime, "exec">,
+  machine: Target,
+  invocation: Invocation,
+  mark: string,
+  output: ReturnType<typeof keptOutput>
+): Effect.Effect<
+  { readonly exitCode: Effect.Effect<number, RuntimeError> },
+  RuntimeError,
+  Scope.Scope
+> =>
+  Effect.map(
+    runtime.exec(machine, guestCommand(invocation, mark)),
+    (execution) => ({
+      exitCode: Effect.map(
+        Effect.all(
+          [
+            Stream.runForEach(execution.output, (chunk) =>
+              Effect.sync(() => {
+                output.push(chunk);
+              })
+            ),
+            execution.exitCode,
+          ],
+          { concurrency: "unbounded" }
+        ),
+        ([, exitCode]) => exitCode
+      ),
+    })
+  );
+
+const ended = (
+  runtime: Pick<Runtime, "exec">,
+  machine: Target,
+  mark: string
+): Effect.Effect<void> => {
+  const output = keptOutput();
+
+  return Effect.scoped(
+    Effect.flatMap(
+      attached(
+        runtime,
+        machine,
+        {
+          argv: ["/bin/sh", "-c", endScript, "clankerbox-end"],
+          stdin: `${mark}\n`,
+        },
+        minted(),
+        output
+      ),
+      ({ exitCode }) => exitCode
+    )
+  ).pipe(
+    timeoutFail(
+      endTimeout,
+      () =>
+        new Internal({
+          message: `it didn't end within ${Duration.format(endTimeout)}`,
+        })
+    ),
+    Effect.flatMap((code) =>
+      code === 0
+        ? Effect.void
+        : Effect.fail(
+            new Internal({
+              message: `it exited ${code}: ${lastLines(output.text())}`,
+            })
+          )
+    ),
+    Effect.catch((error) =>
+      Effect.logWarning(
+        `couldn't end in ${machine.name} the command of an exec that ended before its exit code, which may still run there: ${error.message}`
+      )
+    )
+  );
+};
+
 const drained = (
   runtime: Pick<Runtime, "exec">,
   machine: Target,
   invocation: Invocation,
-  output: ReturnType<typeof keptOutput>
-): Effect.Effect<number, RuntimeError> =>
-  Effect.map(
-    Effect.scoped(
-      Effect.flatMap(
-        runtime.exec(machine, guestCommand(invocation)),
-        (execution) =>
-          Effect.all(
-            [
-              Stream.runForEach(execution.output, (chunk) =>
-                Effect.sync(() => {
-                  output.push(chunk);
-                })
-              ),
-              execution.exitCode,
-            ],
-            { concurrency: "unbounded" }
-          )
-      )
-    ),
-    ([, exitCode]) => exitCode
+  output: ReturnType<typeof keptOutput>,
+  limit: Duration.Duration | undefined
+): Effect.Effect<Option.Option<number>, RuntimeError> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const mark = minted();
+      const held = yield* Scope.make();
+      let finished = false;
+
+      yield* Effect.addFinalizer((exit) =>
+        Effect.andThen(
+          finished ? Effect.void : ended(runtime, machine, mark),
+          Scope.close(held, exit)
+        )
+      );
+
+      const execution = yield* Scope.provide(
+        attached(runtime, machine, invocation, mark, output),
+        held
+      );
+
+      const waited = Effect.asSome(
+        Effect.tap(execution.exitCode, () =>
+          Effect.sync(() => {
+            finished = true;
+          })
+        )
+      );
+
+      return limit === undefined
+        ? yield* waited
+        : yield* Effect.timeoutOrElse(waited, {
+            duration: limit,
+            orElse: () => Effect.succeed(Option.none<number>()),
+          });
+    })
   );
 
 const runInGuest = (
@@ -207,23 +412,19 @@ const runInGuest = (
 ): Effect.Effect<string, RuntimeError | ScriptFailed> =>
   Effect.gen(function* () {
     const output = keptOutput();
-
-    const code = yield* drained(runtime, machine, invocation, output).pipe(
-      timeoutFail(
-        timeout,
-        () =>
-          new ScriptFailed({
-            message: `${script} ran past its ${Duration.format(timeout)} timeout; its last output:\n${lastLines(output.text())}`,
-            script,
-          })
-      )
-    );
-
+    const code = yield* drained(runtime, machine, invocation, output, timeout);
     const text = output.text();
 
-    if (code !== 0) {
+    if (Option.isNone(code)) {
       return yield* new ScriptFailed({
-        message: `${script} exited ${code}; its last output:\n${lastLines(text)}`,
+        message: `${script} ran past its ${Duration.format(timeout)} timeout; its last output:\n${lastLines(text)}`,
+        script,
+      });
+    }
+
+    if (code.value !== 0) {
+      return yield* new ScriptFailed({
+        message: `${script} exited ${code.value}; its last output:\n${lastLines(text)}`,
         script,
       });
     }
@@ -242,39 +443,54 @@ const ran = (
   Effect.gen(function* () {
     const output = keptOutput();
 
-    const drain = drained(
+    const code = yield* drained(
       runtime,
       machine,
-      { argv, env, user, stdin, timeoutSeconds },
-      output
+      { argv, env, user, stdin },
+      output,
+      timeoutSeconds === undefined
+        ? undefined
+        : Duration.seconds(timeoutSeconds)
     );
 
-    const exitCode =
-      timeoutSeconds === undefined
-        ? yield* drain
-        : yield* Effect.timeoutOrElse(drain, {
-            duration: Duration.seconds(timeoutSeconds),
-            orElse: () => Effect.succeed(timedOutExitCode),
-          });
-
-    return { exitCode, output: output.text(), truncated: output.truncated() };
+    return {
+      exitCode: Option.getOrElse(code, () => timedOutExitCode),
+      output: output.text(),
+      truncated: output.truncated(),
+    };
   });
 
-/** Runs a caller's command, refusing one that holds a NUL, which no process takes, as `Invalid`. */
+/**
+ * Runs a caller's command, refusing one that holds a NUL, which no process takes, or that sets the
+ * mark's variable, which is the exec's own, as `Invalid`.
+ */
 export const runCommand = (
   runtime: Runtime,
   command: GuestCommand
-): Effect.Effect<Executed, Invalid | RuntimeError> =>
-  [...command.argv, ...Object.values(command.env ?? {})].some((value) =>
-    value.includes("\0")
-  )
-    ? Effect.fail(
-        new Invalid({
-          message:
-            "a command's arguments and environment can't hold a NUL character, which no process takes",
-        })
-      )
-    : ran(runtime, command);
+): Effect.Effect<Executed, Invalid | RuntimeError> => {
+  if (
+    [...command.argv, ...Object.values(command.env ?? {})].some((value) =>
+      value.includes("\0")
+    )
+  ) {
+    return Effect.fail(
+      new Invalid({
+        message:
+          "a command's arguments and environment can't hold a NUL character, which no process takes",
+      })
+    );
+  }
+
+  if (command.env !== undefined && Object.hasOwn(command.env, markName)) {
+    return Effect.fail(
+      new Invalid({
+        message: `a command's environment can't set ${markName}, which marks the processes of its exec, so a cut one is ended`,
+      })
+    );
+  }
+
+  return ran(runtime, command);
+};
 
 const preparationTimeout = Duration.seconds(60);
 
@@ -428,7 +644,7 @@ const setupRunner = [
   "root=${CLANKERBOX_ROOT-}",
   ...addingMissingKeys,
   ...heldDir,
-  `sudo -n -u "$login" -H /bin/sh -c '${setupHeld}' clankerbox-setup "$held" "$kernel"`,
+  `sudo -n -u "$login" -H env "${markName}=$${markName}" /bin/sh -c '${setupHeld}' clankerbox-setup "$held" "$kernel"`,
   ...addingMissingKeys,
 ].join("\n");
 

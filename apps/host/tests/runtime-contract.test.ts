@@ -52,6 +52,8 @@ onFake("fixed", { checkpoints: "marked" });
 
 runtimeContract({
   name: "smolvm adapter's",
+  runsNoGuest:
+    "its model answers the commands smolvm takes, and runs none of a guest's",
   lacks: {
     dropAnswer:
       "smolvm is a CLI on this host, whose answer is its exit status, which no connection can lose",
@@ -89,6 +91,8 @@ runtimeContract({
 
 runtimeContract({
   name: "Tart adapter's",
+  runsNoGuest:
+    "its scripted Mac answers the commands Tart takes, and runs none of a guest's",
   lacks: {
     dropAnswer:
       "tart is a CLI on this host, whose answer is its exit status, which no connection can lose",
