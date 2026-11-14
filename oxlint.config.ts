@@ -157,6 +157,7 @@ export default config({
       },
     },
     {
+      excludeFiles: ["packages/host-contract/src/journal.ts"],
       files: ["packages/host-contract/src/*.ts"],
       rules: {
         "fence/allowed-imports": [
@@ -165,12 +166,24 @@ export default config({
             allow: [
               "^\\./[a-z-]+\\.ts$",
               "^effect$",
-              "^effect/http$",
               "^@gjermundgaraba/clankerbox-sdk$",
               "^@gjermundgaraba/effect-actions/",
             ],
             because:
-              "the host contract is schemas and actions, and the journal of the requests each side serves, shared by the server and the host alone",
+              "the host contract is schemas and actions, shared by the server and the host alone; the journal alone serves HTTP",
+          },
+        ],
+      },
+    },
+    {
+      files: ["packages/host-contract/src/journal.ts"],
+      rules: {
+        "fence/allowed-imports": [
+          "error",
+          {
+            allow: ["^effect$", "^effect/http$"],
+            because:
+              "the journal is a middleware over Effect's HTTP server, of the requests the server and a host each serve",
           },
         ],
       },

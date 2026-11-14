@@ -370,8 +370,9 @@ tagged errors compare equal only with the same message. None of the
   host package; the server's only adapter is the `Store`, and a host's adapters
   can't import `node:sqlite`; a host adapter imports domain files, its own
   folder and `platform/`'s `process.ts`; the host contract
-  imports `effect`, with its `http` for the journal, the SDK and effect-actions,
-  and the server's `composition/` takes only its journal; an app command imports only
+  imports `effect`, the SDK and effect-actions, but for `journal.ts`, which
+  imports `effect` and its `http` alone, and the server's `composition/` takes
+  only its journal; an app command imports only
   `effect` (with its `cli`, `encoding`, `http`, `process` and `socket`), the SDK
   and its siblings, so a client can't reach the host contract; the provider takes
   Node and `@effect/platform-node` only in `index.ts` and `tunnel.ts`, and the
