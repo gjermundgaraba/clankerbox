@@ -333,11 +333,7 @@ export const copySizable = (
   }
 };
 
-/**
- * Where a pause with a capture takes its capture: `before` the pause, of the running machine; `after`
- * it, of the stopped machine a pause that stops leaves; or `never`, where a capture takes only a
- * stopped machine and a pause leaves it paused.
- */
+/** Where a pause with a capture takes it, as `pauseMachine`'s description states the rule. */
 export const pauseCapture = (
   traits: RuntimeTraits
 ): "before" | "after" | "never" => {

@@ -138,7 +138,7 @@ export const pause = Command.make(
     capture: Flag.String("capture").pipe(
       Flag.withMetavar("NAME"),
       Flag.withDescription(
-        "Capture the machine as checkpoint NAME too. Its traits decide when: where they capture a running machine, the capture comes first and the pause begins once it has, so the checkpoint holds the machine as it ran; where they capture a stopped one and a pause stops it, the capture takes what the pause leaves; where a pause saves it, no pause captures, and the command is refused."
+        "Capture the machine as checkpoint NAME too, before or after the pause as its runtime captures a machine, where one can: the command's description says when."
       ),
       Flag.optional
     ),
