@@ -178,7 +178,7 @@ The control plane exits 130 on SIGINT or SIGTERM and 1 when it fails. It stops a
 
 ### Upgrading from 0.40
 
-Upgrade the control plane, every host and every client together, as each refuses a peer of another `major.minor` and the host contract changed. A 0.40 client's every command fails `Invalid`, saying `this control plane runs clankerbox 0.41.0 and the caller is 0.40.1; their major.minor must match`, and `clankerbox hosts` shows a 0.40 host `incompatible`, with the host's own refusal under `PROBLEM`: `this host runs clankerbox 0.40.1 and the caller is 0.41.0; their major.minor must match`.
+Upgrade the control plane, every host and every client together, as each refuses a peer of another `major.minor` and the host contract changed. A 0.40 client's every command fails `Invalid`, saying `this control plane runs clankerbox 0.41.0 and the caller is 0.40.1; their major.minor must match`, and `clankerbox hosts` shows a 0.40 host `incompatible`, with its refusal under `PROBLEM`: `host <id> refused the read: this host runs clankerbox 0.40.1 and the caller is 0.41.0; their major.minor must match`.
 
 Each host:
 
