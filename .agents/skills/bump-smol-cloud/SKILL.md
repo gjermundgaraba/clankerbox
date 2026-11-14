@@ -112,9 +112,10 @@ when it was measured on the operator's account.
   `send`). A 429, never provoked, is waited as its `Retry-After` asks, in
   seconds or until an HTTP date, within `provider-http.ts`'s clamp of 1 to
   30 seconds, and sent again, six sends in all; each send has its own bound,
-  and the wait is outside it. Each step is `bounded` in
-  `provider-http.ts`, 10 minutes for all its requests and polls, and runs
-  whole: a later request waits for it. A read whose answer is lost, or that the
+  and the wait is outside it. Each provider call of a step, a make, start,
+  stop, pause, delete, resize or capture, is `bounded` in `provider-http.ts`,
+  10 minutes for all its requests and polls, and runs whole: a later request
+  cuts the step short only once it has ended. A read whose answer is lost, or that the
   provider refuses `retryable`, is asked again the same way; a change whose
   answer is lost is left to its caller, which reads the machine first.
   (`api.ts`'s `send`; the 429 tests and the test of a read whose answer is

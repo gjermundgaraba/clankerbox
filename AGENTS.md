@@ -305,8 +305,8 @@ the run.
   comes from the leaf. What the VM is doing is read from its host, never stored,
   and so is `waiting`, which a read that finds the VM unknown shows. One loop per
   machine moves it toward what was asked a whole step at a time, and a later
-  request cuts a step short, on boat and smol cloud only once the billed call
-  to the provider in flight, which runs whole, has ended, ten minutes at most.
+  request cuts a step short, on boat and smol cloud only once the provider call
+  in flight, which is billed and runs whole, has ended, ten minutes at most.
   A request takes the row out of rest in the write
   that records it, so a resting `phase` read after it has seen it. A client waits
   by reading, and works out `Superseded` from what it reads. A wait follows the
