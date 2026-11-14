@@ -51,56 +51,66 @@ export const make = (dir: string) =>
     const identity = `${dir}/id_ed25519`;
     const env = { PATH: process.env["PATH"], HOME: process.env["HOME"] };
 
-    if (yield* files(`read ${identity}`, fs.exists(identity))) {
-      const { mode } = yield* files(`read ${identity}`, fs.stat(identity));
+    const ownerOnly = (path: string, mends: string) =>
+      Effect.gen(function* () {
+        const { mode } = yield* files(`read ${path}`, fs.stat(path));
 
-      if ((mode & 0o077) !== 0) {
-        return yield* new CannotStart({
-          message: `the host's boat key ${identity} has mode ${(mode & 0o777).toString(8)}, and OpenSSH takes no private key others can read: chmod 600 it, or delete it and ${identity}.pub for a new one`,
-        });
-      }
-    } else {
-      yield* files(
-        `make ${dir}`,
-        fs.makeDirectory(dir, { recursive: true, mode: 0o700 })
-      );
+        if ((mode & 0o077) !== 0) {
+          return yield* new CannotStart({
+            message: `the host's boat key ${path} has mode ${(mode & 0o777).toString(8)}, and the key it holds must be its owner's alone: ${mends}`,
+          });
+        }
+      });
 
-      yield* Effect.scoped(
-        Effect.flatMap(
-          spawner.spawn(
-            ChildProcess.make(
-              "ssh-keygen",
-              [
-                "-q",
-                "-t",
-                "ed25519",
-                "-N",
-                "",
-                "-C",
-                "clankerbox-host",
-                "-f",
-                identity,
-              ],
-              { env, extendEnv: false, stdin: "ignore" }
-            )
-          ),
-          (handle) =>
-            Effect.all({
-              exitCode: handle.exitCode,
-              stdout: Stream.mkString(Stream.decodeText(handle.stdout)),
-              stderr: Stream.mkString(Stream.decodeText(handle.stderr)),
-            })
-        )
-      ).pipe(
-        Effect.mapError(
-          (error) =>
-            new Internal({
-              message: `ssh-keygen ${identity}: ${error.message}`,
-            })
+    yield* (yield* files(`read ${dir}`, fs.exists(dir)))
+      ? ownerOnly(dir, `chmod 700 it`)
+      : files(
+          `make ${dir}`,
+          fs.makeDirectory(dir, { recursive: true, mode: 0o700 })
+        );
+
+    const keygen = Effect.scoped(
+      Effect.flatMap(
+        spawner.spawn(
+          ChildProcess.make(
+            "ssh-keygen",
+            [
+              "-q",
+              "-t",
+              "ed25519",
+              "-N",
+              "",
+              "-C",
+              "clankerbox-host",
+              "-f",
+              identity,
+            ],
+            { env, extendEnv: false, stdin: "ignore" }
+          )
         ),
-        Effect.flatMap((ran) => expect(ran, `ssh-keygen ${identity}`))
-      );
-    }
+        (handle) =>
+          Effect.all({
+            exitCode: handle.exitCode,
+            stdout: Stream.mkString(Stream.decodeText(handle.stdout)),
+            stderr: Stream.mkString(Stream.decodeText(handle.stderr)),
+          })
+      )
+    ).pipe(
+      Effect.mapError(
+        (error) =>
+          new Internal({
+            message: `ssh-keygen ${identity}: ${error.message}`,
+          })
+      ),
+      Effect.flatMap((ran) => expect(ran, `ssh-keygen ${identity}`))
+    );
+
+    yield* (yield* files(`read ${identity}`, fs.exists(identity)))
+      ? ownerOnly(
+          identity,
+          `OpenSSH takes no private key others can read, so chmod 600 it, or delete it and ${identity}.pub for a new one`
+        )
+      : keygen;
 
     const publicKey = (yield* files(
       `read ${identity}.pub`,

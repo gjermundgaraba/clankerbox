@@ -1286,35 +1286,50 @@ describe("the host's boat key", () => {
   );
 
   it.live(
-    "found readable by others, stops the host from starting and says how to mend it",
+    "or its folder, found open to others, stops the host from starting and says how to mend it",
     () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const dir = yield* scratch;
-          const boat = yield* fakeBoat({ dir });
-          const keys = path.join(dir, "state", "boat");
+      Effect.gen(function* () {
+        for (const { folder, key, says } of [
+          { folder: 0o700, key: 0o644, says: ["mode 644", "chmod 600"] },
+          { folder: 0o700, key: 0o640, says: ["mode 640", "chmod 600"] },
+          { folder: 0o755, key: 0o600, says: ["mode 755", "chmod 700"] },
+          { folder: 0o750, key: undefined, says: ["mode 750", "chmod 700"] },
+        ]) {
+          const refused = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const dir = yield* scratch;
+              const boat = yield* fakeBoat({ dir });
+              const keys = path.join(dir, "state", "boat");
 
-          mkdirSync(keys, { recursive: true, mode: 0o700 });
-          execFileSync("ssh-keygen", [
-            "-q",
-            "-t",
-            "ed25519",
-            "-N",
-            "",
-            "-f",
-            path.join(keys, "id_ed25519"),
-          ]);
-          chmodSync(path.join(keys, "id_ed25519"), 0o644);
+              mkdirSync(keys, { recursive: true });
+              chmodSync(keys, folder);
 
-          const refused = yield* Effect.flip(
-            Layer.build(Layer.provide(boat.layer, services))
+              if (key !== undefined) {
+                execFileSync("ssh-keygen", [
+                  "-q",
+                  "-t",
+                  "ed25519",
+                  "-N",
+                  "",
+                  "-f",
+                  path.join(keys, "id_ed25519"),
+                ]);
+                chmodSync(path.join(keys, "id_ed25519"), key);
+              }
+
+              return yield* Effect.flip(
+                Layer.build(Layer.provide(boat.layer, services))
+              );
+            })
           );
 
           expect(refused).toMatchObject({ _tag: "CannotStart" });
-          expect(refused.message).toContain("mode 644");
-          expect(refused.message).toContain("chmod 600");
-        }).pipe(Effect.provide(NodeServices.layer))
-      ),
+
+          for (const said of says) {
+            expect(refused.message).toContain(said);
+          }
+        }
+      }).pipe(Effect.provide(NodeServices.layer)),
     30_000
   );
 });
