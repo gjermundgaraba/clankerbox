@@ -1462,7 +1462,6 @@ export const make = (
                 `sweep: deleting ${what}, which the control plane retired`
               ),
           work.pipe(
-            inTime(`the ${traits.runtime} runtime's delete of ${what}`),
             Effect.tap(() =>
               Effect.andThen(
                 Effect.sync(() => undeleted.delete(instance)),

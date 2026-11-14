@@ -3491,6 +3491,47 @@ layer(NodeServices.layer)((it) => {
       })
   );
 
+  it.effect(
+    "a sweep waits out a delete its runtime masks, so a sweep while it runs starts no second delete of the instance",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner({ as: "fixed" });
+
+        keptByRuntime(host, "dev");
+
+        const { entered, release } = host.fake.holdNext("delete", {
+          runsOn: true,
+        });
+
+        const retired = { machines: ["dev-instance"], checkpoints: [] };
+        const first = yield* Effect.forkChild(host.operations.sweep(retired));
+
+        yield* entered;
+        yield* TestClock.adjust(readTimeout);
+
+        const second = yield* Effect.forkChild(host.operations.sweep(retired));
+
+        yield* TestClock.adjust(readTimeout);
+
+        const whileHeld = [
+          counted(host.fake.calls, "delete dev-instance"),
+          first.pollUnsafe() === undefined,
+          second.pollUnsafe() === undefined,
+        ];
+
+        yield* release;
+
+        const none = { machines: [], checkpoints: [] };
+
+        expect([
+          whileHeld,
+          yield* Fiber.join(first),
+          yield* Fiber.join(second),
+          counted(host.fake.calls, "delete dev-instance"),
+        ]).toStrictEqual([[1, true, true], none, none, 1]);
+      })
+  );
+
   it.effect("a runtime that doesn't answer a read answers Internal", () =>
     Effect.gen(function* () {
       const host = yield* runner();
