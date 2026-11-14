@@ -27,6 +27,7 @@ import { HttpServer } from "effect/http";
 import { applied } from "../src/chart.ts";
 import * as Checkpoints from "../src/checkpoints.ts";
 import { serverLayer, stopsAtOnce } from "../src/composition/server.ts";
+import * as Hosts from "../src/hosts.ts";
 import type { Member } from "../src/hosts.ts";
 import {
   machineChart,
@@ -35,6 +36,7 @@ import {
 } from "../src/machine-chart.ts";
 import type { MachineEvent, MachineRow } from "../src/machine-chart.ts";
 import * as Machines from "../src/machines.ts";
+import * as Sqlite from "../src/platform/sqlite.ts";
 import {
   defaultFailedRowsLast,
   defaultHookTimeoutSeconds,
@@ -189,6 +191,45 @@ const started = (
     };
 
     return served;
+  });
+
+/**
+ * `planned`'s control plane with no HTTP in front: its store, its hosts and the services a request
+ * reaches, where `checkpoints` reaches `machines` around the real one, so a test can hold or refuse
+ * the write a request makes of a machine.
+ */
+export const services = (
+  planned: Pick<Plane, "settings">,
+  machines: (real: Machines.Interface) => Machines.Interface
+) =>
+  Effect.gen(function* () {
+    const scope = yield* Scope.make();
+    const { settings } = planned;
+
+    const context = yield* Layer.buildWithScope(
+      Checkpoints.layer(settings).pipe(
+        Layer.provide(
+          Layer.effect(
+            Machines.Machines,
+            Effect.gen(function* () {
+              return machines(yield* Machines.Machines);
+            })
+          )
+        ),
+        Layer.provideMerge(Machines.layer(settings)),
+        Layer.provideMerge(Hosts.layer(settings.hosts)),
+        Layer.provideMerge(Sqlite.layer(settings)),
+        Layer.provide(NodeHttpClient.layerNodeHttp),
+        Layer.provide(NodeServices.layer)
+      ),
+      scope
+    );
+
+    return {
+      checkpoints: Context.get(context, Checkpoints.Checkpoints),
+      store: Context.get(context, Store),
+      crash: Scope.close(scope, Exit.void),
+    };
   });
 
 const planePorts = 21_100;

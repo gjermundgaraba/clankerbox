@@ -307,6 +307,15 @@ export const make = (settings: {
           : drive(name)
       );
 
+    const discarded = (name: string) =>
+      remove(name).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning(
+            `couldn't discard checkpoint ${name}, whose pause was refused, so it stays a capture of its own, which runs now or at the next start of the control plane: ${Cause.pretty(cause)}`
+          )
+        )
+      );
+
     const rests = (name: string) =>
       Effect.gen(function* () {
         const found = yield* store.findCheckpoint(name);
@@ -413,12 +422,19 @@ export const make = (settings: {
               return yield* unpinnedRefusal;
             }
 
-            const record = yield* recorded({ machine: id, ...capture });
-            const paused = yield* machines.pause(id);
+            return yield* Effect.uninterruptible(
+              Effect.gen(function* () {
+                const record = yield* recorded({ machine: id, ...capture });
 
-            yield* driven(record);
+                const paused = yield* machines
+                  .pause(id)
+                  .pipe(Effect.tapError(() => discarded(record.name)));
 
-            return paused;
+                yield* driven(record);
+
+                return paused;
+              })
+            );
           }
 
           case "before": {
@@ -447,10 +463,16 @@ export const make = (settings: {
           return yield* unpinnedRefusal;
         }
 
-        yield* capturing({ machine: id, ...capture });
-        yield* begun(capture.name);
+        return yield* Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            yield* capturing({ machine: id, ...capture });
+            yield* Effect.exit(restore(begun(capture.name)));
 
-        return yield* machines.pause(id, capture.name);
+            return yield* machines
+              .pause(id, capture.name)
+              .pipe(Effect.tapError(() => discarded(capture.name)));
+          })
+        );
       });
 
     const sweep = Effect.gen(function* () {

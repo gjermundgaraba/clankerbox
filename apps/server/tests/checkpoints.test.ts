@@ -17,7 +17,7 @@ import {
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Client } from "@gjermundgaraba/clankerbox-sdk";
 import { read } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { DateTime, Duration, Effect, Fiber, Option } from "effect";
+import { DateTime, Deferred, Duration, Effect, Fiber, Option } from "effect";
 import { expect } from "vite-plus/test";
 
 import * as Sqlite from "../src/platform/sqlite.ts";
@@ -32,6 +32,8 @@ import {
   pause,
   plane,
   request,
+  services,
+  stageOf,
   withClient,
 } from "./support.ts";
 import type { Plane, Started, running } from "./support.ts";
@@ -111,6 +113,24 @@ const seeded = <A, E>(
   { stateDir }: Pick<Plane, "stateDir">,
   use: (store: Started["store"]) => Effect.Effect<A, E>
 ) => Effect.scoped(Effect.flatMap(Sqlite.open({ stateDir }), use));
+
+const madeOn = (as: FakeRuntimeName) =>
+  Effect.gen(function* () {
+    const planned = yield* plane({ hosts: [{ id: as, as }] });
+    const first = yield* planned.start();
+    const host = firstHost(planned);
+
+    yield* (yield* clientOf(first.url)).create("dev", request("dev"));
+    yield* first.crash;
+    host.fake.calls.length = 0;
+
+    return { planned, host };
+  });
+
+const desiredOf = (store: Started["store"], name: string) =>
+  Effect.map(store.findMachine(name), (found) =>
+    Option.getOrThrow(Option.map(found, ({ desired }) => desired))
+  );
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
@@ -1193,6 +1213,285 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           error: { _tag: "NotFound", id: "gone" },
         });
         expect(callsTo(host, "capture")).toStrictEqual([]);
+      })
+  );
+
+  it.effect(
+    "a pause with a capture whose request ends while its capture waits to begin still pauses, once the capture has run",
+    () =>
+      Effect.gen(function* () {
+        const { client, host, store } = yield* withClient({
+          recheck: Duration.seconds(2),
+        });
+
+        yield* client.create("dev", request("dev"));
+
+        const resizing = host.fake.holdNext("resize");
+
+        const resize = yield* Effect.forkChild(
+          client.resizeMachine({ id: "dev", ramMib: 2048 })
+        );
+
+        yield* resizing.entered;
+
+        const asking = yield* Effect.forkChild(
+          client.pauseMachine({ id: "dev", capture: { name: "snap" } })
+        );
+
+        yield* eventually(store.findCheckpoint("snap"), Option.isSome);
+        yield* Fiber.interrupt(asking);
+
+        const recorded = yield* eventually(
+          desiredOf(store, "dev"),
+          (desired) => desired === "paused"
+        );
+
+        yield* resizing.release;
+        yield* Fiber.join(resize);
+
+        const paused = yield* eventually(
+          client.getMachine({ id: "dev" }),
+          ({ state, phase }) => state === "paused" && phase === "settled"
+        ).pipe(Effect.timeout(Duration.seconds(30)));
+
+        expect(recorded).toBe("paused");
+        expect(paused.desired).toBe("paused");
+        expect(yield* client.getCheckpoint({ id: "snap" })).toMatchObject({
+          phase: "ready",
+        });
+        expect(
+          host.fake.calls.filter(
+            (call) => call === "capture snap" || call === "pause dev"
+          )
+        ).toStrictEqual(["capture snap", "pause dev"]);
+      }),
+    60_000
+  );
+
+  it.effect(
+    "a pause with a capture whose machine is deleted while its capture waits to begin, where the capture comes first, answers NotFound and leaves no checkpoint",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* withClient({ recheck: Duration.seconds(2) });
+        const { client, host, store } = served;
+
+        yield* client.create("dev", request("dev"));
+
+        const resizing = host.fake.holdNext("resize");
+
+        const resize = yield* Effect.forkChild(
+          Effect.exit(client.resizeMachine({ id: "dev", ramMib: 2048 }))
+        );
+
+        yield* resizing.entered;
+
+        const asking = yield* Effect.forkChild(
+          Effect.flip(
+            client.pauseMachine({ id: "dev", capture: { name: "snap" } })
+          )
+        );
+
+        yield* eventually(store.findCheckpoint("snap"), Option.isSome);
+
+        const deleting = yield* Effect.forkChild(
+          client.deleteMachine({ id: "dev" })
+        );
+
+        yield* eventually(store.findMachine("dev"), (found) =>
+          Option.exists(found, (row) => stageOf(row) === "deleting")
+        );
+        yield* resizing.release;
+        yield* Fiber.join(resize);
+        yield* Fiber.join(deleting);
+
+        const refused = yield* Fiber.join(asking);
+
+        yield* gone(served, "snap");
+
+        expect(refused).toMatchObject({ _tag: "NotFound", id: "dev" });
+        expect(callsTo(host, "capture")).toStrictEqual([]);
+      }),
+    60_000
+  );
+
+  it.effect(
+    "a pause with a capture whose request ends between its two writes, where the pause comes first, records the pause and captures what it left",
+    () =>
+      Effect.gen(function* () {
+        const { planned, host } = yield* madeOn("fixed");
+        const entered = yield* Deferred.make<true>();
+        const release = yield* Deferred.make<true>();
+
+        const served = yield* services(planned, (machines) => ({
+          ...machines,
+          pause: (id, after) =>
+            Deferred.succeed(entered, true).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.andThen(machines.pause(id, after))
+            ),
+        }));
+
+        yield* Effect.addFinalizer(() => served.crash);
+
+        const asking = yield* Effect.forkChild(
+          served.checkpoints.pause({ id: "dev", capture: { name: "snap" } })
+        );
+
+        yield* Deferred.await(entered);
+
+        const ending = yield* Effect.forkChild(Fiber.interrupt(asking), {
+          startImmediately: true,
+        });
+
+        yield* Deferred.succeed(release, true);
+        yield* Fiber.join(ending);
+
+        const desired = yield* desiredOf(served.store, "dev");
+        const snap = yield* rested(served, "snap");
+
+        expect(desired).toBe("paused");
+        expect(snap.state).toBe("ready");
+        expect(
+          host.fake.calls.filter(
+            (call) => call === "capture snap" || call === "stop dev"
+          )
+        ).toStrictEqual(["stop dev", "capture snap"]);
+      })
+  );
+
+  it.effect(
+    "a pause with a capture whose pause is refused after the capture's row, where the pause comes first, answers the refusal and leaves no checkpoint",
+    () =>
+      Effect.gen(function* () {
+        const { planned, host } = yield* madeOn("fixed");
+
+        const served = yield* services(planned, (machines) => ({
+          ...machines,
+          pause: () =>
+            Effect.fail(new Internal({ message: "the store refused it" })),
+        }));
+
+        yield* Effect.addFinalizer(() => served.crash);
+
+        const refused = yield* Effect.flip(
+          served.checkpoints.pause({ id: "dev", capture: { name: "snap" } })
+        );
+
+        yield* gone(served, "snap");
+
+        expect(refused).toStrictEqual(
+          new Internal({ message: "the store refused it" })
+        );
+        expect(yield* desiredOf(served.store, "dev")).toBe("running");
+        expect(callsTo(host, "capture")).toStrictEqual([]);
+      })
+  );
+
+  it.effect(
+    "a pause with a capture killed between its two writes, where the pause comes first, leaves a capture its host refuses at the restart, saying why, its machine running, and a retry that pauses and captures",
+    () =>
+      Effect.gen(function* () {
+        const { planned, host } = yield* madeOn("fixed");
+        const entered = yield* Deferred.make<true>();
+
+        const first = yield* services(planned, (machines) => ({
+          ...machines,
+          pause: () =>
+            Effect.andThen(
+              Deferred.succeed(entered, true),
+              Effect.interruptible(Effect.never)
+            ),
+        }));
+
+        const asking = yield* Effect.forkChild(
+          first.checkpoints.pause({ id: "dev", capture: { name: "snap" } })
+        );
+
+        yield* Deferred.await(entered);
+        yield* Fiber.interrupt(asking);
+        yield* first.crash;
+
+        const second = yield* planned.start();
+
+        yield* Effect.addFinalizer(() => second.crash);
+
+        const client = yield* clientOf(second.url);
+        const snap = yield* rested(second, "snap");
+        const left = yield* client.getMachine({ id: "dev" });
+        const refusal = yield* client.getCheckpoint({ id: "snap" });
+
+        const paused = yield* client.pauseMachine({
+          id: "dev",
+          capture: { name: "snap" },
+        });
+
+        const again = yield* client.getCheckpoint({ id: "snap" });
+
+        expect(snap).toMatchObject({
+          state: "failed",
+          error: { _tag: "WrongState" },
+        });
+        expect(snap.error?.message).toContain("running");
+        expect(snap.handle).toBeUndefined();
+        expect(refusal.phase).toBe("failed");
+        expect(at(left)).toStrictEqual(["running", "running", "settled"]);
+        expect(at(paused)).toStrictEqual(["stopped", "paused", "settled"]);
+        expect(again.phase).toBe("ready");
+        expect(
+          host.fake.calls.filter(
+            (call) => call === "capture snap" || call === "stop dev"
+          )
+        ).toStrictEqual(["capture snap", "stop dev", "capture snap"]);
+      })
+  );
+
+  it.effect(
+    "a pause with a capture killed before its pause's write, where the capture comes first, leaves the capture to run and its machine running, and a retry under the capture's name is Conflict",
+    () =>
+      Effect.gen(function* () {
+        const { planned, host } = yield* madeOn("smolvm");
+        const entered = yield* Deferred.make<true>();
+
+        const first = yield* services(planned, (machines) => ({
+          ...machines,
+          pause: () =>
+            Effect.andThen(
+              Deferred.succeed(entered, true),
+              Effect.interruptible(Effect.never)
+            ),
+        }));
+
+        const asking = yield* Effect.forkChild(
+          first.checkpoints.pause({ id: "dev", capture: { name: "snap" } })
+        );
+
+        yield* Deferred.await(entered);
+        yield* Fiber.interrupt(asking);
+        yield* first.crash;
+
+        const second = yield* planned.start();
+
+        yield* Effect.addFinalizer(() => second.crash);
+
+        const client = yield* clientOf(second.url);
+        const snap = yield* rested(second, "snap");
+        const left = yield* client.getMachine({ id: "dev" });
+
+        const retried = yield* Effect.flip(
+          client.pauseMachine({ id: "dev", capture: { name: "snap" } })
+        );
+
+        const paused = yield* client.pauseMachine({ id: "dev" });
+
+        expect(snap.state).toBe("ready");
+        expect(at(left)).toStrictEqual(["running", "running", "settled"]);
+        expect(retried).toMatchObject({ _tag: "Conflict" });
+        expect(at(paused)).toStrictEqual(["paused", "paused", "settled"]);
+        expect(
+          host.fake.calls.filter(
+            (call) => call === "capture snap" || call === "pause dev"
+          )
+        ).toStrictEqual(["capture snap", "pause dev"]);
       })
   );
 
