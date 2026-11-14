@@ -110,9 +110,14 @@ Each line names where the code holds it and how to check it again.
   running, as boat does, until the host's end, a stop, a delete or the fake's
   end ends it, with what it left in the background; its stdio reaches the
   local `ssh` over FIFOs a cut closes, so the command's next write dies of
-  SIGPIPE, as a writer did on boat. (`ssh.ts`'s `exec`; `guest.ts`'s
-  `ended`; `fake-boat.ts`'s `fakeBoatSsh`, `guest-groups.ts`, and the
-  contract's case that ends a command whose exec is cut short.)
+  SIGPIPE, as a writer did on boat. On boat the end's exec runs as root under
+  `sudo`, reads every process's environment in `/proc`, and ends the cut
+  command's `sudo`, shell, child and a child that ignores TERM, 6 s after a
+  10 s timeout, while a command another exec runs beside it runs on. (`ssh.ts`'s
+  `exec`; `guest.ts`'s `ended`; `fake-boat.ts`'s `fakeBoatSsh`,
+  `guest-groups.ts`, the contract's case that ends a command whose exec is
+  cut short, and the live suite's that ends one its exec's timeout cut, in
+  `tests/live/cut.ts`.)
 - Machine types: `small` 2 vCPUs 4 GiB, `default` 4 and 8, `large` 8 and 16,
   `xlarge` 16 and 32, with the disk the guest's block device reads: 80 GiB
   on `small` and `default`, 149 GiB on `large`. `xlarge` is the docs' 251,

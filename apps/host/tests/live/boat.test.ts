@@ -34,6 +34,7 @@ import * as Boat from "../../src/platform/boat/boat.ts";
 import { types } from "../../src/platform/boat/traits.ts";
 import { Runtime } from "../../src/runtime.ts";
 import type { Target } from "../../src/runtime.ts";
+import { ended, endsACutCommand } from "./cut.ts";
 import { runOfLabel } from "./marks.ts";
 import {
   ledgerOf,
@@ -701,6 +702,65 @@ describe.runIf(live)("boat, against the real account", () => {
         expect(snapshotGone).toBeUndefined();
       }).pipe(Effect.scoped, Effect.provide(services)),
     { timeout: 30 * 60 * 1000 }
+  );
+
+  it.live(
+    "ends in the guest a command its exec's timeout cut, and not one beside it",
+    () =>
+      Effect.gen(function* () {
+        const { api: boat, dir } = yield* client;
+
+        yield* finding(`host ${host}: the cut run's mark`);
+        yield* swept(boat);
+
+        yield* Effect.addFinalizer(() =>
+          Effect.gen(function* () {
+            const left = yield* swept(boat);
+
+            yield* finding(
+              `left at the end: ${left.swept.machines.length} sandboxes and ${left.swept.copies.length} saved snapshots of this run or one over`
+            );
+          }).pipe(Effect.orDie)
+        );
+
+        const context = yield* Layer.build(
+          Boat.layer(
+            { apiKeyFile: path.join(dir, "boat-key"), api },
+            {
+              id: host,
+              stateDir: path.join(dir, "state"),
+              listen: { address: "127.0.0.1", port: 1 },
+            }
+          )
+        );
+
+        const runtime = Context.get(context, Runtime);
+
+        const source = {
+          name: "cut",
+          instance: liveInstance(),
+          ...types.small,
+        };
+
+        const made = yield* runtime.make(
+          source,
+          { _tag: "image", image: Boat.image },
+          { _tag: "none" }
+        );
+
+        note("sandbox", made.handle);
+
+        const machine: Target = { ...source, handle: made.handle };
+
+        yield* Effect.addFinalizer(() =>
+          Effect.ignore(runtime.delete(machine, new Set()))
+        );
+
+        expect(yield* endsACutCommand(runtime, machine, finding)).toStrictEqual(
+          ended
+        );
+      }).pipe(Effect.scoped, Effect.provide(services)),
+    { timeout: 10 * 60 * 1000 }
   );
 
   it.live(
