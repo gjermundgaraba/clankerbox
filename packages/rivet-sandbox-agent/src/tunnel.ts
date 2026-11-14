@@ -268,6 +268,7 @@ const echoed = (child: ChildProcess): Echo => {
         seen = `${seen}${chunk}`;
 
         if (seen.includes(`${answer}\n`)) {
+          child.stdout?.off("data", read);
           resume(Effect.void);
         }
 

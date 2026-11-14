@@ -309,17 +309,19 @@ export const make = (options: Options, ssh = "ssh") => {
     known: Sandbox
   ): Effect.Effect<number, ClankerboxError | LocalTunnelError, Services> =>
     Effect.gen(function* () {
-      if (known.held?.value.running() !== true) {
-        yield* closed(known);
-
-        const client = yield* Client.Client;
-        const target = yield* sshTarget(yield* client.getMachine({ id }));
-
-        yield* relayOf(id, known);
-        known.held = yield* tunnelled(id, target);
+      if (known.held?.value.running() === true) {
+        return (yield* relayOf(id, known)).port;
       }
 
-      return (yield* relayOf(id, known)).port;
+      yield* closed(known);
+
+      const client = yield* Client.Client;
+      const target = yield* sshTarget(yield* client.getMachine({ id }));
+      const { port } = yield* relayOf(id, known);
+
+      known.held = yield* tunnelled(id, target);
+
+      return port;
     });
 
   const started = (id: string, known: Sandbox) =>
