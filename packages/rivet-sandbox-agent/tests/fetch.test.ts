@@ -187,6 +187,32 @@ describe("agentFetch", () => {
     }
   );
 
+  it.each(["localhost", "[::1]"])(
+    "refuses a request to %s at the port it holds, which is held on 127.0.0.1 alone",
+    async (host) => {
+      const heard: string[] = [];
+
+      const url = await served(
+        createServer((request, reply) => {
+          heard.push(request.url ?? "");
+          reply.end();
+        })
+      );
+
+      const { port } = new URL(url);
+      const sent = agentFetch("kept", () => url);
+
+      await expect(sent(`${url}/answered`)).resolves.toHaveProperty(
+        "status",
+        200
+      );
+      await expect(sent(`http://${host}:${port}/answered`)).rejects.toThrow(
+        `the provider holds no port for sandbox kept at http://${host}:${port}`
+      );
+      expect(heard).toStrictEqual(["/answered"]);
+    }
+  );
+
   it("waits for a reply as long as the agent's server holds it", async () => {
     const { send } = await servedAgent();
 

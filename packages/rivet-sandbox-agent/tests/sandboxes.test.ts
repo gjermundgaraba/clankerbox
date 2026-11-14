@@ -460,6 +460,58 @@ describe("dispose", () => {
     }
   );
 
+  it("refuses at once each call but destroy issued while it waits for a call in flight, and a destroy then deletes its machine once dispose is done, as a second dispose waits on the first", async () => {
+    const settled: string[] = [];
+    const gate = gated();
+
+    const { stub, sandbox, dispose } = await setup(
+      { machines: [reachable("kept"), reachable("other")] },
+      {},
+      undefined,
+      gate.wrap
+    );
+
+    await sandbox.getUrl("kept");
+    gate.arm();
+
+    const pausing = sandbox.pause("kept");
+
+    await until("the pause to reach its machine", async () => gate.entered());
+
+    const disposing = dispose().then(() => settled.push("dispose"));
+    const again = sandbox.dispose().then(() => settled.push("second dispose"));
+
+    const destroying = sandbox
+      .destroy("other")
+      .then(() => settled.push("destroy"));
+
+    for (const call of [
+      sandbox.create(),
+      sandbox.pause("kept"),
+      sandbox.resize("kept", { cpu: 4 }),
+      sandbox.reconnect("kept"),
+      sandbox.ensureServer("kept"),
+      sandbox.getUrl("kept"),
+      sandbox.getFetch("kept"),
+    ]) {
+      await expect(call).rejects.toMatchObject(disposed);
+    }
+
+    expect(settled).toStrictEqual([]);
+
+    gate.release();
+    await Promise.all([pausing, disposing, again, destroying]);
+
+    expect({
+      disposes: settled.slice(0, 2).toSorted(),
+      last: settled.at(-1),
+    }).toStrictEqual({
+      disposes: ["dispose", "second dispose"],
+      last: "destroy",
+    });
+    expect(stub.held()).toStrictEqual(["kept"]);
+  });
+
   it("refuses each call after it but destroy as ProviderDisposedError, a destroy still deletes its machine, and a second dispose resolves", async () => {
     const { stub, sandbox, dispose } = await setup({
       machines: [reachable("kept")],
