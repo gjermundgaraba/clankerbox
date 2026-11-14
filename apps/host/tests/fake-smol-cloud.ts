@@ -40,6 +40,7 @@ export interface FakeMachine {
   readonly root: string;
   readonly restoredFrom: string | undefined;
   readonly branchedFrom: string | undefined;
+  readonly rootBranch: string;
   pausedWith: string | undefined;
 }
 
@@ -143,6 +144,10 @@ const recordOf = (machine: FakeMachine) => ({
   id: machine.id,
   name: machine.name,
   state: machine.state,
+  ...(machine.branchedFrom === undefined
+    ? {}
+    : { parentMachineId: machine.branchedFrom }),
+  rootBranchId: machine.rootBranch,
   ready: machine.state === "started",
   resources: {
     cpus: machine.cpus,
@@ -297,7 +302,10 @@ export const fakeSmolCloud = (
       [...machines.values()].some((machine) => machine.name === name);
 
     const newMachine = async (
-      fields: Omit<FakeMachine, "id" | "createdAt" | "root" | "pausedWith">,
+      fields: Omit<
+        FakeMachine,
+        "id" | "createdAt" | "root" | "rootBranch" | "pausedWith"
+      >,
       from: string | undefined
     ) => {
       const id = idOf("mach");
@@ -314,6 +322,11 @@ export const fakeSmolCloud = (
         ...fields,
         id,
         root,
+        rootBranch:
+          fields.branchedFrom === undefined
+            ? id
+            : (machines.get(fields.branchedFrom)?.rootBranch ??
+              fields.branchedFrom),
         createdAt: now(),
         pausedWith: undefined,
       };

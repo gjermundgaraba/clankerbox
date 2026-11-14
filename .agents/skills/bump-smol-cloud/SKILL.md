@@ -111,22 +111,37 @@ Each is an assertion of the live suite, in the case named.
 - A branch answers its source's `autoStopSeconds` and `ttlSeconds`, and the
   source's delete answers 409 `conflict`, `checkpoint has 1 live branch;
   delete its branches before deleting it`, while the branch lives (measured
-  in fix round 1's probe-9b). The adapter's delete fails with that reason
-  after three refusals, and the control plane runs it again at its next
-  check. (`smol-cloud.ts`'s `settle`; the fake's `branchedFrom` and the
-  fork-delete test.)
+  in fix round 1's probe-9b), whether the source runs or is stopped. The
+  source stops while its branch lives (200, in under a second), the branch
+  runs on, and the account's started machines and RAM drop by the source's.
+  A branch's record carries `parentMachineId`, its source's ID, in a read and
+  in the list (measured in fix round 2's probe). `GET /v1/pricing` bills a
+  machine by the hour, its base and vCPUs and RAM only while it runs, and
+  100 µ$ a GB of disk an hour always. On a delete's 409, whatever its `retryable` says, the adapter lists the
+  machines whose `parentMachineId` is the source, and when one is listed the
+  refusal stands at once: it stops a running source, fails naming the fork, warns
+  once and logs at debug after. It names the fork as clankerbox does when the
+  adapter was handed it since the host started, by a make, a search or a read,
+  by smol cloud's name otherwise, and a branch made by hand by its own name or
+  ID. (`smol-cloud.ts`'s `heldByFork`, `heldUp` and `forkNamed`; the fake's
+  `branchedFrom` and its `parentMachineId`, and the fork-delete tests.)
 - A resize is absolute, so the adapter follows boat's rule for a lost
   answer: it reads the machine until it rests, is done when it holds the
   sizes asked, and sends the resize again otherwise, at most three times.
-  (`smol-cloud.ts`'s `resized`; the fake's `loseResize` and the resize
-  tests.)
+  A start, stop, pause, resume or delete whose answer is lost follows the
+  same rule, done once the machine rests anywhere but where it was sent
+  from, so a gateway's 502 to every send of one costs three sends, not one
+  a second for the step's ten minutes. (`smol-cloud.ts`'s `resized` and
+  `sent` over `provider-http.ts`'s `sentUntilHeld`; the fake's `loseResize`,
+  the resize tests and the test of an act whose every answer is lost.)
 - A machine reads `creating` through its start (`stopped`, `creating`,
   `started`, measured in fix round 2's second probe), and a resize sent then
   answers 409 `resize needs a started, stopped or paused machine, and this
   one is creating; retry once it settles`. Every goal, a delete's too, waits
   while the machine reads `creating`, `pausing`, `starting` or `stopping`,
   and sends nothing until it rests; a 409 at one settled state three times in
-  a row is a standing refusal. A DELETE sent 40 ms into a stop was taken, 204.
+  a row is a standing refusal, and so is a refusal smol cloud marks
+  `retryable`, each waited as its `Retry-After` asks. A DELETE sent 40 ms into a stop was taken, 204.
   (`smol-cloud.ts`'s `moveOf` and `settle`.)
 - A capture with `wait=true` can answer `creating`, so the adapter polls it to
   `available`.

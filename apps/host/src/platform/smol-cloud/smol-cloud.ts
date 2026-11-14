@@ -116,7 +116,19 @@ const checkpointEnds = new Set(["available", "failed"]);
 
 const apiErrors = ["Refused", "Unanswered", "Busy", "Unreadable"] as const;
 
+const fromApi = (error: { readonly _tag: string }): error is ApiError =>
+  apiErrors.some((tag) => tag === error._tag);
+
 const standingAfter = 3;
+
+class HeldByFork extends Schema.TaggedError<
+  HeldByFork,
+  { readonly brand: unique symbol }
+>()("HeldByFork", {
+  forks: Schema.Array(Schema.String),
+}) {}
+
+type Stands<E> = (refusal: Refused) => Effect.Effect<void, E | ApiError>;
 
 interface Conflicted {
   readonly state: string;
@@ -171,8 +183,11 @@ const unknownOutcome = (error: ApiError) =>
 const isGone = (error: ApiError) =>
   error._tag === "Refused" && error.status === 404;
 
-const isConflict = (error: ApiError): error is Refused =>
-  error._tag === "Refused" && error.status === 409;
+const isConflict = (error: { readonly _tag: string }): error is Refused =>
+  error instanceof Api.Refused && error.status === 409;
+
+const retryable = (error: { readonly _tag: string }): error is Refused =>
+  error instanceof Api.Refused && error.retryable;
 
 const oversized = (error: Refused) =>
   error.status === 422 && error.detail.startsWith("machine size exceeds");
@@ -370,11 +385,33 @@ export const make = (
       (exit) => (exit._tag === "Success" ? Duration.infinity : Duration.zero)
     );
 
-    const settle = (
+    const rested = (handle: Handle) =>
+      untilRest(
+        record(handle),
+        (found) => !transitional.has(found?.state ?? "missing"),
+        poll
+      );
+
+    const sent = (machine: Target, move: Api.Verb | "delete", state: string) =>
+      sentUntilHeld({
+        send: (move === "delete"
+          ? api.deleteMachine(machine.handle)
+          : api.act(machine.handle, move)
+        ).pipe(Effect.catchIf(isGone, () => Effect.void)),
+        rested: rested(machine.handle),
+        holds: (found) => (found?.state ?? "missing") !== state,
+        unheld: () =>
+          new Internal({
+            message: `smol cloud answered none of ${triesAfterLoss} ${move}s of ${machine.name}, and holds it ${state}`,
+          }),
+      });
+
+    const settle = <E extends { readonly _tag: string }>(
       machine: Target,
       goal: Goal,
+      stands: Stands<E>,
       conflicted?: Conflicted
-    ): Effect.Effect<void, ApiError | Missing | WrongState> =>
+    ): Effect.Effect<void, ApiError | Internal | Missing | WrongState | E> =>
       Effect.gen(function* () {
         const found = yield* record(machine.handle);
         const state = found?.state ?? "missing";
@@ -399,48 +436,135 @@ export const make = (
         if (move === "wait") {
           yield* Effect.sleep(poll);
 
-          return yield* settle(machine, goal);
+          return yield* settle(machine, goal, stands);
         }
 
         const times = conflicted?.state === state ? conflicted.times : 0;
 
         if (conflicted !== undefined && times >= standingAfter) {
-          return yield* new WrongState({
-            message: `smol cloud refused to ${move} ${machine.name} ${times} times while it stayed ${state}: ${conflicted.refusal.detail}`,
-            machine: machine.name,
-            state,
-          });
+          return yield* isConflict(conflicted.refusal)
+            ? new WrongState({
+                message: `smol cloud refused to ${move} ${machine.name} ${times} times while it stayed ${state}: ${conflicted.refusal.detail}`,
+                machine: machine.name,
+                state,
+              })
+            : Effect.fail(conflicted.refusal);
         }
 
-        const refusal = yield* (
-          move === "delete"
-            ? api.deleteMachine(machine.handle)
-            : api.act(machine.handle, move)
-        ).pipe(
+        const refusal = yield* sent(machine, move, state).pipe(
           Effect.as(undefined),
-          Effect.catchIf(isGone, () => Effect.undefined),
-          Effect.catchIf(unknownOutcome, (error) =>
-            Effect.as(waited(error), undefined)
+          Effect.catchIf(isConflict, (error) =>
+            Effect.andThen(stands(error), Effect.as(waited(error), error))
           ),
-          Effect.catchIf(isConflict, (error) => Effect.as(waited(error), error))
+          Effect.catchIf(retryable, (error) => Effect.as(waited(error), error))
         );
 
         return yield* settle(
           machine,
           goal,
+          stands,
           refusal === undefined
             ? undefined
             : { state, times: times + 1, refusal }
         );
       });
 
-    const toward = (machine: Target, goal: Goal) => {
+    const toward = <E extends { readonly _tag: string } = never>(
+      machine: Target,
+      goal: Goal,
+      stands: Stands<E> = () => Effect.void
+    ) => {
       const refused = failed(
         `${goal === "gone" ? "delete" : goal} ${machine.name}`
       );
 
-      return settle(machine, goal).pipe(Effect.catchTag(apiErrors, refused));
+      return settle(machine, goal, stands).pipe(
+        Effect.catchIf(fromApi, refused)
+      );
     };
+
+    const names = new Map<string, string>();
+
+    const told = (
+      machines: ReadonlyArray<Pick<Identity, "name" | "instance">>
+    ) =>
+      Effect.sync(() => {
+        for (const { name, instance } of machines) {
+          names.set(instance, name);
+        }
+      });
+
+    const forkNamed = (found: MachineRecord) => {
+      const instance =
+        found.name?.startsWith(prefix) === true
+          ? found.name.slice(prefix.length)
+          : undefined;
+
+      if (instance === undefined) {
+        return `${found.name ?? found.id} at smol cloud, which this host didn't make`;
+      }
+
+      return (
+        names.get(instance) ??
+        `${found.name}, smol cloud's name for a machine of this host's that the host hasn't read since it started`
+      );
+    };
+
+    const forksOf = (machine: Target) =>
+      Effect.map(listed, (all) =>
+        all
+          .filter(
+            (found) =>
+              found.parentMachineId === machine.handle &&
+              found.state !== "deleted"
+          )
+          .map(forkNamed)
+      );
+
+    const heldByFork: (machine: Target) => Stands<HeldByFork> =
+      (machine) => () =>
+        Effect.flatMap(forksOf(machine), (forks) =>
+          forks.length === 0
+            ? Effect.void
+            : Effect.fail(new HeldByFork({ forks }))
+        );
+
+    const warnedHeld = new Set<Handle>();
+
+    const stoppedWhileHeld = (machine: Target) =>
+      Effect.flatMap(record(machine.handle), (found) => {
+        const state = found?.state ?? "missing";
+
+        if (state !== "started" && state !== "running") {
+          return Effect.succeed(`it stays ${state}`);
+        }
+
+        return api.act(machine.handle, "stop").pipe(
+          Effect.as(
+            "it is stopped meanwhile, which smol cloud's price list bills for its disk alone"
+          ),
+          Effect.catch((error) =>
+            Effect.succeed(
+              `its stop failed, so it may still run and bill: ${error.message}`
+            )
+          )
+        );
+      });
+
+    const heldUp = (machine: Target, held: HeldByFork) =>
+      Effect.gen(function* () {
+        const meanwhile = yield* stoppedWhileHeld(machine);
+        const message = `smol cloud won't delete ${machine.name} while a fork of it lives: ${held.forks.join("; ")}. Delete the fork, and the delete goes through at the first check after; ${meanwhile}`;
+
+        if (warnedHeld.has(machine.handle)) {
+          yield* Effect.logDebug(message);
+        } else {
+          warnedHeld.add(machine.handle);
+          yield* Effect.logWarning(message);
+        }
+
+        return yield* new Internal({ message });
+      });
 
     const settled = (machine: Target, goal: Goal) =>
       bounded(`bringing ${machine.name} ${goal}`)(toward(machine, goal));
@@ -769,15 +893,28 @@ export const make = (
       startup: Effect.void,
       find: (what, ref) =>
         what === "machine"
-          ? read(
-              `the search for machine ${ref.name}`,
-              byName(nameOf(ref.instance))
+          ? Effect.andThen(
+              told([ref]),
+              read(
+                `the search for machine ${ref.name}`,
+                byName(nameOf(ref.instance))
+              )
             )
           : Effect.undefined,
-      observe: (machines) => read("the machines' states", observe(machines)),
-      capacity: () => read("the account's capacity", capacity),
+      observe: (machines) =>
+        Effect.andThen(
+          told(machines),
+          read("the machines' states", observe(machines))
+        ),
+      capacity: (machines) =>
+        Effect.andThen(
+          told(machines.map(({ machine }) => machine)),
+          read("the account's capacity", capacity)
+        ),
       make: (machine, origin) =>
         Effect.gen(function* () {
+          yield* told([machine]);
+
           const handle = yield* created(machine, origin).pipe(
             Effect.catchIf(
               (error) => error._tag === "Refused" && oversized(error),
@@ -825,7 +962,15 @@ export const make = (
           Effect.fail(new Internal({ message: error.message }))
         ),
       delete: (machine, keep) =>
-        Effect.andThen(toward(machine, "gone"), unkept(machine, keep)).pipe(
+        toward(machine, "gone", heldByFork(machine)).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              warnedHeld.delete(machine.handle);
+              names.delete(machine.instance);
+            })
+          ),
+          Effect.andThen(unkept(machine, keep)),
+          Effect.catchTag("HeldByFork", (held) => heldUp(machine, held)),
           bounded(`delete ${machine.name}`),
           Effect.mapError((error) => new Internal({ message: error.message }))
         ),

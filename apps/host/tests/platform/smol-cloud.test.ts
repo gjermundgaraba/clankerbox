@@ -767,9 +767,11 @@ describe("the smol cloud runtime over an account without a card", () => {
   );
 
   it.live(
-    "a delete of a machine whose fork lives fails with smol cloud's reason, and is done once the fork is gone",
-    () =>
-      Effect.scoped(
+    "a delete of a machine whose fork lives stops it, fails naming the fork with one DELETE a try and one warning, and is done once the fork is gone",
+    () => {
+      const logged: string[] = [];
+
+      return Effect.scoped(
         Effect.gen(function* () {
           const { fake, runtime } = yield* onCloud;
           const dev = yield* made(runtime, "dev");
@@ -784,10 +786,25 @@ describe("the smol cloud runtime over an account without a card", () => {
             { _tag: "none" }
           );
 
+          const deletes = () =>
+            fake.calls.filter((call) =>
+              call.startsWith(`DELETE /v1/machines/${dev.handle} `)
+            ).length;
+
           const refused = yield* Effect.flip(runtime.delete(dev, new Set()));
 
-          expect(refused.message).toContain("delete its branches");
-          expect(fake.machines.has(dev.handle)).toBe(true);
+          expect(refused.message).toContain("while a fork of it lives: twin.");
+          expect(refused.message).not.toContain(`cbx-${hostId}-`);
+          expect(fake.machines.get(dev.handle)?.state).toBe("stopped");
+          expect(fake.machines.get(handle)?.state).toBe("started");
+          expect(deletes()).toBe(1);
+
+          yield* Effect.flip(runtime.delete(dev, new Set()));
+
+          expect(deletes()).toBe(2);
+          expect(
+            logged.filter((line) => line.includes("a fork of it lives: twin."))
+          ).toHaveLength(1);
 
           yield* runtime.delete(
             { name: "twin", instance: twin.instance, handle },
@@ -797,7 +814,18 @@ describe("the smol cloud runtime over an account without a card", () => {
 
           expect([...fake.machines.keys()]).toStrictEqual([]);
         })
-      )
+      ).pipe(
+        Effect.provide(
+          Logger.layer([
+            Logger.make(({ message, logLevel }) => {
+              if (logLevel === "Warn") {
+                logged.push(String(message));
+              }
+            }),
+          ])
+        )
+      );
+    }
   );
 
   it.live(
@@ -1648,6 +1676,17 @@ const asks = (asked: readonly string[], route: string) =>
 
 const planted = "PLANTED-TOKEN-7f3a";
 
+const problem = (status: number, detail: string, retryable = false) =>
+  Response.json(
+    {
+      code: status === 409 ? "conflict" : "internal",
+      detail,
+      retryable,
+      status,
+    },
+    { status }
+  );
+
 describe("what a smol cloud answer puts in a log or an error", () => {
   it.effect(
     "names a listed record the host can't read by its name or ID, or as one with neither, and quotes nothing of its body",
@@ -1711,6 +1750,194 @@ describe("what a smol cloud answer puts in a log or an error", () => {
       expect(failed).toMatchObject({ _tag: "Internal" });
       expect(failed.message).not.toContain(planted);
     })
+  );
+});
+
+describe("a smol cloud act or delete whose every answer is lost", () => {
+  it.effect(
+    "is sent three times in all, the machine read between, then fails naming what smol cloud holds",
+    () =>
+      Effect.gen(function* () {
+        const steps = [
+          [
+            "start",
+            "stopped",
+            (runtime: Interface) => runtime.start(dev1, new Set()),
+          ],
+          ["stop", "started", (runtime: Interface) => runtime.stop(dev1)],
+          ["pause", "started", (runtime: Interface) => runtime.pause(dev1)],
+          [
+            "delete",
+            "stopped",
+            (runtime: Interface) => runtime.delete(dev1, new Set()),
+          ],
+        ] as const;
+
+        for (const [verb, state, step] of steps) {
+          const sent =
+            verb === "delete"
+              ? "DELETE /v1/machines/mach-1"
+              : `POST /v1/machines/mach-1/${verb}`;
+
+          const { asked, client } = answering((route) => {
+            if (route === sent) {
+              return new Response("<html>bad gateway</html>", { status: 502 });
+            }
+
+            if (route === "GET /v1/machines/mach-1") {
+              return Response.json(recordIn(state));
+            }
+
+            return route === "GET /v1/checkpoints" ||
+              route === "GET /v1/machines"
+              ? Response.json([])
+              : undefined;
+          });
+
+          const runtime = yield* scriptedRuntime(client);
+          const ended = yield* endedWithin(step(runtime), "10 minutes");
+
+          expect(failureOf(ended), verb).toMatchObject({ _tag: "Internal" });
+          expect(String(failureOf(ended)), verb).toContain(
+            `none of 3 ${verb}s`
+          );
+          expect(asks(asked, sent), verb).toBe(3);
+        }
+      })
+  );
+});
+
+const forkOf = (state: string) => ({
+  id: "mach-2",
+  name: `cbx-${hostId}-${machineOf("twin").instance}`,
+  state,
+  parentMachineId: "mach-1",
+  resources: { cpus: 1, memoryMb: 1024 },
+});
+
+describe("a smol cloud delete a live fork holds", () => {
+  it.effect(
+    "stands at the first refusal and stops the source, whether or not the refusal says it may be retried",
+    () =>
+      Effect.gen(function* () {
+        for (const retryable of [false, true]) {
+          let state = "started";
+
+          const { asked, client } = answering((route) => {
+            if (route === "DELETE /v1/machines/mach-1") {
+              return problem(
+                409,
+                "checkpoint has 1 live branch; delete its branches before deleting it",
+                retryable
+              );
+            }
+
+            if (route === "POST /v1/machines/mach-1/stop") {
+              state = "stopped";
+
+              return Response.json(recordIn(state));
+            }
+
+            if (route === "GET /v1/machines/mach-1") {
+              return Response.json(recordIn(state));
+            }
+
+            return route === "GET /v1/machines"
+              ? Response.json([recordIn(state), forkOf("started")])
+              : undefined;
+          });
+
+          const runtime = yield* scriptedRuntime(client);
+
+          const ended = yield* endedWithin(
+            runtime.delete(dev1, new Set()),
+            "1 minute"
+          );
+
+          expect(failureOf(ended), `retryable ${retryable}`).toMatchObject({
+            _tag: "Internal",
+          });
+          expect([
+            asks(asked, "DELETE /v1/machines/mach-1"),
+            asks(asked, "POST /v1/machines/mach-1/stop"),
+            state,
+          ]).toStrictEqual([1, 1, "stopped"]);
+
+          const checked = asked.length;
+
+          yield* endedWithin(runtime.delete(dev1, new Set()), "1 minute");
+
+          expect(asked.slice(checked)).toStrictEqual([
+            "GET /v1/machines/mach-1",
+            "DELETE /v1/machines/mach-1",
+            "GET /v1/machines",
+            "GET /v1/machines/mach-1",
+          ]);
+        }
+      })
+  );
+
+  it.effect(
+    "names a fork as clankerbox does once the host was handed it, by smol cloud's name before, and a branch made by hand by its own",
+    () =>
+      Effect.gen(function* () {
+        const twin = machineOf("twin");
+
+        const byHand = {
+          id: "mach-3",
+          name: "by-hand",
+          state: "started",
+          parentMachineId: "mach-1",
+          resources: { cpus: 1, memoryMb: 1024 },
+        };
+
+        const { client } = answering((route) => {
+          if (route === "DELETE /v1/machines/mach-1") {
+            return problem(
+              409,
+              "checkpoint has 1 live branch; delete its branches before deleting it"
+            );
+          }
+
+          if (route === "GET /v1/machines/mach-1") {
+            return Response.json(recordIn("stopped"));
+          }
+
+          if (route === "GET /v1/machines/mach-2") {
+            return Response.json(forkOf("started"));
+          }
+
+          return route === "GET /v1/machines"
+            ? Response.json([recordIn("stopped"), forkOf("started"), byHand])
+            : undefined;
+        });
+
+        const runtime = yield* scriptedRuntime(client);
+
+        const refusal = Effect.map(
+          endedWithin(runtime.delete(dev1, new Set()), "1 minute"),
+          (ended) => String(failureOf(ended))
+        );
+
+        const untold = yield* refusal;
+
+        yield* runtime.observe([
+          {
+            name: "twin",
+            instance: twin.instance,
+            handle: Handle.make("mach-2"),
+          },
+        ]);
+
+        const told = yield* refusal;
+
+        expect(untold).toContain(
+          `while a fork of it lives: cbx-${hostId}-${twin.instance}, smol cloud's name for a machine of this host's that the host hasn't read since it started; by-hand at smol cloud, which this host didn't make.`
+        );
+        expect(told).toContain(
+          "while a fork of it lives: twin; by-hand at smol cloud, which this host didn't make."
+        );
+      })
   );
 });
 

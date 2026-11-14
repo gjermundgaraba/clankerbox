@@ -21,6 +21,7 @@ export const MachineRecord = Schema.Struct({
   id: Handle,
   name: Schema.optionalKey(Schema.NullOr(Schema.String)),
   state: Schema.String,
+  parentMachineId: Schema.optionalKey(Schema.NullOr(Schema.String)),
   resources: Schema.Struct({
     cpus: Schema.Int,
     memoryMb: Schema.Int,
