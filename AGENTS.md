@@ -88,12 +88,9 @@ the whole CLI span domains on purpose.
 - `copies.ts`: a copy's spec, and why its source refuses it.
 - `fleet.ts`: capacity, and what a recheck does beyond each loop: tells a
   restarted host its machines, again until it finds each, and stores the handle
-  and endpoint it answers in each row; then starts, on each host that sweeps
-  and whose last sweep has ended, a sweep of the instances the store retired
-  there, which runs beside the rechecks after it for as long as the host says
-  one takes, noting when a sweep first found each gone and keeping each it
-  answers it left, and notes those of a host that doesn't sweep gone at once;
-  and ends old failures and forgets retired instances a day after.
+  and endpoint it answers in each row; starts each host's sweep (see House
+  style) once its last has ended; and ends old failures and forgets retired
+  instances a day after a sweep first found each gone.
 - `machine-view.ts`: what a client reads of a machine, and `waiting`, which a
   read tells.
 - `operations.ts`: plain functions of a step on its host. `poll` sends it when
@@ -334,33 +331,17 @@ the run.
   cut short reports `cancelled` only once the VM is where that command takes it.
   A smolvm host that starts resumes a machine a killed pause left `pausing`, so
   no step runs a hook in a frozen guest.
-- **A sweep deletes only what its store retired.** A runtime with the `owned`
-  facet lists the machines that carry the host's mark at its provider, and
-  nothing else, and its host's `HostInfo` says it `sweeps`, and how long a
-  sweep there takes: its list and the delete the facet bounds. A store retires a
+- **A sweep deletes only what its store retired.** A store retires a
   machine's instance on a host in the write that ends its row's hold on it
-  there: the row goes, moves to another host under a new instance, or rests
-  undone. The record outlives the row, and lasts a day of the control
-  plane's clock from the first sweep that reached its host and left nothing of
-  it, while one no sweep has reached, or the last sweep left, stays; no row takes
-  the instance again. Each recheck, after the adopts, sends each host that
-  sweeps the instances retired there, and the host deletes those it lists that
-  no step it holds names, all at once, a machine alone, leaving every
-  checkpoint it holds, and answers each it left: one a step names, and one whose delete failed. A
-  host that doesn't sweep is sent none, and its records are noted gone at once,
-  as no sweep there could find one. A
-  checkpoint's instance is never retired: every runtime that marks its machines
-  holds each checkpoint through its machine, and the start and remove below
-  prune what no row keeps. The sweep deletes
-  nothing for want of a claim, so a wiped or second store sweeps nothing of
-  another store's, and a make that lands a day after a sweep first found it
-  gone is left at its provider. A checkpoint a provider holds through its
-  machine has no mark: a `start` and a `remove` carry `keep`, every checkpoint
-  handle the rows hold on the host, as a checkpoint row names its source by name
-  alone, and the runtime deletes the machine's others, once a start runs it or
-  with the machine. That prune does delete for want of a claim, on one machine
-  the store claims, so a store restored from a backup prunes that machine's
-  checkpoints captured after the backup.
+  there, and no row takes that instance again. Each recheck sends each host
+  whose `HostInfo` says it `sweeps`, as one whose runtime has the `owned` facet
+  does, the instances retired there, and the host deletes the machines of those
+  its runtime lists under its mark that no step it holds names. A checkpoint's
+  instance is never retired: a `start` and a `remove` carry `keep`, and the
+  runtime prunes the machine's checkpoints no row keeps. Nothing else deletes
+  for want of a claim, so a wiped or second store sweeps nothing of another
+  store's. `docs/design/control-plane.md`, How an operation works, holds the
+  rest: how long a record lasts, what a sweep answers, and what it leaves.
 - **Leases are rows.** They are the `operations` table: what changes a resource
   owns it, what copies or reads it shares it, taken in the write that begins the
   operation, and a lease that refuses leaves that write undone. They survive a
@@ -372,13 +353,12 @@ the run.
   arguments and every process's environment. An exec whose scope closes before
   its command exits and its output closes, by its limit, its request ending or
   the host's stop, runs `endScript` through the runtime's own `exec` before the
-  scope's close goes on, bounded by `endTimeout`: TERM, then, 5 s later, STOP
-  until a listing finds nothing new and KILL until it finds nothing, for at
-  most 6 listings, to each process that holds the mark in its own arguments or environment,
-  the exec's or another's, or descends from one. An end that leaves any running
-  answers the caller `Internal`, saying so.
-  Smolvm's agent ends a cut command too; a Tart guest, boat and smol cloud
-  leave it running, measured on each, and the fake runtime's `cut` models each.
+  scope's close goes on, bounded by `endTimeout`: TERM, then STOP and KILL, to
+  each process whose own arguments or environment hold the mark, the exec's or
+  another's, and what descends from one. An end that leaves any running answers
+  the caller `Internal`. README's `exec` bullet states the rest. Smolvm's agent
+  ends a cut command too; a Tart guest, boat and smol cloud leave it running,
+  measured on each, and the fake runtime's `cut` models each.
 - **Setup scripts stay in memory, on both sides, but for a macOS guest's
   disk.** They may carry secrets, and are never stored or logged. A make that
   hasn't reached its host when the control plane ends can't be sent again, and
