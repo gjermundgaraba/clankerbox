@@ -173,26 +173,17 @@ export const migrations: readonly string[] = [
   ALTER TABLE templates DROP COLUMN ram_mib;
   ALTER TABLE templates DROP COLUMN disk_gib;
   ALTER TABLE templates DROP COLUMN setup_timeout_seconds`,
-  `ALTER TABLE machines ADD COLUMN traits TEXT NOT NULL DEFAULT '';
-  ALTER TABLE checkpoints ADD COLUMN traits TEXT NOT NULL DEFAULT '';
-  CREATE TEMP TABLE kind_traits (kind TEXT PRIMARY KEY, traits TEXT NOT NULL) STRICT;
+  `CREATE TEMP TABLE kind_traits (kind TEXT PRIMARY KEY, traits TEXT NOT NULL) STRICT;
   INSERT INTO kind_traits VALUES
     ('linux', json_object('runtime', 'smolvm', 'images', 'references', 'checkpoint', 'ram',
       'captureFrom', 'running', 'pause', 'saves', 'copies', 'grow',
       'resize', json_object('running', 'grow', 'stopped', 'any'),
-      'sizes', json_object('_tag', 'free'), 'stopsOnItsOwn', json('false'))),
+      'sizes', json_object('_tag', 'free'), 'stopsOnItsOwn', json('false'), 'stop', 'resumes')),
     ('mac', json_object('runtime', 'tart', 'images', 'named', 'checkpoint', 'disk',
       'captureFrom', 'stopped', 'pause', 'saves', 'copies', 'any',
       'resize', json_object('running', 'none', 'stopped', 'any'),
-      'sizes', json_object('_tag', 'free'), 'stopsOnItsOwn', json('false')));
-  UPDATE machines
-    SET traits = (SELECT traits FROM kind_traits WHERE kind_traits.kind = machines.kind);
-  UPDATE checkpoints
-    SET traits = (SELECT traits FROM kind_traits WHERE kind_traits.kind = checkpoints.kind);
-  DROP TABLE kind_traits;
-  ALTER TABLE machines DROP COLUMN kind;
-  ALTER TABLE checkpoints DROP COLUMN kind`,
-  `CREATE TABLE reached (
+      'sizes', json_object('_tag', 'free'), 'stopsOnItsOwn', json('false'), 'stop', 'discards'));
+  CREATE TABLE reached (
     name TEXT PRIMARY KEY,
     instance TEXT NOT NULL,
     created_at TEXT NOT NULL,
@@ -222,33 +213,31 @@ export const migrations: readonly string[] = [
     SELECT name, instance, created_at, base, cpu, ram_mib, disk_gib, host, NULL,
       CASE WHEN port IS NULL THEN NULL ELSE json_object('port', port) END,
       desired, state, prepared, error, resize, ephemeral, source, host_key, pin, undone_at,
-      labels, after, template, traits
+      labels, after, template,
+      (SELECT traits FROM kind_traits WHERE kind_traits.kind = machines.kind)
     FROM machines;
   DROP TABLE machines;
   ALTER TABLE reached RENAME TO machines;
+  ALTER TABLE checkpoints ADD COLUMN traits TEXT NOT NULL DEFAULT '';
+  UPDATE checkpoints
+    SET traits = (SELECT traits FROM kind_traits WHERE kind_traits.kind = checkpoints.kind);
+  ALTER TABLE checkpoints DROP COLUMN kind;
   ALTER TABLE checkpoints DROP COLUMN port;
   ALTER TABLE checkpoints ADD COLUMN handle TEXT;
-  DELETE FROM hosts`,
-  `CREATE TABLE retired (
+  DROP TABLE kind_traits;
+  DELETE FROM hosts;
+  CREATE TABLE retired (
     host TEXT NOT NULL,
     resource TEXT NOT NULL,
     instance TEXT NOT NULL,
     retired_at TEXT NOT NULL,
+    told_at TEXT,
     PRIMARY KEY (host, resource, instance)
-  ) STRICT`,
-  `UPDATE machines SET traits = json_set(traits, '$.stop',
-    CASE json_extract(traits, '$.runtime') WHEN 'smolvm' THEN 'resumes'
-      WHEN 'smol-cloud' THEN 'resumes' ELSE 'discards' END);
-  UPDATE checkpoints SET traits = json_set(traits, '$.stop',
-    CASE json_extract(traits, '$.runtime') WHEN 'smolvm' THEN 'resumes'
-      WHEN 'smol-cloud' THEN 'resumes' ELSE 'discards' END)`,
-  `ALTER TABLE retired ADD COLUMN told_at TEXT;
+  ) STRICT;
   INSERT INTO retired (host, resource, instance, retired_at)
-    SELECT host, 'machine', instance, undone_at FROM machines WHERE undone_at IS NOT NULL
-    ON CONFLICT DO NOTHING;
+    SELECT host, 'machine', instance, undone_at FROM machines WHERE undone_at IS NOT NULL;
   INSERT INTO retired (host, resource, instance, retired_at)
-    SELECT host, 'checkpoint', instance, failed_at FROM checkpoints WHERE failed_at IS NOT NULL
-    ON CONFLICT DO NOTHING`,
+    SELECT host, 'checkpoint', instance, failed_at FROM checkpoints WHERE failed_at IS NOT NULL`,
 ];
 
 const isSqliteError = (

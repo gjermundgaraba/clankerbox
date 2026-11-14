@@ -8,8 +8,6 @@ import { Handle } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { presets } from "@gjermundgaraba/clankerbox-host/testing";
-import { traits as boatTraits } from "@gjermundgaraba/clankerbox-host/testing/boat";
-import { traits as smolCloudTraits } from "@gjermundgaraba/clankerbox-host/testing/smol-cloud";
 import { Conflict, Internal, NotFound } from "@gjermundgaraba/clankerbox-sdk";
 import {
   mkdir,
@@ -162,9 +160,7 @@ const storeFrom = (fixture: string) =>
     return stateDir;
   });
 
-const trunkStore = storeFrom("store-d5f7dac.db");
-
-const p2Store = storeFrom("store-4b73940.db");
+const schema6Store = storeFrom("store-schema-6.db");
 
 type SqlRow = Readonly<Record<string, SQLOutputValue>>;
 
@@ -548,10 +544,10 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a store that trunk's control plane wrote opens with each row's traits stamped from its kind, its other columns as they were, and opens again unchanged",
+    "a store at 0.40.1's schema opens with each row's traits stamped from its kind, its other columns as they were, and opens again unchanged",
     () =>
       Effect.gen(function* () {
-        const stateDir = yield* trunkStore;
+        const stateDir = yield* schema6Store;
         const before = rowsOf(stateDir);
 
         const read = yield* withStore(stateDir, (store) =>
@@ -596,225 +592,10 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a store P2's control plane wrote opens with each machine's port inside its endpoint and no handle yet, its checkpoints without a port, and every host to be given its machines again",
+    "a store at 0.40.1's schema holding a kind no runtime has is refused, and left as it was",
     () =>
       Effect.gen(function* () {
-        const stateDir = yield* p2Store;
-        const before = rowsOf(stateDir);
-
-        const [machines, checkpoints] = yield* withStore(stateDir, (store) =>
-          Effect.all([store.machines, store.checkpoints])
-        );
-
-        const after = rowsOf(stateDir);
-        const once = dumped(stateDir);
-
-        yield* withStore(stateDir, (store) => store.machines);
-
-        expect(before.user_version).toBe(7);
-        expect(
-          machines.map(({ name, host, handle, endpoint }) => ({
-            name,
-            host,
-            handle,
-            endpoint,
-          }))
-        ).toStrictEqual([
-          {
-            name: "keep",
-            host: "smolvm-1",
-            handle: undefined,
-            endpoint: { port: 21_000 },
-          },
-          {
-            name: "big",
-            host: "smolvm-1",
-            handle: undefined,
-            endpoint: { port: 21_001 },
-          },
-          {
-            name: "fast",
-            host: "smolvm-1",
-            handle: undefined,
-            endpoint: { port: 21_002 },
-          },
-          {
-            name: "mbox",
-            host: "tart-1",
-            handle: undefined,
-            endpoint: { port: 21_000 },
-          },
-        ]);
-        expect(
-          checkpoints.map(({ name, handle }) => [name, handle])
-        ).toStrictEqual([
-          ["snap", undefined],
-          ["built-df5613ce21aef7f5", undefined],
-          ["msnap", undefined],
-        ]);
-        expect(after.user_version).toBe(migrations.length);
-        expect(
-          after.machines.map(without("traits", "handle", "endpoint"))
-        ).toStrictEqual(before.machines.map(without("traits", "port")));
-        expect(after.machines.map(({ endpoint }) => endpoint)).toStrictEqual(
-          portsOf(before.machines)
-        );
-        expect(machines.map(({ traits }) => traits)).toStrictEqual(
-          machines.map(({ host }) =>
-            host === "tart-1" ? presets.tart.traits : presets.smolvm.traits
-          )
-        );
-        expect(
-          after.checkpoints.map(without("traits", "handle"))
-        ).toStrictEqual(before.checkpoints.map(without("traits", "port")));
-        expect(after.rest).toStrictEqual({ ...before.rest, hosts: [] });
-        expect(dumped(stateDir)).toStrictEqual(once);
-      })
-  );
-
-  it.effect(
-    "a store written before the stop trait opens with each row's traits stamped with what its runtime's stop does to a paused machine",
-    () =>
-      Effect.gen(function* () {
-        const runtimes = [
-          presets.smolvm.traits,
-          presets.tart.traits,
-          smolCloudTraits,
-          boatTraits,
-        ];
-
-        const stateDir = yield* stateDirAt(9, (db) => {
-          for (const migration of migrations.slice(0, 9)) {
-            db.exec(migration);
-          }
-
-          for (const [index, traits] of runtimes.entries()) {
-            const { stop: _stop, ...stamped } = traits;
-            const name = `m${index}`;
-
-            db.prepare(
-              `INSERT INTO machines (name, instance, created_at, base, cpu, ram_mib, disk_gib, host,
-                desired, state, prepared, ephemeral, source, traits)
-                VALUES (?, ?, '2026-11-13T12:00:00.000Z', 'ubuntu', 1, 1024, 10, ?, 'running',
-                  'made.settled', 1, 0, '{"kind":"base"}', ?)`
-            ).run(
-              name,
-              `instance-${name}`,
-              traits.runtime,
-              JSON.stringify(stamped)
-            );
-            db.prepare(
-              `INSERT INTO checkpoints (name, instance, created_at, machine, host, base, cpu,
-                ram_mib, disk_gib, state, traits)
-                VALUES (?, ?, '2026-11-13T12:00:00.000Z', ?, ?, 'ubuntu', 1, 1024, 10, 'ready', ?)`
-            ).run(
-              `c${index}`,
-              `instance-c${index}`,
-              name,
-              traits.runtime,
-              JSON.stringify(stamped)
-            );
-          }
-        });
-
-        const [machines, checkpoints] = yield* withStore(stateDir, (store) =>
-          Effect.all([store.machines, store.checkpoints])
-        );
-
-        expect(machines.map(({ traits }) => traits)).toStrictEqual(runtimes);
-        expect(checkpoints.map(({ traits }) => traits)).toStrictEqual(runtimes);
-        expect(rowsOf(stateDir).user_version).toBe(migrations.length);
-      })
-  );
-
-  it.effect(
-    "a store whose rows rested undone or failed before the retired table opens with their instances retired on their hosts, and no other",
-    () =>
-      Effect.gen(function* () {
-        const traits = JSON.stringify(presets.fixed.traits);
-        const error = JSON.stringify({ _tag: "Internal", message: "failed" });
-
-        const stateDir = yield* stateDirAt(8, (db) => {
-          for (const migration of migrations.slice(0, 8)) {
-            db.exec(migration);
-          }
-
-          const machineRow = db.prepare(
-            `INSERT INTO machines (name, instance, created_at, base, cpu, ram_mib, disk_gib, host,
-              desired, state, prepared, error, ephemeral, source, undone_at, traits)
-              VALUES (?, ?, '2026-11-13T12:00:00.000Z', 'ubuntu', 1, 1024, 10, 'fixed', 'running',
-                ?, 0, ?, 0, '{"kind":"base"}', ?, ?)`
-          );
-
-          const checkpointRow = db.prepare(
-            `INSERT INTO checkpoints (name, instance, created_at, machine, host, base, cpu,
-              ram_mib, disk_gib, state, error, failed_at, traits)
-              VALUES (?, ?, '2026-11-13T12:00:00.000Z', 'kept', 'fixed', 'ubuntu', 1, 1024, 10,
-                ?, ?, ?, ?)`
-          );
-
-          machineRow.run(
-            "gone",
-            instance(1),
-            "undone",
-            error,
-            "2026-11-13T12:01:00.000Z",
-            traits
-          );
-          machineRow.run(
-            "kept",
-            instance(2),
-            "made.settled",
-            null,
-            null,
-            traits
-          );
-          checkpointRow.run(
-            "lost",
-            instance(3),
-            "failed",
-            error,
-            "2026-11-13T12:02:00.000Z",
-            traits
-          );
-          checkpointRow.run("snap", instance(4), "ready", null, null, traits);
-        });
-
-        const retired = yield* withStore(stateDir, (store) =>
-          store.retired("fixed")
-        );
-
-        expect(retired).toStrictEqual({
-          machines: [instance(1)],
-          checkpoints: [instance(3)],
-        });
-      })
-  );
-
-  it.effect(
-    "a P2 store whose upgrade fails after its machines moved is refused, and left as it was",
-    () =>
-      Effect.gen(function* () {
-        const stateDir = yield* p2Store;
-        const db = new DatabaseSync(path.join(stateDir, databaseFile));
-
-        db.exec("CREATE INDEX checkpoint_ports ON checkpoints (port)");
-        db.close();
-
-        const before = dumped(stateDir);
-        const error = yield* opening(stateDir);
-
-        expect(error).toBeInstanceOf(Internal);
-        expect(error.message).toContain("checkpoint_ports");
-        expect(dumped(stateDir)).toStrictEqual(before);
-      })
-  );
-
-  it.effect(
-    "a trunk store holding a kind no runtime has is refused, and left as it was",
-    () =>
-      Effect.gen(function* () {
-        const stateDir = yield* trunkStore;
+        const stateDir = yield* schema6Store;
         const file = path.join(stateDir, databaseFile);
         const db = new DatabaseSync(file);
 
