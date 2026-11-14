@@ -1,5 +1,5 @@
 import type { Handle } from "@clankerbox/host-contract";
-import { fitted, resizable } from "@clankerbox/host-contract/traits";
+import { fitted, resizeRefusal } from "@clankerbox/host-contract/traits";
 import { describe, it } from "@effect/vitest";
 import { Capacity, Missing, WrongState } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Fiber, Schedule, Stream } from "effect";
@@ -425,10 +425,10 @@ export const runtimeContract = (subject: Subject): void => {
                 ? undefined
                 : offered.find(
                     (sizes) =>
-                      sizes.diskGib >= from.diskGib &&
                       (sizes.cpu !== from.cpu ||
                         sizes.ramMib !== from.ramMib) &&
-                      resizable(traits, state, from, sizes) === "resizes"
+                      resizeRefusal(traits, "dev", state, from, sizes) ===
+                        undefined
                   );
 
             if (state === undefined || to === undefined) {

@@ -832,14 +832,8 @@ export const make = (
 
           return Handle.make(name);
         }).pipe(bounded("boat", `capture ${machine.name}`)),
-      resize: (machine, to, live) =>
+      resize: (machine, to) =>
         Effect.gen(function* () {
-          if (live) {
-            return yield* new Internal({
-              message: `boat changes ${machine.name}'s machine type only while it is stopped`,
-            });
-          }
-
           const type = yield* typeFor(
             {
               cpu: to.cpu ?? machine.cpu,

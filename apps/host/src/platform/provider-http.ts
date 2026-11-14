@@ -15,15 +15,15 @@ import type { HttpClient, HttpClientResponse } from "effect/http";
 import { CannotStart, timeoutFail } from "../runtime.ts";
 import { describe } from "./process.ts";
 
+/**
+ * What a request asks of a provider's API, which bounds how long it may take to answer: a `read`, a
+ * `change` it answers once it has taken it, or one it answers only once the machine has `settle`d,
+ * as smol cloud's start and capture do. A request not answered in time is a lost answer, so a
+ * stalled connection costs its step a read, not its whole deadline.
+ */
 export type Asked = "read" | "change" | "settle";
 
-/**
- * How long a provider's API may take to answer a request, by what it asks: a `read`, a `change`
- * it answers once it has taken it, or one it answers only once the machine has `settle`d, as smol
- * cloud's start and capture do. A request not answered in time leaves its outcome unknown, as a
- * dropped connection does, so a stalled connection costs its step a read, not its whole deadline.
- */
-export const answerWithin: Readonly<Record<Asked, Duration.Duration>> = {
+const answerWithin: Readonly<Record<Asked, Duration.Duration>> = {
   read: Duration.seconds(30),
   change: Duration.minutes(1),
   settle: Duration.minutes(5),
@@ -75,12 +75,12 @@ export class Unreadable extends Schema.TaggedError<
   message: Schema.String,
 }) {}
 
-export const lost =
+const lost =
   (call: string) =>
   (error: { readonly message: string }): Unanswered =>
     new Unanswered({ message: `${call}: ${error.message}` });
 
-export const within =
+const within =
   (asked: Asked, call: string) =>
   <A, E, R>(answer: Effect.Effect<A, E, R>) =>
     answer.pipe(
@@ -201,8 +201,7 @@ export const exchanged = <A>(
     );
 };
 
-/** How many times a call is sent while its answer is lost or asks to be waited out. */
-export const triesPerCall = 6;
+const triesPerCall = 6;
 
 /**
  * Whether sending a call twice does no more than sending it once, as a read, or a delete, does.
