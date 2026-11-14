@@ -207,4 +207,27 @@ layer(NodeServices.layer)((it) => {
       expect(yield* fs.exists(knownHosts)).toBe(false);
     })
   );
+
+  it.effect(
+    "pinnedSsh writes its known-hosts file in the directory it is given, and leaves that directory to its caller",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const directory = yield* fs.makeTempDirectoryScoped();
+
+        const knownHosts = yield* Effect.scoped(
+          Effect.map(
+            Effect.flatMap(sshTarget(reachable), (target) =>
+              pinnedSsh(target, "user", [], directory)
+            ),
+            knownHostsIn
+          )
+        );
+
+        expect(knownHosts).toBe(`${directory}/known_hosts`);
+        expect(yield* read(knownHosts)).toBe(
+          "dev ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample\n"
+        );
+      }).pipe(Effect.scoped)
+  );
 });

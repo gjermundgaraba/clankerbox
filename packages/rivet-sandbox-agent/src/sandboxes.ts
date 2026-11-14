@@ -282,7 +282,8 @@ export const make = (options: Options, ssh = "ssh") => {
         const args = yield* pinnedSsh(
           target,
           target.login.user,
-          forwarding(socket, extra)
+          forwarding(socket, extra),
+          directory
         );
 
         return yield* open({

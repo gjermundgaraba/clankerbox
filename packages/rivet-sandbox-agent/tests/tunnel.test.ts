@@ -531,7 +531,7 @@ describe("tunnel", () => {
   });
 
   it(
-    "a sandbox's port and tunnel, a request through them done, don't keep its program running, and leave no ssh, listener or socket file once it ends",
+    "a sandbox's port and tunnel, a request through them done, don't keep its program running, and leave no ssh, listener, socket or known-hosts file once it ends",
     async () => {
       const { code, stdout } = await run("leave-tunnel.ts", []);
       const { url, dir } = decodeLeft(stdout);
@@ -549,8 +549,15 @@ describe("tunnel", () => {
         throw new Error("leave-tunnel.ts started no ssh");
       }
 
+      const knownHosts = (
+        tunnel.args.find((arg) => arg.startsWith("UserKnownHostsFile=")) ?? ""
+      ).replace("UserKnownHostsFile=", "");
+
       await until("the tunnel's ssh to end", async () => gone(tunnel.pid));
-      expect(existsSync(path.dirname(tunnel.socket))).toBe(false);
+      expect({
+        socket: existsSync(path.dirname(tunnel.socket)),
+        knownHosts: existsSync(knownHosts),
+      }).toStrictEqual({ socket: false, knownHosts: false });
       await expect(free(portOf(url))).resolves.toBe(true);
     },
     testLimit
@@ -560,7 +567,7 @@ describe("tunnel", () => {
 describe("a tunnel's directory", () => {
   afterEach(cleanUp);
 
-  it("holds only the tunnel's socket", async () => {
+  it("holds only the tunnel's socket and known-hosts file", async () => {
     const { sandbox, calls } = await setup({ machines: [reachable("kept")] });
 
     await sandbox.getUrl("kept");
@@ -568,7 +575,7 @@ describe("a tunnel's directory", () => {
     const { socket } = liveTunnel(await calls());
     const held = await readdir(path.dirname(socket));
 
-    expect(held).toStrictEqual(["agent.sock"]);
+    expect(held.toSorted()).toStrictEqual(["agent.sock", "known_hosts"]);
   });
 
   it("a tunnel whose ssh fails quotes the last 600 characters ssh printed", async () => {

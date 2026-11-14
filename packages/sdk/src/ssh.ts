@@ -107,14 +107,16 @@ const sshArguments = (
 
 /**
  * ssh's arguments to the target's address, pinned to its host key through a known-hosts file that
- * lasts as long as the scope, which must outlast the ssh. The destination is the address, not the
- * ID, so no ssh_config block for the ID applies. Ports change on fork and restore, so read the
- * target anew for each ssh.
+ * lasts as long as the scope, which must outlast the ssh, in a temporary directory of its own, or
+ * in `directory`, which the caller keeps. The destination is the address, not the ID, so no
+ * ssh_config block for the ID applies. Ports change on fork and restore, so read the target anew
+ * for each ssh.
  */
 export const pinnedSsh = (
   target: SshTarget,
   user: string,
-  extra: readonly string[]
+  extra: readonly string[],
+  directory?: string
 ): Effect.Effect<
   string[],
   PlatformError.PlatformError,
@@ -124,11 +126,11 @@ export const pinnedSsh = (
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
 
-    const directory = yield* fs.makeTempDirectoryScoped({
-      prefix: "clankerbox-ssh-",
-    });
-
-    const knownHosts = path.join(directory, "known_hosts");
+    const knownHosts = path.join(
+      directory ??
+        (yield* fs.makeTempDirectoryScoped({ prefix: "clankerbox-ssh-" })),
+      "known_hosts"
+    );
 
     yield* fs.writeFileString(
       knownHosts,
