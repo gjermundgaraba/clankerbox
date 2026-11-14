@@ -1,5 +1,6 @@
 import {
   actionsByName,
+  endTimeout,
   formatCpu,
   formatGib,
   formatMib,
@@ -12,6 +13,7 @@ import {
   ConfigProvider,
   Console,
   Context,
+  Duration,
   Effect,
   Option,
   Stdio,
@@ -335,7 +337,7 @@ export const exec = Command.make(
     limit: Flag.String("timeout").pipe(
       Flag.withMetavar("DURATION"),
       Flag.withDescription(
-        "End the command after this long, such as 90s or 30m, and exit 124 once it has ended, or fail Internal where some of it still runs; unbounded by default."
+        `End the command after this long, such as 90s or 30m, and exit 124 once it has ended, within ${Duration.format(endTimeout)} of it, saying on stderr when some of it may still run; unbounded by default.`
       ),
       Flag.optional
     ),
@@ -403,6 +405,12 @@ export const exec = Command.make(
         if (executed.truncated) {
           yield* Console.error(
             `clankerbox: the output above is only its last ${outputLimit} characters`
+          );
+        }
+
+        if (executed.mayStillRun !== undefined) {
+          yield* Console.error(
+            `clankerbox: the command ran past its timeout and may still run in ${flags.machine}: ${executed.mayStillRun}`
           );
         }
       }

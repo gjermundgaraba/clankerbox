@@ -267,6 +267,29 @@ layer(NodeServices.layer)((it) => {
         expect(result.stderr).toContain("exited 127: sh: amp: not found");
       })
     );
+
+    it.effect(
+      "fails saying bootstrap may still run when its timeout cut it and its end wasn't confirmed",
+      () =>
+        Effect.gen(function* () {
+          const stub = server({
+            exec: () =>
+              Effect.succeed({
+                exitCode: 124,
+                output: "fetching amp\n",
+                truncated: false,
+                mayStillRun: "its end's 10s ran out",
+              }),
+          });
+
+          const result = yield* dispatched(spawnEnv, stub);
+
+          expect(result.code).toBe(1);
+          expect(result.stderr).toContain(
+            "exited 124, and may still run there: its end's 10s ran out: fetching amp"
+          );
+        })
+    );
   });
 
   describe("a pause", () => {
