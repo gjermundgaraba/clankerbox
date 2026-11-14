@@ -172,25 +172,11 @@ const isGone = (error: ApiError) =>
 const isConflict = (error: ApiError): error is Refused =>
   error._tag === "Refused" && error.status === 409;
 
-const quota = /limit reached|quota|concurren/iu;
-
 const oversized = (error: Refused) =>
   error.status === 422 && error.detail.startsWith("machine size exceeds");
 
-const refusedRoom = (error: ApiError) =>
-  error._tag === "Refused" &&
-  !oversized(error) &&
-  (error.status === 402 ||
-    error.code === "insufficient_capacity" ||
-    (error.status === 422 && quota.test(error.detail)));
-
 const internal = (what: string) => (error: ApiError) =>
   new Internal({ message: `${what}: ${error.message}` });
-
-const failure = (what: string) => (error: ApiError) =>
-  refusedRoom(error)
-    ? new Capacity({ message: `${what}: ${error.message}` })
-    : internal(what)(error);
 
 const waited = (error: ApiError) =>
   Effect.sleep(
@@ -312,18 +298,45 @@ export const make = (
     const record = (handle: Handle) =>
       api.machine(handle).pipe(Effect.catchIf(isGone, () => Effect.undefined));
 
-    const unsized = (machine: Pick<Identity, "name">, asked: Sizes) =>
-      Effect.flatMap(api.account, (account) =>
-        asked.cpu > account.effectiveMaxCpus ||
-        asked.ramMib > account.effectiveMaxMemoryMb ||
-        asked.diskGib > account.effectiveMaxDiskGb
-          ? Effect.fail(
-              new Unsizable({
-                message: `smol cloud gives a machine of this account at most ${account.effectiveMaxCpus} vCPUs, ${account.effectiveMaxMemoryMb} MiB of RAM and ${account.effectiveMaxDiskGb} GiB of disk, and ${machine.name} was asked ${asked.cpu} vCPUs, ${asked.ramMib} MiB and ${asked.diskGib} GiB`,
-              })
-            )
-          : Effect.void
-      );
+    const atLimit = Effect.map(
+      Effect.all([api.account, api.inUse], { concurrency: "unbounded" }),
+      ([account, inUse]) =>
+        inUse.startedMachines >= account.effectiveMaxConcurrentMachines ||
+        inUse.machines >= account.effectiveMaxMachines
+    );
+
+    const failed =
+      (what: string) =>
+      (error: ApiError): Effect.Effect<never, Capacity | Internal> => {
+        if (
+          error._tag === "Refused" &&
+          (error.status === 402 || error.code === "insufficient_capacity")
+        ) {
+          return Effect.fail(
+            new Capacity({ message: `${what}: ${error.message}` })
+          );
+        }
+
+        if (
+          error._tag === "Refused" &&
+          error.status === 422 &&
+          !oversized(error)
+        ) {
+          return Effect.flatMap(
+            Effect.orElseSucceed(atLimit, () => false),
+            (full) =>
+              Effect.fail(
+                full
+                  ? new Capacity({
+                      message: `${what}: the account is at its limits: ${error.message}`,
+                    })
+                  : internal(what)(error)
+              )
+          );
+        }
+
+        return Effect.fail(internal(what)(error));
+      };
 
     const autoStopSeconds = yield* Effect.cachedWithTTL(
       Effect.map(api.account, (account) =>
@@ -396,16 +409,15 @@ export const make = (
         );
       });
 
-    const toward = (machine: Target, goal: Goal) =>
-      settle(machine, goal).pipe(
-        Effect.catchTag(["Refused", "Unanswered", "Unreadable"], (error) =>
-          Effect.fail(
-            failure(`${goal === "gone" ? "delete" : goal} ${machine.name}`)(
-              error
-            )
-          )
-        )
+    const toward = (machine: Target, goal: Goal) => {
+      const refused = failed(
+        `${goal === "gone" ? "delete" : goal} ${machine.name}`
       );
+
+      return settle(machine, goal).pipe(
+        Effect.catchTag(["Refused", "Unanswered", "Unreadable"], refused)
+      );
+    };
 
     const settled = (machine: Target, goal: Goal) =>
       bounded(`bringing ${machine.name} ${goal}`)(toward(machine, goal));
@@ -735,11 +747,7 @@ export const make = (
         machines: read("the machines this host made", marked),
         checkpoints: Effect.succeed([]),
       },
-      sizable: (machine, _from, to) =>
-        Effect.catchTags(unsized(machine, to), {
-          Refused: () => Effect.void,
-          Unanswered: () => Effect.void,
-        }),
+      sizable: () => Effect.void,
       startup: Effect.void,
       find: (what, ref) =>
         what === "machine"
@@ -752,14 +760,20 @@ export const make = (
       capacity: () => read("the account's capacity", capacity),
       make: (machine, origin) =>
         Effect.gen(function* () {
-          const handle = yield* Effect.mapError(
-            created(machine, origin),
-            (error): Capacity | Internal | Unsizable =>
-              error._tag === "Refused" && oversized(error)
-                ? new Unsizable({
-                    message: `make ${machine.name}: ${error.detail}`,
+          const handle = yield* created(machine, origin).pipe(
+            Effect.catchIf(
+              (error) => error._tag === "Refused" && oversized(error),
+              (error) =>
+                Effect.fail(
+                  new Capacity({
+                    message: `make ${machine.name}: smol cloud makes no machine of these sizes on this account: ${error.message}`,
                   })
-                : failure(`make ${machine.name}`)(error)
+                )
+            ),
+            Effect.catchTag(
+              ["Refused", "Unanswered", "Unreadable"],
+              failed(`make ${machine.name}`)
+            )
           );
 
           yield* toward(targetOf(machine, handle), "running");
@@ -803,14 +817,17 @@ export const make = (
       capture: (machine) =>
         Effect.gen(function* () {
           const checkpoint = yield* api.capture(machine.handle).pipe(
-            Effect.mapError((error) =>
-              isConflict(error)
-                ? new WrongState({
-                    message: `capture ${machine.name}: ${error.message}`,
-                    machine: machine.name,
-                    state: error.code,
-                  })
-                : failure(`capture ${machine.name}`)(error)
+            Effect.catch(
+              (error): Effect.Effect<never, Capacity | Internal | WrongState> =>
+                isConflict(error)
+                  ? Effect.fail(
+                      new WrongState({
+                        message: `capture ${machine.name}: ${error.message}`,
+                        machine: machine.name,
+                        state: error.code,
+                      })
+                    )
+                  : failed(`capture ${machine.name}`)(error)
             )
           );
 
@@ -843,8 +860,7 @@ export const make = (
             ),
             Effect.mapError((error) =>
               error._tag === "Refused" &&
-              (error.status === 400 || error.status === 422) &&
-              !refusedRoom(error)
+              (error.status === 400 || error.status === 422)
                 ? new Unsizable({
                     message: `resize ${machine.name}: ${error.detail}`,
                   })

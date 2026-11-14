@@ -688,21 +688,21 @@ const onCloud = Effect.gen(function* () {
 
 describe("the smol cloud runtime over an account without a card", () => {
   it.live(
-    "refuses a machine past the account's per-machine sizes as unsizable, made or resized",
+    "moves a make past the account's per-machine sizes on as Capacity, and refuses such a resize as unsizable",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
           const { runtime } = yield* onCloud;
           const big = { ...machineOf("big"), cpu: 5 };
 
-          expect(
-            yield* Effect.flip(runtime.sizable(big, sizes, big, false))
-          ).toMatchObject({ _tag: "Unsizable" });
-          expect(
-            yield* Effect.flip(
-              runtime.make(big, { _tag: "image", image }, { _tag: "none" })
-            )
-          ).toMatchObject({ _tag: "Unsizable" });
+          yield* runtime.sizable(big, sizes, big, false);
+
+          const refused = yield* Effect.flip(
+            runtime.make(big, { _tag: "image", image }, { _tag: "none" })
+          );
+
+          expect(refused).toMatchObject({ _tag: "Capacity" });
+          expect(refused.message).toContain("up to 4 vCPU");
 
           const dev = yield* made(runtime, "dev");
 
@@ -816,6 +816,7 @@ describe("the smol cloud runtime over an account without a card", () => {
 interface Failing {
   readonly account?: { times: number; readonly answer: "gateway" | "refused" };
   readonly create?: string;
+  readonly inUse?: { readonly machines: number; readonly started: number };
 }
 
 const scripted = (
@@ -911,8 +912,8 @@ const scripted = (
 
           if (route === "GET /v1/capacity") {
             return reply(200, {
-              machines: 0,
-              startedMachines: 0,
+              machines: failing?.inUse?.machines ?? 0,
+              startedMachines: failing?.inUse?.started ?? 0,
               startedMemoryMb: 0,
             });
           }
@@ -1008,10 +1009,13 @@ describe("a smol cloud make's read of the account", () => {
   );
 });
 
-const refusedCreate = (detail: string) =>
+const refusedCreate = (detail: string, failing: Omit<Failing, "create"> = {}) =>
   Effect.flatMap(
     scriptedRuntime(
-      scripted({ busy: 0 }, "started", undefined, { create: detail })
+      scripted({ busy: 0 }, "started", undefined, {
+        ...failing,
+        create: detail,
+      })
     ),
     (runtime) =>
       Effect.flip(
@@ -1023,18 +1027,47 @@ const refusedCreate = (detail: string) =>
       )
   );
 
+const concurrency =
+  "concurrency limit reached: an account without a card can run 4 machines at once; add a card at https://smolmachines.com/console/usage to run up to your plan's limit";
+
 describe("a smol cloud create the provider refuses 422", () => {
-  it.effect("is Capacity only when it says a limit is reached", () =>
-    Effect.gen(function* () {
-      expect(
-        yield* refusedCreate(
-          "concurrency limit reached: an account without a card can run 4 machines at once"
-        )
-      ).toMatchObject({ _tag: "Capacity" });
-      expect(
-        yield* refusedCreate("ttlSeconds exceeds the maximum of 86400")
-      ).toMatchObject({ _tag: "Internal" });
-    })
+  it.effect(
+    "is Capacity when the account holds what its limits allow, whatever the words",
+    () =>
+      Effect.gen(function* () {
+        expect(
+          yield* refusedCreate(concurrency, {
+            inUse: { machines: 4, started: 4 },
+          })
+        ).toMatchObject({ _tag: "Capacity" });
+        expect(
+          yield* refusedCreate(
+            "machine count exceeds what an account without a card can keep: 20",
+            { inUse: { machines: 20, started: 0 } }
+          )
+        ).toMatchObject({ _tag: "Capacity" });
+      })
+  );
+
+  it.effect(
+    "is Internal when the account is within its limits, or its limits can't be read",
+    () =>
+      Effect.gen(function* () {
+        expect(
+          yield* refusedCreate(concurrency, {
+            inUse: { machines: 1, started: 1 },
+          })
+        ).toMatchObject({ _tag: "Internal" });
+        expect(
+          yield* refusedCreate("ttlSeconds exceeds the maximum of 86400")
+        ).toMatchObject({ _tag: "Internal" });
+        expect(
+          yield* refusedCreate(concurrency, {
+            inUse: { machines: 4, started: 4 },
+            account: { times: 2, answer: "refused" },
+          })
+        ).toMatchObject({ _tag: "Internal" });
+      })
   );
 });
 

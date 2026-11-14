@@ -74,11 +74,17 @@ Each is an assertion of the live suite, in the case named.
   `startedMemoryMb`. The account has no limit on vCPUs in all: five 1-vCPU
   machines ran at once on an account whose `effectiveMaxCpus` is 4.
 - A create or resize past one machine's most answers 422 `unprocessable`,
-  `machine size exceeds what an account without a card can run, …`, which the
-  adapter answers `Unsizable`. A start, or an exec that starts a machine, past
-  `effectiveMaxConcurrentMachines` answers 422 `unprocessable`, `concurrency
-  limit reached: …`, which is `Capacity`. The second is in the fake, not the
-  live suite, as provoking it takes five running machines.
+  `machine size exceeds what an account without a card can run, …`, the one
+  text the adapter reads: a create answers `Capacity`, so it moves to a host
+  that may take it, and a resize `Unsizable`. A start, or an exec that starts
+  a machine, past `effectiveMaxConcurrentMachines` answers 422
+  `unprocessable`, `concurrency limit reached: …` (measured in the first
+  round's probe). The adapter decides any 422 but the size one by reading
+  `GET /v1/account` and `GET /v1/capacity`: `Capacity` when the account holds
+  what its limits allow, running or kept, `Internal` otherwise or when that
+  read fails, since the provider also answers 422 to a body it won't take.
+  (`smol-cloud.ts`'s `failed`; the fake's `quota` fault lowers the limits it
+  reports to what the account holds.)
 - An exec request's body is at most 1 MiB (1048576 bytes) as sent: past it the
   provider answers 413 `payload_too_large`, `Failed to buffer the request
   body: length limit exceeded`. The adapter sizes stdin by its JSON encoding

@@ -241,7 +241,11 @@ export const fakeSmolCloud = (
     const started = () =>
       [...machines.values()].filter(({ state }) => state === "started");
 
-    const roomFor = () => !quotaOn && started().length < concurrentLimit;
+    const machinesAllowed = () => (quotaOn ? machines.size : machineLimit);
+
+    const runningAllowed = () => (quotaOn ? started().length : concurrentLimit);
+
+    const roomFor = () => started().length < runningAllowed();
 
     const noRoom = problem(
       422,
@@ -358,7 +362,7 @@ export const fakeSmolCloud = (
         );
       }
 
-      if (quotaOn || machines.size >= machineLimit) {
+      if (machines.size >= machinesAllowed()) {
         return problem(
           422,
           "unprocessable",
@@ -669,8 +673,8 @@ export const fakeSmolCloud = (
         if (kind === "account" && method === "GET") {
           return answer(200, {
             plan: { allowAlwaysOn: false },
-            effectiveMaxMachines: machineLimit,
-            effectiveMaxConcurrentMachines: concurrentLimit,
+            effectiveMaxMachines: machinesAllowed(),
+            effectiveMaxConcurrentMachines: runningAllowed(),
             effectiveMaxCpus: perMachine.cpus,
             effectiveMaxMemoryMb: perMachine.memoryMb,
             effectiveMaxDiskGb: perMachine.diskGb,
