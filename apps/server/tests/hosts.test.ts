@@ -5,7 +5,8 @@ import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { readTimeout, version } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, Logger, Schema } from "effect";
+import { Duration, Effect, Exit, Layer, Logger, Result, Schema } from "effect";
+import { HttpClient } from "effect/http";
 import { expect } from "vite-plus/test";
 
 import * as Hosts from "../src/hosts.ts";
@@ -317,6 +318,33 @@ layer(NodeServices.layer, { excludeTestServices: true })(
               `${status} POST ${url}/host/readHost`
             );
           }
+        })
+    );
+
+    it.effect(
+      "whose call dies of a defect that isn't the HTTP client's dies of it, not read as unreachable",
+      () =>
+        Effect.gen(function* () {
+          const bug = new Error("a bug under the host's API");
+
+          const exit = yield* Effect.exit(
+            Effect.gen(function* () {
+              const hosts = yield* Hosts.make([
+                { id: "old", url: "http://127.0.0.1:1", draining: false },
+              ]);
+
+              return yield* hosts.call("old", (api) => api.readHost({}));
+            }).pipe(
+              Effect.provide(
+                Layer.succeed(
+                  HttpClient.HttpClient,
+                  HttpClient.make(() => Effect.die(bug))
+                )
+              )
+            )
+          );
+
+          expect(Result.getOrUndefined(Exit.findDefect(exit))).toBe(bug);
         })
     );
 

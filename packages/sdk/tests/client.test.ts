@@ -1,5 +1,15 @@
 import { it } from "@effect/vitest";
-import { Clock, DateTime, Duration, Effect, Fiber } from "effect";
+import {
+  Clock,
+  DateTime,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Result,
+} from "effect";
+import { HttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
 import { afterEach, describe, expect } from "vite-plus/test";
 
@@ -835,6 +845,29 @@ describe("client", () => {
           expect(error._tag).toBe("Conflict");
           expect(error).toMatchObject({ id: "dev" });
           expect(error).not.toHaveProperty("made");
+        })
+    );
+
+    it.effect(
+      "a defect that isn't the HTTP client's dies of it, not read as an answer",
+      () =>
+        Effect.gen(function* () {
+          const bug = new Error("a bug under the client");
+
+          const exit = yield* Effect.exit(
+            Effect.flatMap(Client.make(url), (client) =>
+              client.pauseMachine({ id: "dev" })
+            ).pipe(
+              Effect.provide(
+                Layer.succeed(
+                  HttpClient.HttpClient,
+                  HttpClient.make(() => Effect.die(bug))
+                )
+              )
+            )
+          );
+
+          expect(Result.getOrUndefined(Exit.findDefect(exit))).toBe(bug);
         })
     );
   });
