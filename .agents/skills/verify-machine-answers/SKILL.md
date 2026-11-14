@@ -1,6 +1,6 @@
 ---
 name: verify-machine-answers
-description: Model-check, with TLA+ and TLC, that a clankerbox machine request's answer is true under every interleaving of concurrent requests, a control plane crash, a host restart, a partition and lost, repeated or late delivery of operations. Use when a change touches apps/server/src/chart.ts, machine-chart.ts, machines.ts, driver.ts, operations.ts, the store's advance, apps/host/src/operations.ts, or the SDK client's wait, before calling it done.
+description: Model-check, with TLA+ and TLC, that a clankerbox machine request's answer is true under every interleaving of concurrent requests, a control plane crash, a host restart, a partition and lost, repeated or late delivery of operations. Use when a change touches apps/server/src/chart.ts, machine-chart.ts, machines.ts, driver.ts, operations.ts, the store's advance, apps/host/src/operations.ts, apps/host/src/recheck.ts, or the SDK client's wait, before calling it done.
 ---
 
 # Verify machine answers
@@ -211,7 +211,7 @@ for this code:
 | `Crash`, `Revive`                | a new process: the store stays, `creates` goes; `machines.ts` start-up     |
 | `Drift`                          | a provider stopping a machine unasked; the fake runtime's `drift` hook     |
 | `LandLate`                       | a provider making a machine whose answer was lost; the fake's `landLate` hook |
-| `SweepRead`, `Sweep`             | the store retiring an instance in `advance`, read by `apps/server/src/fleet.ts`'s recheck and sent as `sweepRetired`; `apps/host/src/operations.ts`, which deletes what was retired and no step names |
+| `SweepRead`, `Sweep`             | the store retiring an instance in `advance`, read by `apps/server/src/fleet.ts`'s recheck and sent as `sweepRetired`; `apps/host/src/recheck.ts` `sweep`, which deletes what was retired and no step names |
 | `Shown`                          | `machine-view.ts` `phaseShown`, in `Machines.get` and `list`               |
 | `Answer`                         | `packages/sdk/src/client.ts` `machineRest`, `machineGone`, `answerOf`      |
 
