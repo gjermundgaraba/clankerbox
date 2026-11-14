@@ -781,7 +781,10 @@ export const make = (
         yield* set(made, machine, ["--random-serial", ...sizes]);
         yield* boot(made).pipe(
           Effect.catchTag("Capacity", (refused) =>
-            Effect.andThen(removed(made.handle), Effect.fail(refused))
+            Effect.andThen(
+              Effect.ignore(removed(made.handle), { log: "Warn" }),
+              Effect.fail(refused)
+            )
           )
         );
 
@@ -812,9 +815,7 @@ export const make = (
       Effect.gen(function* () {
         yield* copyable(what, source);
         yield* clone(source.handle, into);
-        yield* copyable(what, source).pipe(
-          Effect.tapError(() => deleteVm(into))
-        );
+        yield* copyable(what, source);
       });
 
     const resume = (machine: Target) =>
