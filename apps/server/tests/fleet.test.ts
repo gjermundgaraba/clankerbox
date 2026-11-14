@@ -2,7 +2,7 @@ import { cpSync, rmSync } from "node:fs";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { Internal } from "@gjermundgaraba/clankerbox-sdk";
+import { Internal, RuntimeName } from "@gjermundgaraba/clankerbox-sdk";
 import type { BuildRequest } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Duration, Effect, Fiber } from "effect";
 import { expect } from "vite-plus/test";
@@ -16,23 +16,17 @@ import {
   request,
   restartedHost,
   running,
+  stubHost,
+  stubInfo,
 } from "./support.ts";
 import type { Started } from "./support.ts";
 
-type Checkpoints = "held" | "marked";
+const fixed = { id: "fixed", as: "fixed" as const };
 
-const fixed = (checkpoints: Checkpoints) => ({
-  id: "fixed",
-  as: "fixed" as const,
-  options: { runtime: { owned: { checkpoints } } },
-});
-
-const onFixed = (
-  options: { recheck?: Duration.Duration; checkpoints?: Checkpoints } = {}
-) =>
+const onFixed = (options: { recheck?: Duration.Duration } = {}) =>
   Effect.gen(function* () {
     const served = yield* running({
-      hosts: [fixed(options.checkpoints ?? "held")],
+      hosts: [fixed],
       ...(options.recheck === undefined ? {} : { recheck: options.recheck }),
     });
 
@@ -43,10 +37,10 @@ const onFixed = (
     };
   });
 
-const onPlane = (checkpoints: Checkpoints = "held") =>
+const onPlane = () =>
   Effect.gen(function* () {
     const planned = yield* plane({
-      hosts: [fixed(checkpoints)],
+      hosts: [fixed],
       recheck: Duration.millis(100),
     });
 
@@ -232,40 +226,38 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
-  for (const checkpoints of ["held", "marked"] as const) {
-    it.effect(
-      `a sweep of what was retired before a capture keeps the ${checkpoints} checkpoint it makes`,
-      () =>
-        Effect.gen(function* () {
-          const served = yield* onFixed({ checkpoints });
+  it.effect(
+    "a sweep of what was retired before a capture keeps the checkpoint it makes",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* onFixed();
 
-          yield* served.client.create("old", request("old"));
-          yield* served.client.deleteMachine({ id: "old" });
-          yield* served.client.create("dev", request("dev"));
-          yield* served.client.stopMachine({ id: "dev" });
+        yield* served.client.create("old", request("old"));
+        yield* served.client.deleteMachine({ id: "old" });
+        yield* served.client.create("dev", request("dev"));
+        yield* served.client.stopMachine({ id: "dev" });
 
-          const retired = yield* served.store.retired("fixed");
+        const retired = yield* served.store.retired("fixed");
 
-          yield* served.client.captureCheckpoint({
-            machine: "dev",
-            name: "snap",
-          });
-          yield* Effect.sleep(Duration.millis(200));
-          yield* served.host.operations.sweep(retired);
+        yield* served.client.captureCheckpoint({
+          machine: "dev",
+          name: "snap",
+        });
+        yield* Effect.sleep(Duration.millis(200));
+        yield* served.host.operations.sweep(retired);
 
-          const restored = yield* served.client.restoreMachine({
-            checkpoint: "snap",
-            name: "copy",
-          });
+        const restored = yield* served.client.restoreMachine({
+          checkpoint: "snap",
+          name: "copy",
+        });
 
-          expect(retired.machines).toHaveLength(1);
-          expect(callsTo(served.host, "deleteCheckpoint")).toStrictEqual([]);
-          expect(callsTo(served.host, "delete")).toStrictEqual(["delete old"]);
-          expect(served.host.fake.machines.has("dev")).toBe(true);
-          expect(restored.phase).toBe("settled");
-        })
-    );
-  }
+        expect(retired.machines).toHaveLength(1);
+        expect(callsTo(served.host, "deleteCheckpoint")).toStrictEqual([]);
+        expect(callsTo(served.host, "delete")).toStrictEqual(["delete old"]);
+        expect(served.host.fake.machines.has("dev")).toBe(true);
+        expect(restored.phase).toBe("settled");
+      })
+  );
 
   it.effect(
     "the recheck's sweeps keep a machine a row wants beside one the store retired",
@@ -282,6 +274,68 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(created.phase).toBe("settled");
         expect(callsTo(served.host, "delete")).toStrictEqual(["delete old"]);
         expect(served.host.fake.machines.has("dev")).toBe(true);
+      })
+  );
+
+  it.effect(
+    "a recheck sends no sweep to a host whose runtime marks nothing, and forgets what it retired there a day on",
+    () =>
+      Effect.gen(function* () {
+        const asked: string[] = [];
+        const url = yield* stubHost(200, { ...stubInfo, id: "plain" }, asked);
+        const longAfter = DateTime.makeUnsafe("2100-01-01T00:00:00Z");
+
+        const served = yield* running({
+          hosts: [],
+          members: [{ id: "plain", url, draining: false }],
+          recheck: Duration.millis(50),
+        });
+
+        yield* served.store.insertMachine({
+          name: "old",
+          instance: "0123456789abcdef0123456789abcdef",
+          createdAt: DateTime.makeUnsafe("2026-10-04T12:00:00Z"),
+          runtime: RuntimeName.make("smolvm"),
+          captures: "ram",
+          base: "ubuntu",
+          cpu: 1,
+          ramMib: 1024,
+          diskGib: 10,
+          host: "plain",
+          handle: undefined,
+          endpoint: undefined,
+          desired: "running",
+          state: "made.settled",
+          prepared: true,
+          error: undefined,
+          resize: undefined,
+          ephemeral: false,
+          source: { kind: "base" },
+          template: undefined,
+          hostKey: undefined,
+          pin: undefined,
+          undoneAt: undefined,
+          labels: undefined,
+          after: undefined,
+        });
+        yield* served.store.advance("machine", "old", () => ({
+          next: "removed",
+          finish: false,
+        }));
+
+        const retired = yield* served.store.retired("plain");
+
+        const forgotten = yield* eventually(
+          Effect.andThen(
+            served.store.forgetRetired(longAfter),
+            served.store.retired("plain")
+          ),
+          ({ machines }) => machines.length === 0
+        );
+
+        expect(retired.machines).toHaveLength(1);
+        expect(forgotten.machines).toStrictEqual([]);
+        expect(asked).not.toContain("/host/sweepRetired");
       })
   );
 
@@ -419,7 +473,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a control plane over a wiped store sweeps only what it retired, and nothing of the first store's",
     () =>
       Effect.gen(function* () {
-        const planned = yield* onPlane("marked");
+        const planned = yield* onPlane();
         const first = yield* planned.start();
         const client = yield* clientOf(first.url);
 

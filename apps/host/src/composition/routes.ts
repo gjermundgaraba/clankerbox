@@ -34,6 +34,7 @@ const app = (config: Served) =>
             ...(runtime.pin === undefined ? {} : { pin: runtime.pin }),
             joins: Option.isSome(tailnet),
             builds: Option.isSome(builds),
+            sweeps: runtime.owned !== undefined,
           }),
         readMachines: ({ machines }) =>
           Effect.map(operations.read(machines), (observed) =>

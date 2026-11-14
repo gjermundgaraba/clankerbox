@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import type { Server } from "node:http";
 import path from "node:path";
 
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
@@ -15,7 +16,7 @@ import type {
   TestHost,
 } from "@gjermundgaraba/clankerbox-host/testing";
 import { planeRange } from "@gjermundgaraba/clankerbox-host/testing/port-slot";
-import { Client } from "@gjermundgaraba/clankerbox-sdk";
+import { Client, version } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   CreateRequest,
   Internal,
@@ -23,7 +24,16 @@ import type {
 } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
-import { Context, Duration, Effect, Exit, Layer, Logger, Scope } from "effect";
+import {
+  Context,
+  Duration,
+  Effect,
+  Exit,
+  Layer,
+  Logger,
+  Schema,
+  Scope,
+} from "effect";
 import { HttpServer } from "effect/http";
 
 import { applied } from "../src/chart.ts";
@@ -361,3 +371,69 @@ export const machineNames = (served: Pick<Started, "store">) =>
 
 export const callsTo = (host: TestHost, operation: string) =>
   host.fake.calls.filter((call) => call.startsWith(`${operation} `));
+
+/** What a smolvm host answers of itself, for a stub that serves it. */
+export const stubInfo = {
+  id: "old",
+  traits: {
+    runtime: "smolvm",
+    images: "references",
+    checkpoint: "ram",
+    captureFrom: "running",
+    pause: "saves",
+    stop: "resumes",
+    copies: "grow",
+    resize: { running: "grow", stopped: "any" },
+    sizes: { _tag: "free" },
+    limits: { least: {}, most: {}, live: {} },
+  },
+  version,
+  runtimeVersion: "fake",
+  bases: ["ubuntu"],
+  images: { ubuntu: "ubuntu" },
+  boot: "b00t",
+  pin: "fake 1",
+  joins: false,
+  builds: false,
+  sweeps: false,
+};
+
+/**
+ * A host that answers `readHost` with `answer()` and every other action with an empty array, at
+ * `status`, and records the path of each request it is sent in `asked`.
+ */
+export const stubHost = (
+  status: number,
+  body: unknown,
+  asked: string[] = [],
+  answer: () => unknown = () => body
+) =>
+  Effect.acquireRelease(
+    Effect.callback<Server>((resume) => {
+      const server = createServer((incoming, response) => {
+        asked.push(incoming.url ?? "");
+        response.writeHead(status, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify(incoming.url === "/host/readHost" ? answer() : [])
+        );
+      });
+
+      server.listen({ host: "127.0.0.1", port: 0 }, () => {
+        resume(Effect.succeed(server));
+      });
+    }),
+    (server) =>
+      Effect.callback<undefined>((resume) => {
+        server.close(() => {
+          resume(Effect.undefined);
+        });
+      })
+  ).pipe(
+    Effect.map((server) => {
+      const { port } = Schema.decodeUnknownSync(
+        Schema.Struct({ port: Schema.Finite })
+      )(server.address(), { onExcessProperty: "ignore" });
+
+      return `http://127.0.0.1:${port}`;
+    })
+  );

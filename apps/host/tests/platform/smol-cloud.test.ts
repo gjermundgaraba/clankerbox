@@ -369,10 +369,7 @@ describe("the smol cloud runtime on its host", () => {
             instance: "held-1",
           });
 
-          yield* operations.sweep({
-            machines: [dev.instance],
-            checkpoints: [],
-          });
+          yield* operations.sweep({ machines: [dev.instance] });
 
           expect([...fake.machines.keys()]).toStrictEqual([kept.handle]);
           expect(new Set(fake.checkpoints.keys())).toStrictEqual(
@@ -410,10 +407,7 @@ describe("the smol cloud runtime on its host", () => {
 
           expect(found).toBeDefined();
 
-          yield* operations.sweep({
-            machines: [fast.instance],
-            checkpoints: [],
-          });
+          yield* operations.sweep({ machines: [fast.instance] });
 
           expect([...fake.machines.keys()]).toStrictEqual([builder.handle]);
           expect(fake.checkpoints.has(copy)).toBe(true);

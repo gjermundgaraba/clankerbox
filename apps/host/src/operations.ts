@@ -75,8 +75,8 @@ import type {
   Handle,
   Held,
   Identity,
+  MarkedMachine,
   Observed,
-  Marked,
   Origin,
   Sized,
   Target,
@@ -172,9 +172,6 @@ const targetOf = ({ name, instance }: Identity, handle: Handle): Target => ({
   instance,
   handle,
 });
-
-const markedTarget = ({ instance, handle }: Marked): Target =>
-  targetOf({ name: instance, instance }, handle);
 
 const sizedOf = (machine: MachineRef, handle: Handle): Sized => ({
   ...targetOf(machine, handle),
@@ -1432,19 +1429,17 @@ export const make = (
         }
       }
 
-      return ({ instance, handle }: Marked) =>
+      return ({ instance, handle }: MarkedMachine) =>
         named.has(instance) || named.has(handle);
     };
 
     const sweeping = yield* Semaphore.make(1);
     const undeleted = new Set<string>();
 
-    const swept = (
-      { instance }: Marked,
-      what: string,
-      work: Effect.Effect<void, HostError>
-    ): Effect.Effect<boolean> =>
+    const swept = (machine: MarkedMachine): Effect.Effect<boolean> =>
       Effect.suspend(() => {
+        const { instance } = machine;
+        const what = `machine ${instance} (${machine.handle})`;
         const again = undeleted.has(instance);
 
         return Effect.andThen(
@@ -1453,109 +1448,76 @@ export const make = (
             : Effect.logInfo(
                 `sweep: deleting ${what}, which the control plane retired`
               ),
-          work.pipe(
-            Effect.tap(() =>
-              Effect.andThen(
-                Effect.sync(() => undeleted.delete(instance)),
-                again
-                  ? Effect.logInfo(
-                      `sweep: deleted ${what}, which an earlier sweep couldn't`
-                    )
-                  : Effect.void
-              )
-            ),
-            Effect.as(true),
-            Effect.catch((error) =>
-              Effect.as(
+          runtime
+            .delete(
+              targetOf({ name: instance, instance }, machine.handle),
+              new Set(machine.checkpoints)
+            )
+            .pipe(
+              Effect.tap(() =>
                 Effect.andThen(
-                  Effect.sync(() => undeleted.add(instance)),
+                  Effect.sync(() => undeleted.delete(instance)),
                   again
-                    ? Effect.logDebug(
-                        `sweep: still couldn't delete ${what} on host ${config.id}: ${error.message}`
+                    ? Effect.logInfo(
+                        `sweep: deleted ${what}, which an earlier sweep couldn't`
                       )
-                    : Effect.logWarning(
-                        `sweep: couldn't delete ${what}, which stays at its provider until a sweep deletes it, so each sweep of host ${config.id} tries again: ${error.message}`
-                      )
-                ),
-                false
+                    : Effect.void
+                )
+              ),
+              Effect.as(true),
+              Effect.catch((error) =>
+                Effect.as(
+                  Effect.andThen(
+                    Effect.sync(() => undeleted.add(instance)),
+                    again
+                      ? Effect.logDebug(
+                          `sweep: still couldn't delete ${what} on host ${config.id}: ${error.message}`
+                        )
+                      : Effect.logWarning(
+                          `sweep: couldn't delete ${what}, which stays at its provider until a sweep deletes it, so each sweep of host ${config.id} tries again: ${error.message}`
+                        )
+                  ),
+                  false
+                )
               )
             )
-          )
         );
       });
 
     const sweep: Interface["sweep"] = (retired) => {
       const { owned } = runtime;
 
-      if (
-        owned === undefined ||
-        (retired.machines.length === 0 && retired.checkpoints.length === 0)
-      ) {
-        return Effect.succeed({ machines: [], checkpoints: [] });
+      if (owned === undefined || retired.machines.length === 0) {
+        return Effect.succeed({ machines: [] });
       }
 
       return sweeping.withPermits(1)(
         Effect.gen(function* () {
-          const still = new Set([...retired.machines, ...retired.checkpoints]);
+          const wanted = new Set(retired.machines);
 
           for (const instance of undeleted) {
-            if (!still.has(instance)) {
+            if (!wanted.has(instance)) {
               undeleted.delete(instance);
             }
           }
 
-          const [machines, checkpoints] = yield* Effect.all(
-            [owned.machines, owned.checkpoints],
-            { concurrency: "unbounded" }
-          ).pipe(
+          const machines = yield* owned.machines.pipe(
             inTime(`the ${traits.runtime} runtime's list of what it marked`)
           );
 
           const named = namedBySteps();
 
-          const left = <M extends Marked>(
-            listed: readonly M[],
-            instances: readonly string[],
-            remove: (resource: M) => Effect.Effect<boolean>
-          ) => {
-            const wanted = new Set(instances);
+          const left = yield* Effect.forEach(
+            machines.filter(({ instance }) => wanted.has(instance)),
+            (machine) =>
+              named(machine)
+                ? Effect.succeed([machine.instance])
+                : Effect.map(swept(machine), (deleted) =>
+                    deleted ? [] : [machine.instance]
+                  )
+          );
 
-            return Effect.map(
-              Effect.forEach(
-                listed.filter((resource) => wanted.has(resource.instance)),
-                (resource) =>
-                  named(resource)
-                    ? Effect.succeed([resource.instance])
-                    : Effect.map(remove(resource), (deleted) =>
-                        deleted ? [] : [resource.instance]
-                      )
-              ),
-              (kept) => kept.flat()
-            );
-          };
-
-          return {
-            machines: yield* left(machines, retired.machines, (machine) =>
-              swept(
-                machine,
-                `machine ${machine.instance} (${machine.handle})`,
-                runtime.delete(
-                  markedTarget(machine),
-                  new Set(machine.checkpoints)
-                )
-              )
-            ),
-            checkpoints: yield* left(
-              checkpoints,
-              retired.checkpoints,
-              (checkpoint) =>
-                swept(
-                  checkpoint,
-                  `checkpoint ${checkpoint.instance} (${checkpoint.handle})`,
-                  runtime.deleteCheckpoint(markedTarget(checkpoint))
-                )
-            ),
-          };
+          return { machines: left.flat() };
         })
       );
     };

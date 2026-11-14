@@ -857,7 +857,6 @@ export const make = (
           marked,
           internal("the machines this host made")
         ),
-        checkpoints: Effect.succeed([]),
       },
       sizable: () => Effect.void,
       startup: Effect.void,

@@ -41,7 +41,6 @@ import type {
   Identity,
   MachineState,
   Made,
-  Marked,
   MarkedMachine,
   Observed,
   Interface,
@@ -78,7 +77,8 @@ export interface Preset {
   readonly prepares: Interface["prepares"];
   readonly admits: boolean;
   readonly files: { readonly keyed: boolean } | undefined;
-  readonly owned: { readonly checkpoints: "held" | "marked" } | undefined;
+  /** Whether it marks the machines it makes, and holds each checkpoint through its machine. */
+  readonly owned: boolean;
   readonly relayed: boolean;
   /**
    * What the runtime does to a guest command when its exec is cut short: smolvm's agent ends it with
@@ -118,7 +118,7 @@ export const presets = {
     prepares: "with-setup",
     admits: true,
     files: { keyed: true },
-    owned: undefined,
+    owned: false,
     relayed: false,
     cut: "ends",
     stopsOnItsOwn: false,
@@ -130,7 +130,7 @@ export const presets = {
     prepares: "with-setup",
     admits: true,
     files: { keyed: false },
-    owned: undefined,
+    owned: false,
     relayed: true,
     cut: "leaves",
     stopsOnItsOwn: false,
@@ -142,7 +142,7 @@ export const presets = {
     prepares: "always",
     admits: false,
     files: undefined,
-    owned: { checkpoints: "held" },
+    owned: true,
     relayed: false,
     cut: "leaves",
     stopsOnItsOwn: true,
@@ -377,7 +377,6 @@ interface FakeMachine {
 interface FakeCheckpoint {
   readonly name: string;
   readonly instance: string;
-  readonly marked: boolean;
   readonly of: Handle | undefined;
 }
 
@@ -388,7 +387,6 @@ const decodeKept = Schema.decodeUnknownSync(
         handle: Handle,
         name: Schema.String,
         instance: Schema.String,
-        marked: Schema.Boolean,
         of: Schema.NullOr(Handle),
       })
     )
@@ -627,7 +625,7 @@ export const fakeRuntime = (options: FakeOptions) => {
     ref: Identity
   ): Handle | undefined => {
     if (what === "checkpoint") {
-      return owned?.checkpoints === "held"
+      return owned
         ? undefined
         : [...checkpoints].find(
             ([, held]) =>
@@ -645,9 +643,7 @@ export const fakeRuntime = (options: FakeOptions) => {
     path.join(options.dir, "checkpoints", instance);
 
   const heldBy = (machine: Handle) =>
-    owned?.checkpoints === "held"
-      ? [...checkpoints].filter(([, held]) => held.of === machine)
-      : [];
+    owned ? [...checkpoints].filter(([, held]) => held.of === machine) : [];
 
   const pruned = async (machine: Handle, keep: ReadonlySet<Handle>) => {
     for (const [handle, held] of heldBy(machine)) {
@@ -676,7 +672,6 @@ export const fakeRuntime = (options: FakeOptions) => {
     checkpoints.set(handle, {
       name: checkpoint.name,
       instance: checkpoint.instance,
-      marked: true,
       of,
     });
     remembered();
@@ -950,38 +945,25 @@ export const fakeRuntime = (options: FakeOptions) => {
                 ),
             }
           : undefined,
-        owned:
-          owned === undefined
-            ? undefined
-            : {
-                machines: Effect.sync(() => {
-                  record("marked machines");
+        owned: owned
+          ? {
+              machines: Effect.sync(() => {
+                record("marked machines");
 
-                  return machines
-                    .values()
-                    .filter(({ marked }) => marked)
-                    .map((machine): MarkedMachine => ({
-                      instance: machine.instance,
-                      handle: machine.handle,
-                      checkpoints: heldBy(machine.handle).map(
-                        ([handle]) => handle
-                      ),
-                    }))
-                    .toArray();
-                }),
-                checkpoints: Effect.sync(() =>
-                  owned.checkpoints === "held"
-                    ? []
-                    : checkpoints
-                        .entries()
-                        .filter(([, { marked }]) => marked)
-                        .map(([handle, held]): Marked => ({
-                          instance: held.instance,
-                          handle,
-                        }))
-                        .toArray()
-                ),
-              },
+                return machines
+                  .values()
+                  .filter(({ marked }) => marked)
+                  .map((machine): MarkedMachine => ({
+                    instance: machine.instance,
+                    handle: machine.handle,
+                    checkpoints: heldBy(machine.handle).map(
+                      ([handle]) => handle
+                    ),
+                  }))
+                  .toArray();
+              }),
+            }
+          : undefined,
         files:
           preset.files === undefined
             ? undefined
@@ -1422,8 +1404,7 @@ export const fakeRuntime = (options: FakeOptions) => {
       checkpoints.set(minted("ckpt"), {
         name: instance,
         instance,
-        marked: false,
-        of: owned?.checkpoints === "held" ? handle : undefined,
+        of: owned ? handle : undefined,
       });
       remembered();
     }),

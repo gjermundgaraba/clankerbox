@@ -139,6 +139,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           pin: "fake 1",
           joins: false,
           builds: false,
+          sweeps: false,
         });
       })
   );
@@ -536,7 +537,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           findCheckpoints: {
             checkpoints: [{ name: dev.name, instance: dev.instance }],
           },
-          sweepRetired: { machines: [], checkpoints: [] },
+          sweepRetired: { machines: [] },
           runOperation: { ...made("op-1"), boot: yield* bootOf(url) },
           waitOperation: { id: "op-1" },
           cancelOperation: { id: "op-1" },

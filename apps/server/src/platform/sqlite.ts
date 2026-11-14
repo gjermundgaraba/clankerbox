@@ -26,12 +26,18 @@ import {
   ended,
   Facts,
   holdOf,
-  Lease,
   Operation,
   Store,
   TemplateFacts,
 } from "../store.ts";
-import type { Advanced, Hold, Interface, Rows, TemplateRow } from "../store.ts";
+import type {
+  Advanced,
+  Hold,
+  Interface,
+  Rows,
+  TemplateRow,
+  Lease,
+} from "../store.ts";
 
 export const databaseFile = "server.db";
 
@@ -219,11 +225,10 @@ export const migrations: readonly string[] = [
   DELETE FROM hosts;
   CREATE TABLE retired (
     host TEXT NOT NULL,
-    resource TEXT NOT NULL,
     instance TEXT NOT NULL,
     retired_at TEXT NOT NULL,
     told_at TEXT,
-    PRIMARY KEY (host, resource, instance)
+    PRIMARY KEY (host, instance)
   ) STRICT`,
 ];
 
@@ -374,9 +379,7 @@ const decodeBoot = Schema.decodeUnknownSync(
 );
 
 const decodeRetired = Schema.decodeUnknownSync(
-  Schema.Array(
-    Schema.Struct({ resource: Lease.fields.resource, instance: Schema.String })
-  )
+  Schema.Array(Schema.Struct({ instance: Schema.String }))
 );
 
 type Bound = string | number | null;
@@ -433,7 +436,7 @@ interface Table<R> {
   readonly remove: StatementSync;
   readonly decoded: (raw: unknown) => R;
   readonly columns: (row: R) => Readonly<Record<string, Bound>>;
-  readonly holdOf: (row: R) => Hold | undefined;
+  readonly holdOf: ((row: R) => Hold | undefined) | undefined;
 }
 
 type Tables = { readonly [K in Lease["resource"]]: Table<Rows[K]> };
@@ -599,19 +602,19 @@ export const open = (
     );
 
     const insertRetired = yield* prepare(
-      "INSERT INTO retired (host, resource, instance, retired_at) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING"
+      "INSERT INTO retired (host, instance, retired_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING"
     );
 
     const selectRetired = yield* prepare(
-      "SELECT resource, instance FROM retired WHERE host = ? ORDER BY retired_at, instance"
+      "SELECT instance FROM retired WHERE host = ? ORDER BY retired_at, instance"
     );
 
     const tellRetired = yield* prepare(
-      "UPDATE retired SET told_at = ? WHERE host = ? AND resource = ? AND instance = ? AND told_at IS NULL"
+      "UPDATE retired SET told_at = ? WHERE host = ? AND instance = ? AND told_at IS NULL"
     );
 
     const untellRetired = yield* prepare(
-      "UPDATE retired SET told_at = NULL WHERE host = ? AND resource = ? AND instance = ?"
+      "UPDATE retired SET told_at = NULL WHERE host = ? AND instance = ?"
     );
 
     const deleteRetired = yield* prepare(
@@ -671,7 +674,7 @@ export const open = (
         remove: deleteMachine,
         decoded: rowOf,
         columns: machineColumns,
-        holdOf: holdOf.machine,
+        holdOf,
       },
       checkpoint: {
         select: selectCheckpoint,
@@ -679,7 +682,7 @@ export const open = (
         remove: deleteCheckpoint,
         decoded: checkpointOf,
         columns: checkpointColumns,
-        holdOf: holdOf.checkpoint,
+        holdOf: undefined,
       },
     };
 
@@ -730,15 +733,19 @@ export const open = (
             table.update.run(table.columns(next));
           }
 
-          const retired = ended(
-            table.holdOf(row),
-            next === "removed" ? undefined : table.holdOf(next)
-          );
+          const { holdOf: heldBy } = table;
+
+          const retired =
+            heldBy === undefined
+              ? undefined
+              : ended(
+                  heldBy(row),
+                  next === "removed" ? undefined : heldBy(next)
+                );
 
           if (retired !== undefined) {
             insertRetired.run(
               retired.host,
-              resource,
               retired.instance,
               DateTime.formatIso(now)
             );
@@ -821,31 +828,22 @@ export const open = (
         })
       ),
       retired: Effect.fn("Store.retired")((host) =>
-        sql(`read what host ${host} retired`, () => {
-          const rows = decodeRetired(selectRetired.all(host));
-
-          const of = (resource: Lease["resource"]) =>
-            rows.flatMap((row) =>
-              row.resource === resource ? [row.instance] : []
-            );
-
-          return { machines: of("machine"), checkpoints: of("checkpoint") };
-        })
+        sql(`read what host ${host} retired`, () => ({
+          machines: decodeRetired(selectRetired.all(host)).map(
+            ({ instance }) => instance
+          ),
+        }))
       ),
       told: Effect.fn("Store.told")((host, { gone, left }, at) =>
         transaction(db, `record what host ${host} was told it retired`, () => {
           const when = DateTime.formatIso(at);
 
-          for (const resource of ["machine", "checkpoint"] as const) {
-            const of = resource === "machine" ? "machines" : "checkpoints";
+          for (const instance of gone.machines) {
+            tellRetired.run(when, host, instance);
+          }
 
-            for (const instance of gone[of]) {
-              tellRetired.run(when, host, resource, instance);
-            }
-
-            for (const instance of left[of]) {
-              untellRetired.run(host, resource, instance);
-            }
+          for (const instance of left.machines) {
+            untellRetired.run(host, instance);
           }
         })
       ),

@@ -206,13 +206,13 @@ export interface Hold {
   readonly instance: string;
 }
 
-/** Where a row holds its instance: on its host, until it rests undone or failed. */
-export const holdOf = {
-  machine: ({ host, instance, undoneAt }: MachineRow): Hold | undefined =>
-    undoneAt === undefined ? { host, instance } : undefined,
-  checkpoint: ({ host, instance, failedAt }: CheckpointRow): Hold | undefined =>
-    failedAt === undefined ? { host, instance } : undefined,
-};
+/** Where a machine's row holds its instance: on its host, until it rests undone. */
+export const holdOf = ({
+  host,
+  instance,
+  undoneAt,
+}: MachineRow): Hold | undefined =>
+  undoneAt === undefined ? { host, instance } : undefined;
 
 /** The hold a write ends, which retires its instance on its host: the row's, once the row no longer holds it there. */
 export const ended = (

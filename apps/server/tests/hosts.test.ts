@@ -18,6 +18,8 @@ import {
   request,
   restartedHost,
   running,
+  stubHost,
+  stubInfo as info,
 } from "./support.ts";
 
 layer(NodeServices.layer, { excludeTestServices: true })(
@@ -67,66 +69,6 @@ layer(NodeServices.layer, { excludeTestServices: true })(
     );
   }
 );
-
-const info = {
-  id: "old",
-  traits: {
-    runtime: "smolvm",
-    images: "references",
-    checkpoint: "ram",
-    captureFrom: "running",
-    pause: "saves",
-    stop: "resumes",
-    copies: "grow",
-    resize: { running: "grow", stopped: "any" },
-    sizes: { _tag: "free" },
-    limits: { least: {}, most: {}, live: {} },
-  },
-  version,
-  runtimeVersion: "fake",
-  bases: ["ubuntu"],
-  images: { ubuntu: "ubuntu" },
-  boot: "b00t",
-  pin: "fake 1",
-  joins: false,
-  builds: false,
-};
-
-const stubHost = (
-  status: number,
-  body: unknown,
-  asked: string[] = [],
-  answer: () => unknown = () => body
-) =>
-  Effect.acquireRelease(
-    Effect.callback<Server>((resume) => {
-      const server = createServer((incoming, response) => {
-        asked.push(incoming.url ?? "");
-        response.writeHead(status, { "content-type": "application/json" });
-        response.end(
-          JSON.stringify(incoming.url === "/host/readHost" ? answer() : [])
-        );
-      });
-
-      server.listen({ host: "127.0.0.1", port: 0 }, () => {
-        resume(Effect.succeed(server));
-      });
-    }),
-    (server) =>
-      Effect.callback<undefined>((resume) => {
-        server.close(() => {
-          resume(Effect.undefined);
-        });
-      })
-  ).pipe(
-    Effect.map((server) => {
-      const { port } = Schema.decodeUnknownSync(
-        Schema.Struct({ port: Schema.Finite })
-      )(server.address(), { onExcessProperty: "ignore" });
-
-      return `http://127.0.0.1:${port}`;
-    })
-  );
 
 const pageHost = (status: number) =>
   Effect.acquireRelease(

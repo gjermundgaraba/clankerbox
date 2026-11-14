@@ -150,7 +150,7 @@ runServe(
                   _tag: "never",
                   because: `host ${id} fakes ${runtime}, whose machines never stop on their own`,
                 },
-            sweeps: owned !== undefined,
+            sweeps: owned,
             repin: (pin) =>
               Effect.sync(() => {
                 host.fake.repin(pin);

@@ -647,7 +647,7 @@ export const make = (
       prepares: "always",
       admission: undefined,
       files: undefined,
-      owned: { machines: markedMachines, checkpoints: Effect.succeed([]) },
+      owned: { machines: markedMachines },
       reach: {
         _tag: "relayed",
         address: host.listen.address,

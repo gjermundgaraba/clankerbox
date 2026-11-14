@@ -58,7 +58,7 @@ const presetFacets = (preset: Preset) => ({
   reach: preset.relayed ? "relayed" : "published",
   admits: preset.admits,
   files: preset.files !== undefined,
-  owned: preset.owned !== undefined,
+  owned: preset.owned,
 });
 
 describe("the fake runtime's presets", () => {
@@ -82,9 +82,9 @@ describe("the fake runtime's presets", () => {
   );
 });
 
-const onFake = (as: FakeRuntimeName, owned?: Preset["owned"]) => {
+const onFake = (as: FakeRuntimeName) => {
   runtimeContract({
-    name: `fake ${as}${owned === undefined ? "" : ` with ${owned.checkpoints} checkpoints`}`,
+    name: `fake ${as}`,
     image,
     sizes: { cpu: 1, ramMib: 1024, diskGib: 10 },
     lacks: {
@@ -93,7 +93,7 @@ const onFake = (as: FakeRuntimeName, owned?: Preset["owned"]) => {
     },
     fixture: Effect.gen(function* () {
       const dir = yield* scratch;
-      const fake = fakeRuntime({ dir, as, owned });
+      const fake = fakeRuntime({ dir, as });
 
       const context = yield* Layer.build(
         Layer.provide(fake.layer, NodeServices.layer)
@@ -113,8 +113,6 @@ onFake("smolvm");
 onFake("tart");
 
 onFake("fixed");
-
-onFake("fixed", { checkpoints: "marked" });
 
 runtimeContract({
   name: "smolvm adapter's",

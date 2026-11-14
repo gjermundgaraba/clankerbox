@@ -191,43 +191,43 @@ const located = (
  */
 export const retiredLast = Duration.days(1);
 
-const without = (instances: readonly string[], kept: readonly string[]) => {
-  const still = new Set(kept);
-
-  return instances.filter((instance) => !still.has(instance));
-};
-
-const goneOf = (retired: Retired, left: Retired): Retired => ({
-  machines: without(retired.machines, left.machines),
-  checkpoints: without(retired.checkpoints, left.checkpoints),
-});
-
-const swept = (store: Store, hosts: Hosts, host: string) =>
+const swept = (store: Store, hosts: Hosts, host: string, sweeps: boolean) =>
   Effect.gen(function* () {
     const retired = yield* store.retired(host);
 
-    if (retired.machines.length === 0 && retired.checkpoints.length === 0) {
+    if (retired.machines.length === 0) {
       return;
     }
 
-    const left = yield* hosts
-      .call(host, (api) => api.sweepRetired(retired))
-      .pipe(
-        Effect.asSome,
-        Effect.catch(({ message }) =>
-          Effect.as(
-            Effect.logWarning(
-              `host ${host} couldn't sweep what the store retired, so the next recheck tries again: ${message}`
-            ),
-            Option.none<Retired>()
+    const left = sweeps
+      ? yield* hosts
+          .call(host, (api) => api.sweepRetired(retired))
+          .pipe(
+            Effect.asSome,
+            Effect.catch(({ message }) =>
+              Effect.as(
+                Effect.logWarning(
+                  `host ${host} couldn't sweep what the store retired, so the next recheck tries again: ${message}`
+                ),
+                Option.none<Retired>()
+              )
+            )
           )
-        )
-      );
+      : Option.some<Retired>({ machines: [] });
 
     if (Option.isSome(left)) {
+      const kept = new Set(left.value.machines);
+
       yield* store.told(
         host,
-        { gone: goneOf(retired, left.value), left: left.value },
+        {
+          gone: {
+            machines: retired.machines.filter(
+              (instance) => !kept.has(instance)
+            ),
+          },
+          left: left.value,
+        },
         yield* DateTime.now
       );
     }
@@ -268,7 +268,9 @@ export const recheckHosts = (
     yield* Effect.forEach(
       reached,
       ({ member, info }) =>
-        info === undefined ? Effect.void : swept(store, hosts, member.id),
+        info === undefined
+          ? Effect.void
+          : swept(store, hosts, member.id, info.sweeps),
       { discard: true }
     );
 

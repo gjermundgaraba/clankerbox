@@ -1738,7 +1738,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a write that ends a row's hold on its instance retires it on its host, past the row, until it is forgotten once told",
+    "a write that ends a machine row's hold on its instance retires it on its host, past the row, until it is forgotten once told, and a checkpoint's retires nothing",
     () =>
       Effect.gen(function* () {
         const stateDir = yield* stateIn;
@@ -1793,7 +1793,7 @@ layer(NodeServices.layer)((it) => {
 
             yield* store.told(
               "linux",
-              { gone: retired, left: { machines: [], checkpoints: [] } },
+              { gone: retired, left: { machines: [] } },
               at
             );
             yield* store.forgetRetired(
@@ -1809,15 +1809,13 @@ layer(NodeServices.layer)((it) => {
           })
         );
 
-        const none = { machines: [], checkpoints: [] };
+        const none = { machines: [] };
 
-        expect({
-          machines: read.retired.machines.toSorted(),
-          checkpoints: read.retired.checkpoints.toSorted(),
-        }).toStrictEqual({
-          machines: [instance(1), instance(2), instance(3)],
-          checkpoints: [instance(5), instance(6)],
-        });
+        expect(read.retired.machines.toSorted()).toStrictEqual([
+          instance(1),
+          instance(2),
+          instance(3),
+        ]);
         expect(read.elsewhere).toStrictEqual(none);
         expect(read.kept).toStrictEqual(read.retired);
         expect(read.forgotten).toStrictEqual(none);
@@ -1849,7 +1847,7 @@ layer(NodeServices.layer)((it) => {
 
             yield* store.told(
               "linux",
-              { gone: once, left: { machines: [], checkpoints: [] } },
+              { gone: once, left: { machines: [] } },
               first
             );
             yield* removing(store, "m2");
@@ -1857,7 +1855,7 @@ layer(NodeServices.layer)((it) => {
               "linux",
               {
                 gone: yield* store.retired("linux"),
-                left: { machines: [], checkpoints: [] },
+                left: { machines: [] },
               },
               later
             );
@@ -1892,7 +1890,7 @@ layer(NodeServices.layer)((it) => {
         const first = DateTime.makeUnsafe("2026-10-05T00:00:00Z");
         const later = DateTime.makeUnsafe("2026-10-06T00:00:00Z");
         const longAfter = DateTime.makeUnsafe("2100-01-01T00:00:00Z");
-        const none = { machines: [], checkpoints: [] };
+        const none = { machines: [] };
 
         const read = yield* withStore(stateDir, (store) =>
           Effect.gen(function* () {
@@ -1916,7 +1914,7 @@ layer(NodeServices.layer)((it) => {
 
         expect(read.retired.machines).toStrictEqual([instance(1)]);
         expect(read.left).toStrictEqual(read.retired);
-        expect(read.forgotten).toStrictEqual({ machines: [], checkpoints: [] });
+        expect(read.forgotten).toStrictEqual({ machines: [] });
       })
   );
 

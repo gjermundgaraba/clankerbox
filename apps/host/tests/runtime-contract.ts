@@ -54,8 +54,8 @@ export interface Fixture {
   readonly runtime: Runtime;
   readonly faults: Partial<Faults>;
   /**
-   * Puts a machine and a checkpoint in the provider's account without this host's mark, as another
-   * host or user of the account would. Every runtime with `owned` gives it.
+   * Puts a machine, with a checkpoint it holds, in the provider's account without this host's mark,
+   * as another host or user of the account would. Every runtime with `owned` gives it.
    */
   readonly unmarked: Effect.Effect<void> | undefined;
 }
@@ -507,16 +507,16 @@ export const runtimeContract = (subject: Subject): void => {
             });
 
             const listed = yield* owned.machines;
-            const marked = yield* owned.checkpoints;
-
-            const holds = listed.flatMap(({ checkpoints }) => checkpoints);
 
             expect(
-              listed.map(({ instance, handle }) => [instance, handle])
-            ).toStrictEqual([[machine.instance, machine.handle]]);
-            expect(
-              new Set([...holds, ...marked.map(({ handle }) => handle)])
-            ).toStrictEqual(new Set([kept, other]));
+              listed.map(({ instance, handle, checkpoints }) => [
+                instance,
+                handle,
+                new Set(checkpoints),
+              ])
+            ).toStrictEqual([
+              [machine.instance, machine.handle, new Set([kept, other])],
+            ]);
 
             yield* runtime.delete(machine, new Set<Handle>([kept]));
 
@@ -547,9 +547,7 @@ export const runtimeContract = (subject: Subject): void => {
               restoredFrom(other, second, fourth)
             );
 
-            expect(otherRestored._tag).toBe(
-              holds.includes(other) ? "Failure" : "Success"
-            );
+            expect(otherRestored._tag).toBe("Failure");
           })
         )
     );
@@ -578,7 +576,6 @@ export const runtimeContract = (subject: Subject): void => {
                 checkpoints,
               ])
             ).toStrictEqual([[machine.instance, machine.handle, []]]);
-            expect(yield* owned.checkpoints).toStrictEqual([]);
           })
         )
     );
@@ -608,26 +605,20 @@ export const runtimeContract = (subject: Subject): void => {
               instance: second,
             });
 
-            const everything = Effect.map(
-              Effect.all([owned.machines, owned.checkpoints]),
-              ([listed, marked]) =>
-                new Set([
-                  ...listed.flatMap(({ checkpoints }) => checkpoints),
-                  ...marked.map(({ handle }) => handle),
-                ])
+            const held = Effect.map(
+              owned.machines,
+              (listed) =>
+                new Set(listed.flatMap(({ checkpoints }) => checkpoints))
             );
 
-            const held = (yield* owned.machines).flatMap(
-              ({ checkpoints }) => checkpoints
-            );
+            const before = yield* held;
 
             yield* runtime.stop(machine);
             yield* runtime.start(machine, new Set<Handle>([kept]));
 
+            expect(before).toStrictEqual(new Set([kept, other]));
             expect(yield* stateOf(runtime, machine)).toBe("running");
-            expect(yield* everything).toStrictEqual(
-              new Set(held.includes(other) ? [kept] : [kept, other])
-            );
+            expect(yield* held).toStrictEqual(new Set([kept]));
           })
         )
     );

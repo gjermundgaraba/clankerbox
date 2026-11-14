@@ -191,30 +191,27 @@ export interface CheckpointFiles {
   ) => Effect.Effect<Handle, RuntimeError>;
 }
 
-/** A resource carrying this host's mark, and the instance the mark names. */
-export interface Marked {
+/**
+ * A machine carrying this host's mark, the instance the mark names, and the handle of each
+ * checkpoint the provider holds through it.
+ */
+export interface MarkedMachine {
   readonly instance: string;
   readonly handle: Handle;
-}
-
-/** A marked machine, and the handle of each checkpoint the provider holds through it, unmarked. */
-export interface MarkedMachine extends Marked {
   readonly checkpoints: readonly Handle[];
 }
 
 /**
- * What carries this host's mark at its provider. The mark is this host's ID and the resource's
- * instance, which the adapter sets on each machine and checkpoint it makes, so a provider account
- * that several hosts or other users share lists each resource under one host alone. `machines` and
- * `checkpoints` list only what carries this host's mark, and nothing without it, whoever made it. A
- * sweep deletes those whose instance the control plane retired. A checkpoint the provider holds
- * through its machine carries no mark of its own, and a row claims it by its handle alone: only a
- * start and a remove of its machine, inside a step that owns the machine, delete it, when `keep`
- * lacks its handle.
+ * What carries this host's mark at its provider. The mark is this host's ID and the machine's
+ * instance, which the adapter sets on each machine it makes, so a provider account that several
+ * hosts or other users share lists each machine under one host alone. `machines` lists only what
+ * carries this host's mark, and nothing without it, whoever made it. A sweep deletes those whose
+ * instance the control plane retired. A checkpoint the provider holds through its machine carries no
+ * mark of its own, and a row claims it by its handle alone: only a start and a remove of its machine,
+ * inside a step that owns the machine, delete it, when `keep` lacks its handle.
  */
 export interface Owned {
   readonly machines: Effect.Effect<readonly MarkedMachine[], RuntimeError>;
-  readonly checkpoints: Effect.Effect<readonly Marked[], RuntimeError>;
 }
 
 /**
