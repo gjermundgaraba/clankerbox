@@ -10,6 +10,7 @@ import type {
   HostError,
   Reading,
   Sizing,
+  Missing,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Deferred,
@@ -76,7 +77,7 @@ const instancePattern = /^[0-9a-f]{32}$/u;
 
 type Goal = "running" | "stopped" | "paused" | "gone";
 
-type Move = Api.Verb | "delete" | "wait" | "done" | "stuck";
+type Move = Api.Verb | "delete" | "wait" | "done" | "stuck" | "missing";
 
 const moves: Readonly<Record<Goal, Readonly<Record<string, Move>>>> = {
   running: {
@@ -85,6 +86,8 @@ const moves: Readonly<Record<Goal, Readonly<Record<string, Move>>>> = {
     stopped: "start",
     created: "start",
     paused: "resume",
+    missing: "missing",
+    deleted: "missing",
   },
   stopped: {
     started: "stop",
@@ -93,6 +96,7 @@ const moves: Readonly<Record<Goal, Readonly<Record<string, Move>>>> = {
     created: "done",
     paused: "resume",
     missing: "done",
+    deleted: "done",
   },
   paused: {
     started: "pause",
@@ -100,6 +104,8 @@ const moves: Readonly<Record<Goal, Readonly<Record<string, Move>>>> = {
     stopped: "done",
     created: "done",
     paused: "done",
+    missing: "missing",
+    deleted: "missing",
   },
   gone: { missing: "done", deleted: "done" },
 };
@@ -107,6 +113,14 @@ const moves: Readonly<Record<Goal, Readonly<Record<string, Move>>>> = {
 const transitional = new Set(["creating", "pausing", "starting", "stopping"]);
 
 const checkpointEnds = new Set(["available", "failed"]);
+
+const standingAfter = 3;
+
+interface Conflicted {
+  readonly state: string;
+  readonly times: number;
+  readonly refusal: Refused;
+}
 
 const moveOf = (goal: Goal, state: string): Move => {
   const move = moves[goal][state];
@@ -320,8 +334,9 @@ export const make = (
 
     const settle = (
       machine: Target,
-      goal: Goal
-    ): Effect.Effect<void, ApiError | WrongState> =>
+      goal: Goal,
+      conflicted?: Conflicted
+    ): Effect.Effect<void, ApiError | Missing | WrongState> =>
       Effect.gen(function* () {
         const found = yield* record(machine.handle);
         const state = found?.state ?? "missing";
@@ -329,6 +344,10 @@ export const make = (
 
         if (move === "done") {
           return;
+        }
+
+        if (move === "missing") {
+          return yield* missing(traits.runtime, machine);
         }
 
         if (move === "stuck") {
@@ -339,40 +358,53 @@ export const make = (
           });
         }
 
-        yield* move === "wait"
-          ? Effect.sleep(poll)
-          : (move === "delete"
-              ? api.deleteMachine(machine.handle)
-              : api.act(machine.handle, move)
-            ).pipe(
-              Effect.catchIf(
-                (error) =>
-                  unknownOutcome(error) || isConflict(error) || isGone(error),
-                (error) => (isGone(error) ? Effect.void : waited(error))
-              )
-            );
+        if (move === "wait") {
+          yield* Effect.sleep(poll);
 
-        return yield* settle(machine, goal);
+          return yield* settle(machine, goal);
+        }
+
+        const times = conflicted?.state === state ? conflicted.times : 0;
+
+        if (conflicted !== undefined && times >= standingAfter) {
+          return yield* new WrongState({
+            message: `smol cloud refused to ${move} ${machine.name} ${times} times while it stayed ${state}: ${conflicted.refusal.detail}`,
+            machine: machine.name,
+            state,
+          });
+        }
+
+        const refusal = yield* (
+          move === "delete"
+            ? api.deleteMachine(machine.handle)
+            : api.act(machine.handle, move)
+        ).pipe(
+          Effect.as(undefined),
+          Effect.catchIf(isGone, () => Effect.undefined),
+          Effect.catchIf(unknownOutcome, (error) =>
+            Effect.as(waited(error), undefined)
+          ),
+          Effect.catchIf(isConflict, (error) => Effect.as(waited(error), error))
+        );
+
+        return yield* settle(
+          machine,
+          goal,
+          refusal === undefined
+            ? undefined
+            : { state, times: times + 1, refusal }
+        );
       });
 
     const toward = (machine: Target, goal: Goal) =>
-      Effect.mapError(
-        settle(machine, goal),
-        (error): Capacity | Internal | WrongState => {
-          if (error._tag === "WrongState") {
-            return error;
-          }
-
-          return isConflict(error)
-            ? new WrongState({
-                message: error.message,
-                machine: machine.name,
-                state: error.code,
-              })
-            : failure(`${goal === "gone" ? "delete" : goal} ${machine.name}`)(
-                error
-              );
-        }
+      settle(machine, goal).pipe(
+        Effect.catchTag(["Refused", "Unanswered", "Unreadable"], (error) =>
+          Effect.fail(
+            failure(`${goal === "gone" ? "delete" : goal} ${machine.name}`)(
+              error
+            )
+          )
+        )
       );
 
     const settled = (machine: Target, goal: Goal) =>

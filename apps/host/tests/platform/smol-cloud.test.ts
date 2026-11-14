@@ -1066,6 +1066,114 @@ describe("a smol cloud delete", () => {
   );
 });
 
+const recordIn = (state: string | undefined) => ({
+  id: "mach-1",
+  name: `cbx-${hostId}-${machineOf("dev").instance}`,
+  state,
+  resources: { cpus: 1, memoryMb: 1024 },
+});
+
+const acting = (machine: { state: string | undefined; refusals: number }) =>
+  HttpClient.make((request, url) =>
+    Effect.sync(() => {
+      const route = `${request.method} ${url.pathname}`;
+
+      const reply = (status: number, body: unknown) =>
+        HttpClientResponse.fromWeb(request, Response.json(body, { status }));
+
+      if (route === "POST /v1/machines/mach-1/start") {
+        if (machine.refusals > 0) {
+          machine.refusals -= 1;
+
+          return reply(409, {
+            code: "conflict",
+            detail: "machine is locked by an operation",
+            retryable: false,
+          });
+        }
+
+        machine.state = "started";
+
+        return reply(200, recordIn(machine.state));
+      }
+
+      if (route === "GET /v1/machines/mach-1") {
+        return machine.state === undefined
+          ? reply(404, {
+              code: "not_found",
+              detail: "no machine",
+              retryable: false,
+            })
+          : reply(200, recordIn(machine.state));
+      }
+
+      return reply(200, []);
+    })
+  );
+
+const started = (machine: { state: string | undefined; refusals: number }) =>
+  Effect.gen(function* () {
+    const runtime = yield* scriptedRuntime(acting(machine));
+
+    const starting = yield* Effect.forkChild(
+      runtime.start(
+        {
+          name: "dev",
+          instance: machineOf("dev").instance,
+          handle: Handle.make("mach-1"),
+        },
+        new Set()
+      )
+    );
+
+    yield* TestClock.adjust("1 minute");
+
+    return starting.pollUnsafe();
+  });
+
+describe("a smol cloud start", () => {
+  it.effect(
+    "refused 409 while the machine stays where it was fails within a minute with the provider's reason",
+    () =>
+      Effect.gen(function* () {
+        const ended = yield* started({
+          state: "stopped",
+          refusals: Number.POSITIVE_INFINITY,
+        });
+
+        const failed =
+          ended !== undefined && Exit.isFailure(ended)
+            ? Cause.squash(ended.cause)
+            : undefined;
+
+        expect(failed, "ended within a minute").toMatchObject({
+          _tag: "WrongState",
+        });
+        expect(String(failed)).toContain("locked by an operation");
+      })
+  );
+
+  it.effect("refused 409 twice, then taken, runs the machine", () =>
+    Effect.gen(function* () {
+      const ended = yield* started({ state: "stopped", refusals: 2 });
+
+      expect(ended !== undefined && Exit.isSuccess(ended)).toBe(true);
+    })
+  );
+
+  it.effect("of a machine the provider answers 404 is Missing", () =>
+    Effect.gen(function* () {
+      const ended = yield* started({ state: undefined, refusals: 0 });
+
+      expect(
+        ended !== undefined &&
+          Exit.isFailure(ended) &&
+          Cause.squash(ended.cause)
+      ).toMatchObject({ _tag: "Missing", machine: "dev" });
+    })
+  );
+});
+
 describe("a smol cloud step's deadline", () => {
   it.effect(
     "ends a read of the account the provider never answers, failed Internal",
