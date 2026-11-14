@@ -65,6 +65,8 @@ export interface FakeSandbox {
   type: Offered;
   running: boolean;
   inPassing: "provisioning" | "archiving" | undefined;
+  archivingFor: number;
+  dataExpired: boolean;
   failed: boolean;
   cancelled: boolean;
   stoppedAt: number | undefined;
@@ -189,6 +191,13 @@ const unoffered = (type: string | undefined) =>
     400,
     "machine_type_unavailable",
     `this plan offers no machine type ${type ?? "unnamed"}`
+  );
+
+const expired = (sandbox: FakeSandbox) =>
+  refused(
+    409,
+    "snapshot_data_expired",
+    `sandbox ${sandbox.id}'s snapshot data was deleted after 14 days stopped`
   );
 
 const typeIn = (asked: string | undefined, otherwise: Offered) => {
@@ -565,6 +574,10 @@ export const fakeBoat = (
         return "cancelled";
       }
 
+      if (sandbox.archivingFor > 0) {
+        return "archiving";
+      }
+
       return sandbox.failed
         ? "error"
         : (sandbox.inPassing ?? (sandbox.running ? "ready" : "archived"));
@@ -577,13 +590,14 @@ export const fakeBoat = (
       type: sandbox.type,
       labels: sandbox.labels,
       createdAt: sandbox.createdAt,
-      dataExpiredAt: null,
+      dataExpiredAt: sandbox.dataExpired ? sandbox.createdAt : null,
     });
 
     const sandboxJson = (sandbox: FakeSandbox) => {
       const json = answeredJson(sandbox);
 
       sandbox.inPassing = undefined;
+      sandbox.archivingFor = Math.max(0, sandbox.archivingFor - 1);
 
       return json;
     };
@@ -645,6 +659,8 @@ export const fakeBoat = (
         type: made.type,
         running: true,
         inPassing: "provisioning",
+        archivingFor: 0,
+        dataExpired: false,
         failed: failingNext,
         cancelled: cancellingNext,
         stoppedAt: undefined,
@@ -771,6 +787,10 @@ export const fakeBoat = (
         return unoffered(body.type);
       }
 
+      if (source.dataExpired) {
+        return expired(source);
+      }
+
       return await make(
         key,
         async () =>
@@ -814,6 +834,10 @@ export const fakeBoat = (
 
       if (type === undefined) {
         return unoffered(asked);
+      }
+
+      if (sandbox.dataExpired) {
+        return expired(sandbox);
       }
 
       if (sandbox.running) {
@@ -1568,6 +1592,25 @@ export const fakeBoat = (
             sandbox.failed = true;
           }
         }),
+      archiveSlowly: (id: string, reads: number) =>
+        Effect.promise(async () => {
+          const sandbox = sandboxes.get(id);
+
+          if (sandbox !== undefined) {
+            await stop(sandbox);
+            sandbox.archivingFor = reads;
+          }
+        }),
+      expire: (id: string) =>
+        Effect.promise(async () => {
+          const sandbox = sandboxes.get(id);
+
+          if (sandbox !== undefined) {
+            await stop(sandbox);
+            sandbox.inPassing = undefined;
+            sandbox.dataExpired = true;
+          }
+        }),
       listsLag: (times: number) =>
         Effect.sync(() => {
           listsLagging = times;
@@ -1609,6 +1652,10 @@ export interface FakeBoat {
   /** `vanish` at once, for an `onCall` hook. */
   readonly vanishNow: (id: string) => void;
   readonly fail: (id: string) => Effect.Effect<void>;
+  /** Stops a sandbox, which then reads `archiving` for this many reads of it. */
+  readonly archiveSlowly: (id: string, reads: number) => Effect.Effect<void>;
+  /** Stops a sandbox and drops its data, as boat does 14 days into a stop: it reads `dataExpiredAt`, and a resume or fork of it is refused. */
+  readonly expire: (id: string) => Effect.Effect<void>;
   /** Lists a saved snapshot whose `status` boat answers null, saved from `sourceSandboxId`. */
   readonly malformedSnapshot: (
     name: string,

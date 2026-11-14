@@ -12,6 +12,7 @@ import path from "node:path";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it } from "@effect/vitest";
+import { WrongState } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import type { Scope, Duration } from "effect";
 import {
@@ -1009,7 +1010,14 @@ describe("the boat runtime over fake boat", () => {
   );
 });
 
-type Held = "running" | "stopped" | "error" | "cancelled" | "gone";
+type Held =
+  | "running"
+  | "archiving"
+  | "stopped"
+  | "expired"
+  | "error"
+  | "cancelled"
+  | "gone";
 
 const holding = (
   boat: FakeBoat,
@@ -1022,8 +1030,16 @@ const holding = (
       return Effect.void;
     }
 
+    case "archiving": {
+      return boat.archiveSlowly(machine.handle, 4);
+    }
+
     case "stopped": {
       return runtime.stop(machine);
+    }
+
+    case "expired": {
+      return boat.expire(machine.handle);
     }
 
     case "error": {
@@ -1044,13 +1060,16 @@ const outcome = <A, E extends { readonly _tag: string }, R>(
   effect: Effect.Effect<A, E, R>
 ) =>
   Effect.match(effect.pipe(Effect.timeout("20 seconds")), {
-    onFailure: (error) => error._tag,
+    onFailure: (error) =>
+      error instanceof WrongState ? `${error._tag} ${error.state}` : error._tag,
     onSuccess: () => "done",
   });
 
 const everyHeld: readonly Held[] = [
   "running",
+  "archiving",
   "stopped",
+  "expired",
   "error",
   "cancelled",
   "gone",
@@ -1058,7 +1077,7 @@ const everyHeld: readonly Held[] = [
 
 describe("each boat goal from each state boat holds", () => {
   it.live(
-    "ends where the state allows, and names what stops it",
+    "ends where the state allows, reading the sandbox as its refusals do",
     () =>
       onBoat(({ boat, runtime }) =>
         Effect.gen(function* () {
@@ -1105,7 +1124,16 @@ describe("each boat goal from each state boat holds", () => {
             running: {
               observe: "running",
               find: "found",
-              capture: "WrongState",
+              capture: "WrongState running",
+              start: "done",
+              stop: "done",
+              pause: "done",
+              delete: "done",
+            },
+            archiving: {
+              observe: "stopped",
+              find: "found",
+              capture: "done",
               start: "done",
               stop: "done",
               pause: "done",
@@ -1120,10 +1148,19 @@ describe("each boat goal from each state boat holds", () => {
               pause: "done",
               delete: "done",
             },
+            expired: {
+              observe: "missing",
+              find: "found",
+              capture: "Missing",
+              start: "Missing",
+              stop: "done",
+              pause: "done",
+              delete: "done",
+            },
             error: {
               observe: "stopped",
               find: "found",
-              capture: "WrongState",
+              capture: "WrongState error",
               start: "Internal",
               stop: "done",
               pause: "done",

@@ -83,16 +83,34 @@ const heldBy = (
 const running = new Set(["ready", "idle", "running"]);
 
 /**
- * `cancelled` and `error` as https://docs.boat.dev/openapi/boat-v1.yaml's `Sandbox.state` and
- * https://docs.boat.dev/llms-full.txt's "A sandbox is in error" define them: a create or fork that
- * got no machine, read once before a 404, and a machine boat lost or failed to start, unbilled,
- * which a resume recovers.
+ * `cancelled`, `error` and `expired` as https://docs.boat.dev/openapi/boat-v1.yaml's
+ * `Sandbox.state` and `dataExpiredAt`, and https://docs.boat.dev/llms-full.txt's "A sandbox is in
+ * error", define them: a create or fork that got no machine, read once before a 404; a machine
+ * boat lost or failed to start, unbilled, which a resume recovers; and a sandbox whose data boat
+ * deleted 14 days into a stop, which no resume or fork can bring back.
  */
-type Held = "running" | "stopped" | "error" | "moving" | "cancelled" | "gone";
+type Held =
+  | "running"
+  | "stopping"
+  | "stopped"
+  | "expired"
+  | "error"
+  | "moving"
+  | "cancelled"
+  | "gone";
+
+type Rested = Exclude<Held, "moving" | "stopping">;
+
+const rests = (held: Held): held is Rested =>
+  held !== "moving" && held !== "stopping";
 
 const heldOf = (sandbox: Sandbox | undefined): Held => {
   if (sandbox === undefined) {
     return "gone";
+  }
+
+  if ((sandbox.dataExpiredAt ?? null) !== null) {
+    return "expired";
   }
 
   if (running.has(sandbox.state)) {
@@ -100,6 +118,10 @@ const heldOf = (sandbox: Sandbox | undefined): Held => {
   }
 
   switch (sandbox.state) {
+    case "archiving": {
+      return "stopping";
+    }
+
     case "archived": {
       return "stopped";
     }
@@ -115,11 +137,25 @@ const heldOf = (sandbox: Sandbox | undefined): Held => {
   }
 };
 
+const readAs: Readonly<Record<Held, MachineState>> = {
+  running: "running",
+  stopping: "stopped",
+  stopped: "stopped",
+  expired: "missing",
+  error: "stopped",
+  moving: "unknown",
+  cancelled: "missing",
+  gone: "missing",
+};
+
+const stateOf = (sandbox: Sandbox | undefined): MachineState =>
+  readAs[heldOf(sandbox)];
+
 type Goal = "running" | "stopped" | "gone";
 
 const ends = {
-  running: ["running", "error", "cancelled", "gone"],
-  stopped: ["stopped", "error", "cancelled", "gone"],
+  running: ["running", "expired", "error", "cancelled", "gone"],
+  stopped: ["stopped", "expired", "error", "cancelled", "gone"],
   gone: ["cancelled", "gone"],
 } as const satisfies Readonly<Record<Goal, readonly Held[]>>;
 
@@ -130,31 +166,11 @@ const endsAt =
   (held: Held): held is End<G> =>
     ends[goal].some((end: Held) => end === held);
 
-const stateOf = (sandbox: Sandbox | undefined): MachineState => {
-  if ((sandbox?.dataExpiredAt ?? null) !== null) {
-    return "missing";
-  }
-
-  switch (heldOf(sandbox)) {
-    case "running": {
-      return "running";
-    }
-
-    case "stopped":
-    case "error": {
-      return "stopped";
-    }
-
-    case "cancelled":
-    case "gone": {
-      return "missing";
-    }
-
-    case "moving": {
-      return sandbox?.state === "archiving" ? "stopped" : "unknown";
-    }
-  }
-};
+const dropped = (machine: Pick<Target, "name">) =>
+  new Missing({
+    message: `boat dropped machine ${machine.name}'s disk after its long stop; delete it`,
+    machine: machine.name,
+  });
 
 const settled = new Set(["ready", "failed"]);
 
@@ -305,11 +321,7 @@ export const make = (
       untilRest(Effect.map(read(machine), heldOf), endsAt(goal), pollEvery);
 
     const rested = (machine: Target) =>
-      untilRest(
-        Effect.map(read(machine), heldOf),
-        (held) => held !== "moving",
-        pollEvery
-      );
+      untilRest(Effect.map(read(machine), heldOf), rests, pollEvery);
 
     const pinned = (machine: Target) =>
       api.sshKey(machine.handle, channel.publicKey).pipe(
@@ -344,6 +356,10 @@ export const make = (
             yield* pinned(machine);
 
             return;
+          }
+
+          case "expired": {
+            return yield* dropped(machine);
           }
 
           case "error": {
@@ -399,11 +415,15 @@ export const make = (
       source: Target
     ): Effect.Effect<void, Internal | Missing | WrongState> =>
       Effect.flatMap(
-        read(source),
-        (sandbox): Effect.Effect<void, Missing | WrongState> => {
-          switch (heldOf(sandbox)) {
+        rested(source),
+        (held): Effect.Effect<void, Missing | WrongState> => {
+          switch (held) {
             case "stopped": {
               return Effect.void;
+            }
+
+            case "expired": {
+              return Effect.fail(dropped(source));
             }
 
             case "cancelled":
@@ -416,18 +436,17 @@ export const make = (
                 new WrongState({
                   message: `boat holds ${source.name} in error, which it copies from no snapshot: start it to recover it, or delete it`,
                   machine: source.name,
-                  state: "stopped",
+                  state: "error",
                 })
               );
             }
 
-            case "running":
-            case "moving": {
+            case "running": {
               return Effect.fail(
                 new WrongState({
-                  message: `boat copies a stopped machine, and ${source.name} is ${stateOf(sandbox)}: stop it first`,
+                  message: `boat copies a stopped machine, and ${source.name} is running: stop it first`,
                   machine: source.name,
-                  state: stateOf(sandbox),
+                  state: "running",
                 })
               );
             }
@@ -557,7 +576,14 @@ export const make = (
               });
             }
 
-            case "moving": {
+            case "expired": {
+              return yield* new Internal({
+                message: dropped(machine).message,
+              });
+            }
+
+            case "moving":
+            case "stopping": {
               yield* Effect.sleep(pollEvery);
               break;
             }
@@ -717,12 +743,7 @@ export const make = (
                     error._tag === "Refused" &&
                     error.code === "snapshot_data_expired"
                   ) {
-                    return Effect.fail(
-                      new Missing({
-                        message: `boat dropped machine ${machine.name}'s disk after its long stop; delete it`,
-                        machine: machine.name,
-                      })
-                    );
+                    return Effect.fail(dropped(machine));
                   }
 
                   return Effect.fail(failure(`start ${machine.name}`)(error));

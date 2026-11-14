@@ -148,16 +148,22 @@ Each line names where the code holds it and how to check it again.
   `sandbox_running_stop_first` while it reads the sandbox archived, three
   untaken sends in all, never provoked on the account. (`boat.ts`'s
   `retyped`; the fake's `loseRequest` and the resize tests.)
-- The states: `ready`, `idle` and `running` run; `archived` is stopped;
+- The states: `ready`, `idle` and `running` run; `archived` is stopped,
+  and `archiving` reads stopped, a capture or fork waiting for it to rest;
   `error`, a machine boat lost or failed to start, is unbilled, read as
-  stopped, ends a stop at once and fails a start; `cancelled`, a create or
-  fork boat found no machine for, is read once and then answers 404, so a
-  make that meets it answers `Capacity` and a start `Missing`, as a 404
-  does; a set `dataExpiredAt` reads missing; the rest are on their way.
-  Neither `error` nor `cancelled` was met on the operator's account: the
-  YAML's `Sandbox.state` and the docs' "A sandbox is in error" say so.
-  (`boat.ts`'s `heldOf`, `ends` and `stateOf`; the fake's `fail`, `cancel`
-  and `vanish`.)
+  stopped, ends a stop at once, fails a start, and refuses a capture or fork
+  `WrongState` with the state `error`; `cancelled`, a create or fork boat
+  found no machine for, is read once and then answers 404, so a make that
+  meets it answers `Capacity` and a start `Missing`, as a 404 does; a set
+  `dataExpiredAt`, data boat deleted 14 days into a stop, reads missing,
+  whatever the state, and a start, capture or fork of it is `Missing`, as
+  the YAML says a resume and a fork answer 409 `snapshot_data_expired`;
+  the rest are on their way. None of `error`, `cancelled` and an expiry was
+  met on the operator's account: the YAML's `Sandbox.state` and
+  `dataExpiredAt` and the docs' "A sandbox is in error" say so. (`boat.ts`'s
+  `heldOf`, `readAs` and `ends`, one table each run through; the fake's
+  `fail`, `cancel`, `vanish`, `archiveSlowly` and `expire`, and the test of
+  each goal from each state.)
 - Each request is bounded by `answerWithin` in `platform/provider-http.ts`: 30
   seconds for a read, a minute for a change. A request unanswered by then is
   one whose answer was lost. Each step is `bounded` there, 10 minutes for all
