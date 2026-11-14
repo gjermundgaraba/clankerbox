@@ -61,20 +61,29 @@ export const files = <A>(
   );
 
 const commandIn =
-  (env: Readonly<Record<string, string | undefined>>) =>
+  (env: Readonly<Record<string, string | undefined>>, detached: boolean) =>
   (file: string, args: readonly string[], stdin: ChildProcess.CommandInput) =>
     ChildProcess.make(file, args, {
       env,
       extendEnv: false,
       stdin,
+      detached,
       forceKillAfter: Duration.seconds(5),
     });
 
-export const cliIn = (env: Readonly<Record<string, string | undefined>>) =>
+/**
+ * The commands a host runs with `env` alone. Each runs in a process group of its own, which its
+ * interruption ends whole, or, `detached: false`, in the host's, which ends with the host where its
+ * service manager ends that group, as launchd does.
+ */
+export const cliIn = (
+  env: Readonly<Record<string, string | undefined>>,
+  { detached = true }: { readonly detached?: boolean } = {}
+) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
-    const command = commandIn(env);
+    const command = commandIn(env, detached);
 
     const run = (file: string, args: readonly string[], what: string) =>
       Effect.scoped(

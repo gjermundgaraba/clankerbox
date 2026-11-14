@@ -331,6 +331,7 @@ layer(NodeServices.layer)((it) => {
               NO_COLOR: "1",
             },
             stdin: undefined,
+            detached: true,
           },
         ]);
         expect(environment(settings)).not.toHaveProperty("SMOLVM_BOOT_BINARY");

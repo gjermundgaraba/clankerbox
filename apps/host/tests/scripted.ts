@@ -8,6 +8,7 @@ export interface Call {
   readonly args: readonly string[];
   readonly env: unknown;
   readonly stdin: string | undefined;
+  readonly detached: boolean;
 }
 
 export interface Reply {
@@ -43,6 +44,7 @@ export const scripted = (reply: (call: Call) => Reply | undefined) => {
         ),
         env: command.options.env,
         stdin,
+        detached: command.options.detached !== false,
       };
 
       const held = stalls.next();
