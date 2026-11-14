@@ -88,6 +88,36 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a ready build is fetched by no host of another runtime, though it shares the build store",
+    () =>
+      Effect.gen(function* () {
+        const shared = memoryBuildStore();
+
+        const served = yield* running({
+          hosts: [{ id: "one" }, { id: "other", as: "fixed" }, { id: "two" }],
+          runtime: { builds: shared.layer },
+          recheck: Duration.millis(100),
+        });
+
+        const client = yield* clientOf(served.url);
+
+        yield* client.buildTemplate({ ...web, host: "one" });
+
+        const copies = yield* eventually(copiesOf(served), (shown) =>
+          shown.includes("web@1 two ready")
+        );
+
+        expect(copies.toSorted()).toStrictEqual([
+          "web@1 one ready",
+          "web@1 two ready",
+        ]);
+        expect(callsTo(named(served.hosts, "other"), "install")).toHaveLength(
+          0
+        );
+      })
+  );
+
+  it.effect(
     "a delete of a fetched copy leaves the build in the build store, and a delete of the published one removes it",
     () =>
       Effect.gen(function* () {

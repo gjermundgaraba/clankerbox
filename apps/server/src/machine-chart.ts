@@ -48,7 +48,6 @@ export const toldNewReach = (row: Facts, told: Reach): boolean =>
     (told.endpoint.host !== row.endpoint?.host ||
       told.endpoint.port !== row.endpoint?.port));
 
-/** Where a failed create goes next, past a host that hadn't the capacity. */
 /** Where a create goes once a host had no room: another host, under a new instance, as an instance names one make on one host. */
 export type Move = Pick<
   Facts,

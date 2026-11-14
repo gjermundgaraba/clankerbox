@@ -4,14 +4,12 @@ import { expect } from "vite-plus/test";
 
 import {
   copySizable,
-  fetchable,
   fitted,
   offered,
   offers,
   pauseCapture,
   resizable,
   RuntimeTraits,
-  stopsBeforeCapture,
 } from "../src/index.ts";
 
 const Small = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 4 }));
@@ -233,22 +231,6 @@ describe("copySizable", () => {
   );
 });
 
-describe("stopsBeforeCapture", () => {
-  it.effect.prop(
-    "a build stops its builder first exactly where the runtime captures from a stopped machine",
-    { traits: RuntimeTraits },
-    ({ traits }) =>
-      Effect.sync(() => {
-        expect(stopsBeforeCapture({ ...traits, captureFrom: "stopped" })).toBe(
-          true
-        );
-        expect(stopsBeforeCapture({ ...traits, captureFrom: "running" })).toBe(
-          false
-        );
-      })
-  );
-});
-
 describe("pauseCapture", () => {
   it.effect.prop(
     "a pause captures its machine in the one state a capture takes: running before the pause, or what the pause leaves after it, or never where that is paused",
@@ -261,18 +243,6 @@ describe("pauseCapture", () => {
         expect(pauseCapture(traits)).toBe(
           traits.captureFrom === "running" ? "before" : after
         );
-      })
-  );
-});
-
-describe("fetchable", () => {
-  it.effect.prop(
-    "a copy moves between hosts of one runtime, and never to another",
-    { from: RuntimeTraits, to: RuntimeTraits },
-    ({ from, to }) =>
-      Effect.sync(() => {
-        expect(fetchable(from, { ...to, runtime: from.runtime })).toBe(true);
-        expect(fetchable(from, to)).toBe(from.runtime === to.runtime);
       })
   );
 });
