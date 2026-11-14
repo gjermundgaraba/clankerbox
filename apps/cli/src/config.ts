@@ -5,22 +5,7 @@ import {
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Config, Effect, FileSystem, Option, Path, Schema } from "effect";
 
-const gone = (why: string) =>
-  Schema.optionalKey(
-    Schema.Unknown.check(
-      Schema.makeFilter(() => `${why} (README, Upgrading from 0.35)`)
-    )
-  );
-
-const ClientConfig = Schema.Struct({
-  server: Schema.String,
-  profiles: gone(
-    "profiles are gone: delete it here, and build each profile's setup as a template on the server, with clankerbox template build"
-  ),
-  authorizedKeys: gone(
-    "moved to the server config: delete it here, and put its keys in the file the server config's authorizedKeys names"
-  ),
-});
+const ClientConfig = Schema.Struct({ server: Schema.String });
 
 const decodeConfig = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ClientConfig)

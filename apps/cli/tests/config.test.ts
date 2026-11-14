@@ -100,35 +100,6 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a config from 0.35 that still names authorizedKeys or profiles is refused, saying where each went",
-    () =>
-      Effect.gen(function* () {
-        const dir = yield* scratch;
-        const keys = path.join(dir, "keys.json");
-        const profiles = path.join(dir, "profiles.json");
-
-        yield* write(
-          keys,
-          JSON.stringify({
-            server: serverUrl,
-            authorizedKeys: "~/.ssh/id_ed25519.pub",
-          })
-        );
-        yield* write(
-          profiles,
-          JSON.stringify({ server: serverUrl, profiles: "profiles" })
-        );
-
-        expect(yield* hostsStderr(keys)).toBe(
-          `clankerbox: Invalid: client config ${keys}: authorizedKeys: moved to the server config: delete it here, and put its keys in the file the server config's authorizedKeys names (README, Upgrading from 0.35)`
-        );
-        expect(yield* hostsStderr(profiles)).toBe(
-          `clankerbox: Invalid: client config ${profiles}: profiles: profiles are gone: delete it here, and build each profile's setup as a template on the server, with clankerbox template build (README, Upgrading from 0.35)`
-        );
-      })
-  );
-
-  it.effect(
     "a config's mistakes are all named, each by its JSON path, the old list of hosts among them",
     () =>
       Effect.gen(function* () {
