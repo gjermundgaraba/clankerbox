@@ -1,7 +1,7 @@
 import { Result } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
-import { holders } from "../../../src/platform/tart/locks.ts";
+import { holders, readerArguments } from "../../../src/platform/tart/locks.ts";
 
 const paths = ["/home/vms/a/config.json", "/home/vms/b/config.json"];
 
@@ -24,5 +24,20 @@ describe("the lock reader's answer", () => {
         "",
       ].map((output) => Result.isFailure(holders(paths, output)))
     ).toStrictEqual([true, true, true, true, true, true]);
+  });
+});
+
+describe("the lock reader", () => {
+  it("opens each file to read and asks its lock's holder with F_GETLK, taking no lock of its own", () => {
+    const [flag, script = "", separator, ...files] = readerArguments(paths);
+
+    expect([flag, separator, files]).toStrictEqual(["-e", "--", paths]);
+    expect(script.match(/\bF_[A-Z]+\b|\bflock\b/gu)).toStrictEqual([
+      "F_RDLCK",
+      "F_GETLK",
+    ]);
+    expect(script.match(/open\(\$fh, '[^']*'/gu)).toStrictEqual([
+      "open($fh, '<'",
+    ]);
   });
 });
