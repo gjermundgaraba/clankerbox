@@ -67,7 +67,7 @@ A host keeps no database. Each operation carries the refs it needs, and a host's
 
 ### How an operation works
 
-An operation has an ID, a sequence number and a step, and is recorded with its leases in one transaction before it is sent (`store.advance`). The steps are `make`, `start`, `stop`, `pause`, `remove`, `resize`, `capture`, `deleteCheckpoint` and `join`. A create, a fork and a restore are all `make`, from a different source. Reads are plain calls, not operations.
+An operation has an ID, a sequence number and a step, and is recorded with its leases in one transaction before it is sent (`store.advance`). The steps are `make`, `start`, `stop`, `pause`, `remove`, `resize`, `capture`, `deleteCheckpoint`, `join`, and a build copy's `publish` and `fetch`. A create, a fork and a restore are all `make`, from a different source. Reads are plain calls, not operations.
 
 - A host runs an operation to its end, whether or not its caller stays.
 - A host keeps an operation's report until the control plane collects it. The control plane stores the report first (`store.advance`, then `apps/server/src/operations.ts` `collect`).
@@ -150,7 +150,7 @@ Each duty has exactly one home. "Before" is the code at `adcacee`. "Deleted" is 
 | Keep the SSH config | `apps/clankerbox/src/ssh-config.ts:10-22`, one block per host | CLI: `apps/cli/src/ssh-config.ts`, one `Host *.cbx` block | The per-host blocks |
 | Name a host on an error | `located` in `client.ts:367`, `errors.ts:3` | Nowhere on a client error. The server's log names it. | `error.host` |
 | Read setup scripts and keys | `specRequest` (`profile.ts:111`), `packages/sdk/src/setup.ts` | Client: the request carries them | Nothing |
-| Allocate SSH ports | `pickPort` in `machines.ts:823` | Host: `host/operations.ts`, inside the step, which reports the port | Port uniqueness as a store rule |
+| Allocate SSH ports | `pickPort` in `machines.ts:823` | Host: `host/reach.ts`, which claims it inside the step, and the step reports the port | Port uniqueness as a store rule |
 | Mint tailnet keys | `machines.ts:471` `join`, `tailnet.oauthClient` in host config | Host: the `join` step, over `Tailnet` | Nothing. When a join is due is `server/tailnet.ts`. |
 | Move a machine toward what was asked | `lifecycle.ts`, `reconcile.ts`, `machines.ts:1071` | Server: `server/machine-chart.ts`, `server/driver.ts`, `server/machines.ts` | The host's actors, store, recheck and `lifecycle.ts` |
 | Hold leases | `packages/host/src/leases.ts`, in memory | Server: the `operations` table, `server/platform/sqlite.ts` `advance` | `leases.ts` |
