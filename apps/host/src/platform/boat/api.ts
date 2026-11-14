@@ -123,9 +123,13 @@ export class Refused extends Schema.TaggedError<
 
 export type ApiError = Refused | Unanswered | Busy | Unreadable;
 
-/** The codes that mean the account has no room now, which moves a create to the next host. */
+/**
+ * The codes that mean the account takes no such request now, which moves a create to the next
+ * host: it has no room, or its plan no longer offers the machine type the host read at its start.
+ */
 export const noRoom: ReadonlySet<string> = new Set([
   "limit_reached",
+  "machine_class_plan_required",
   "rate_limited",
   "out_of_capacity",
   "no_ready_machine",

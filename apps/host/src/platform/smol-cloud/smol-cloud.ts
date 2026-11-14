@@ -263,7 +263,7 @@ export const make = (
   api: Api.Api,
   sockets: Socket.WebSocketConstructor["Service"]
 ): Effect.Effect<Interface> =>
-  Effect.gen(function* () {
+  Effect.sync(() => {
     const prefix = `cbx-${host.id}-`;
     const nameOf = (instance: string) => `${prefix}${instance}`;
 
@@ -345,11 +345,8 @@ export const make = (
         return Effect.fail(internal(what)(error));
       };
 
-    const autoStopSeconds = yield* Effect.cachedWithTTL(
-      Effect.map(api.account, (account) =>
-        account.plan.allowAlwaysOn ? 0 : idleStopSeconds
-      ),
-      (exit) => (exit._tag === "Success" ? Duration.infinity : Duration.zero)
+    const autoStopSeconds = Effect.map(api.account, (account) =>
+      account.plan.allowAlwaysOn ? 0 : idleStopSeconds
     );
 
     const rested = (handle: Handle) =>

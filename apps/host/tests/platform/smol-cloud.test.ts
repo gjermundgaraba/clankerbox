@@ -1584,6 +1584,60 @@ const failureOf = <A, E>(ended: Exit.Exit<A, E> | undefined) =>
     ? Cause.squash(ended.cause)
     : undefined;
 
+const Created = Schema.fromJsonString(
+  Schema.Struct({ autoStopSeconds: Schema.Int })
+);
+
+describe("a smol cloud make on an account whose plan changes", () => {
+  it.effect(
+    "sends each create the idle stop the plan allows when it is made",
+    () =>
+      Effect.gen(function* () {
+        let alwaysOn = true;
+        const autoStops: number[] = [];
+
+        const client = HttpClient.make((request, url) =>
+          Effect.gen(function* () {
+            const route = `${request.method} ${url.pathname}`;
+
+            if (
+              route === "POST /v1/machines" &&
+              request.body._tag === "Uint8Array"
+            ) {
+              const created = yield* Schema.decodeEffect(Created)(
+                new TextDecoder().decode(request.body.body)
+              ).pipe(Effect.orDie);
+
+              autoStops.push(created.autoStopSeconds);
+            }
+
+            const answer =
+              route === "GET /v1/account"
+                ? { ...smolAccount, plan: { allowAlwaysOn: alwaysOn } }
+                : recordIn("started");
+
+            return HttpClientResponse.fromWeb(request, Response.json(answer));
+          })
+        );
+
+        const runtime = yield* scriptedRuntime(client);
+
+        const create = (name: string) =>
+          runtime.make(
+            machineOf(name),
+            { _tag: "image", image },
+            { _tag: "none" }
+          );
+
+        yield* create("dev");
+        alwaysOn = false;
+        yield* create("web");
+
+        expect(autoStops).toStrictEqual([0, 86_400]);
+      })
+  );
+});
+
 describe("a smol cloud delete of a machine on its way", () => {
   it.effect("waits while the machine moves, and deletes it once it rests", () =>
     Effect.gen(function* () {

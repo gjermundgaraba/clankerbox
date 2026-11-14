@@ -66,7 +66,9 @@ Each is an assertion of the live suite, in the case named.
   at most 26 (`cbx-` + ID + `-` + 32 hex). A second create of a name answers 409.
 - `autoStopSeconds: 0` with a published port answers 422 on a plan whose
   `GET /v1/account` says `plan.allowAlwaysOn` false; the adapter sends 86400
-  then.
+  then, reading the account at each create and restore, so a plan that
+  changes takes effect at the next one. (`smol-cloud.ts`'s `autoStopSeconds`;
+  the test of a make on an account whose plan changes.)
 - `GET /v1/account` gives `effectiveMaxMachines`,
   `effectiveMaxConcurrentMachines`, and one machine's most,
   `effectiveMaxCpus`, `effectiveMaxMemoryMb` and `effectiveMaxDiskGb`;

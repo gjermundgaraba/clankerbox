@@ -188,8 +188,8 @@ const withBody = async <A>(
 
 const unoffered = (type: string | undefined) =>
   refused(
-    400,
-    "machine_type_unavailable",
+    403,
+    "machine_class_plan_required",
     `this plan offers no machine type ${type ?? "unnamed"}`
   );
 

@@ -1456,6 +1456,41 @@ const failureOf = <A, E>(ended: Exit.Exit<A, E> | undefined) =>
     ? Cause.squash(ended.cause)
     : undefined;
 
+describe("a boat make of a type the account's plan no longer offers", () => {
+  it.effect("is Capacity, which moves the create to the next host", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { runtime, asked } = yield* scriptedBoat((route) =>
+          route === "POST /sandboxes"
+            ? Response.json(
+                {
+                  error: {
+                    code: "machine_class_plan_required",
+                    message: "this machine type needs a higher plan",
+                  },
+                },
+                { status: 403 }
+              )
+            : undefined
+        );
+
+        const refused = yield* Effect.flip(
+          runtime.make(
+            { name: "dev", instance: bx1.instance, ...types.small },
+            { _tag: "image", image: "ubuntu-24.04" },
+            { _tag: "none" }
+          )
+        );
+
+        expect(refused).toMatchObject({ _tag: "Capacity" });
+        expect(
+          asked.filter((route) => route === "POST /sandboxes")
+        ).toHaveLength(1);
+      })
+    )
+  );
+});
+
 describe("a boat step's bound", () => {
   it.effect(
     "ends a start whose every resume is lost while boat moves the sandbox for minutes, within 10 minutes, failed Internal",
