@@ -73,7 +73,7 @@ import { collect, cutShort, poll } from "./operations.ts";
 import { builtUnder, holding, placing } from "./placement.ts";
 import type { BuiltUnder, Candidate } from "./placement.ts";
 import { machineStep, refOf } from "./steps.ts";
-import { newId, notFound, Store } from "./store.ts";
+import { madeOn, newId, notFound, Store } from "./store.ts";
 import type { Operation, TemplateRow } from "./store.ts";
 import { checked, due, firstCheck, ticked, unchecked } from "./tailnet.ts";
 import type { TailnetCheck } from "./tailnet.ts";
@@ -246,7 +246,7 @@ export const make = (
         : {
             host: candidate.host,
             instance: newId(),
-            traits: info.traits,
+            ...madeOn(info.traits),
             pin: info.pin,
             source: candidate.source,
           };
@@ -492,7 +492,7 @@ export const make = (
           name,
           instance: newId(),
           createdAt: yield* DateTime.now,
-          traits: info.traits,
+          ...madeOn(info.traits),
           base: spec.base,
           cpu: spec.cpu,
           ramMib: spec.ramMib,

@@ -92,13 +92,13 @@ const unfetched = (
   records: readonly CheckpointRow[],
   reached: readonly Reached[]
 ): readonly BuildCopy[] => {
-  const traits = records[0]?.traits;
+  const runtime = records[0]?.runtime;
 
   return reached.flatMap(({ info }) => {
     const why =
       info === undefined ||
-      traits === undefined ||
-      !fetchable(traits, info.traits) ||
+      runtime === undefined ||
+      !fetchable(runtime, info.traits) ||
       !offers(info, made.base) ||
       records.some(({ host }) => host === info.id)
         ? undefined
@@ -252,7 +252,7 @@ export const fetchesDue = (
 
             return info !== undefined &&
               info.builds &&
-              fetchable(source.traits, info.traits) &&
+              fetchable(source.runtime, info.traits) &&
               offers(info, made.base) &&
               outdated(info, made) === undefined &&
               !here.some(holds)
@@ -388,9 +388,9 @@ export const make = (settings: {
             host.id
           );
 
-          const made = yield* atRest;
+          yield* atRest;
 
-          if (stopsBeforeCapture(made.traits)) {
+          if (stopsBeforeCapture(host.traits)) {
             yield* machines.stop(builder);
             yield* atRest;
           }

@@ -6,7 +6,7 @@ import path from "node:path";
 import type { MachineState } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { presets, suitePorts } from "@gjermundgaraba/clankerbox-host/testing";
+import { suitePorts } from "@gjermundgaraba/clankerbox-host/testing";
 import { Capacity, Internal, Unsizable } from "@gjermundgaraba/clankerbox-sdk";
 import type { Machine, Setup } from "@gjermundgaraba/clankerbox-sdk";
 import {
@@ -208,7 +208,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(made).toMatchObject({
           id: "dev",
-          traits: presets.smolvm.traits,
+          runtime: "smolvm",
           base: "ubuntu",
           state: "running",
           desired: "running",
@@ -335,7 +335,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       const made = yield* client.create("dev", request("dev"));
 
-      expect(made).toMatchObject({ id: "dev", traits: presets.tart.traits });
+      expect(made).toMatchObject({ id: "dev", runtime: "tart" });
     })
   );
 
@@ -2105,7 +2105,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           recheck: Duration.millis(200),
         });
 
-        const made = yield* client.create("dev", request("dev"));
+        yield* client.create("dev", request("dev"));
 
         fake.calls.length = 0;
         yield* fake.faults.drift(fake.machines.get("dev")?.instance ?? "");
@@ -2118,7 +2118,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             phase === "settled"
         );
 
-        expect(made.traits.stopsOnItsOwn).toBe(true);
         expect(at(back)).toStrictEqual(["running", "running", "settled"]);
         expect(
           fake.calls.filter((call) => call.startsWith("start"))
@@ -2126,46 +2125,34 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
-  it.effect(
-    "a fork and a restore are sized by their host's live traits, not the traits stamped on their source",
-    () =>
-      Effect.gen(function* () {
-        const { client, store } = yield* served({
-          hosts: [{ id: "fixed", as: "fixed" }],
-        });
+  it.effect("a fork and a restore are sized by their host's traits", () =>
+    Effect.gen(function* () {
+      const { client, store } = yield* served({
+        hosts: [{ id: "fixed", as: "fixed" }],
+      });
 
-        const odd = { cpu: 3, ramMib: 6144, diskGib: 40 };
-        const stamped = { traits: presets.smolvm.traits };
+      const odd = { cpu: 3, ramMib: 6144, diskGib: 40 };
+      yield* client.create("dev", request("dev"));
+      yield* client.stopMachine({ id: "dev" });
+      yield* client.captureCheckpoint({ machine: "dev", name: "snap" });
 
-        yield* client.create("dev", request("dev"));
-        yield* client.stopMachine({ id: "dev" });
-        yield* client.captureCheckpoint({ machine: "dev", name: "snap" });
-        yield* store.advance("machine", "dev", (row) => ({
-          next: { ...row, ...stamped },
-          finish: false,
-        }));
-        yield* store.advance("checkpoint", "snap", (row) => ({
-          next: { ...row, ...stamped },
-          finish: false,
-        }));
+      const refused = [
+        yield* Effect.flip(
+          client.forkMachine({ machine: "dev", name: "fork", ...odd })
+        ),
+        yield* Effect.flip(
+          client.restoreMachine({ checkpoint: "snap", name: "copy", ...odd })
+        ),
+      ];
 
-        const refused = [
-          yield* Effect.flip(
-            client.forkMachine({ machine: "dev", name: "fork", ...odd })
-          ),
-          yield* Effect.flip(
-            client.restoreMachine({ checkpoint: "snap", name: "copy", ...odd })
-          ),
-        ];
-
-        expect(refused.map(({ _tag }) => _tag)).toStrictEqual([
-          "Unsizable",
-          "Unsizable",
-        ]);
-        expect((yield* store.machines).map(({ name }) => name)).toStrictEqual([
-          "dev",
-        ]);
-      })
+      expect(refused.map(({ _tag }) => _tag)).toStrictEqual([
+        "Unsizable",
+        "Unsizable",
+      ]);
+      expect((yield* store.machines).map(({ name }) => name)).toStrictEqual([
+        "dev",
+      ]);
+    })
   );
 
   it.effect(

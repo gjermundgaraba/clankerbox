@@ -86,7 +86,7 @@ export const machineOf = (
 
   return {
     id: found.name,
-    traits: found.traits,
+    runtime: found.runtime,
     createdAt: found.createdAt,
     base: found.base,
     cpu: found.cpu,

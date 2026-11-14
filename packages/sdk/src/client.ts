@@ -421,7 +421,7 @@ export const answerOf = (
   if (phase === "lost") {
     return Effect.fail(
       new Missing({
-        message: `machine ${id} is missing from the ${machine.traits.runtime} runtime; delete it`,
+        message: `machine ${id} is missing from the ${machine.runtime} runtime; delete it`,
         machine: id,
       })
     );

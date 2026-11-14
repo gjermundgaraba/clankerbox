@@ -29,7 +29,8 @@ const Growth = Schema.Literals(["grow", "any", "none"]);
 
 /**
  * What every machine of a runtime does where runtimes differ, declared once in the runtime's own
- * folder on its host, and stamped on each row the control plane makes there.
+ * folder on its host, and read from the host as it answers: a row the control plane keeps names its
+ * runtime alone.
  *
  * - `images`: `named` creates only from the host's named bases; `references` also from an image
  *   reference.
@@ -200,6 +201,6 @@ export const pauseCapture = (
 export const stopsBeforeCapture = (traits: RuntimeTraits): boolean =>
   traits.captureFrom === "stopped";
 
-/** Whether a host of runtime `to` can take a copy of a checkpoint made on runtime `from`. */
-export const fetchable = (from: RuntimeTraits, to: RuntimeTraits): boolean =>
-  from.runtime === to.runtime;
+/** Whether a host of `to`'s traits can take a copy of a checkpoint made on runtime `from`. */
+export const fetchable = (from: RuntimeName, to: RuntimeTraits): boolean =>
+  from === to.runtime;

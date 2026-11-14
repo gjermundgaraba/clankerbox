@@ -685,7 +685,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const found = Option.getOrThrow(yield* served.store.findMachine("dev"));
 
-        expect(machine.traits).toStrictEqual(presets.tart.traits);
+        expect(machine.runtime).toBe("tart");
         expect(found.pin).toBeUndefined();
         expect(second?.fake.calls).toContain("create dev");
       })

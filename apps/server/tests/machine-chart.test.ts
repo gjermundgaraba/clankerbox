@@ -1376,7 +1376,8 @@ describe("the chart", () => {
     const move = {
       host: "other",
       instance: "moved-instance",
-      traits: presets.tart.traits,
+      runtime: presets.tart.traits.runtime,
+      captures: "disk",
       pin: "other pin",
       source: { kind: "checkpoint", name: "built" },
     } as const;

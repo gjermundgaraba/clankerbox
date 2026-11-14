@@ -2,7 +2,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { image, presets } from "@gjermundgaraba/clankerbox-host/testing";
+import { image } from "@gjermundgaraba/clankerbox-host/testing";
 import type {
   TestHost,
   FakeRuntimeName,
@@ -385,7 +385,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(built.pin).toBeDefined();
         expect(copy).toMatchObject({
           build: "web@1",
-          traits: presets.smolvm.traits,
+          runtime: "smolvm",
+          kind: "ram",
         });
         expect(isBuildCopy(copy?.name ?? "")).toBe(true);
         expect(copy?.machine).toMatch(/^building-[0-9a-f]{16}$/u);

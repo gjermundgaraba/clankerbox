@@ -12,6 +12,7 @@ import type {
 import type {
   Facts,
   Lease,
+  MadeOn,
   MachinePhase,
   MachineState,
   Operation,
@@ -49,10 +50,7 @@ export const toldNewReach = (row: Facts, told: Reach): boolean =>
       told.endpoint.port !== row.endpoint?.port));
 
 /** Where a create goes once a host had no room: another host, under a new instance, as an instance names one make on one host. */
-export type Move = Pick<
-  Facts,
-  "host" | "instance" | "traits" | "pin" | "source"
->;
+export type Move = Pick<Facts, "host" | "instance" | "pin" | "source"> & MadeOn;
 
 export interface Read extends Begins {
   readonly seen: MachineState;

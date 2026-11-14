@@ -2,18 +2,19 @@ import { Endpoint, Handle, Step } from "@clankerbox/host-contract";
 import type { Retired } from "@clankerbox/host-contract";
 import {
   Build,
+  Checkpoint,
   Desired,
   HostError,
   Labels,
   NotFound,
-  RuntimeTraits,
+  RuntimeName,
   Sizing,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
-  Checkpoint,
   Conflict,
   Internal,
   Phase,
+  RuntimeTraits,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, Schema, SchemaGetter } from "effect";
 import type {
@@ -94,11 +95,29 @@ export type Operation = typeof Operation.Type;
 
 export type MachinePhase = Exclude<Phase, "waiting">;
 
+/**
+ * What a machine's row keeps of the runtime it was made on, the one way a host's traits reach a
+ * row: its `runtime`, which a client is shown and a copy of the machine stays on, and what a capture
+ * of it `captures`, its checkpoint's `kind`, recorded also while its host can't be read. Every
+ * decision about what a host does reads the host's traits as it answers now, so a trait a release
+ * adds or changes migrates no row.
+ */
+export const MadeOn = Schema.Struct({
+  runtime: RuntimeName,
+  captures: Checkpoint.fields.kind,
+});
+
+export type MadeOn = typeof MadeOn.Type;
+
+export const madeOn = (traits: RuntimeTraits): MadeOn => ({
+  runtime: traits.runtime,
+  captures: traits.checkpoint,
+});
+
 const made = {
   name: Schema.String,
   instance: Schema.String,
   createdAt: Schema.DateTimeUtcFromString,
-  traits: Schema.fromJsonString(RuntimeTraits),
   base: Schema.String,
   cpu: Schema.Int,
   ramMib: Schema.Int,
@@ -113,6 +132,7 @@ const made = {
 /** What a machine's row holds but for its leaf: what no leaf can tell, and its chart's context. */
 export const Facts = Schema.Struct({
   ...made,
+  ...MadeOn.fields,
   endpoint: UndefinedFromNull(Schema.fromJsonString(Endpoint)),
   desired: Desired.pick(["running", "stopped", "paused"]),
   prepared: Schema.BooleanFromBit,
@@ -135,6 +155,8 @@ export type ShownPhase = Checkpoint["phase"];
 /** What a checkpoint's row holds but for its leaf. */
 export const CheckpointFacts = Schema.Struct({
   ...made,
+  runtime: RuntimeName,
+  kind: Checkpoint.fields.kind,
   machine: Schema.String,
   failedAt: UndefinedFromNull(Schema.DateTimeUtcFromString),
   /** When the control plane deletes it, once ready. */

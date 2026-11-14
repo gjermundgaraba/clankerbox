@@ -173,17 +173,7 @@ export const migrations: readonly string[] = [
   ALTER TABLE templates DROP COLUMN ram_mib;
   ALTER TABLE templates DROP COLUMN disk_gib;
   ALTER TABLE templates DROP COLUMN setup_timeout_seconds`,
-  `CREATE TEMP TABLE kind_traits (kind TEXT PRIMARY KEY, traits TEXT NOT NULL) STRICT;
-  INSERT INTO kind_traits VALUES
-    ('linux', json_object('runtime', 'smolvm', 'images', 'references', 'checkpoint', 'ram',
-      'captureFrom', 'running', 'pause', 'saves', 'copies', 'grow',
-      'resize', json_object('running', 'grow', 'stopped', 'any'),
-      'sizes', json_object('_tag', 'free'), 'stopsOnItsOwn', json('false'), 'stop', 'resumes')),
-    ('mac', json_object('runtime', 'tart', 'images', 'named', 'checkpoint', 'disk',
-      'captureFrom', 'stopped', 'pause', 'saves', 'copies', 'any',
-      'resize', json_object('running', 'none', 'stopped', 'any'),
-      'sizes', json_object('_tag', 'free'), 'stopsOnItsOwn', json('false'), 'stop', 'discards'));
-  CREATE TABLE reached (
+  `CREATE TABLE rebuilt (
     name TEXT PRIMARY KEY,
     instance TEXT NOT NULL,
     created_at TEXT NOT NULL,
@@ -207,24 +197,25 @@ export const migrations: readonly string[] = [
     labels TEXT,
     after TEXT,
     template TEXT,
-    traits TEXT NOT NULL
+    runtime TEXT NOT NULL,
+    captures TEXT NOT NULL
   ) STRICT;
-  INSERT INTO reached
+  INSERT INTO rebuilt
     SELECT name, instance, created_at, base, cpu, ram_mib, disk_gib, host, NULL,
       CASE WHEN port IS NULL THEN NULL ELSE json_object('port', port) END,
       desired, state, prepared, error, resize, ephemeral, source, host_key, pin, undone_at,
       labels, after, template,
-      (SELECT traits FROM kind_traits WHERE kind_traits.kind = machines.kind)
+      CASE kind WHEN 'linux' THEN 'smolvm' WHEN 'mac' THEN 'tart' END,
+      CASE kind WHEN 'linux' THEN 'ram' WHEN 'mac' THEN 'disk' END
     FROM machines;
   DROP TABLE machines;
-  ALTER TABLE reached RENAME TO machines;
-  ALTER TABLE checkpoints ADD COLUMN traits TEXT NOT NULL DEFAULT '';
+  ALTER TABLE rebuilt RENAME TO machines;
+  ALTER TABLE checkpoints ADD COLUMN runtime TEXT NOT NULL DEFAULT '';
   UPDATE checkpoints
-    SET traits = (SELECT traits FROM kind_traits WHERE kind_traits.kind = checkpoints.kind);
-  ALTER TABLE checkpoints DROP COLUMN kind;
+    SET runtime = CASE kind WHEN 'linux' THEN 'smolvm' WHEN 'mac' THEN 'tart' END,
+      kind = CASE kind WHEN 'linux' THEN 'ram' WHEN 'mac' THEN 'disk' END;
   ALTER TABLE checkpoints DROP COLUMN port;
   ALTER TABLE checkpoints ADD COLUMN handle TEXT;
-  DROP TABLE kind_traits;
   DELETE FROM hosts;
   CREATE TABLE retired (
     host TEXT NOT NULL,

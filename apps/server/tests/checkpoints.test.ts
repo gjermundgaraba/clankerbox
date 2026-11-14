@@ -2,7 +2,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { presets, startHost } from "@gjermundgaraba/clankerbox-host/testing";
+import { startHost } from "@gjermundgaraba/clankerbox-host/testing";
 import type {
   TestHost,
   FakeRuntimeName,
@@ -915,36 +915,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           yield* Effect.flip(client.getCheckpoint({ id: "snap" }))
         ).toMatchObject({ _tag: "NotFound" });
         expect(host.fake.calls).toStrictEqual([]);
-      })
-  );
-
-  it.effect(
-    "a pause with a capture takes its order from the host's traits as it answers now, not the machine's stamp",
-    () =>
-      Effect.gen(function* () {
-        const served = yield* withClient();
-        const { client, host, store } = served;
-
-        yield* client.create("dev", request("dev"));
-        yield* patched(store, "dev", { traits: presets.tart.traits });
-        host.fake.calls.length = 0;
-
-        const paused = yield* client.pauseMachine({
-          id: "dev",
-          capture: { name: "snap" },
-        });
-
-        const snap = yield* client.getCheckpoint({ id: "snap" });
-
-        expect([paused.state, paused.phase]).toStrictEqual([
-          "paused",
-          "settled",
-        ]);
-        expect(snap.phase).toBe("ready");
-        expect(callsTo(host, "capture")).toStrictEqual(["capture snap"]);
-        expect(host.fake.calls.indexOf("capture snap")).toBeLessThan(
-          host.fake.calls.indexOf("pause dev")
-        );
       })
   );
 

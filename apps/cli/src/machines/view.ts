@@ -66,7 +66,7 @@ export const machineFields = (machine: Machine, now: DateTime.Utc) => {
 
   return [
     ...machineColumns.map(([label, cell]) => [label, cell(machine, now)]),
-    ["RUNTIME", machine.traits.runtime],
+    ["RUNTIME", machine.runtime],
     ["DESIRED", machine.desired],
     ["PHASE", machine.phase],
     ["SSH", ssh === undefined ? "-" : `${ssh.user}@${ssh.host}:${ssh.port}`],

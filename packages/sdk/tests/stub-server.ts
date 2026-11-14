@@ -110,7 +110,7 @@ export const stubTraits: RuntimeTraits = {
 
 export const machine = (id: string, fields?: Partial<Machine>): Machine => ({
   id,
-  traits: stubTraits,
+  runtime: stubTraits.runtime,
   createdAt: DateTime.makeUnsafe("2026-10-01T00:00:00Z"),
   base: "ubuntu",
   cpu: 1,
@@ -525,7 +525,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
         return yield* add(
           labelled(
             machine(request.id, {
-              traits,
+              runtime: traits.runtime,
               base: ready.base,
               ...sized(ready, request),
               template: ready.id,
@@ -544,7 +544,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
       return yield* add(
         labelled(
           machine(request.id, {
-            traits,
+            runtime: traits.runtime,
             base: request.base,
             cpu: request.cpu,
             ramMib: request.ramMib,
@@ -567,7 +567,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
       add(
         labelled(
           machine(name, {
-            traits,
+            runtime: traits.runtime,
             base: found.base,
             ...sized(found, sizes),
             state: "unknown",
@@ -748,7 +748,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
           add(
             labelled(
               machine(name, {
-                traits: found.traits,
+                runtime: found.runtime,
                 base: found.base,
                 ...sized(found, sizes),
                 state: "unknown",

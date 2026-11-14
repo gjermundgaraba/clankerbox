@@ -337,7 +337,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a create with --host lands on that host alone, reads its runtime's traits, and --host of a host the control plane doesn't know answers NotOffered",
+    "a create with --host lands on that host alone, reads its runtime, and --host of a host the control plane doesn't know answers NotOffered",
     () =>
       Effect.gen(function* () {
         const { run } = yield* setUp(twoHosts);
@@ -363,10 +363,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           tag: "NotOffered",
           retryable: false,
         });
-        expect(JSON.parse(json.stdout)).toMatchObject({
-          traits: { runtime: "smolvm", checkpoint: "ram" },
-        });
+        expect(JSON.parse(json.stdout)).toMatchObject({ runtime: "smolvm" });
         expect(JSON.parse(json.stdout)).not.toHaveProperty("kind");
+        expect(JSON.parse(json.stdout)).not.toHaveProperty("traits");
         expect(table.stdout).toMatch(/^RUNTIME\s+smolvm$/mu);
         expect(
           (yield* decodeJson(CapacityJson, capacity.stdout)).usage.filter(

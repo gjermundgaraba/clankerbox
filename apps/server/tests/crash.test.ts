@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { accepts, presets } from "@gjermundgaraba/clankerbox-host/testing";
+import { accepts } from "@gjermundgaraba/clankerbox-host/testing";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Logger, Option, Schedule } from "effect";
 import { expect } from "vite-plus/test";
@@ -490,7 +490,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a restore recorded but never sent, at sizes its copy can't take, is refused by its host's traits as it answers, not the copy's stamp, though the host was down when the control plane restarted",
+    "a restore recorded but never sent, at sizes its copy can't take, is refused by its host's traits as it answers, though the host was down when the control plane restarted",
     () =>
       Effect.gen(function* () {
         const { client, first, fake, planned, restart } = yield* killedPlane({
@@ -513,7 +513,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           instance: "unsent",
           handle: undefined,
           endpoint: undefined,
-          traits: presets.tart.traits,
           state: "making.due",
           prepared: false,
           hostKey: undefined,
