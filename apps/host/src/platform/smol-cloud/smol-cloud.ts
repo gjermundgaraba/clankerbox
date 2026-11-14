@@ -131,11 +131,11 @@ const moveOf = (goal: Goal, state: string): Move => {
     return move;
   }
 
-  if (goal === "gone") {
-    return "delete";
+  if (transitional.has(state)) {
+    return "wait";
   }
 
-  return transitional.has(state) ? "wait" : "stuck";
+  return goal === "gone" ? "delete" : "stuck";
 };
 
 const stateOf = (record: MachineRecord | undefined): MachineState => {

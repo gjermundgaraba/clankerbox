@@ -1400,6 +1400,58 @@ const failureOf = <A, E>(ended: Exit.Exit<A, E> | undefined) =>
     ? Cause.squash(ended.cause)
     : undefined;
 
+describe("a smol cloud delete of a machine on its way", () => {
+  it.effect("waits while the machine moves, and deletes it once it rests", () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      let deleted = false;
+
+      const { asked, client } = answering((route) => {
+        if (route === "GET /v1/machines/mach-1") {
+          reads += 1;
+
+          return deleted
+            ? Response.json(
+                { code: "not_found", detail: "no machine", status: 404 },
+                { status: 404 }
+              )
+            : Response.json(recordIn(reads < 6 ? "stopping" : "stopped"));
+        }
+
+        if (route === "DELETE /v1/machines/mach-1") {
+          if (reads < 6) {
+            return Response.json(
+              { code: "conflict", detail: "machine is stopping", status: 409 },
+              { status: 409 }
+            );
+          }
+
+          deleted = true;
+
+          return new Response(null, { status: 204 });
+        }
+
+        return route === "GET /v1/checkpoints" ? Response.json([]) : undefined;
+      });
+
+      const runtime = yield* scriptedRuntime(client);
+
+      const ended = yield* endedWithin(
+        runtime.delete(dev1, new Set()),
+        "1 minute"
+      );
+
+      expect(
+        ended !== undefined && Exit.isSuccess(ended),
+        String(failureOf(ended))
+      ).toBe(true);
+      expect(
+        asked.filter((route) => route === "DELETE /v1/machines/mach-1")
+      ).toHaveLength(1);
+    })
+  );
+});
+
 describe("a smol cloud answer a gateway gives", () => {
   it.effect(
     "is a 5xx whose JSON body is no problem of the provider's, a lost answer, so the create is looked for by its name",

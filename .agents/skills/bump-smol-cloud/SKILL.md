@@ -120,6 +120,14 @@ Each is an assertion of the live suite, in the case named.
   sizes asked, and sends the resize again otherwise, at most three times.
   (`smol-cloud.ts`'s `resized`; the fake's `loseResize` and the resize
   tests.)
+- A machine reads `creating` through its start (`stopped`, `creating`,
+  `started`, measured in fix round 2's second probe), and a resize sent then
+  answers 409 `resize needs a started, stopped or paused machine, and this
+  one is creating; retry once it settles`. Every goal, a delete's too, waits
+  while the machine reads `creating`, `pausing`, `starting` or `stopping`,
+  and sends nothing until it rests; a 409 at one settled state three times in
+  a row is a standing refusal. A DELETE sent 40 ms into a stop was taken, 204.
+  (`smol-cloud.ts`'s `moveOf` and `settle`.)
 - A capture with `wait=true` can answer `creating`, so the adapter polls it to
   `available`.
 - A pause leaves a checkpoint of its own, which outlives the resume. While
