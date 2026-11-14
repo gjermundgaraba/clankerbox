@@ -214,7 +214,29 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "every tart call runs the configured binary in the environment the VM jobs get",
+    "a host refuses to start, naming macOS's Perl, where the lock reader doesn't run",
+    () =>
+      Effect.gen(function* () {
+        const mac = scriptedMac(path.join(yield* scratch, "state"));
+
+        mac.hooks.locks = () => ({
+          exitCode: 127,
+          stderr: "env: /usr/bin/perl: No such file or directory\n",
+        });
+
+        const refused = yield* Effect.flip(
+          make(mac.settings).pipe(Effect.provide(mac.spawner.layer))
+        );
+
+        expect([refused._tag, refused.message]).toStrictEqual([
+          "CannotStart",
+          "a Tart host reads which VMs run from the locks Tart holds, with macOS's own /usr/bin/perl, and it couldn't: /usr/bin/perl reading the VMs' locks exited 127: env: /usr/bin/perl: No such file or directory",
+        ]);
+      })
+  );
+
+  it.effect(
+    "a host starts by asking the configured binary its version and checking the lock reader runs, each in the environment the VM jobs get",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -223,8 +245,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(runtime.pin).toBeUndefined();
         expect(runtime.traits.stop).toBe("discards");
 
+        expect(mac.spawner.calls.map(({ file }) => file)).toStrictEqual([
+          binary,
+          "/usr/bin/perl",
+        ]);
+
         for (const call of mac.spawner.calls) {
-          expect(call.file).toBe(binary);
           expect(call.env).toStrictEqual({
             PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
             HOME: homedir(),

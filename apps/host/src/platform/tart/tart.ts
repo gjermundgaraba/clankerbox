@@ -387,6 +387,14 @@ export const make = (
         return new Map(vms.map((vm, at) => [vm, read[at] ?? 0]));
       });
 
+    yield* Effect.mapError(
+      lockFiles([]),
+      ({ message }) =>
+        new CannotStart({
+          message: `a Tart host reads which VMs run from the locks Tart holds, with macOS's own ${Locks.reader}, and it couldn't: ${message}`,
+        })
+    );
+
     const onTheMac = Effect.map(
       Effect.flatMap(
         run("/bin/ps", ["-axo", "pid=,ucomm=,args="], "ps"),
