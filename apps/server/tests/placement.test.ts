@@ -336,7 +336,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       ["b", "copy-b"],
     ]);
 
-    const holders = (reached: readonly Reached[], ask: Ask = asked) =>
+    const holders = (
+      reached: readonly Reached[],
+      ask: Ask = asked,
+      unready: Parameters<typeof holding>[5] = new Map()
+    ) =>
       holding(
         reached,
         copies,
@@ -348,8 +352,37 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           image: "image/ubuntu",
           ...small,
         },
-        ask
+        ask,
+        unready
       );
+
+    it.effect(
+      "passes over a host whose copy is still fetched or failed, saying which, and advises a build only for the failed one",
+      () =>
+        Effect.sync(() => {
+          const unready = new Map([
+            ["a", { state: "fetching.sent", error: undefined }],
+            [
+              "c",
+              {
+                state: "failed",
+                error: new Internal({ message: "the bucket lost it" }),
+              },
+            ],
+          ] as const);
+
+          const message = (reached: readonly Reached[]) =>
+            Result.getOrThrow(Result.flip(holders(reached, asked, unready)))
+              .message;
+
+          expect(message([up("a")])).toBe(
+            "no host can take a clone of build web@1: a holds a copy of web@1 that isn't ready yet"
+          );
+          expect(message([up("a"), up("c")])).toBe(
+            "no host can take a clone of build web@1: a holds a copy of web@1 that isn't ready yet; c holds a copy of web@1 that failed: the bucket lost it; run clankerbox template build on web's template file to build it again"
+          );
+        })
+    );
 
     it.effect(
       "passes over a holder whose size classes hold none of the sizes asked, and keeps only the host an ask names",

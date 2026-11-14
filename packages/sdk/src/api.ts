@@ -173,7 +173,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: [...making, PinMismatch] as const,
       description:
-        "Create a machine from a checkpoint, with its sizes or the ones given. A checkpoint is restored only under the runtime pin it was captured under, and one captured under another is refused with PinMismatch before anything is recorded. A restore's vCPUs and RAM follow its runtime, as a fork's do. A disk otherwise only grows. A restore that fails deletes the new VM and keeps its row, failed, to say why.",
+        "Create a machine from a checkpoint, with its sizes or the ones given. Only a ready checkpoint is restored: one whose capture still runs is NotMade, and one whose capture failed, or that is being deleted, NotFound, saying so and, of a failed one, why. A checkpoint is restored only under the runtime pin it was captured under, and one captured under another is refused with PinMismatch before anything is recorded. A restore's vCPUs and RAM follow its runtime, as a fork's do. A disk otherwise only grows. A restore that fails deletes the new VM and keeps its row, failed, to say why.",
       input: Schema.Struct({ ...RestoreRequest.fields, ...Sizing.fields }),
       success: Machine,
     }),

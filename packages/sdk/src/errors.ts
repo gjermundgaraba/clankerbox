@@ -49,7 +49,11 @@ export class Invalid extends Schema.TaggedError<
   }
 }
 
-/** The machine or checkpoint doesn't exist. A `delete` that meets it is done. */
+/**
+ * The machine or checkpoint doesn't exist, or is kept only to say why its create or capture
+ * failed, which the message gives with that error, or is being deleted. A `delete` that meets it
+ * is done.
+ */
 export class NotFound extends Schema.TaggedError<
   NotFound,
   { readonly brand: unique symbol }
@@ -154,19 +158,31 @@ export class NotBuilt extends Schema.TaggedError<
   }
 }
 
-/** `machine` isn't made yet: its create or setup still runs, so it can't be copied or captured. */
+/**
+ * What the request needs isn't made yet, which it names: `machine`, whose create or setup still
+ * runs, so it can't be copied or captured, or `checkpoint`, whose capture still runs, so it can't
+ * be restored.
+ */
 export class NotMade extends Schema.TaggedError<
   NotMade,
   { readonly brand: unique symbol }
 >()(
   "NotMade",
-  { message: Schema.String, ...located, machine: Schema.String },
+  {
+    message: Schema.String,
+    ...located,
+    machine: Schema.optionalKey(Schema.String),
+    checkpoint: Schema.optionalKey(Schema.String),
+  },
   { httpApiStatus: 412 }
 ) {
   located(where: Where): NotMade {
+    const { machine, checkpoint } = this;
+
     return new NotMade({
       ...at(this, where),
-      machine: this.machine,
+      ...(machine === undefined ? {} : { machine }),
+      ...(checkpoint === undefined ? {} : { checkpoint }),
       message: this.message,
     });
   }

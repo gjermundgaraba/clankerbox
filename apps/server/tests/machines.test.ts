@@ -817,6 +817,48 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a request on a machine whose create failed says so, with its error, as a list shows it failed",
+    () =>
+      Effect.gen(function* () {
+        const { client, fake } = yield* served();
+
+        fake.failNext("admit", new Capacity({ message: "no room" }));
+        yield* Effect.flip(client.create("dev", request("dev")));
+
+        const answers = yield* Effect.forEach(
+          [
+            Effect.asVoid(client.startMachine({ id: "dev" })),
+            Effect.asVoid(client.stopMachine({ id: "dev" })),
+            Effect.asVoid(client.forkMachine({ machine: "dev", name: "copy" })),
+            Effect.asVoid(client.execMachine({ id: "dev", argv: ["true"] })),
+            Effect.asVoid(client.resizeMachine({ id: "dev", cpu: 2 })),
+            Effect.asVoid(
+              client.captureCheckpoint({ machine: "dev", name: "snap" })
+            ),
+          ],
+          (asked) =>
+            Effect.map(Effect.flip(asked), ({ _tag, message }) => [
+              _tag,
+              message,
+            ])
+        );
+
+        const [listed] = yield* client.listMachines();
+
+        const why = [
+          "NotFound",
+          "machine dev's create failed, so there is no machine dev: no room; delete it, or create it again",
+        ];
+
+        expect(listed).toMatchObject({
+          phase: "failed",
+          error: { message: "no room" },
+        });
+        expect(answers).toStrictEqual(Array.from({ length: 6 }, () => why));
+      })
+  );
+
+  it.effect(
     "a start refused at admission rests failed with the refusal, and the next start tries again",
     () =>
       Effect.gen(function* () {
@@ -3720,34 +3762,51 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     })
   );
 
-  it.effect("a template with no ready build fails NotBuilt", () =>
-    Effect.gen(function* () {
-      const { client, rows } = yield* built();
+  it.effect(
+    "a template with no ready build fails NotBuilt, saying of a build that failed why",
+    () =>
+      Effect.gen(function* () {
+        const { client, rows } = yield* built();
 
-      yield* Effect.flip(
-        client.buildTemplate({
-          template: "broken",
-          ...request("unused"),
-          setup: exits3,
-        })
-      );
+        const broke = yield* Effect.flip(
+          client.buildTemplate({
+            template: "broken",
+            ...request("unused"),
+            setup: exits3,
+          })
+        );
 
-      const [unknown, failed, unkept] = yield* Effect.all([
-        Effect.flip(client.create("a", { template: "nope" })),
-        Effect.flip(client.create("b", { template: "broken" })),
-        Effect.flip(client.create("c", { template: "web@9" })),
-      ]);
+        yield* Effect.flip(
+          client.buildTemplate({
+            template: "web",
+            ...request("unused"),
+            setup: exits3,
+          })
+        );
 
-      expect(unknown).toMatchObject({ _tag: "NotBuilt", template: "nope" });
-      expect(unknown.message).toContain(
-        "template nope has no ready build: run clankerbox template build on nope's template file to make one"
-      );
-      expect(failed).toMatchObject({ _tag: "NotBuilt", template: "broken" });
-      expect(unkept.message).toBe(
-        "template web has no ready build web@9: its ready builds are web@1"
-      );
-      expect(yield* rows).toStrictEqual([]);
-    })
+        const [unknown, failed, unkept, pinned] = yield* Effect.all([
+          Effect.flip(client.create("a", { template: "nope" })),
+          Effect.flip(client.create("b", { template: "broken" })),
+          Effect.flip(client.create("c", { template: "web@9" })),
+          Effect.flip(client.create("d", { template: "web@2" })),
+        ]);
+
+        expect(unknown).toMatchObject({ _tag: "NotBuilt", template: "nope" });
+        expect(unknown.message).toContain(
+          "template nope has no ready build: run clankerbox template build on nope's template file to make one"
+        );
+        expect(failed).toMatchObject({ _tag: "NotBuilt", template: "broken" });
+        expect(failed.message).toBe(
+          `template broken has no ready build: broken@1 failed: ${broke.message}; run clankerbox template build on broken's template file to make one`
+        );
+        expect(unkept.message).toBe(
+          "template web has no ready build web@9: its ready builds are web@1"
+        );
+        expect(pinned.message).toBe(
+          `template web has no ready build web@2: web@2 failed: ${broke.message}; its ready builds are web@1`
+        );
+        expect(yield* rows).toStrictEqual([]);
+      })
   );
 
   it.effect(

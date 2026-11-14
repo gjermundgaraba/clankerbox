@@ -6,6 +6,7 @@ import {
   isResting,
   labelledWith,
   NotBuilt,
+  NotFound,
   NotMade,
   readTimeout,
   templateRef,
@@ -20,7 +21,6 @@ import type {
   Labels,
   ListFilter,
   Machine,
-  NotFound,
   ResizeRequest,
   RestoreRequest,
   Setup,
@@ -39,7 +39,11 @@ import {
 import type { Array as Arr, Scope } from "effect";
 
 import { applied } from "./chart.ts";
-import { checkpointChart } from "./checkpoint-chart.ts";
+import {
+  checkpointChart,
+  phaseOf as checkpointPhaseOf,
+} from "./checkpoint-chart.ts";
+import type { CheckpointRow } from "./checkpoint-chart.ts";
 import {
   cloned,
   copied,
@@ -171,10 +175,12 @@ const readyBuild = (
   found: Option.Option<TemplateRow>,
   { template, number }: ReturnType<typeof templateRef>
 ): Result.Result<BuiltUnder, NotBuilt> => {
-  const ready = Option.match(found, {
+  const builds = Option.match(found, {
     onNone: () => [],
-    onSome: ({ builds }) => builds.filter(({ phase }) => phase === "ready"),
+    onSome: (row) => row.builds,
   });
+
+  const ready = builds.filter(({ phase }) => phase === "ready");
 
   const build =
     number === undefined
@@ -185,15 +191,29 @@ const readyBuild = (
     return Result.succeed(builtUnder(template, build));
   }
 
+  const asked =
+    number === undefined
+      ? builds.at(-1)
+      : builds.find((each) => each.number === number);
+
   const kept = ready.map((each) => buildId(template, each.number));
+
+  const why = [
+    ...(asked === undefined
+      ? []
+      : [
+          asked.phase === "building"
+            ? `${buildId(template, asked.number)} is still building`
+            : `${buildId(template, asked.number)} failed: ${asked.error?.message ?? "its build ended"}`,
+        ]),
+    kept.length === 0
+      ? `run clankerbox template build on ${template}'s template file to make one`
+      : `its ready builds are ${kept.join(", ")}`,
+  ];
 
   return Result.fail(
     new NotBuilt({
-      message: `template ${template} has no ready build${number === undefined ? "" : ` ${buildId(template, number)}`}: ${
-        kept.length === 0
-          ? `run clankerbox template build on ${template}'s template file to make one`
-          : `its ready builds are ${kept.join(", ")}`
-      }`,
+      message: `template ${template} has no ready build${number === undefined ? "" : ` ${buildId(template, number)}`}: ${why.join("; ")}`,
       template,
     })
   );
@@ -211,6 +231,30 @@ const onBase = ({ id }: HostInfo): Candidate => ({
   source: { kind: "base" },
 });
 
+const absent = ({ name, state, error }: MachineRow): NotFound => {
+  switch (stageOf(state)) {
+    case "undoing":
+    case "undone": {
+      return new NotFound({
+        message: `machine ${name}'s create failed, so there is no machine ${name}: ${error?.message ?? "it ended"}; delete it, or create it again`,
+        id: name,
+      });
+    }
+
+    case "deleting": {
+      return new NotFound({
+        message: `machine ${name} is being deleted`,
+        id: name,
+      });
+    }
+
+    case "making":
+    case "made": {
+      return notFound("machine", name);
+    }
+  }
+};
+
 /** Why a machine can't be copied or resized: it may yet be made, or it won't be. */
 export const unmade = (found: MachineRow): NotMade | NotFound =>
   stageOf(found.state) === "making"
@@ -218,7 +262,51 @@ export const unmade = (found: MachineRow): NotMade | NotFound =>
         message: `machine ${found.name} isn't made yet: its create or setup still runs`,
         machine: found.name,
       })
-    : notFound("machine", found.name);
+    : absent(found);
+
+const restorable = (
+  name: string,
+  found: Option.Option<CheckpointRow>
+): Result.Result<CheckpointRow, NotMade | NotFound> => {
+  if (Option.isNone(found) || found.value.build !== undefined) {
+    return Result.fail(notFound("checkpoint", name));
+  }
+
+  const record = found.value;
+
+  switch (checkpointPhaseOf(record.state)) {
+    case "ready": {
+      return Result.succeed(record);
+    }
+
+    case "capturing": {
+      return Result.fail(
+        new NotMade({
+          message: `checkpoint ${name} isn't made yet: its capture still runs`,
+          checkpoint: name,
+        })
+      );
+    }
+
+    case "failed": {
+      return Result.fail(
+        new NotFound({
+          message: `checkpoint ${name} failed, so nothing restores it: ${record.error?.message ?? "its capture ended"}; delete it`,
+          id: name,
+        })
+      );
+    }
+
+    case "deleting": {
+      return Result.fail(
+        new NotFound({
+          message: `checkpoint ${name} is being deleted`,
+          id: name,
+        })
+      );
+    }
+  }
+};
 
 export const make = (
   settings: Settings
@@ -565,7 +653,7 @@ export const make = (
 
         return moved || stageOf(next.state) === "deleting"
           ? shown(next)
-          : yield* notFound("machine", name);
+          : yield* absent(next);
       });
 
     const copy = (
@@ -601,19 +689,30 @@ export const make = (
 
         const build = made.id;
 
-        const copies = new Map(
-          (yield* store.checkpoints).flatMap((record) =>
-            record.build === build && record.state === "ready"
-              ? [[record.host, record] as const]
-              : []
-          )
+        const records = (yield* store.checkpoints).filter(
+          (record) =>
+            record.build === build &&
+            checkpointPhaseOf(record.state) !== "deleting"
         );
 
+        const byHost = (ready: boolean) =>
+          new Map(
+            records.flatMap((record) =>
+              (record.state === "ready") === ready
+                ? [[record.host, record] as const]
+                : []
+            )
+          );
+
         const [first, ...rest] = yield* Effect.fromResult(
-          holding(yield* hosts.reachAll, copies, template, made, {
-            sizes: sizedBy(made, sizing),
-            host,
-          })
+          holding(
+            yield* hosts.reachAll,
+            byHost(true),
+            template,
+            made,
+            { sizes: sizedBy(made, sizing), host },
+            byHost(false)
+          )
         );
 
         const onCopy = ([{ id }, held]: (typeof rest)[number]): Candidate => ({
@@ -689,17 +788,9 @@ export const make = (
       ...sizing
     }: RestoreRequest & Sizing) =>
       Effect.gen(function* () {
-        const present = yield* store.findCheckpoint(checkpoint);
-
-        if (
-          Option.isNone(present) ||
-          present.value.state !== "ready" ||
-          present.value.build !== undefined
-        ) {
-          return yield* notFound("checkpoint", checkpoint);
-        }
-
-        const record = present.value;
+        const record = yield* Effect.fromResult(
+          restorable(checkpoint, yield* store.findCheckpoint(checkpoint))
+        );
 
         const info = yield* answering(hosts, record.host);
 
