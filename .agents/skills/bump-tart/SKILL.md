@@ -229,9 +229,11 @@ Each: what Tart does, where, and what of ours depends on it.
   `stateReadWait` (9 s).
 - `launchctl print gui/<uid>/<label>` is macOS's, not a stable interface: the
   host reads its tab-indented `state = …` line and its `arguments = { … }`
-  block, and fails `Internal` on a print without them, or with a state not
-  among those captured on macOS 27.2 (`apps/host/tests/platform/tart/launchctl/`),
-  naming it: `not running` before a job's first run and after each, with
+  block. A print without them, or with a state not among those captured on
+  macOS 27.2 (`apps/host/tests/platform/tart/launchctl/`, and `capturedOn` in
+  `launchd.ts`), makes that VM alone read unknown, with a warning that names
+  it and the remedy, a release qualified on that macOS, and fails a stop, a
+  pause or a boot of it `Internal`, saying the same. The states: `not running` before a job's first run and after each, with
   `last exit code`, a number or `(never exited)`; `xpcproxy` while launchd
   starts a VM's job; `spawn scheduled` while it waits to respawn a job
   `KeepAlive` restarts, which runs no process, so the host reads it as exited;

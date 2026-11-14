@@ -27,6 +27,7 @@ import {
   Exit,
   Fiber,
   Layer,
+  Logger,
   Stream,
 } from "effect";
 import { TestClock } from "effect/testing";
@@ -1780,44 +1781,82 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a launchctl print without the job's state or arguments fails a read, a stop and a pause of a VM whose lock no run holds as Internal, naming what it printed, and signals nothing",
+    "a launchctl print this host can't read makes only its VM read unknown, logging what to do, and fails a stop and a pause of it as Internal, naming the same, and signals nothing",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
         const machine = machineOn("dev");
+        const other = machineOn("other");
         const vm = vmOf(machine);
 
         yield* runtime.make(machine, fromImage("base"), unbound);
+        yield* runtime.make(other, fromImage("base"), unbound);
         mac.vms.set(vm, "stopped");
+        mac.vms.set(vmOf(other), "stopped");
 
         const before = calls(mac).length;
 
         const unreadable = [
-          "gui/501/job = {\n\tstate = running\n}\n",
-          "gui/501/job = {\n\tprogram = /opt/tart\n\targuments = {\n\t\t/opt/tart\n\t}\n}\n",
+          {
+            stdout: "gui/501/job = {\n\tstate = running\n}\n",
+            why: "no state or arguments this host reads",
+          },
+          {
+            stdout:
+              "gui/501/job = {\n\tprogram = /opt/tart\n\targuments = {\n\t\t/opt/tart\n\t}\n}\n",
+            why: "no state or arguments this host reads",
+          },
+          {
+            stdout:
+              "gui/501/job = {\n\tstate = penned\n\targuments = {\n\t\t/opt/tart\n\t}\n}\n",
+            why: 'the state "penned", which this host doesn\'t know',
+          },
         ];
 
+        const logged: string[] = [];
+        const seen = [];
         const failures = [];
 
-        for (const stdout of unreadable) {
-          mac.hooks.print = () => ({ stdout });
+        for (const { stdout } of unreadable) {
+          mac.hooks.print = (label) => (label === vm ? { stdout } : undefined);
 
+          seen.push(
+            yield* runtime.observe([machine, other]).pipe(
+              Effect.provide(
+                Logger.layer([
+                  Logger.make(({ logLevel, message }) => {
+                    logged.push(`${logLevel}: ${[message].flat().join(" ")}`);
+                  }),
+                ])
+              )
+            )
+          );
           failures.push(
-            ...[
-              yield* Effect.flip(runtime.observe([machine])),
-              yield* Effect.flip(runtime.stop(machine)),
-              yield* Effect.flip(runtime.pause(machine)),
-            ].map(failure)
+            failure(yield* Effect.flip(runtime.stop(machine))),
+            failure(yield* Effect.flip(runtime.pause(machine)))
           );
         }
 
-        expect(failures).toStrictEqual(
-          unreadable.flatMap((stdout) =>
-            Array.from({ length: 3 }, () => [
-              "Internal",
-              `launchctl print gui/501/${vm} printed no state or arguments this host reads: ${stdout.trimEnd()}`,
-            ])
+        const told = unreadable.map(
+          ({ stdout, why }) =>
+            `launchctl print gui/501/${vm} printed ${why}, as a macOS other than 27.2, which this release read launchd's jobs on, may: run a clankerbox release qualified on this macOS. It printed: ${stdout.trimEnd()}`
+        );
+
+        expect(seen).toStrictEqual(
+          unreadable.map(
+            () =>
+              new Map([
+                [machine.name, "unknown"],
+                [other.name, "stopped"],
+              ])
           )
+        );
+        expect(logged).toStrictEqual(told.map((message) => `Warn: ${message}`));
+        expect(failures).toStrictEqual(
+          told.flatMap((message) => [
+            ["Internal", message],
+            ["Internal", message],
+          ])
         );
         expect(calls(mac).slice(before)).toStrictEqual([]);
       })

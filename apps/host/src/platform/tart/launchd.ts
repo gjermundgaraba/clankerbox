@@ -15,6 +15,9 @@ export type Job =
       readonly lastExit: number | undefined;
     };
 
+/** The macOS whose prints the `bump-tart` skill last captured, the states below among them. */
+export const capturedOn = "27.2";
+
 const states = new Map<string, Job["_tag"]>([
   ["not running", "exited"],
   ["spawn scheduled", "exited"],

@@ -85,6 +85,20 @@ const shrinkRefusal = "should be larger than the current disk size";
 // https://github.com/openai/tart/blob/2.41.1/Sources/tart/VMConfig.swift#L178
 const minimumRefusal = "at minimum (requested";
 
+class Unreadable extends Schema.TaggedError<
+  Unreadable,
+  { readonly brand: unique symbol }
+>()("Unreadable", {
+  message: Schema.String,
+}) {}
+
+const unreadFails = <A>(
+  read: Effect.Effect<A, Internal | Unreadable>
+): Effect.Effect<A, Internal> =>
+  Effect.catchTag(read, "Unreadable", ({ message }) =>
+    Effect.fail(new Internal({ message }))
+  );
+
 const bootWait = Duration.minutes(3);
 
 const probePause = Duration.seconds(1);
@@ -347,7 +361,7 @@ export const make = (
     const logOf = (vm: string) =>
       fs.readFileString(job(vm).log).pipe(Effect.orElseSucceed(() => ""));
 
-    const jobOf = (vm: string) =>
+    const jobRead = (vm: string) =>
       Effect.gen(function* () {
         const { target } = job(vm);
 
@@ -364,11 +378,13 @@ export const make = (
         return yield* Effect.mapError(
           Effect.fromResult(Launchd.parse(ran.stdout)),
           (unread) =>
-            new Internal({
-              message: `launchctl print ${target} printed ${unread}: ${lastLines(ran.stdout)}`,
+            new Unreadable({
+              message: `launchctl print ${target} printed ${unread}, as a macOS other than ${Launchd.capturedOn}, which this release read launchd's jobs on, may: run a clankerbox release qualified on this macOS. It printed: ${lastLines(ran.stdout)}`,
             })
         );
       });
+
+    const jobOf = (vm: string) => unreadFails(jobRead(vm));
 
     const lockFiles = (vms: readonly string[]) =>
       Effect.gen(function* () {
@@ -406,20 +422,22 @@ export const make = (
 
     const runsWith = (vm: string, holder: number) =>
       holder === 0
-        ? Effect.map(jobOf(vm), (read) => read?._tag === "running")
+        ? Effect.map(jobRead(vm), (read) => read?._tag === "running")
         : Effect.succeed(true);
 
     // https://github.com/openai/tart/blob/2.41.1/Sources/tart/VMDirectory.swift#L52
     const running = (vm: string) =>
-      Effect.flatMap(lockFiles([vm]), (held) =>
-        runsWith(vm, held.get(vm) ?? 0)
+      unreadFails(
+        Effect.flatMap(lockFiles([vm]), (held) =>
+          runsWith(vm, held.get(vm) ?? 0)
+        )
       );
 
     // https://github.com/openai/tart/blob/2.41.1/Sources/tart/VMDirectory.swift#L65
     const stateWith = (
       vm: string,
       holder: number
-    ): Effect.Effect<MachineState, Internal> =>
+    ): Effect.Effect<MachineState, Internal | Unreadable> =>
       Effect.gen(function* () {
         const held = yield* home.look(vm);
 
@@ -435,8 +453,10 @@ export const make = (
       });
 
     const state = (vm: string) =>
-      Effect.flatMap(lockFiles([vm]), (held) =>
-        stateWith(vm, held.get(vm) ?? 0)
+      unreadFails(
+        Effect.flatMap(lockFiles([vm]), (held) =>
+          stateWith(vm, held.get(vm) ?? 0)
+        )
       );
 
     const states = (machines: readonly Target[]) =>
@@ -447,7 +467,11 @@ export const make = (
           machines,
           (machine) =>
             Effect.map(
-              stateWith(machine.handle, held.get(machine.handle) ?? 0),
+              stateWith(machine.handle, held.get(machine.handle) ?? 0).pipe(
+                Effect.catchTag("Unreadable", ({ message }) =>
+                  Effect.as(Effect.logWarning(message), "unknown" as const)
+                )
+              ),
               (read) => [machine.name, read] as const
             ),
           { concurrency: "unbounded" }
