@@ -23,7 +23,7 @@ const closeWait = Duration.seconds(5);
 
 const drainWait = Duration.seconds(1);
 
-const stderrTail = 600;
+const outputTail = 600;
 
 const prefix = "clankerbox-tunnel-";
 
@@ -254,25 +254,34 @@ export const forwarding = (
 // https://github.com/openssh/openssh-portable/blob/V_10_2_P1/ssh.c#L2336
 const answer = "clankerbox-tunnel-open";
 
-const answered = (child: ChildProcess): Effect.Effect<void> =>
-  Effect.callback((resume) => {
-    let partial = "";
+interface Echo {
+  readonly answered: Effect.Effect<void>;
+  readonly printed: () => string;
+}
 
-    const read = (chunk: string) => {
-      const lines = `${partial}${chunk}`.split("\n");
+const echoed = (child: ChildProcess): Echo => {
+  let seen = "";
 
-      partial = lines.pop() ?? "";
+  return {
+    answered: Effect.callback((resume) => {
+      const read = (chunk: string) => {
+        seen = `${seen}${chunk}`;
 
-      if (lines.includes(answer)) {
-        resume(Effect.void);
-      }
-    };
+        if (seen.includes(`${answer}\n`)) {
+          resume(Effect.void);
+        }
 
-    child.stdout?.on("data", read);
-    child.stdin?.write(`${answer}\n`);
+        seen = seen.slice(-outputTail);
+      };
 
-    return Effect.sync(() => child.stdout?.off("data", read));
-  });
+      child.stdout?.on("data", read);
+      child.stdin?.write(`${answer}\n`);
+
+      return Effect.sync(() => child.stdout?.off("data", read));
+    }),
+    printed: () => seen.trim(),
+  };
+};
 
 const over = (child: ChildProcess) =>
   child.exitCode !== null || child.signalCode !== null;
@@ -343,7 +352,7 @@ const closed = (out: Readable | null): Effect.Effect<void> =>
   });
 
 const drained = (child: ChildProcess): Effect.Effect<void> =>
-  closed(child.stderr).pipe(
+  Effect.andThen(closed(child.stdout), closed(child.stderr)).pipe(
     Effect.timeoutOrElse({ duration: drainWait, orElse: () => Effect.void })
   );
 
@@ -419,31 +428,43 @@ export const open = (
         )
     );
 
+    const { answered, printed } = echoed(child);
+
     let stderr = "";
 
     child.stderr?.on("data", (chunk: string) => {
-      stderr = `${stderr}${chunk}`.slice(-stderrTail);
+      stderr = `${stderr}${chunk}`.slice(-outputTail);
     });
 
     const failure = (
       why: string,
-      printed: string
+      said: string
     ): Internal | LocalTunnelError => {
       const reason = (detail: string) =>
         `the tunnel to ${start.machine} ${why}${detail === "" ? "" : `: ${detail}`}`;
 
-      return unrun === undefined
-        ? new Internal({ message: reason(printed) })
-        : new LocalTunnelError({
-            message: reason(`couldn't run ${start.program}: ${unrun.message}`),
-          });
+      if (unrun !== undefined) {
+        return new LocalTunnelError({
+          message: reason(`couldn't run ${start.program}: ${unrun.message}`),
+        });
+      }
+
+      const echo = printed();
+
+      return new Internal({
+        message: reason(
+          [said, echo === "" ? "" : `the guest printed ${JSON.stringify(echo)}`]
+            .filter((part) => part !== "")
+            .join("; ")
+        ),
+      });
     };
 
     const failed = (why: string) =>
       Effect.failSync(() => failure(why, stderr.trim()));
 
     yield* Effect.raceFirst(
-      answered(child),
+      answered,
       exited(child).pipe(
         Effect.andThen(drained(child)),
         Effect.andThen(failed("ended before it opened"))

@@ -26,7 +26,8 @@ export interface Options {
    * change the forward or its session, but a short flag takes effect wherever it stands: these may
    * not hold `-f`, `-M`, `-N`, `-n`, `-O`, `-S`, `-s`, `-t` or `-W`, `-G`, `-Q` or `-V`, which
    * print and exit before ssh connects, `--`, or a word that isn't an option, which ssh would run
-   * as the command. The provider refuses them as `Invalid` when it is made.
+   * as the command. The provider refuses them as `Invalid` when it is made. A tunnel that fails to
+   * open quotes the last of what the guest's login printed and of ssh's own output, `-v`'s too.
    */
   readonly sshArguments?: readonly string[] | undefined;
   /** `/home/admin` by default, the login user's home, where the Ubuntu recipe runs the server. */

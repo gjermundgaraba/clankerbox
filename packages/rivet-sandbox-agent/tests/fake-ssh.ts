@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import { fakeAgent } from "./fake-agent.ts";
 
@@ -23,9 +24,23 @@ const early: Buffer[] = [];
 
 let bound = false;
 
+const echo = async (chunk: Buffer) => {
+  if (!flagged("slow-echo")) {
+    process.stdout.write(chunk);
+
+    return;
+  }
+
+  const half = Math.floor(chunk.length / 2);
+
+  process.stdout.write(chunk.subarray(0, half));
+  await sleep(50);
+  process.stdout.write(chunk.subarray(half));
+};
+
 process.stdin.on("data", (chunk: Buffer) => {
   if (bound) {
-    process.stdout.write(chunk);
+    void echo(chunk);
   } else {
     early.push(chunk);
   }
@@ -76,20 +91,36 @@ forward.once("error", (error) => {
   process.exit(255);
 });
 
+const opened = async () => {
+  bound = true;
+
+  const printed = flagged("login-prints")
+    ? readFileSync(path.join(dir, "login-prints"))
+    : Buffer.alloc(0);
+
+  if (flagged("login-refuses")) {
+    process.stdout.write(printed, () => process.exit(1));
+
+    return;
+  }
+
+  process.stdout.write(printed);
+
+  for (const chunk of early) {
+    await echo(chunk);
+  }
+
+  if (flagged("stderr-after-open")) {
+    process.stderr.write(
+      "debug1: ".repeat(
+        Number(readFileSync(path.join(dir, "stderr-after-open"), "utf-8"))
+      )
+    );
+  }
+};
+
 if (!refused && !flagged("never-opens")) {
   forward.listen(socket, () => {
-    bound = true;
-
-    for (const chunk of early) {
-      process.stdout.write(chunk);
-    }
-
-    if (flagged("stderr-after-open")) {
-      process.stderr.write(
-        "debug1: ".repeat(
-          Number(readFileSync(path.join(dir, "stderr-after-open"), "utf-8"))
-        )
-      );
-    }
+    void opened();
   });
 }

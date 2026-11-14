@@ -311,6 +311,58 @@ describe("tunnel", () => {
     });
   });
 
+  it("a tunnel opens on the line that ends in its echo, whatever the guest's login printed before it, and however the line comes in pieces", async () => {
+    const { dir, sandbox } = await setup({
+      machines: [reachable("chatty"), reachable("slow")],
+    });
+
+    await writeFile(
+      path.join(dir, "login-prints"),
+      "Welcome to the guest\nno newline here "
+    );
+
+    await expect(sandbox.getUrl("chatty")).resolves.toMatch(
+      /^http:\/\/127\.0\.0\.1:\d+$/u
+    );
+
+    await rm(path.join(dir, "login-prints"));
+    await writeFile(path.join(dir, "slow-echo"), "");
+
+    await expect(sandbox.getUrl("slow")).resolves.toMatch(
+      /^http:\/\/127\.0\.0\.1:\d+$/u
+    );
+  });
+
+  it("a tunnel whose guest's login ends before its echo fails with the last of what it printed, as nologin's refusal or a line that only starts like the echo", async () => {
+    const { dir, sandbox } = await setup({
+      machines: [reachable("kept")],
+    });
+
+    const printed = async (text: string) => {
+      await writeFile(path.join(dir, "login-prints"), text);
+
+      return await sandbox.getUrl("kept").then(
+        () => "opened",
+        (error: unknown) =>
+          error instanceof Internal ? error.message : String(error)
+      );
+    };
+
+    await writeFile(path.join(dir, "login-refuses"), "");
+
+    const long = `${"x".repeat(5000)} the end`;
+
+    const refusal = await printed("This account is currently not available.\n");
+    const likeTheEcho = await printed("clankerbox-tunnel-opened\n");
+    const chatty = await printed(`${long}\n`);
+
+    expect([refusal, likeTheEcho, chatty]).toStrictEqual([
+      'the tunnel to kept ended before it opened: the guest printed "This account is currently not available."',
+      'the tunnel to kept ended before it opened: the guest printed "clankerbox-tunnel-opened"',
+      `the tunnel to kept ended before it opened: the guest printed "${`${long}\n`.slice(-600).trim()}"`,
+    ]);
+  });
+
   it("a URL given out reaches its sandbox's agent alone: while the tunnel is down no other program can take its port and a prompt sent there reaches nothing, and ensureServer opens the tunnel again behind it", async () => {
     const { stub, sandbox, calls } = await setup({
       machines: [reachable("kept")],
