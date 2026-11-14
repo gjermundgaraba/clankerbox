@@ -39,6 +39,7 @@ import {
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { checkPort, PortProbe } from "../src/machine-ports.ts";
+import type { Probe } from "../src/machine-ports.ts";
 import * as BindProbe from "../src/platform/bind-probe.ts";
 import { traits as smolvm } from "../src/platform/smolvm/traits.ts";
 import { traits as tart } from "../src/platform/tart/traits.ts";
@@ -175,6 +176,12 @@ export interface FakeOptions {
   readonly ramBudgetMib?: number | undefined;
   readonly pin?: string | undefined;
   readonly relayed?: boolean | undefined;
+  /**
+   * Whether a published machine's boot binds its port on loopback to find another program holding
+   * it, as a smolvm host's does; otherwise every port is free to it, so a run sharing a range with
+   * another never fails on the other's ports.
+   */
+  readonly probesPorts?: boolean | undefined;
   readonly onCall?: ((call: string) => void) | undefined;
 }
 
@@ -873,7 +880,12 @@ export const fakeRuntime = (options: FakeOptions) => {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const layerScope = yield* Effect.scope;
       const bin = yield* Effect.sync(() => writeStubs(options.dir));
-      const probe = yield* Effect.provide(PortProbe, BindProbe.layer);
+
+      const probe: Probe =
+        options.probesPorts === true
+          ? yield* Effect.provide(PortProbe, BindProbe.layer)
+          : { free: () => Effect.succeed(true) };
+
       const address = "127.0.0.1";
 
       stubs = bin;

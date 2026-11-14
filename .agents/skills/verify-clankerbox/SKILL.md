@@ -47,7 +47,8 @@ fleet's order and are named `<runtime>-<n>`, numbered per runtime: `fixed-1`,
 `smolvm-1`. Each fakes its runtime with that runtime's traits:
 
 - `smolvm` and `tart`, as the real runtimes are, so a smolvm machine takes at
-  most 16 vCPUs;
+  most 16 vCPUs, and a start or resume of one whose port another program on
+  this machine listens on fails `Capacity`, as a smolvm host's does;
 - `fixed`, which stands for no provider: size classes (`small` 1 vCPU, 1G, 10G;
   `default` 2, 4G, 20G; `large` 4, 8G, 40G), a pause that stops, disk
   checkpoints, machines that stop unasked, and machines that carry the host's

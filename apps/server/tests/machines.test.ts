@@ -2837,7 +2837,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { client, fake, machine, row } = yield* served({
-          runtime: { ports: portsOfHere },
+          runtime: { ports: portsOfHere, runtime: { probesPorts: true } },
         });
 
         yield* client.create("dev", request("dev"));

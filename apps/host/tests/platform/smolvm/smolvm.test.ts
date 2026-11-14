@@ -4033,7 +4033,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a start, a resume or a stop that resumes, of a machine whose port another program holds, fails Capacity naming the port and the cure, with nothing sent to boot it, while a running machine's resize, whose VM holds its port, goes on",
+    "a start, a resume or a stop that resumes, of a machine whose port another program holds, fails Capacity naming the port and the cure, with nothing sent to boot it, while a running machine's resize or start, whose VM holds its port, goes on",
     () =>
       Effect.gen(function* () {
         const model = smolvmModel();
@@ -4049,12 +4049,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const paused = migrated("paused", 10_001);
         const pausedToStop = migrated("parked", 10_002);
         const grown = migrated("grown", 10_003);
+        const again = migrated("again", 10_004);
 
         const states = new Map([
           [stopped, "stopped"],
           [paused, "paused"],
           [pausedToStop, "paused"],
           [grown, "running"],
+          [again, "running"],
         ] as const);
 
         for (const [each, state] of states) {
@@ -4107,6 +4109,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
               machines: onHost,
             },
           ],
+          [
+            again.name,
+            { _tag: "start", machine: again, keep: [], machines: onHost },
+          ],
         ];
 
         const reports = yield* Effect.forEach(steps, ([name, step]) =>
@@ -4148,6 +4154,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             "stopMachine parked needs port 10002 on 100.64.0.10, which another program on this host holds: free it, then ask again",
           ],
           ["done", undefined, undefined],
+          ["done", undefined, undefined],
         ]);
         expect(
           smolvmArgs(model.spawner.calls.slice(before)).filter(
@@ -4156,7 +4163,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         ).toStrictEqual([]);
         expect(
           onHost.map((each) => model.vms.get(nativeName(each))?.state)
-        ).toStrictEqual(["stopped", "paused", "paused", "running"]);
+        ).toStrictEqual(["stopped", "paused", "paused", "running", "running"]);
       })
   );
 });
