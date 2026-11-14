@@ -6,6 +6,7 @@ import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import { Effect, Layer } from "effect";
 
 import { main } from "./clankerbox.ts";
+import { Environment, environmentOf } from "./machines/commands.ts";
 import { Dial } from "./ssh.ts";
 
 NodeRuntime.runMain(
@@ -14,6 +15,7 @@ NodeRuntime.runMain(
       Layer.mergeAll(
         NodeServices.layer,
         NodeHttpClient.layerNodeHttp,
+        Layer.sync(Environment, () => environmentOf()),
         Layer.succeed(Dial, (host, port) =>
           NodeSocket.makeNet({ host, port, openTimeout: "10 seconds" })
         )

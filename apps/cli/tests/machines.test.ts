@@ -762,6 +762,41 @@ describe("machines", () => {
     );
 
     it.effect(
+      "exec --env NAME sends a value this environment sets empty, as set",
+      () =>
+        Effect.gen(function* () {
+          const { code, execs } = yield* execOn(
+            ["--env", "EMPTY", "dev", "--", "true"],
+            undefined,
+            { EMPTY: "" }
+          );
+
+          expect(code).toBe(3);
+          expect(execs).toStrictEqual([
+            { id: "dev", argv: ["true"], env: { EMPTY: "" } },
+          ]);
+        })
+    );
+
+    it.effect(
+      "exec --env with a name that isn't a variable's name is refused, naming it, before any call",
+      () =>
+        Effect.gen(function* () {
+          const { code, stderr, execs } = yield* execOn([
+            "--env",
+            "1BAD=x",
+            "dev",
+            "--",
+            "true",
+          ]);
+
+          expect(code).toBe(1);
+          expect(stderr).toContain('"1BAD"');
+          expect(execs).toStrictEqual([]);
+        })
+    );
+
+    it.effect(
       "exec --env NAME that this environment doesn't set is refused before any call",
       () =>
         Effect.gen(function* () {

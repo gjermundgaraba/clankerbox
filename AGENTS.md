@@ -204,8 +204,9 @@ delete, over the client), `job.ts` (the job, from the environment Amp gives),
 
 ## Where Layers are chosen
 
-Only at an entry: each app's `main.ts` (the CLI's: Node's services, HTTP client
-and TCP dial, and the path that runs it; the server's: the config's server Layer
+Only at an entry: each app's `main.ts` (the CLI's: Node's services, HTTP client,
+TCP dial and `Environment`, the environment `exec --env NAME` reads, an empty
+value kept, and the path that runs it; the server's: the config's server Layer
 and Node's HTTP client, given to `serverLayer`; the host's: the box's facts,
 the config's runtime, from the registry, and Node's HTTP server, given to
 `hostLayer`), the SDK's `node.ts` (the

@@ -29,6 +29,7 @@ import { TestConsole } from "effect/testing";
 
 import { dispatch } from "../src/clankerbox.ts";
 import { ErrorDocument } from "../src/command.ts";
+import { Environment, environmentOf } from "../src/machines/commands.ts";
 import { Dial } from "../src/ssh.ts";
 
 export const serverUrl = "http://cbx.test";
@@ -142,7 +143,8 @@ export const cli = (
             options?.http ?? transport(network),
             ConfigProvider.layer(
               ConfigProvider.fromEnv({ env: { ...options?.env } })
-            )
+            ),
+            Layer.succeed(Environment, environmentOf({ ...options?.env }))
           )
         )
       )

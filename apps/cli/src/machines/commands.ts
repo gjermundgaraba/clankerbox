@@ -6,7 +6,16 @@ import {
   outputLimit,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Machine } from "@gjermundgaraba/clankerbox-sdk";
-import { Config, Console, Effect, Option, Stdio, Stream } from "effect";
+import {
+  Config,
+  ConfigProvider,
+  Console,
+  Context,
+  Effect,
+  Option,
+  Stdio,
+  Stream,
+} from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 
 import {
@@ -274,8 +283,25 @@ export const restore = Command.make(
   )
 );
 
+/**
+ * The environment `exec --env NAME` takes NAME's value from, where a variable set empty is set,
+ * unlike the CLI's own settings, which read an empty one as unset.
+ */
+export class Environment extends Context.Service<
+  Environment,
+  ConfigProvider.ConfigProvider
+>()("@gjermundgaraba/clankerbox/Environment") {}
+
+/** The process's environment as `exec --env NAME` reads it. */
+export const environmentOf = (env?: Record<string, string>) =>
+  ConfigProvider.fromEnv({
+    ...(env === undefined ? {} : { env }),
+    preserveEmptyStrings: true,
+  });
+
 const environment = (texts: readonly string[]) =>
   Effect.gen(function* () {
+    const provider = yield* Environment;
     const pairs: Array<readonly [string, string]> = [];
 
     for (const text of texts) {
@@ -284,9 +310,9 @@ const environment = (texts: readonly string[]) =>
           ...Object.entries((yield* parsePairs("--env", [text])) ?? {})
         );
       } else {
-        const value = yield* Config.option(Config.String(text)).pipe(
-          Effect.orElseSucceed(() => Option.none<string>())
-        );
+        const value = yield* Config.option(Config.String(text))
+          .parse(provider)
+          .pipe(Effect.orElseSucceed(() => Option.none<string>()));
 
         if (Option.isNone(value)) {
           return yield* new Invalid({
