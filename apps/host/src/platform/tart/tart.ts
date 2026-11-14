@@ -24,6 +24,7 @@ import {
 } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 
+import { Box } from "../../box.ts";
 import { lastLines } from "../../guest.ts";
 import {
   atLeast,
@@ -1130,16 +1131,18 @@ export const layer = (
 ): Layer.Layer<
   Runtime,
   HostError | CannotStart,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Box
 > =>
   Layer.effect(
     Runtime,
-    make({
-      binary: settings.binary,
-      publishAddress: config.listen.address,
-      hostId: config.id,
-      stateDir: config.stateDir,
-      uid: process.getuid?.(),
-      tartHome: process.env["TART_HOME"],
-    })
+    Effect.flatMap(Box, (box) =>
+      make({
+        binary: settings.binary,
+        publishAddress: config.listen.address,
+        hostId: config.id,
+        stateDir: config.stateDir,
+        uid: box.uid,
+        tartHome: process.env["TART_HOME"],
+      })
+    )
   );

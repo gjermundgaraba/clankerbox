@@ -35,9 +35,11 @@ import {
 import { TestClock } from "effect/testing";
 import { expect } from "vite-plus/test";
 
+import { Box } from "../../../src/box.ts";
 import { runCommand } from "../../../src/guest.ts";
 import { PortProbe } from "../../../src/machine-ports.ts";
 import * as Operations from "../../../src/operations.ts";
+import { defaultEphemeralPorts } from "../../../src/platform/box.ts";
 import * as Relay from "../../../src/platform/relay.ts";
 import {
   checkpointName,
@@ -52,6 +54,7 @@ import {
   settleScript,
   supported,
 } from "../../../src/platform/tart/tart.ts";
+import * as Tart from "../../../src/platform/tart/tart.ts";
 import type { Settings } from "../../../src/platform/tart/tart.ts";
 import * as Reach from "../../../src/reach.ts";
 import { Runtime } from "../../../src/runtime.ts";
@@ -222,6 +225,41 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       2, 50, 51, 54,
     ]);
   });
+
+  it.effect(
+    "a Tart host takes its user from the box it runs on, and refuses to start where the box tells of none",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+
+        const refused = yield* Effect.flip(
+          Layer.build(
+            Tart.layer(
+              { binary },
+              {
+                id: "mac",
+                stateDir: dir,
+                listen: { address: "127.0.0.1", port: 0 },
+              }
+            )
+          ).pipe(
+            Effect.provideService(
+              Box,
+              Box.of({
+                uid: undefined,
+                ended: () => Effect.succeed(true),
+                ephemeralPorts: defaultEphemeralPorts("darwin"),
+              })
+            )
+          )
+        );
+
+        expect(refused).toMatchObject({
+          _tag: "CannotStart",
+          message: "a Tart host runs on macOS, as a user",
+        });
+      }).pipe(Effect.scoped)
+  );
 
   it.effect(
     "Tart from 2.41.1 to the release last qualified, 2.41.1, is required, and any other is refused at startup",
