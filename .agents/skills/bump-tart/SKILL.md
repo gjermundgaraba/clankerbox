@@ -6,8 +6,9 @@ disable-model-invocation: true
 
 # Bump Tart
 
-clankerbox's Tart host runs the operator's versioned `tart` install, any release
-at or above a floor, and makes its machines from one Cirrus base. A bump
+clankerbox's Tart host runs the operator's versioned `tart` install, a release
+from a floor to the release this skill last qualified, and makes its machines
+from one Cirrus base. A bump
 re-checks the claims below against Tart's source at the target release, not
 just the tests: the host's code embodies each one. Every bump also moves the
 base to Cirrus's newest image, even when Tart itself hasn't moved, and re-checks
@@ -18,9 +19,14 @@ operator's Tart, or commit unless asked.
 ## Source and scope
 
 - **Pinned in this repo:** `minimumVersion` in
-  `apps/host/src/platform/tart/tart.ts` is a floor: `supported` accepts any
-  `major.minor.patch` at or above it, and startup refuses the rest.
-  `requirements.test.ts` fails until README states it. Why the floor is where
+  `apps/host/src/platform/tart/tart.ts` is a floor and `testedVersion` a
+  ceiling, the release this skill last qualified: `supported` accepts a
+  `major.minor.patch` between them, and startup refuses the rest, and a version
+  that names no release, with one message naming the range `qualified` gives. The host reads Tart's VM
+  directories and processes (State, stop and capacity, below), which no Tart
+  release promises to keep, so a newer Tart is refused rather than misread,
+  a machine read `missing` and lost among them. `requirements.test.ts` fails
+  until README's install table and upgrade notes name that range. Why the floor is where
   it is lives in this skill, below, and in the commit that moved it. The tested
   release also appears in README (install table, the `runtime.tart.binary` setting)
   and the tests (`apps/host/tests/platform/tart/tart.test.ts`, whose fake
@@ -447,8 +453,10 @@ times, and the disk's capacity and format)
 
 ## After
 
-- Raise `minimumVersion` only when the code comes to depend on something the
-  target added or fixed: add that reason under "Why the floor is" and in the
+- Set `testedVersion` to the target once every claim holds at it, with its
+  boundary versions in `tart.test.ts`'s `supported` cases and README's
+  install table. Raise `minimumVersion` only when the code comes to depend on
+  something the target added or fixed: add that reason under "Why the floor is" and in the
   commit message, and the boundary
   versions to `tart.test.ts`'s `supported` cases. Otherwise the floor stays,
   and only the tested release moves (README, the fake's version).
@@ -458,8 +466,10 @@ times, and the disk's capacity and format)
 - Set the new base in README (the reference, its macOS and
   Xcode, its disk's format and capacity and the `diskGib` floor they give) and
   "The base" above, and move the claims the VM check changed.
-- Tell the operator how to move: install the new release in its own versioned
-  path, change `tart.binary`, restart the host. Every `start` writes the VM's
+- Tell the operator how to move: first to the clankerbox release whose
+  `testedVersion` is the target, which still starts under the old Tart, then
+  install the new Tart in its own versioned path, change `tart.binary`, restart
+  the host. Every `start` writes the VM's
   job again, and a stopped job launchd still holds whose arguments aren't this
   host's is reloaded, so VMs move as they restart; keep the old install until
   no running VM's job names it. A paused machine resumes under the new Tart,

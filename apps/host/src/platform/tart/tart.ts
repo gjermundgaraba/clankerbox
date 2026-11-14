@@ -202,7 +202,31 @@ const sizeFlags = ({ cpu, ramMib, diskGib }: Sizing): readonly string[] => [
 /** The oldest Tart a mac host starts under; the `bump-tart` skill owns it. */
 export const minimumVersion = "2.41.1";
 
-export const supported = atLeast(minimumVersion);
+/**
+ * The newest Tart a mac host starts under, the release the `bump-tart` skill last qualified. The
+ * host reads VMs from Tart's own directories and processes, which no release promises to keep, so a
+ * newer Tart is refused rather than misread.
+ */
+export const testedVersion = "2.41.1";
+
+const release = /^\d+\.\d+\.\d+$/u;
+
+const notAfter = (reported: string): boolean =>
+  reported.localeCompare(testedVersion, "en", { numeric: true }) <= 0;
+
+export const supported = (reported: string): boolean =>
+  atLeast(minimumVersion)(reported) && notAfter(reported);
+
+const releases = (floor: string, tested: string): string =>
+  floor === tested
+    ? `Tart ${floor} alone, the release`
+    : `Tart ${floor} to ${tested}, the releases`;
+
+/** The releases a mac host starts under, as README names them. */
+export const qualified = releases(minimumVersion, testedVersion);
+
+const refusal = (binary: string, reported: string): string =>
+  `${binary} reports version "${reported}", ${release.test(reported) ? "" : "which names no Tart release, "}and this host runs ${qualified} it was qualified on, as it reads Tart's own VM directories and processes: install Tart ${testedVersion} and set runtime.tart.binary to its tart executable`;
 
 const ended = (job: Launchd.Job | undefined, target: string): string => {
   if (job === undefined) {
@@ -275,7 +299,7 @@ export const make = (
 
     if (!supported(reported)) {
       return yield* new CannotStart({
-        message: `${settings.binary} reports version "${reported}", and this host needs Tart ${minimumVersion} or later`,
+        message: refusal(settings.binary, reported),
       });
     }
 

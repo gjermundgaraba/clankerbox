@@ -152,12 +152,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   });
 
   it.effect(
-    "Tart 2.41.1 or later is required, and an older one is refused at startup",
+    "Tart from 2.41.1 to the release last qualified, 2.41.1, is required, and any other is refused at startup",
     () =>
       Effect.gen(function* () {
+        expect(["2.41.1"].map(supported)).toStrictEqual([true]);
         expect(
-          ["2.41.1", "2.41.2", "2.42.0", "2.100.0", "10.0.0"].map(supported)
-        ).toStrictEqual([true, true, true, true, true]);
+          ["2.41.2", "2.42.0", "2.100.0", "10.0.0"].map(supported)
+        ).toStrictEqual([false, false, false, false]);
         expect(
           ["2.41.0", "2.40.1", "2.39.9", "2.9.0", "1.99.0"].map(supported)
         ).toStrictEqual([false, false, false, false, false]);
@@ -167,19 +168,44 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const mac = scriptedMac(path.join(yield* scratch, "state"));
 
-        const old = scripted((call) =>
-          call.args[0] === "--version" ? { stdout: "2.38.0\n" } : undefined
+        const refusals = yield* Effect.forEach(
+          ["2.38.0", "2.42.0", "dev", "v2.41.1", "2.41.1-rc1"],
+          (version) =>
+            Effect.scoped(make(mac.settings)).pipe(
+              Effect.flip,
+              Effect.provide(
+                Layer.merge(
+                  NodeServices.layer,
+                  scripted((call) =>
+                    call.args[0] === "--version"
+                      ? { stdout: `${version}\n` }
+                      : undefined
+                  ).layer
+                )
+              ),
+              Effect.map((error) => [error._tag, error.message])
+            )
         );
 
-        const error = yield* Effect.scoped(make(mac.settings)).pipe(
-          Effect.flip,
-          Effect.provide(Layer.merge(NodeServices.layer, old.layer))
-        );
+        const runs =
+          "and this host runs Tart 2.41.1 alone, the release it was qualified on, as it reads Tart's own VM directories and processes: install Tart 2.41.1 and set runtime.tart.binary to its tart executable";
 
-        expect(error._tag).toBe("CannotStart");
-        expect(error.message).toBe(
-          `${binary} reports version "2.38.0", and this host needs Tart 2.41.1 or later`
-        );
+        expect(refusals).toStrictEqual([
+          ["CannotStart", `${binary} reports version "2.38.0", ${runs}`],
+          ["CannotStart", `${binary} reports version "2.42.0", ${runs}`],
+          [
+            "CannotStart",
+            `${binary} reports version "dev", which names no Tart release, ${runs}`,
+          ],
+          [
+            "CannotStart",
+            `${binary} reports version "v2.41.1", which names no Tart release, ${runs}`,
+          ],
+          [
+            "CannotStart",
+            `${binary} reports version "2.41.1-rc1", which names no Tart release, ${runs}`,
+          ],
+        ]);
       })
   );
 
