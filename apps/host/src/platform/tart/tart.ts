@@ -42,6 +42,7 @@ import type {
   MachineState,
   Observed,
   Sizes,
+  StateError,
   Target,
 } from "../../runtime.ts";
 import type { HostSettings } from "../../settings.ts";
@@ -712,18 +713,18 @@ export const make = (
         yield* expect(ran, `tart set ${vm}`);
       });
 
+    const clone = (from: string, into: string) =>
+      Effect.asVoid(call(["clone", from, into], `clone ${from} ${into}`));
+
     const cloneInto = (
-      from: string,
+      copy: (into: Handle) => Effect.Effect<void, Internal | StateError>,
       machine: Identity & Sizes,
       sizes: readonly string[]
     ) => {
       const made = { ...machine, handle: vmOf(machine) };
 
       return Effect.gen(function* () {
-        yield* call(
-          ["clone", from, made.handle],
-          `clone ${from} ${made.handle}`
-        );
+        yield* copy(made.handle);
         yield* set(made, machine, ["--random-serial", ...sizes]);
         yield* boot(made).pipe(
           Effect.catchTag("Capacity", (refused) =>
@@ -749,6 +750,17 @@ export const make = (
                 machine: machine.name,
                 state: observed,
               })
+        );
+      });
+
+    // tart clone copies a running source, reading its state only for its MAC address:
+    // https://github.com/openai/tart/blob/2.41.1/Sources/tart/Commands/Clone.swift#L108
+    const copied = (what: string, source: Target, into: string) =>
+      Effect.gen(function* () {
+        yield* copyable(what, source);
+        yield* clone(source.handle, into);
+        yield* copyable(what, source).pipe(
+          Effect.tapError(() => deleteVm(into))
         );
       });
 
@@ -827,14 +839,18 @@ export const make = (
     const made = (machine: Identity & Sizes, origin: Origin) => {
       switch (origin._tag) {
         case "image": {
-          return cloneInto(origin.image, machine, sizeFlags(machine));
+          return cloneInto(
+            (into) => clone(origin.image, into),
+            machine,
+            sizeFlags(machine)
+          );
         }
 
         case "checkpoint": {
           const { checkpoint } = origin;
 
           return cloneInto(
-            checkpoint.handle,
+            (into) => clone(checkpoint.handle, into),
             machine,
             sizeFlags(changes(checkpoint, machine))
           );
@@ -843,13 +859,10 @@ export const make = (
         case "machine": {
           const source = origin.machine;
 
-          return Effect.andThen(
-            copyable("fork", source),
-            cloneInto(
-              source.handle,
-              machine,
-              sizeFlags(changes(source, machine))
-            )
+          return cloneInto(
+            (into) => copied("fork", source, into),
+            machine,
+            sizeFlags(changes(source, machine))
           );
         }
       }
@@ -994,15 +1007,7 @@ export const make = (
       capture: Effect.fn("Tart.capture")((machine, checkpoint) => {
         const handle = checkpointVm(checkpoint);
 
-        return copyable("checkpoint", machine).pipe(
-          Effect.andThen(
-            call(
-              ["clone", machine.handle, handle],
-              `clone ${machine.handle} ${handle}`
-            )
-          ),
-          Effect.as(handle)
-        );
+        return Effect.as(copied("checkpoint", machine, handle), handle);
       }),
       sizable: (machine, _from, to) => {
         if (to.cpu > maximumFlag || diskGb(to.diskGib) > maximumFlag) {

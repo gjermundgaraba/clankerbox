@@ -2082,6 +2082,59 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a hand run that starts while a capture or fork clones its source fails the copy WrongState, and the copy is deleted",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const [machine, copy] = [machineOn("dev"), machineOn("copy")];
+        const vm = vmOf(machine);
+
+        yield* runtime.make(machine, fromImage("base"), unbound);
+        yield* runtime.stop(machine);
+
+        const raced = <A>(copying: Effect.Effect<A, HostError>) =>
+          Effect.gen(function* () {
+            mac.hooks.clone = (from) => {
+              if (from === vm) {
+                mac.runByHand(vm);
+              }
+
+              return undefined;
+            };
+
+            const refused = failure(yield* Effect.flip(copying));
+
+            mac.hooks.clone = () => undefined;
+            yield* runtime.stop(machine);
+
+            return refused;
+          });
+
+        const refused = [
+          yield* raced(runtime.capture(machine, snapOf())),
+          yield* raced(runtime.make(copy, fromMachine(machine), unbound)),
+        ];
+
+        expect({
+          refused,
+          left: [...mac.vms.keys()].toSorted(),
+        }).toStrictEqual({
+          refused: [
+            [
+              "WrongState",
+              "a Tart checkpoint copies a stopped machine's disk, and dev is running: stop it first",
+            ],
+            [
+              "WrongState",
+              "a Tart fork copies a stopped machine's disk, and dev is running: stop it first",
+            ],
+          ],
+          left: [vm],
+        });
+      })
+  );
+
+  it.effect(
     "a lock read that fails, or answers short, fails a read, a start, a stop, a pause, a capture and a fork as Internal, and signals or copies nothing",
     () =>
       Effect.gen(function* () {
