@@ -1678,7 +1678,7 @@ export const layer = (
       const fs = yield* FileSystem.FileSystem;
       const box = yield* Box;
 
-      yield* aloneOnBox(lock, config.stateDir);
+      yield* aloneOnBox(lock);
 
       const bootId = yield* files(
         `couldn't read the host's boot ID from ${bootIdFile}`,
