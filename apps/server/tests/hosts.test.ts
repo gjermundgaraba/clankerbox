@@ -250,10 +250,7 @@ layer(NodeServices.layer, { excludeTestServices: true })(
             );
           }).pipe(Effect.provide(NodeHttpClient.layerNodeHttp));
 
-          expect(refused).toMatchObject({
-            _tag: "Unreachable",
-            incompatible: true,
-          });
+          expect(refused._tag).toBe("Unsent");
           expect(refused.message).toContain("0.39.4");
           expect(asked).toStrictEqual(["/host/readHost"]);
         })
@@ -288,11 +285,7 @@ layer(NodeServices.layer, { excludeTestServices: true })(
           }).pipe(Effect.provide(NodeHttpClient.layerNodeHttp));
 
           expect(known).toStrictEqual(["fake 1", undefined]);
-          expect(refused).toMatchObject({
-            _tag: "Unreachable",
-            incompatible: true,
-            unsent: true,
-          });
+          expect(refused._tag).toBe("Unsent");
         })
     );
 

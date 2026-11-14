@@ -85,7 +85,11 @@ const looked = <R extends { readonly state: string }>(
       }
     }
   }).pipe(
-    Effect.catchTag("Unreachable", () => Effect.succeed("rest" as const))
+    Effect.catchTags({
+      Unanswered: () => Effect.succeed("rest" as const),
+      Incompatible: () => Effect.succeed("rest" as const),
+      Unsent: () => Effect.succeed("rest" as const),
+    })
   );
 
 const polledFor = <R extends { readonly state: string }>(

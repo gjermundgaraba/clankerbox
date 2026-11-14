@@ -8,6 +8,7 @@ import { Cause, DateTime, Duration, Effect, Option } from "effect";
 
 import { applied } from "./chart.ts";
 import { checkpointChart, phaseOf } from "./checkpoint-chart.ts";
+import { unread } from "./hosts.ts";
 import type { Interface as Hosts } from "./hosts.ts";
 import { machineChart, stageOf } from "./machine-chart.ts";
 import { identityOf, mayHoldVm, refOf } from "./steps.ts";
@@ -30,11 +31,11 @@ export const capacity = (
 
     const unreportedBy = (
       host: string,
-      problem: { readonly message: string; readonly incompatible?: true }
+      problem: { readonly _tag: string; readonly message: string }
     ) => {
       unreported.push({
         host,
-        state: problem.incompatible === true ? "incompatible" : "unreachable",
+        state: unread(problem),
         problem: problem.message,
       });
     };

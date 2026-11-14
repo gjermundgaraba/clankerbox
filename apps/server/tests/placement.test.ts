@@ -7,7 +7,7 @@ import { traits as smolCloud } from "@gjermundgaraba/clankerbox-host/testing/smo
 import { Capacity, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Option, Result } from "effect";
 
-import { Unreachable } from "../src/hosts.ts";
+import { Incompatible, Unanswered } from "../src/hosts.ts";
 import type { Reached } from "../src/hosts.ts";
 import { holding, placing } from "../src/placement.ts";
 import type { Ask } from "../src/placement.ts";
@@ -80,16 +80,15 @@ const draining = (id: string): Reached => {
 const silent = (id: string): Reached => ({
   member: { id, url: `http://${id}`, draining: false },
   info: undefined,
-  problem: new Unreachable({ host: id, message: "connection refused" }),
+  problem: new Unanswered({ host: id, message: "connection refused" }),
 });
 
 const incompatible = (id: string): Reached => ({
   member: { id, url: `http://${id}`, draining: false },
   info: undefined,
-  problem: new Unreachable({
+  problem: new Incompatible({
     host: id,
     message: `host ${id} runs clankerbox 0.39.4`,
-    incompatible: true,
   }),
 });
 

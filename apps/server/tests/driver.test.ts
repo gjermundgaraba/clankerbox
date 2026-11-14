@@ -5,7 +5,7 @@ import { TestClock } from "effect/testing";
 
 import { driver } from "../src/driver.ts";
 import type { Heard, Resource } from "../src/driver.ts";
-import { Unreachable } from "../src/hosts.ts";
+import { Unanswered } from "../src/hosts.ts";
 import type { Polled } from "../src/operations.ts";
 import type { Advanced } from "../src/store.ts";
 import { flight } from "./chart-rows.ts";
@@ -434,7 +434,7 @@ describe("a loop", () => {
         const { counts, hooks, drive } = yield* harness({ state: "reading" });
 
         hooks.looking = () =>
-          Effect.fail(new Unreachable({ host: "linux", message: "down" }));
+          Effect.fail(new Unanswered({ host: "linux", message: "down" }));
 
         yield* drive("dev");
         yield* settled;

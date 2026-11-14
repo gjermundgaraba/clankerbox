@@ -56,7 +56,7 @@ const sifted = <K, A>(
 
     if (Result.isFailure(known)) {
       passed(member.id, known.failure);
-    } else if (problem?.incompatible === true) {
+    } else if (problem?._tag === "Incompatible") {
       passed(member.id, missed(`can't be used: ${problem.message}`));
     } else if (info === undefined) {
       noReply = true;

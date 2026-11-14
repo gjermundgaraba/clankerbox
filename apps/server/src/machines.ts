@@ -722,11 +722,14 @@ export const make = (
               : Duration.sum(Duration.seconds(timeoutSeconds), readTimeout)
           )
           .pipe(
-            Effect.catchTag(
-              "Unreachable",
-              ({ message, unsent }) =>
-                new Unavailable({ message, readOnly: unsent === true })
-            )
+            Effect.catchTags({
+              Unsent: ({ message }) =>
+                new Unavailable({ message, readOnly: true }),
+              Unanswered: ({ message }) =>
+                new Unavailable({ message, readOnly: false }),
+              Incompatible: ({ message }) =>
+                new Unavailable({ message, readOnly: false }),
+            })
           );
       });
 

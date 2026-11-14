@@ -25,17 +25,28 @@ export interface Member {
   readonly draining: boolean;
 }
 
-/**
- * A host gave no usable answer. Nothing can tell what became of a mutation it was sent, unless it
- * was `unsent`, refused before it left. `incompatible` is a host that answers, but of another
- * release than the control plane's, or in another contract, so nothing it says can be used.
- */
-export class Unreachable extends Data.TaggedError("Unreachable")<{
+interface Failed {
   readonly host: string;
   readonly message: string;
-  readonly incompatible?: true;
-  readonly unsent?: true;
-}> {}
+}
+
+/** A host gave no usable answer, so nothing can tell what became of a mutation it was sent. */
+export class Unanswered extends Data.TaggedError("Unanswered")<Failed> {}
+
+/**
+ * A host answers, but of another release than the control plane's or in another contract, so
+ * nothing it says can be used, and nothing can tell what became of a mutation it was sent.
+ */
+export class Incompatible extends Data.TaggedError("Incompatible")<Failed> {}
+
+/**
+ * A call refused before it left: its host isn't in the config, or the last read found it
+ * incompatible, and only a read, which may find it upgraded, reaches it.
+ */
+export class Unsent extends Data.TaggedError("Unsent")<Failed> {}
+
+/** Every way a call to a host or a read of it gets no answer it can use. */
+export type Unreachable = Unanswered | Incompatible | Unsent;
 
 const hostApi = (member: Member) =>
   ActionHttp.client(HostHttp, {
@@ -53,13 +64,18 @@ export interface Reached {
   readonly problem: Unreachable | undefined;
 }
 
+/** What an operator is shown of a host whose read or call failed with `problem`. */
+export const unread = (problem: {
+  readonly _tag: string;
+}): "incompatible" | "unreachable" =>
+  problem._tag === "Incompatible" ? "incompatible" : "unreachable";
+
 export interface Interface {
   readonly members: readonly Member[];
   /**
    * One call to a host, bounded by `readTimeout` unless `within` says otherwise, as a command runs
    * as long as its request does. It fails with an error its action declares, as the host answered
-   * it, and with `Unreachable` for every way it got no answer. A host whose last read found it
-   * `incompatible` isn't called: only a read, which may find it upgraded, reaches it.
+   * it, and with `Unreachable` for every way it got no answer: `Unsent` for one that never left.
    */
   readonly call: <A, E>(
     host: string,
@@ -85,7 +101,7 @@ export const listed = ({ member, info, problem }: Reached): Host =>
   info === undefined
     ? {
         id: member.id,
-        state: problem?.incompatible === true ? "incompatible" : "unreachable",
+        state: problem === undefined ? "unreachable" : unread(problem),
         bases: [],
         ...(problem === undefined ? {} : { problem: problem.message }),
       }
@@ -127,7 +143,7 @@ const bounded = <A, E>(
         duration: within,
         orElse: () =>
           Effect.fail(
-            new Unreachable({
+            new Unanswered({
               host,
               message: `host ${host} didn't answer in time`,
             })
@@ -146,7 +162,7 @@ export const make = (
     );
 
     const infos = new Map<string, HostInfo>();
-    const incompatibles = new Map<string, Unreachable>();
+    const incompatibles = new Map<string, Incompatible>();
     const unanswered = new Set<string>();
 
     const answered = (host: string) =>
@@ -172,48 +188,48 @@ export const make = (
       run: (api: HostApi) => Effect.Effect<A, E>,
       within: Duration.Duration = readTimeout
     ): Effect.Effect<A, Extract<E, HostError> | Unreachable> =>
-      Effect.suspend(() => {
-        const api = apis.get(host);
+      Effect.suspend(
+        (): Effect.Effect<A, Extract<E, HostError> | Unreachable> => {
+          const api = apis.get(host);
 
-        return api === undefined
-          ? Effect.fail(
-              new Unreachable({
+          return api === undefined
+            ? Effect.fail(
+                new Unsent({
+                  host,
+                  message: `host ${host} isn't in the control plane's config`,
+                })
+              )
+            : bounded(
                 host,
-                message: `host ${host} isn't in the control plane's config`,
-                unsent: true,
-              })
-            )
-          : bounded(
-              host,
-              run(api).pipe(
-                Effect.catchDefect((defect) =>
-                  HttpClientError.isHttpClientError(defect)
-                    ? Effect.fail(defect)
-                    : Effect.die(defect)
+                run(api).pipe(
+                  Effect.catchDefect((defect) =>
+                    HttpClientError.isHttpClientError(defect)
+                      ? Effect.fail(defect)
+                      : Effect.die(defect)
+                  ),
+                  Effect.catchIf(
+                    (
+                      error: E | HttpClientError.HttpClientError
+                    ): error is Extract<E, HostError> => isHostError(error),
+                    Effect.fail,
+                    (error) =>
+                      Effect.fail(
+                        Schema.isSchemaError(error)
+                          ? new Incompatible({
+                              host,
+                              message: `host ${host} answers in another contract than this control plane's: ${error.message.replaceAll(/\s*\n\s*/gu, " ")}`,
+                            })
+                          : new Unanswered({
+                              host,
+                              message: `host ${host}: ${describe(error)}`,
+                            })
+                      )
+                  )
                 ),
-                Effect.catchIf(
-                  (
-                    error: E | HttpClientError.HttpClientError
-                  ): error is Extract<E, HostError> => isHostError(error),
-                  Effect.fail,
-                  (error) =>
-                    Effect.fail(
-                      Schema.isSchemaError(error)
-                        ? new Unreachable({
-                            host,
-                            message: `host ${host} answers in another contract than this control plane's: ${error.message.replaceAll(/\s*\n\s*/gu, " ")}`,
-                            incompatible: true,
-                          })
-                        : new Unreachable({
-                            host,
-                            message: `host ${host}: ${describe(error)}`,
-                          })
-                    )
-                )
-              ),
-              within
-            );
-      });
+                within
+              );
+        }
+      );
 
     const call: Interface["call"] = (host, run, within) =>
       Effect.suspend(() => {
@@ -221,14 +237,7 @@ export const make = (
 
         return refused === undefined
           ? reaching(host, run, within)
-          : Effect.fail(
-              new Unreachable({
-                host,
-                message: refused.message,
-                incompatible: true,
-                unsent: true,
-              })
-            );
+          : Effect.fail(new Unsent({ host, message: refused.message }));
       });
 
     const read = (host: string) =>
@@ -236,25 +245,23 @@ export const make = (
         const info = yield* reaching(host, (api) => api.readHost({})).pipe(
           Effect.catchTag("Invalid", ({ message }) =>
             Effect.fail(
-              new Unreachable({
+              new Incompatible({
                 host,
                 message: `host ${host} refused the read: ${message}`,
-                incompatible: true,
               })
             )
           )
         );
 
         if (release(info.version) !== release(version)) {
-          return yield* new Unreachable({
+          return yield* new Incompatible({
             host,
             message: `host ${host} runs clankerbox ${info.version}, and this control plane ${version}; their major.minor must match, so upgrade them together`,
-            incompatible: true,
           });
         }
 
         if (info.id !== host) {
-          return yield* new Unreachable({
+          return yield* new Unanswered({
             host,
             message: `host ${host} calls itself ${info.id}; its entry in the config must use that ID`,
           });
@@ -270,7 +277,7 @@ export const make = (
           return answered(host);
         }),
         Effect.tapError((error) => {
-          if (error.incompatible === true) {
+          if (error._tag === "Incompatible") {
             incompatibles.set(host, error);
             infos.delete(host);
           }
