@@ -48,6 +48,7 @@ import {
   apiKey,
   bounded,
   sentUntilHeld,
+  stepWithin,
   triesAfterLoss,
   untilRest,
 } from "../provider-http.ts";
@@ -653,7 +654,7 @@ export const make = (
       prepares: "always",
       admission: undefined,
       files: undefined,
-      owned: { machines: markedMachines },
+      owned: { machines: markedMachines, deleteWithin: stepWithin },
       reach: {
         _tag: "relayed",
         address: host.listen.address,

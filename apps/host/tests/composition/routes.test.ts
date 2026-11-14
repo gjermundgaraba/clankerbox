@@ -139,7 +139,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           pin: "fake 1",
           joins: false,
           builds: false,
-          sweeps: false,
         });
       })
   );

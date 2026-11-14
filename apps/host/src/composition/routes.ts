@@ -6,6 +6,7 @@ import { Effect, Layer, Option } from "effect";
 
 import { BuildStore } from "../builds.ts";
 import { Operations } from "../operations.ts";
+import { sweepsWithin } from "../recheck.ts";
 import { Runtime, stateIn } from "../runtime.ts";
 import type { HostSettings } from "../settings.ts";
 import { Tailnet } from "../tailnet.ts";
@@ -34,7 +35,9 @@ const app = (config: Served) =>
             ...(runtime.pin === undefined ? {} : { pin: runtime.pin }),
             joins: Option.isSome(tailnet),
             builds: Option.isSome(builds),
-            sweeps: runtime.owned !== undefined,
+            ...(runtime.owned === undefined
+              ? {}
+              : { sweeps: sweepsWithin(runtime.owned) }),
           }),
         readMachines: ({ machines }) =>
           Effect.map(operations.read(machines), (observed) =>

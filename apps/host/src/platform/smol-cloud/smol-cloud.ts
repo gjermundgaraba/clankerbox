@@ -43,6 +43,7 @@ import {
   apiKey,
   bounded,
   sentUntilHeld,
+  stepWithin,
   triesAfterLoss,
   untilRest,
 } from "../provider-http.ts";
@@ -862,6 +863,7 @@ export const make = (
           marked,
           internal("the machines this host made")
         ),
+        deleteWithin: stepWithin,
       },
       sizable: () => Effect.void,
       startup: Effect.void,

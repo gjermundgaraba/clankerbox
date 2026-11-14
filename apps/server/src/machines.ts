@@ -889,7 +889,7 @@ export const make = (
         store.findMachine(name)
       );
 
-    const tick = recheckHosts(store, hosts, settings.failedRowsLast);
+    const { tick } = yield* recheckHosts(store, hosts, settings.failedRowsLast);
 
     yield* tick;
 

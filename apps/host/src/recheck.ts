@@ -5,11 +5,11 @@ import type {
   Retired,
 } from "@clankerbox/host-contract";
 import type { Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Semaphore } from "effect";
+import { Duration, Effect, Semaphore } from "effect";
 
 import { Reaches } from "./reach.ts";
-import { inTime, Runtime, targetOf } from "./runtime.ts";
-import type { Handle, MarkedMachine } from "./runtime.ts";
+import { inTime, Runtime, stateReadWait, targetOf } from "./runtime.ts";
+import type { Handle, MarkedMachine, Owned } from "./runtime.ts";
 
 /** What the recheck's adopt and sweep read of the steps the host runs, which they never change. */
 export interface Steps {
@@ -28,6 +28,10 @@ export interface Interface {
   readonly sweep: (retired: Retired) => Effect.Effect<Retired, Internal>;
 }
 
+/** The longest a sweep takes to answer, once it runs: its list, then its deletes, which run at once. */
+export const sweepsWithin = (owned: Owned): Duration.Duration =>
+  Duration.sum(stateReadWait, owned.deleteWithin);
+
 const heldAs = (machine: Ref, handle: Handle | undefined): string => {
   if (machine.handle !== undefined) {
     return `reached by its row's handle ${machine.handle}`;
@@ -43,7 +47,7 @@ const heldAs = (machine: Ref, handle: Handle | undefined): string => {
  * holds: it resolves each machine's handle, reopens the relay of each that no step since has moved
  * on, and answers each one's handle and endpoint, naming those whose search failed. A sweep deletes
  * each machine the runtime marked whose instance the control plane retired and no step the host holds
- * names, keeping every checkpoint it holds, and answers the retired instances it left.
+ * names, all at once, keeping every checkpoint it holds, and answers the retired instances it left.
  */
 export const make = (hostId: string, steps: Steps) =>
   Effect.gen(function* () {
@@ -189,7 +193,8 @@ export const make = (hostId: string, steps: Steps) =>
                 ? Effect.succeed([machine.instance])
                 : Effect.map(swept(machine), (deleted) =>
                     deleted ? [] : [machine.instance]
-                  )
+                  ),
+            { concurrency: "unbounded" }
           );
 
           return { machines: left.flat() };

@@ -23,7 +23,6 @@ const info = (id: string, bases: readonly string[]): HostInfo => ({
   boot: "boot",
   joins: false,
   builds: false,
-  sweeps: false,
 });
 
 const up = (id: string, bases: readonly string[] = ["ubuntu"]): Reached => ({

@@ -88,11 +88,12 @@ the whole CLI span domains on purpose.
 - `copies.ts`: a copy's spec, and why its source refuses it.
 - `fleet.ts`: capacity, and what a recheck does beyond each loop: tells a
   restarted host its machines, again until it finds each, and stores the handle
-  and endpoint it answers in each row; then sends each host that sweeps the
-  instances the store retired there, for its sweep, noting when a sweep first
-  found each gone and keeping each it answers it left, and notes those of a
-  host that doesn't sweep gone at once; and ends old failures and forgets
-  retired instances a day after.
+  and endpoint it answers in each row; then starts, on each host that sweeps
+  and whose last sweep has ended, a sweep of the instances the store retired
+  there, which runs beside the rechecks after it for as long as the host says
+  one takes, noting when a sweep first found each gone and keeping each it
+  answers it left, and notes those of a host that doesn't sweep gone at once;
+  and ends old failures and forgets retired instances a day after.
 - `machine-view.ts`: what a client reads of a machine, and `waiting`, which a
   read tells.
 - `operations.ts`: plain functions of a step on its host. `poll` sends it when
@@ -334,7 +335,8 @@ the run.
   no step runs a hook in a frozen guest.
 - **A sweep deletes only what its store retired.** A runtime with the `owned`
   facet lists the machines that carry the host's mark at its provider, and
-  nothing else, and its host's `HostInfo` says it `sweeps`. A store retires a
+  nothing else, and its host's `HostInfo` says it `sweeps`, and how long a
+  sweep there takes: its list and the delete the facet bounds. A store retires a
   machine's instance on a host in the write that ends its row's hold on it
   there: the row goes, moves to another host under a new instance, or rests
   undone. The record outlives the row, and lasts a day of the control
@@ -342,8 +344,8 @@ the run.
   it, while one no sweep has reached, or the last sweep left, stays; no row takes
   the instance again. Each recheck, after the adopts, sends each host that
   sweeps the instances retired there, and the host deletes those it lists that
-  no step it holds names, a machine alone, leaving every checkpoint it holds,
-  and answers each it left: one a step names, and one whose delete failed. A
+  no step it holds names, all at once, a machine alone, leaving every
+  checkpoint it holds, and answers each it left: one a step names, and one whose delete failed. A
   host that doesn't sweep is sent none, and its records are noted gone at once,
   as no sweep there could find one. A
   checkpoint's instance is never retired: every runtime that marks its machines

@@ -225,8 +225,8 @@ export type Report = typeof Report.Type;
 /**
  * What the control plane needs to know of a host. `traits` are its runtime's, which the control
  * plane stamps on each row it makes there, `images` is the image each of `bases` names there, `boot` is new each time its process starts, `builds` tells a host that copies template
- * builds through the build store, and `sweeps` one whose runtime marks the machines it makes, so a
- * sweep can find each the store retired.
+ * builds through the build store, and `sweeps`, on a host whose runtime marks the machines it makes
+ * so a sweep can find each the store retired, is the longest its sweep takes to answer.
  */
 export const HostInfo = Schema.Struct({
   id: Schema.String,
@@ -239,7 +239,7 @@ export const HostInfo = Schema.Struct({
   pin: Schema.optionalKey(Schema.String),
   joins: Schema.Boolean,
   builds: Schema.Boolean,
-  sweeps: Schema.Boolean,
+  sweeps: Schema.optionalKey(Schema.DurationFromMillis),
 }).annotate({ identifier: "HostInfo" });
 
 export type HostInfo = typeof HostInfo.Type;
@@ -328,7 +328,7 @@ export const HostHttp = ActionHttp.make(
       ...write,
       error: [Invalid, Internal] as const,
       description:
-        "Delete each machine carrying this host's mark at its provider whose instance is retired and named by no step the host holds, and answer the retired instances it left there: each a step names, or whose delete failed. A machine goes alone, and every checkpoint it holds stays, since a row may still want one. Only a host whose `sweeps` is true is sent one.",
+        "Delete each machine carrying this host's mark at its provider whose instance is retired and named by no step the host holds, and answer the retired instances it left there: each a step names, or whose delete failed. A machine goes alone, and every checkpoint it holds stays, since a row may still want one. Only a host that says its `sweeps` is sent one, and it answers within it.",
       input: Retired,
       success: Retired,
     }),

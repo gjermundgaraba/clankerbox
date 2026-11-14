@@ -395,7 +395,6 @@ export const stubInfo = {
   pin: "fake 1",
   joins: false,
   builds: false,
-  sweeps: false,
 };
 
 /**

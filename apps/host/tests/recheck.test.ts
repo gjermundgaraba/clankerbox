@@ -24,7 +24,7 @@ import {
   portOf,
   locked,
 } from "./operations-kit.ts";
-import { accepts, pause } from "./support.ts";
+import { accepts, eventually, pause } from "./support.ts";
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
@@ -45,6 +45,36 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(failed).toStrictEqual(retired);
         expect(then).toStrictEqual({ machines: [] });
         expect(host.fake.machines.has("dev")).toBe(false);
+      })
+  );
+
+  it.effect(
+    "a sweep deletes its retired machines at once, so one delete held up holds up no other",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner({ as: "fixed" });
+
+        keptByRuntime(host, "one");
+        keptByRuntime(host, "two");
+
+        const held = host.fake.holdNext("delete", { runsOn: true });
+
+        const sweep = yield* Effect.forkChild(
+          host.operations.sweep({ machines: ["one-instance", "two-instance"] })
+        );
+
+        yield* held.entered;
+
+        const whileHeld = yield* eventually(
+          Effect.sync(() => host.fake.machines.size),
+          (left) => left === 1
+        );
+
+        yield* held.release;
+
+        expect(yield* Fiber.join(sweep)).toStrictEqual({ machines: [] });
+        expect(whileHeld).toBe(1);
+        expect(host.fake.machines.size).toBe(0);
       })
   );
 

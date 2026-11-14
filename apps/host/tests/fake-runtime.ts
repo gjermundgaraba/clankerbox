@@ -27,7 +27,15 @@ import {
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Sizing, Unsizable } from "@gjermundgaraba/clankerbox-sdk";
-import { Deferred, Effect, Layer, Schema, Scope, Stream } from "effect";
+import {
+  Deferred,
+  Duration,
+  Effect,
+  Layer,
+  Schema,
+  Scope,
+  Stream,
+} from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { traits as smolvm } from "../src/platform/smolvm/traits.ts";
@@ -962,6 +970,7 @@ export const fakeRuntime = (options: FakeOptions) => {
                   }))
                   .toArray();
               }),
+              deleteWithin: Duration.minutes(1),
             }
           : undefined,
         files:

@@ -230,6 +230,8 @@ export interface MarkedMachine {
  */
 export interface Owned {
   readonly machines: Effect.Effect<readonly MarkedMachine[], RuntimeError>;
+  /** How long the adapter lets a delete of a machine it marked take, which a sweep waits out. */
+  readonly deleteWithin: Duration.Duration;
 }
 
 /**
