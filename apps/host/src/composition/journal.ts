@@ -15,11 +15,11 @@ const answer = (response: HttpServerResponse.HttpServerResponse) =>
 
 /**
  * What a host's journal holds of the requests it serves, in place of Effect's response logger, as
- * the control plane's: a request that answers `Internal`, with that answer, or fails as no declared
- * error does, with its cause, logs at error. A request cut short, by its caller or by the host's
- * stop, logs nothing: Effect answers it with a response it adds to the cause, which is stripped.
- * Any other answer, a refusal included, is its caller's, and logs at debug, which
- * `--log-level debug` shows.
+ * the control plane's: a request whose answer is a 500, `Internal` or one Effect gives a failure no
+ * action declares, logs at error, with that answer or that cause. A request cut short, by its
+ * caller or by the host's stop, logs nothing: Effect answers it with a response it adds to the
+ * cause, which is stripped. Any other answer, a refusal included, is its caller's, and logs at
+ * debug, which `--log-level debug` shows.
  */
 export const journal = HttpMiddleware.make(
   <E, R>(
@@ -36,25 +36,36 @@ export const journal = HttpMiddleware.make(
           "http.url": request.url,
         };
 
-        if (Exit.isFailure(exit)) {
-          const [, cause] = HttpServerError.causeResponseStripped(exit.cause);
+        if (Exit.isSuccess(exit)) {
+          const status = { ...fields, "http.status": exit.value.status };
 
-          return Option.isNone(cause) || Cause.hasInterruptsOnly(cause.value)
-            ? Effect.void
+          return exit.value.status === internalStatus
+            ? Effect.annotateLogs(
+                Effect.logError(
+                  "a request answered Internal",
+                  ...answer(exit.value)
+                ),
+                status
+              )
             : Effect.annotateLogs(
-                Effect.logError("a request failed", cause.value),
-                fields
+                Effect.logDebug("Sent HTTP response"),
+                status
               );
         }
 
-        const status = { ...fields, "http.status": exit.value.status };
+        const [response, cause] = HttpServerError.causeResponseStripped(
+          exit.cause
+        );
 
-        return exit.value.status === internalStatus
+        const status = { ...fields, "http.status": response.status };
+
+        if (Option.isNone(cause) || Cause.hasInterruptsOnly(cause.value)) {
+          return Effect.void;
+        }
+
+        return response.status === internalStatus
           ? Effect.annotateLogs(
-              Effect.logError(
-                "a request answered Internal",
-                ...answer(exit.value)
-              ),
+              Effect.logError("a request failed", cause.value),
               status
             )
           : Effect.annotateLogs(Effect.logDebug("Sent HTTP response"), status);
