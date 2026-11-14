@@ -97,9 +97,7 @@ Each: what Tart does, where, and what of ours depends on it.
 
 - `tart exec` asks the guest agent for 64 KiB HTTP/2 windows from 2.41.1
   (`targetWindowSize`, GuestAgentChannel.swift; see "Exec" below). Ours: every
-  exec and the relay's ssh run over it. 2.41.1 also stopped `tart list`
-  failing on a VM deleted while it lists (`isFileNotFound`, Commands/List.swift),
-  which no longer matters here, as the host runs no `tart list` (below).
+  exec and the relay's ssh run over it.
 - Clone refuses an existing destination unless `--overwrite`
   (`rejectExistingDestination`, Commands/Clone.swift). Ours:
   native names carry the row's instance, so a clone never meets one, and
@@ -162,12 +160,15 @@ Each: what Tart does, where, and what of ours depends on it.
   darwin VM's vCPUs or memory below its minimum throw "… at minimum (requested
   N)" before the config is saved (`setCPU`, `setMemory`, VMConfig.swift).
   `--cpu` and `--disk-size` parse as `UInt16`, `--memory` as `UInt64` (`Set`).
-  Ours: `growsLive` is false, so the core resizes only a stopped VM, after it
+  Ours: the traits' `resize.running` is `none`, so the core resizes only a
+  stopped VM, after it
   refused a smaller disk; `resize` passes the vCPUs, memory and disk the
   request names, a create's `set` all three, and the `set` after a fork's or
   restore's clone those that differ from its source's (`sizeFlags`); `set`
-  makes `minimumRefusal` `Unsizable`, for a create too; `sizable` refuses
-  vCPUs or a disk in GB past `maximumFlag`; `sizes` and
+  makes `minimumRefusal` `Unsizable`, for a create too; the traits'
+  `limits.most` refuse more vCPUs than a `UInt16` holds, 65535, or a disk
+  past 65535 GB, which is 61034 GiB rounded down (`mostFlag`, `traits.ts`);
+  `sizes` and
   `decodeInfo` read the VM back after every resize, and after a resize its
   host lost, leaving out a null `Disk`, which `sizedBy` fills with the disk the
   row holds; and
@@ -461,8 +462,7 @@ times, and the disk's capacity and format)
 
 - Unit: `vp test` in `apps/host` (`platform/tart/tart.test.ts`, `platform/relay.test.ts`,
   `config.test.ts`), then `vp run --no-cache ready`. Change the fake's answers
-  only to match Tart's real output at the target. `vp test` in `packages/sdk`
-  holds README to the new base.
+  only to match Tart's real output at the target.
 - On the base, in the private `TART_HOME`: `tart list`'s `Disk` of the cached
   image, for README's capacity and `diskGib` floor; a clone, `tart set
   --random-serial`, and `tart run` with `program`'s flags (`--no-graphics
@@ -495,7 +495,7 @@ times, and the disk's capacity and format)
   "The base" above, and move the claims the VM check changed.
 - Tell the operator how to move: first to the clankerbox release whose
   `testedVersion` is the target, which still starts under the old Tart, then
-  install the new Tart in its own versioned path, change `tart.binary`, restart
+  install the new Tart in its own versioned path, change `runtime.tart.binary`, restart
   the host. Every `start` writes the VM's
   job again, and a stopped job launchd still holds whose arguments aren't this
   host's is reloaded, so VMs move as they restart; keep the old install until
