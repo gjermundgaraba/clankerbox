@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Kernel settings are not part of a snapshot, so this sets them each time an
+# orb starts or wakes.
+set -euo pipefail
+
+# oxlint with JS plugins, which the lint config loads, maps about 6 GiB per
+# lint thread in one piece. Linux's default heuristic refuses any one mapping
+# larger than RAM and swap, which an orb with 4 GB has, and oxlint then panics
+# (oxc-project/oxc#20331).
+sudo sysctl -qw vm.overcommit_memory=1
