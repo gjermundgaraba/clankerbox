@@ -45,6 +45,7 @@ import {
   copied,
   refusedBySource,
   sizedBy,
+  restingAs,
   uncopiable,
 } from "./copies.ts";
 import type { Spec } from "./copies.ts";
@@ -767,15 +768,6 @@ export const make = (
           );
       });
 
-    const restingIn = (found: MachineRow) =>
-      phaseOf(found.state) === "settled"
-        ? Effect.map(stateOf(hosts, found), (seen) =>
-            seen === "running" || seen === "stopped" || seen === "paused"
-              ? seen
-              : undefined
-          )
-        : Effect.undefined;
-
     const resize = (request: ResizeRequest) =>
       Effect.gen(function* () {
         const { id, ...sizing } = request;
@@ -786,7 +778,7 @@ export const make = (
           const refusal = resizeRefusal(
             info.traits,
             id,
-            yield* restingIn(found),
+            restingAs(found, yield* stateOf(hosts, found)),
             found,
             sizedBy(found, sizing)
           );

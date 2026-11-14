@@ -10,6 +10,7 @@ import {
   formatCpu,
   formatGib,
   formatMib,
+  isResting,
   NotBuilt,
   templateRef,
   Unsizable,
@@ -95,9 +96,22 @@ export const copied = (
 };
 
 /**
+ * The state a step meets in machine `found`, its VM read `seen`, where the server can refuse the
+ * step before a row is written: none where the VM's state isn't known or the machine is still
+ * moving, as the host then decides.
+ */
+export const restingAs = (
+  found: MachineRow,
+  seen: MachineState
+): "running" | "stopped" | "paused" | undefined =>
+  isResting(phaseOf(found.state)) &&
+  (seen === "running" || seen === "stopped" || seen === "paused")
+    ? seen
+    : undefined;
+
+/**
  * Why a fork or capture of a machine at rest, its VM read `seen`, is refused by a host whose
- * runtime copies a machine only in `captureFrom`, before a row is written; none where the VM's
- * state isn't known or the machine is still moving, as the host then decides.
+ * runtime copies a machine only in `captureFrom`, before a row is written.
  */
 export const uncopiable = (
   source: MachineRow,
@@ -105,10 +119,9 @@ export const uncopiable = (
   { captureFrom }: RuntimeTraits,
   action: "fork" | "capture"
 ): WrongState | undefined => {
-  const settled = phaseOf(source.state) === "settled";
-  const known = seen === "running" || seen === "stopped" || seen === "paused";
+  const resting = restingAs(source, seen);
 
-  return settled && known && seen !== captureFrom
+  return resting !== undefined && resting !== captureFrom
     ? new WrongState({
         message: `machine ${source.name} is ${seen}, and its host copies a machine only ${captureFrom}: ${captureFrom === "stopped" ? "stop" : "start"} it, then ${action} it`,
         machine: source.name,

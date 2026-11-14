@@ -2836,6 +2836,38 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a resize past a running machine's live limit is refused before anything is recorded also where its last step failed, each time it is asked",
+    () =>
+      Effect.gen(function* () {
+        const { client, fake, machine, row } = yield* served();
+
+        yield* client.create("dev", request("dev"));
+        fake.failNext("stop", new Internal({ message: "stop refused" }));
+        yield* Effect.flip(client.stopMachine({ id: "dev" }));
+
+        const failed = yield* machine("dev");
+        const before = yield* row("dev");
+
+        fake.calls.length = 0;
+
+        const refusals = yield* Effect.forEach([1, 2], () =>
+          Effect.flip(client.resizeMachine({ id: "dev", cpu: 32 }))
+        );
+
+        expect(refusal(failed)).toStrictEqual(["failed", "Internal"]);
+        expect(failed.state).toBe("running");
+        expect(refusals.map(({ _tag }) => _tag)).toStrictEqual([
+          "Unsizable",
+          "Unsizable",
+        ]);
+        expect(yield* row("dev")).toStrictEqual(before);
+        expect(
+          fake.calls.filter((call) => call.startsWith("resize"))
+        ).toStrictEqual([]);
+      })
+  );
+
+  it.effect(
     "a create, a resize or a fork past the most vCPUs smolvm gives a machine is refused Unsizable, naming it, before anything is recorded",
     () =>
       Effect.gen(function* () {
@@ -3344,6 +3376,48 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "dev",
         ]);
         expect([...linux.fake.calls, ...mac.fake.calls]).toStrictEqual([]);
+      })
+  );
+
+  it.effect(
+    "a fork or capture of a machine whose last step failed, in the state its host doesn't copy, is WrongState before a row is written",
+    () =>
+      Effect.gen(function* () {
+        const { client, fake, machine, rows, store } = yield* served();
+
+        yield* client.create("dev", request("dev"));
+        yield* client.stopMachine({ id: "dev" });
+        fake.failNext("start", new Internal({ message: "start refused" }));
+        yield* Effect.flip(client.startMachine({ id: "dev" }));
+
+        const failed = yield* machine("dev");
+
+        fake.calls.length = 0;
+
+        const refused = [
+          yield* Effect.flip(
+            client.forkMachine({ machine: "dev", name: "copy" })
+          ),
+          yield* Effect.flip(
+            client.captureCheckpoint({ machine: "dev", name: "snap" })
+          ),
+        ];
+
+        expect([failed.phase, failed.state]).toStrictEqual([
+          "failed",
+          "stopped",
+        ]);
+        expect(refused.map(({ _tag }) => _tag)).toStrictEqual([
+          "WrongState",
+          "WrongState",
+        ]);
+        expect((yield* rows).map(({ name }) => name)).toStrictEqual(["dev"]);
+        expect(yield* store.checkpoints).toHaveLength(0);
+        expect(
+          fake.calls.filter(
+            (call) => call.startsWith("fork") || call.startsWith("capture")
+          )
+        ).toStrictEqual([]);
       })
   );
 
