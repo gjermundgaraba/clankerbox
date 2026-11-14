@@ -123,10 +123,15 @@ export const taking =
       },
       "land-late": () =>
         faulted.sweeps
-          ? Effect.as(faulted.faults.landLate(landsLateBy), {
-              took: true,
-              said: `${faulted.name} fails its next make and lands its machine ${Duration.format(landsLateBy)} later`,
-            })
+          ? Effect.as(
+              Effect.flatMap(faulted.faults.landLate, (land) =>
+                Effect.forkDetach(Effect.delay(land, landsLateBy))
+              ),
+              {
+                took: true,
+                said: `${faulted.name} fails its next make and lands its machine ${Duration.format(landsLateBy)} later`,
+              }
+            )
           : Effect.succeed(
               refused(
                 `${faulted.name} marks nothing it makes, so no sweep would find a machine that landed late`

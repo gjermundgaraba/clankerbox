@@ -185,7 +185,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const served = yield* onFixed({ recheck: Duration.millis(20) });
 
-        yield* served.host.fake.faults.landLate("400 millis");
+        const land = yield* served.host.fake.faults.landLate;
 
         const failed = yield* Effect.exit(
           served.client.create("dev", request("dev"))
@@ -193,6 +193,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const [undone] = yield* served.store.machines;
         const replaced = yield* served.client.create("dev", request("dev"));
+
+        yield* land;
 
         yield* eventually(
           Effect.sync(() => callsTo(served.host, "delete")),

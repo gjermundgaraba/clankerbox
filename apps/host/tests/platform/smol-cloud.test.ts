@@ -919,7 +919,13 @@ describe("the smol cloud runtime over an account without a card", () => {
               )
           );
 
-          yield* Effect.sleep("200 millis");
+          yield* Effect.repeat(
+            Effect.sync(() => fake.checkpoints.get(id)?.status),
+            {
+              until: (status) => status === "available",
+              schedule: Schedule.spaced("20 millis"),
+            }
+          );
 
           const restored = yield* Effect.promise(
             async () =>
@@ -1002,7 +1008,9 @@ describe("the smol cloud runtime over an account without a card", () => {
           const dev = yield* made(runtime, "dev");
 
           yield* runtime.stop(dev);
-          yield* fake.faults.settleStarts("1500 millis");
+
+          const settle = yield* fake.faults.holdStarts;
+
           yield* fake.faults.loseResize(1);
 
           const creating = Effect.repeat(
@@ -1013,15 +1021,30 @@ describe("the smol cloud runtime over an account without a card", () => {
             }
           );
 
+          const resizeLost = Effect.repeat(
+            Effect.sync(() =>
+              fake.calls.some((call) =>
+                call.startsWith(`POST /v1/machines/${dev.handle}/resize`)
+              )
+            ),
+            { until: (sent) => sent, schedule: Schedule.spaced("20 millis") }
+          );
+
           yield* Effect.all(
             [
               runtime.start(dev, new Set()),
               Effect.andThen(
                 creating,
-                runtime.resize(
-                  { ...dev, ...sizes },
-                  { cpu: 1, ramMib: 2048, diskGib: 10 },
-                  true
+                Effect.all(
+                  [
+                    runtime.resize(
+                      { ...dev, ...sizes },
+                      { cpu: 1, ramMib: 2048, diskGib: 10 },
+                      true
+                    ),
+                    Effect.andThen(resizeLost, settle),
+                  ],
+                  { concurrency: 2 }
                 )
               ),
             ],

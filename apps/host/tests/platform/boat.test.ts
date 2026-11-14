@@ -481,14 +481,15 @@ describe("the boat runtime over fake boat", () => {
           expect(refused._tag).toBe("Capacity");
 
           yield* boat.faults.quota(false);
-          yield* boat.faults.landLate("200 millis");
+          const land = yield* boat.faults.landLate;
 
           const late = { name: "late", instance: instanceOf("late") };
 
           expect((yield* Effect.flip(made(runtime, "late")))._tag).toBe(
             "Capacity"
           );
-          yield* Effect.sleep("300 millis");
+          expect(yield* runtime.find("machine", late)).toBeUndefined();
+          yield* land;
           expect(yield* runtime.find("machine", late)).toBeDefined();
 
           const machine = yield* made(runtime, "dev");

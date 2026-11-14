@@ -23,7 +23,8 @@ export type Dropped = "make" | "delete";
 
 export interface Faults {
   readonly drift: (instance: string) => Effect.Effect<void>;
-  readonly landLate: (after: Duration.Input) => Effect.Effect<void>;
+  /** Fails the next make as though its answer were lost; the effect it answers lands its machine. */
+  readonly landLate: Effect.Effect<Effect.Effect<void>>;
   readonly quota: (on: boolean) => Effect.Effect<void>;
   readonly dropAnswer: (dropping: Dropped) => Effect.Effect<void>;
   /**
@@ -616,12 +617,13 @@ export const runtimeContract = (subject: Subject): void => {
       () =>
         withFixture(({ runtime, faults }) =>
           Effect.gen(function* () {
-            yield* (yield* given(faults.landLate))("50 millis");
+            const land = yield* yield* given(faults.landLate);
+
             yield* Effect.flip(made(runtime, "late"));
 
             const before = yield* runtime.find("machine", sized("late"));
 
-            yield* Effect.sleep("80 millis");
+            yield* land;
 
             expect(before).toBeUndefined();
             expect(yield* runtime.find("machine", sized("late"))).toBeDefined();

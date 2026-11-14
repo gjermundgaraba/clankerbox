@@ -4,18 +4,8 @@ import { cp, mkdir, rm } from "node:fs/promises";
 import { IncomingMessage } from "node:http";
 import path from "node:path";
 import { finished } from "node:stream/promises";
-import { setTimeout as sleep } from "node:timers/promises";
 
-import {
-  Context,
-  Duration,
-  Effect,
-  Layer,
-  Option,
-  Queue,
-  Schema,
-  Stream,
-} from "effect";
+import { Context, Effect, Layer, Option, Queue, Schema, Stream } from "effect";
 import type { Scope } from "effect";
 import type { HttpServerRequest } from "effect/http";
 import { HttpRouter, HttpServer, HttpServerResponse } from "effect/http";
@@ -23,6 +13,7 @@ import { Socket } from "effect/socket";
 
 import { furnish, writeStubs } from "./fake-runtime.ts";
 import { guestGroups } from "./guest-groups.ts";
+import { lateLandings } from "./late-landing.ts";
 import type { Dropped, Faults } from "./runtime-contract.ts";
 import { loopbackServer } from "./support.ts";
 
@@ -66,8 +57,11 @@ export interface FakeFaults extends Faults {
   readonly dropAnswer: (dropping: Dropping) => Effect.Effect<void>;
   /** Loses the next `times` resize requests before the provider takes them. */
   readonly loseResize: (times: number) => Effect.Effect<void>;
-  /** Has each start of a stopped machine read `creating` for `after`, answering once it reads `started`, as smol cloud's start does. */
-  readonly settleStarts: (after: Duration.Input) => Effect.Effect<void>;
+  /**
+   * Has each start of a stopped machine read `creating` until the effect it answers runs, answering
+   * once it reads `started`, as smol cloud's start does.
+   */
+  readonly holdStarts: Effect.Effect<Effect.Effect<void>>;
 }
 
 export interface FakeSmolCloud {
@@ -237,8 +231,8 @@ export const fakeSmolCloud = (
     const dropping = new Set<Dropping>();
     let losingResizes = 0;
 
-    let startsSettleIn = Duration.zero;
-    const landsLate: Duration.Duration[] = [];
+    let startsHeld: Promise<void> | undefined;
+    const lateMakes = lateLandings();
     let quotaOn = false;
     const malformed: object[] = [];
     let holdingCapture = false;
@@ -408,12 +402,10 @@ export const fakeSmolCloud = (
         return tooBig;
       }
 
-      const late = landsLate.shift();
+      const held = lateMakes.next();
 
-      if (late !== undefined) {
-        setTimeout(() => {
-          void newMachine(fields, undefined);
-        }, Duration.toMillis(late));
+      if (held !== undefined) {
+        await held(async () => await newMachine(fields, undefined));
 
         return problem(500, "internal", "the node lost the create");
       }
@@ -438,7 +430,7 @@ export const fakeSmolCloud = (
             }
 
             machine.state = "creating";
-            await sleep(Duration.toMillis(startsSettleIn));
+            await startsHeld;
             await boot(machine);
           }
 
@@ -970,10 +962,7 @@ export const fakeSmolCloud = (
             }
           }
         }),
-      landLate: (after) =>
-        Effect.sync(() => {
-          landsLate.push(Duration.fromInputUnsafe(after));
-        }),
+      landLate: lateMakes.arm,
       quota: (on) =>
         Effect.sync(() => {
           quotaOn = on;
@@ -986,10 +975,16 @@ export const fakeSmolCloud = (
         Effect.sync(() => {
           losingResizes = times;
         }),
-      settleStarts: (after) =>
-        Effect.sync(() => {
-          startsSettleIn = Duration.fromInputUnsafe(after);
-        }),
+      holdStarts: Effect.sync(() => {
+        const held = Promise.withResolvers<undefined>();
+
+        startsHeld = held.promise;
+
+        return Effect.sync(() => {
+          startsHeld = undefined;
+          held.resolve(undefined);
+        });
+      }),
     };
 
     const handler = (request: HttpServerRequest.HttpServerRequest) =>

@@ -31,6 +31,7 @@ import {
   writeTailscaleStubs,
 } from "./fake-runtime.ts";
 import { guestGroups } from "./guest-groups.ts";
+import { lateLandings } from "./late-landing.ts";
 import type { Dropped, Faults } from "./runtime-contract.ts";
 
 export interface FakeBoatOptions {
@@ -91,12 +92,6 @@ interface Answer {
   readonly body: object;
   readonly start?: boolean | undefined;
   readonly lands?: "late" | undefined;
-}
-
-interface Landing {
-  readonly due: number;
-  readonly key: Keyed | undefined;
-  readonly land: () => Promise<FakeSandbox>;
 }
 
 interface Keyed {
@@ -545,8 +540,7 @@ export const fakeBoat = (
     const malformed: Malformed[] = [];
 
     const refusing = new Set<BoatCall>();
-    const lateBy: number[] = [];
-    const landings: Landing[] = [];
+    const lateMakes = lateLandings();
     const guests = guestGroups();
 
     let keepsStoppedFor = Duration.toMillis(
@@ -665,23 +659,6 @@ export const fakeBoat = (
       return sandbox;
     };
 
-    const landDue = async () => {
-      const now = Date.now();
-
-      for (const landing of landings.filter(({ due }) => due <= now)) {
-        landings.splice(landings.indexOf(landing), 1);
-
-        const landed = await landing.land();
-
-        if (landing.key !== undefined && !idempotent.has(landing.key.key)) {
-          idempotent.set(landing.key.key, {
-            id: landed.id,
-            body: landing.key.body,
-          });
-        }
-      }
-    };
-
     const created = (sandbox: FakeSandbox): Answer => ({
       status: 202,
       body: { type: "sandbox.created", sandbox: answeredJson(sandbox) },
@@ -725,10 +702,16 @@ export const fakeBoat = (
         return refused(429, "limit_reached", "the start limit is reached");
       }
 
-      const late = lateBy.shift();
+      const held = lateMakes.next();
 
-      if (late !== undefined) {
-        landings.push({ due: Date.now() + late, key, land });
+      if (held !== undefined) {
+        await held(async () => {
+          const landed = await land();
+
+          if (key !== undefined && !idempotent.has(key.key)) {
+            idempotent.set(key.key, { id: landed.id, body: key.body });
+          }
+        });
 
         return refused(503, "out_of_capacity", "no machine is free now");
       }
@@ -1302,8 +1285,6 @@ export const fakeBoat = (
 
       requests.push(logged);
 
-      await landDue();
-
       const call = callOf(method, url.pathname.split("/").filter(Boolean));
 
       if (call !== undefined && gateways.delete(call)) {
@@ -1489,10 +1470,7 @@ export const fakeBoat = (
             }
           }
         }),
-      landLate: (after) =>
-        Effect.sync(() => {
-          lateBy.push(Duration.toMillis(Duration.fromInputUnsafe(after)));
-        }),
+      landLate: lateMakes.arm,
       quota: (on) =>
         Effect.sync(() => {
           quotaOn = on;

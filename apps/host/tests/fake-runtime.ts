@@ -29,15 +29,7 @@ import type {
   Sizing,
   Unsizable,
 } from "@gjermundgaraba/clankerbox-sdk";
-import {
-  Clock,
-  DateTime,
-  Deferred,
-  Duration,
-  Effect,
-  Layer,
-  Stream,
-} from "effect";
+import { Deferred, Effect, Layer, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { traits as smolvm } from "../src/platform/smolvm/traits.ts";
@@ -61,6 +53,7 @@ import type {
   Target,
 } from "../src/runtime.ts";
 import { allotted, checkRamBudget, inUse } from "../src/usage.ts";
+import { lateLandings } from "./late-landing.ts";
 import type { Dropped, Faults } from "./runtime-contract.ts";
 
 export type Operation =
@@ -384,12 +377,6 @@ interface FakeCheckpoint {
   readonly of: Handle | undefined;
 }
 
-interface Landing {
-  readonly machine: Identity & Sizes;
-  readonly image: string;
-  readonly due: number;
-}
-
 const minted = (prefix: string): Handle =>
   Handle.make(`${prefix}-${randomUUID().slice(0, 13)}`);
 
@@ -529,15 +516,10 @@ export const fakeRuntime = (options: FakeOptions) => {
   const preset: Preset = presets[options.as ?? "smolvm"];
   const traits = options.traits ?? preset.traits;
   const owned = options.owned ?? preset.owned;
-  const landings: Landing[] = [];
-  const landsLate: Duration.Duration[] = [];
+  const lateMakes = lateLandings();
   const dropped = new Set<Dropped>();
   let quotaOn = false;
   let pin = options.pin ?? preset.pin;
-  let clock: Clock.Clock | undefined;
-
-  const now = () =>
-    DateTime.makeUnsafe(clock?.currentTimeMillisUnsafe() ?? Date.now());
 
   const record = (entry: string) => {
     calls.push(entry);
@@ -684,19 +666,13 @@ export const fakeRuntime = (options: FakeOptions) => {
     );
   };
 
-  const land = () => {
-    const at = DateTime.toEpochMillis(now());
+  const landed = (machine: Identity & Sizes, image: string) => {
+    const root = path.join(options.dir, "roots", machine.instance);
 
-    for (const landing of landings.filter(({ due }) => due <= at)) {
-      landings.splice(landings.indexOf(landing), 1);
-
-      const root = path.join(options.dir, "roots", landing.machine.instance);
-
-      mkdirSync(path.join(root, "etc"), { recursive: true });
-      madeOf(landing.machine, root);
-      images.set(landing.machine.name, landing.image);
-      record(`landed ${landing.machine.name}`);
-    }
+    mkdirSync(path.join(root, "etc"), { recursive: true });
+    madeOf(machine, root);
+    images.set(machine.name, image);
+    record(`landed ${machine.name}`);
   };
 
   const lost = <A, E, E2>(
@@ -722,7 +698,6 @@ export const fakeRuntime = (options: FakeOptions) => {
 
   const states = (refs: readonly Target[]): Effect.Effect<Observed> =>
     Effect.sync(() => {
-      land();
       observed.push(refs.map(({ name }) => name));
 
       return new Map(
@@ -845,7 +820,6 @@ export const fakeRuntime = (options: FakeOptions) => {
     Runtime,
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      clock = yield* Clock.Clock;
       const bin = yield* Effect.sync(() => writeStubs(options.dir));
 
       stubs = bin;
@@ -935,7 +909,6 @@ export const fakeRuntime = (options: FakeOptions) => {
             ? undefined
             : {
                 machines: Effect.sync(() => {
-                  land();
                   record("marked machines");
 
                   return machines
@@ -1030,7 +1003,6 @@ export const fakeRuntime = (options: FakeOptions) => {
         }),
         find: (what, ref) =>
           Effect.suspend(() => {
-            land();
             searches.push(`${what} ${ref.name}`);
             options.onCall?.(`find ${what} ${ref.name}`);
             const failure = findFailures.get(ref.name);
@@ -1050,23 +1022,22 @@ export const fakeRuntime = (options: FakeOptions) => {
             );
           }
 
-          const late = landsLate.shift();
+          const held = lateMakes.next();
 
-          if (late !== undefined) {
-            return Effect.suspend(() => {
-              record(`make ${machine.name}`);
-              landings.push({
-                machine,
-                image: origin._tag === "image" ? origin.image : "",
-                due: DateTime.toEpochMillis(now()) + Duration.toMillis(late),
-              });
-
-              return Effect.fail(
+          if (held !== undefined) {
+            return Effect.andThen(
+              Effect.promise(async () => {
+                record(`make ${machine.name}`);
+                await held(() => {
+                  landed(machine, origin._tag === "image" ? origin.image : "");
+                });
+              }),
+              Effect.fail(
                 new Internal({
                   message: `the ${traits.runtime} provider didn't answer the make of ${machine.name}`,
                 })
-              );
-            });
+              )
+            );
           }
 
           switch (origin._tag) {
@@ -1357,10 +1328,7 @@ export const fakeRuntime = (options: FakeOptions) => {
           record(`drift ${found.name}`);
         }
       }),
-    landLate: (after) =>
-      Effect.sync(() => {
-        landsLate.push(Duration.fromInputUnsafe(after));
-      }),
+    landLate: lateMakes.arm,
     quota: (on) =>
       Effect.sync(() => {
         quotaOn = on;
