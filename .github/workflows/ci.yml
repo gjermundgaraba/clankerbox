@@ -48,3 +48,6 @@ jobs:
             "$bin" --help | grep -qF -- "--config"
             if "$bin" >/dev/null 2>&1; then exit 1; fi
           done
+      - name: Stop the installed host with an exec running
+        working-directory: apps/host
+        run: CLANKERBOX_HOST_PROGRAM="$RUNNER_TEMP/host-prefix/bin/clankerbox-host" vp test run tests/program.test.ts
