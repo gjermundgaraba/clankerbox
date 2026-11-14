@@ -919,7 +919,11 @@ describe("the smol cloud runtime over an account without a card", () => {
 });
 
 interface Failing {
-  readonly account?: { times: number; readonly answer: "gateway" | "refused" };
+  readonly account?: {
+    answeredFirst?: number;
+    times: number;
+    readonly answer: "gateway" | "refused";
+  };
   readonly create?: string;
   readonly inUse?: { readonly machines: number; readonly started: number };
 }
@@ -956,7 +960,8 @@ const scripted = (
 
           if (
             route === "GET /v1/account" &&
-            (failing?.account?.times ?? 0) > 0
+            (failing?.account?.times ?? 0) > 0 &&
+            (failing?.account?.answeredFirst ?? 0) === 0
           ) {
             if (failing?.account !== undefined) {
               failing.account.times -= 1;
@@ -976,6 +981,13 @@ const scripted = (
           }
 
           if (route === "GET /v1/account") {
+            if (failing?.account?.answeredFirst !== undefined) {
+              failing.account.answeredFirst = Math.max(
+                0,
+                failing.account.answeredFirst - 1
+              );
+            }
+
             return reply(200, {
               plan: { allowAlwaysOn: false },
               effectiveMaxMachines: 20,
@@ -1173,12 +1185,17 @@ describe("a smol cloud create the provider refuses 422", () => {
         expect(
           yield* refusedCreate("ttlSeconds exceeds the maximum of 86400")
         ).toMatchObject({ _tag: "Internal" });
-        expect(
-          yield* refusedCreate(concurrency, {
+
+        const unread = yield* refusedCreate(
+          "resources.cpus: expected integer",
+          {
             inUse: { machines: 4, started: 4 },
-            account: { times: 2, answer: "refused" },
-          })
-        ).toMatchObject({ _tag: "Internal" });
+            account: { answeredFirst: 1, times: 5, answer: "refused" },
+          }
+        );
+
+        expect(unread).toMatchObject({ _tag: "Internal" });
+        expect(unread.message).toContain("expected integer");
       })
   );
 });
