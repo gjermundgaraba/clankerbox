@@ -1189,6 +1189,75 @@ describe("client", () => {
         })
     );
 
+    it.effect(
+      "an ensure whose create the timeout cut, in its reply or in its wait, names the machine it may have made",
+      () =>
+        Effect.gen(function* () {
+          const replyCut = server({
+            answerAfter: { createMachine: Duration.seconds(10) },
+          });
+
+          const waitCut = server();
+
+          waitCut.script(
+            "dev",
+            Array.from({ length: 10 }, () => "creating" as const)
+          );
+
+          const errors = yield* Effect.forEach([replyCut, waitCut], (stub) =>
+            ticking(
+              withClient(
+                stub,
+                (client) => Effect.flip(client.ensure("dev", { spec })),
+                { timeout: Duration.seconds(5), ...everyMinute }
+              )
+            )
+          );
+
+          for (const error of errors) {
+            expect(error).toMatchObject({
+              _tag: "Unavailable",
+              readOnly: false,
+              made: "dev",
+            });
+          }
+
+          expect(errors[0]?.message).toContain("its timeout of 5s ran out");
+          expect(errors[1]?.message).toContain("didn't rest within 5s");
+        })
+    );
+
+    it.effect(
+      "a pause whose capture's wait the timeout cut names the checkpoint it may have made",
+      () =>
+        Effect.gen(function* () {
+          const stub = server({ machines: [machine("dev")] });
+
+          stub.scriptCheckpoint(
+            "snap",
+            Array.from({ length: 10 }, () => "capturing" as const)
+          );
+
+          const error = yield* ticking(
+            withClient(
+              stub,
+              (client) =>
+                Effect.flip(
+                  client.pauseMachine({ id: "dev", capture: { name: "snap" } })
+                ),
+              { timeout: Duration.seconds(5), ...everyMinute }
+            )
+          );
+
+          expect(error).toMatchObject({
+            _tag: "Unavailable",
+            readOnly: false,
+            made: "snap",
+          });
+          expect(error.message).toContain("didn't rest within 5s");
+        })
+    );
+
     it.effect("bounds the reads an ensure makes before it asks anything", () =>
       Effect.gen(function* () {
         const silent = new Silent();

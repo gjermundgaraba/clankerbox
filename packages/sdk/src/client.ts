@@ -172,8 +172,10 @@ export interface Interface extends Calls {
    * A machine of `name` that runs: the one that exists, started, or resumed when paused; else one
    * restored from `checkpoint` when that is ready; else one created from `spec`. Each waits as the
    * request would. A failed create's row that still answers `Conflict`, as its VM is still going,
-   * is deleted and the make tried once more, and a make whose reply was lost reads the machine
-   * and decides again, once.
+   * is deleted and the make tried once more, and a make whose reply or wait was cut reads the
+   * machine and decides again, once. Every failure after that make names the machine it may have
+   * made, and one whose second look sent nothing, as a spent timeout leaves it, answers as the cut
+   * make did.
    */
   readonly ensure: (
     name: string,
@@ -827,31 +829,49 @@ export const make = (
                 : Effect.fail(conflict),
             Unavailable: (unavailable) =>
               again && !unavailable.readOnly
-                ? ensuring(name, from, false)
+                ? ensuring(name, from, false).pipe(
+                    Effect.catchIf(
+                      (error) => error._tag === "Unavailable" && error.readOnly,
+                      () => Effect.fail(unavailable)
+                    ),
+                    Effect.mapError(making(name))
+                  )
                 : Effect.fail(unavailable),
           })
         );
       });
 
-    const pauseMachine: Interface["pauseMachine"] = (input) =>
-      Effect.flatMap(asking("pauseMachine", "paused")(input), (machine) => {
-        const { capture } = input;
+    const pauseMachine: Interface["pauseMachine"] = (input) => {
+      const { capture } = input;
 
-        return capture === undefined
-          ? Effect.succeed(machine)
-          : unlessNoWait(
-              machine,
-              Effect.as(
-                polled(
-                  call("getCheckpoint", { id: capture.name }, capture.name),
-                  endedAt<Checkpoint>("ready", "checkpoint"),
-                  "pauseMachine",
-                  capture.name
-                ),
-                machine
+      return capture === undefined
+        ? asking("pauseMachine", "paused")(input)
+        : namingWhatMayExist(
+            capture.name,
+            send("pauseMachine", input, input.id),
+            (recorded) =>
+              Effect.flatMap(
+                machineRest(recorded, "paused", "pauseMachine"),
+                (machine) =>
+                  unlessNoWait(
+                    machine,
+                    Effect.as(
+                      polled(
+                        call(
+                          "getCheckpoint",
+                          { id: capture.name },
+                          capture.name
+                        ),
+                        endedAt<Checkpoint>("ready", "checkpoint"),
+                        "pauseMachine",
+                        capture.name
+                      ),
+                      machine
+                    )
+                  )
               )
-            );
-      });
+          );
+    };
 
     const execMachine: Interface["execMachine"] = (input) =>
       send(
