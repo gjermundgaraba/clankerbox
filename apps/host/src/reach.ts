@@ -1,5 +1,5 @@
-import { Capacity, Internal } from "@gjermundgaraba/clankerbox-sdk";
-import type { SshEndpoint } from "@gjermundgaraba/clankerbox-sdk";
+import { Capacity } from "@gjermundgaraba/clankerbox-sdk";
+import type { SshEndpoint, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, Effect, Layer, Option, Semaphore } from "effect";
 
 import { PortProbe } from "./machine-ports.ts";
@@ -42,12 +42,18 @@ export interface Interface {
     taken: ReadonlySet<number>
   ) => Effect.Effect<Claim, Capacity | Internal>;
   readonly endpoint: (port: number) => SshEndpoint;
+  /**
+   * Reaches the machine at `port`, or, where another program took that, at the first free port of
+   * the range that isn't one of `taken`, and answers the port it is reached at: none while a make of
+   * another instance holds its name. A published runtime's VM binds its own port, so it answers that.
+   */
   readonly open: (
     machine: Target,
-    port: number
-  ) => Effect.Effect<void, Internal>;
+    port: number,
+    taken: ReadonlySet<number>
+  ) => Effect.Effect<Option.Option<number>, Capacity | Internal>;
   readonly close: (machine: Identity) => Effect.Effect<void>;
-  /** Reaches each machine again, and answers the port each is reached at, its own or, where another program took that, another. */
+  /** Opens each machine, none taking another's port, and answers the port each is reached at. */
   readonly adopt: (
     machines: readonly Reopened[]
   ) => Effect.Effect<ReadonlyMap<string, number>>;
@@ -92,7 +98,7 @@ export const make = (
             return yield* noneFree;
           }),
         endpoint,
-        open: () => Effect.void,
+        open: (_machine, port) => Effect.succeedSome(port),
         close: () => Effect.void,
         adopt: (machines) =>
           Effect.succeed(
@@ -164,22 +170,13 @@ export const make = (
         return port;
       });
 
-    const takenBy = (port: number) =>
-      new Internal({
-        message: `the relay couldn't listen on ${address}:${port}: another program holds it`,
-      });
-
-    const opened = <E>(
-      machine: Target,
-      port: number,
-      elsewhere: Effect.Effect<number, E>
-    ): Effect.Effect<Option.Option<number>, Internal | E> =>
+    const open: Interface["open"] = (machine, port, taken) =>
       Effect.gen(function* () {
         const hold = holds.get(machine.name);
 
         if (hold !== undefined) {
           if (hold.instance !== machine.instance) {
-            return Option.none();
+            return Option.none<number>();
           }
 
           yield* relayed(machine, hold);
@@ -189,12 +186,19 @@ export const make = (
 
         const bound = yield* relays.bind(address, port);
 
-        return Option.some(
-          yield* Option.isNone(bound)
-            ? elsewhere
-            : taking(machine, port, bound.value)
+        if (Option.isSome(bound)) {
+          return Option.some(yield* taking(machine, port, bound.value));
+        }
+
+        const free = yield* firstFree(taken);
+        const moved = yield* taking(machine, free.port, free.listener);
+
+        yield* Effect.logInfo(
+          `${machine.name}: another program holds port ${port}, so it is reached at ${moved}`
         );
-      });
+
+        return Option.some(moved);
+      }).pipe(holding.withPermits(1));
 
     return {
       claim: (machine, taken) =>
@@ -218,10 +222,7 @@ export const make = (
           })
         ),
       endpoint,
-      open: (machine, port) =>
-        holding.withPermits(1)(
-          Effect.asVoid(opened(machine, port, Effect.fail(takenBy(port))))
-        ),
+      open,
       close: (machine) =>
         holding.withPermits(1)(
           Effect.suspend(() => {
@@ -237,33 +238,19 @@ export const make = (
 
         return Effect.map(
           Effect.forEach(machines, ({ machine, port }) =>
-            holding.withPermits(1)(
-              opened(
-                machine,
-                port,
-                Effect.flatMap(firstFree(given), (free) =>
-                  Effect.tap(
-                    taking(machine, free.port, free.listener),
-                    (moved) =>
-                      Effect.logInfo(
-                        `adopt ${machine.name}: another program holds port ${port}, so it is reached at ${moved}`
-                      )
-                  )
-                )
-              ).pipe(
-                Effect.map((at) =>
-                  Option.match(at, {
-                    onNone: () => [],
-                    onSome: (reached) => [[machine.name, reached] as const],
-                  })
-                ),
-                Effect.catch((error) =>
-                  Effect.as(
-                    Effect.logWarning(
-                      `adopt: no relay for ${machine.name}: ${error.message}`
-                    ),
-                    []
-                  )
+            open(machine, port, given).pipe(
+              Effect.map((at) =>
+                Option.match(at, {
+                  onNone: () => [],
+                  onSome: (reached) => [[machine.name, reached] as const],
+                })
+              ),
+              Effect.catch((error) =>
+                Effect.as(
+                  Effect.logWarning(
+                    `adopt: no relay for ${machine.name}: ${error.message}`
+                  ),
+                  []
                 )
               )
             )

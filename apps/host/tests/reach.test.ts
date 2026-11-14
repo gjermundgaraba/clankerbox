@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { Effect, Layer, Logger } from "effect";
+import { Effect, Layer, Logger, Option } from "effect";
 import { expect } from "vite-plus/test";
 
 import { PortProbe } from "../src/machine-ports.ts";
@@ -16,15 +16,17 @@ import {
   suitePorts,
 } from "./support.ts";
 
+const at = (name: string, port: number): Reach.Reopened => ({
+  machine: {
+    name,
+    instance: `${name}-instance`,
+    handle: Handle.make(`${name}-handle`),
+  },
+  port,
+});
+
 const machineOn = (name: string): Effect.Effect<Reach.Reopened> =>
-  Effect.map(freePort, (port) => ({
-    machine: {
-      name,
-      instance: `${name}-instance`,
-      handle: Handle.make(`${name}-handle`),
-    },
-    port,
-  }));
+  Effect.map(freePort, (port) => at(name, port));
 
 const relayed: RuntimeReach = {
   _tag: "relayed",
@@ -50,7 +52,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const reaches = yield* reachesOf(relayed);
       const { machine, port } = yield* machineOn("dev");
 
-      yield* reaches.open(machine, port);
+      yield* reaches.open(machine, port, new Set());
 
       expect(yield* roundTrip(port, "to the guest and back")).toBe(
         "to the guest and back"
@@ -118,11 +120,31 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         ]);
         expect(logged).toStrictEqual([
           [
-            `adopt dev: another program holds port ${taken.port}, so it is reached at ${moved}`,
+            `dev: another program holds port ${taken.port}, so it is reached at ${moved}`,
           ],
         ]);
         expect(yield* roundTrip(moved, "moved")).toBe("moved");
         expect(yield* accepts(other.port)).toBe(true);
+      })
+  );
+
+  it.effect(
+    "an open moves a machine whose port another program holds to the first free port none of the given ones is, and answers where it relays it",
+    () =>
+      Effect.gen(function* () {
+        const reaches = yield* reachesOf(relayed);
+        const { first } = suitePorts.reach;
+        const { machine } = yield* machineOn("dev");
+
+        const opened = yield* Effect.scoped(
+          Effect.andThen(
+            holding(first + 3),
+            reaches.open(machine, first + 3, new Set([first, first + 1]))
+          )
+        );
+
+        expect(opened).toStrictEqual(Option.some(first + 2));
+        expect(yield* roundTrip(first + 2, "moved")).toBe("moved");
       })
   );
 
@@ -166,7 +188,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const adopted = yield* machineOn("dev");
 
-        yield* reaches.open(adopted.machine, adopted.port);
+        yield* reaches.open(adopted.machine, adopted.port, new Set());
         yield* reaches.adopt([adopted]);
 
         expect(yield* accepts(adopted.port)).toBe(false);

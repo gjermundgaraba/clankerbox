@@ -2,7 +2,7 @@ import path from "node:path";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 
-import type { Step } from "@clankerbox/host-contract";
+import type { Report, Step } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import {
@@ -3024,8 +3024,13 @@ layer(NodeServices.layer)((it) => {
   );
 });
 
-const refusedListen = (port: number) =>
-  new RegExp(`^the relay couldn't listen on 127\\.0\\.0\\.1:${port}: `, "u");
+const restarted = (name: string, made: Report, port: number) =>
+  ref(name, {
+    ...reached(port),
+    ...(made.outcome.handle === undefined
+      ? {}
+      : { handle: made.outcome.handle }),
+  });
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
@@ -3123,53 +3128,61 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a start on a host restarted since the make listens on its row's port before the runtime starts it, and one whose port is held fails before the runtime is called",
+    "a start on a host restarted since the make listens on its row's port before the runtime starts it, and moves a machine whose port another program holds to a free one no other machine of the host holds, answering that endpoint",
     () =>
       Effect.gen(function* () {
         const before = yield* runner({ relayed: true });
-        const made = yield* finished(before, makes("dev"));
+        const dev = yield* finished(before, makes("dev"));
+
+        const app = yield* finished(
+          before,
+          makes("app", { taken: [relayPorts] })
+        );
+
         const host = yield* runner({ relayed: true, fake: before.fake });
 
-        const blocked = ref("dev", {
-          ...reached(relayPorts + 5),
-          ...(made.outcome.handle === undefined
-            ? {}
-            : { handle: made.outcome.handle }),
+        const opening = delivery({
+          _tag: "start",
+          keep: [],
+          machine: restarted("dev", dev, relayPorts + 5),
+          machines: [],
         });
 
-        const refused = yield* Effect.scoped(
-          Effect.andThen(
-            holding(portIn(blocked)),
-            finished(
-              host,
-              { _tag: "start", keep: [], machine: blocked, machines: [] },
-              2
-            )
-          )
-        );
-
-        expect(errorOf(refused)).toStrictEqual(["failed", "Internal"]);
-        expect(refused.error?.message).toMatch(refusedListen(portIn(blocked)));
-        expect(host.fake.calls).not.toContain("start dev");
-
         const { release, entered } = host.fake.holdNext("start");
-
-        const opening = delivery(
-          { _tag: "start", keep: [], machine: blocked, machines: [] },
-          3
-        );
 
         yield* deliver(host, opening);
         yield* entered;
 
-        const listening = yield* accepts(portIn(blocked));
+        const listening = yield* accepts(relayPorts + 5);
 
         yield* release;
+
+        const other = ref("other", reached(relayPorts + 2));
+        const blocked = restarted("app", app, relayPorts + 6);
+
+        const moved = yield* Effect.scoped(
+          Effect.andThen(
+            holding(portIn(blocked)),
+            finished(host, {
+              _tag: "start",
+              keep: [],
+              machine: blocked,
+              machines: [other],
+            })
+          )
+        );
 
         expect([
           listening,
           (yield* ended(host, opening.id)).status,
         ]).toStrictEqual([true, "done"]);
+        expect([moved.status, moved.outcome.endpoint]).toStrictEqual([
+          "done",
+          { host: "127.0.0.1", port: relayPorts + 3 },
+        ]);
+        expect(yield* roundTrip(relayPorts + 3, "moved")).toBe("moved");
+        expect(yield* accepts(portIn(other))).toBe(false);
+        expect(host.fake.calls).toContain("start app");
       })
   );
 

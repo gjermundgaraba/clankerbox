@@ -738,13 +738,30 @@ export const make = (
       });
     };
 
+    const relayed = (
+      progress: Progress,
+      machine: Target,
+      port: number,
+      taken: ReadonlySet<number>
+    ) =>
+      Effect.flatMap(reaches.open(machine, port, taken), (at) =>
+        Effect.sync(() => {
+          if (Option.isSome(at) && at.value !== port) {
+            progress.outcome = {
+              ...progress.outcome,
+              endpoint: reaches.endpoint(at.value),
+            };
+          }
+        })
+      );
+
     const made = (
       progress: Progress,
       step: Make,
       port: number
     ): Effect.Effect<void, HostError> =>
       Effect.gen(function* () {
-        const { machine, source, machines, authorizedKeys, join } = step;
+        const { machine, source, machines, authorizedKeys, join, taken } = step;
 
         yield* source._tag === "base"
           ? runtime.sizable(machine, machine, machine, false)
@@ -768,7 +785,7 @@ export const make = (
 
         progress.outcome = { ...progress.outcome, handle, sizes };
 
-        yield* reaches.open(ref, port);
+        yield* relayed(progress, ref, port, new Set(taken));
 
         if (
           source._tag === "base" &&
@@ -838,8 +855,16 @@ export const make = (
 
             const { port } = step.machine;
 
+            const taken = new Set(
+              machines.flatMap((other) =>
+                other.port === undefined ? [] : [other.port]
+              )
+            );
+
             const started = Effect.andThen(
-              port === undefined ? Effect.void : reaches.open(machine, port),
+              port === undefined
+                ? Effect.void
+                : relayed(progress, machine, port, taken),
               runtime.start(machine, keep)
             );
 

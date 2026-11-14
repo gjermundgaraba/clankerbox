@@ -131,8 +131,9 @@ domain file never imports `platform/` or `composition/`.
   a probe finds it free. A `relayed` runtime's port it binds as it claims it, so
   no other program takes it while the VM boots, and holds it for the machine
   until a remove or a failed make lets it go; it relays it once the make has
-  made the VM, and on adopt binds it again, or another port where another
-  program took that one while the host was down, answering where.
+  made the VM, and on a start or an adopt binds it again, or another port, none
+  of the host's other machines', where another program took that one while the
+  host was down, answering where.
 - Ports: `Runtime` (`runtime.ts`), with its `traits`, its `guest` (`debian` or
   `macos`, which picks the base `guest.ts` prepares), its `reach` (`published` or `relayed`)
   its `prepares` (`always` where its images lack the login user, else

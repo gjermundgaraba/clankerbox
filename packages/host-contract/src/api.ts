@@ -190,8 +190,9 @@ export type Operation = typeof Operation.Type;
 
 /**
  * What a step leaves that only its host can tell. A make answers its machine's `handle`, the
- * `endpoint` it gave it as soon as it has one, and the `sizes` the runtime gave it; a capture and a
- * fetch answer their checkpoint's `handle`.
+ * `endpoint` it gave it as soon as it has one, and the `sizes` the runtime gave it; a start whose
+ * machine's port another program took answers the `endpoint` it moved it to; a capture and a fetch
+ * answer their checkpoint's `handle`.
  */
 export const Outcome = Schema.Struct({
   handle: Schema.optionalKey(Handle),
