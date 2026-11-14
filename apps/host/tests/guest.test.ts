@@ -353,13 +353,17 @@ const guestShells = [
       .status === 0,
 }));
 
-const launched = (shell: readonly string[], invocation: Invocation) => {
+const launched = (
+  shell: readonly string[],
+  invocation: Invocation,
+  env?: Readonly<Record<string, string>>
+) => {
   const command = guestCommand(invocation);
 
   return outputOf(
     shell[0] ?? "",
     [...shell.slice(1), ...command.argv.slice(1)],
-    { input: new TextEncoder().encode(command.stdin ?? "") }
+    { env, input: new TextEncoder().encode(command.stdin ?? "") }
   );
 };
 
@@ -655,6 +659,37 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(
           path.dirname((yield* readFile(path.join(root, "ran"))).trim())
         ).toBe(path.join(root, "var", "tmp"));
+      })
+  );
+
+  it.effect(
+    "a stop, pause or delete hook runs under the guest's timeout at its limit, and a plain command under none",
+    () =>
+      Effect.gen(function* () {
+        const { runtime, machine } = yield* based;
+        const headers: string[] = [];
+
+        const recording = Runtime.of({
+          ...runtime,
+          exec: (target, command) => {
+            headers.push((command.stdin ?? "").split("\n")[0] ?? "");
+
+            return runtime.exec(target, command);
+          },
+        });
+
+        for (const leaving of ["stop", "pause", "delete"] as const) {
+          yield* leave(recording, machine, leaving, 120);
+        }
+
+        yield* runCommand(recording, { machine, argv: ["/bin/true"] });
+
+        expect(headers.map((header) => header.split(" ")[2])).toStrictEqual([
+          "120",
+          "120",
+          "120",
+          "0",
+        ]);
       })
   );
 
@@ -2006,6 +2041,7 @@ const shellCases = (shell: readonly string[]) => {
               Effect.all([
                 launched(shell, { argv }),
                 launched(shell, { argv, env: { A: "a" } }),
+                launched(shell, { argv, timeoutSeconds: 5 }),
               ]),
               (both) => both.map(({ code, stdout }) => ({ code, stdout }))
             )
@@ -2015,8 +2051,51 @@ const shellCases = (shell: readonly string[]) => {
             named.flatMap(() => [
               { code: 127, stdout: "" },
               { code: 127, stdout: "" },
+              { code: 127, stdout: "" },
             ])
           );
+        })
+    );
+
+    it.effect(
+      "a timed command ends at its limit under the guest's timeout, with what it started",
+      () =>
+        Effect.gen(function* () {
+          const [took, { code }] = yield* Effect.timed(
+            launched(shell, {
+              argv: ["sh", "-c", "sleep 30 & wait"],
+              env: { A: "a" },
+              timeoutSeconds: 1,
+            })
+          );
+
+          expect(code).not.toBe(0);
+          expect(Duration.toSeconds(took)).toBeLessThan(10);
+        })
+    );
+
+    it.effect(
+      "a timed command runs whole where the guest's timeout doesn't take -k",
+      () =>
+        Effect.gen(function* () {
+          const dir = yield* scratch;
+
+          yield* write(
+            path.join(dir, "timeout"),
+            "#!/bin/sh\necho 'timeout: unknown option -- k' >&2\nexit 1\n"
+          );
+          yield* chmod(path.join(dir, "timeout"), 0o755);
+
+          const ran = yield* launched(
+            shell,
+            { argv: ["sh", "-c", "sleep 2; echo whole"], timeoutSeconds: 1 },
+            { PATH: `${dir}:${process.env["PATH"] ?? ""}` }
+          );
+
+          expect({ code: ran.code, stdout: ran.stdout }).toStrictEqual({
+            code: 0,
+            stdout: "whole\n",
+          });
         })
     );
   });

@@ -66,7 +66,10 @@ export interface Invocation {
   readonly env?: Readonly<Record<string, string>> | undefined;
   readonly user?: string | undefined;
   readonly stdin?: string | undefined;
+  readonly timeoutSeconds?: number | undefined;
 }
+
+const killGraceSeconds = 5;
 
 // dash's and bash's `read` take a pipe's input a byte at a time, so the command gets the rest:
 // https://git.kernel.org/pub/scm/utils/dash/dash.git/tree/src/miscbltin.c?h=v0.5.12#n151
@@ -78,6 +81,11 @@ export interface Invocation {
 // A shell copies a string whole at each append and `"$@"` whole at each `set`, and bash 3.2 slows
 // with each variable it holds, so values wait in at most 1000 variables, named in strings of 100,
 // and a value's lines are joined 1000 at a time by `"$*"`, then its pieces at once.
+// A timed command runs under the guest's `timeout`, if it takes `-k`. GNU's, BSD's and uutils'
+// send TERM to the process group they run the command in, so its children end too; busybox's,
+// which takes `-k` from 1.35, signals the command alone:
+// https://github.com/coreutils/coreutils/blob/v9.5/src/timeout.c#L239
+// https://github.com/mirror/busybox/blob/1_36_0/coreutils/timeout.c#L130
 const launcher = [
   "set -e",
   "nl='",
@@ -93,8 +101,10 @@ const launcher = [
   "  done",
   `  eval "join_lines $h$p"`,
   "}",
-  "read -r values pairs",
-  "set --",
+  "read -r values pairs limit",
+  "timed=",
+  `if [ "$limit" -gt 0 ] && timeout -k 1 -- 1 true >/dev/null 2>&1; then timed="timeout -k ${killGraceSeconds} -- $limit"; fi`,
+  `if [ "$pairs" -eq 0 ]; then set -- $timed; else set --; fi`,
   "i=0",
   "j=0",
   "held=",
@@ -116,13 +126,15 @@ const launcher = [
   `  [ "$k" -eq 0 ] || { eval "join_lines $pieces"; value=$joined; }`,
   `  eval "v$j=\\$value"`,
   `  part="$part \\"\\$v$j\\""`,
+  `  if [ "$i" -eq "$pairs" ]; then part="$part $timed"; fi`,
   "  case $j in *00) held=$held$part part= ;; esac",
   `  if [ "$j" -eq 1000 ] || [ "$i" -eq "$values" ]; then`,
   `    eval "set -- \\"\\$@\\"$held$part"`,
   "    j=0 held= part=",
   "  fi",
   "done",
-  `eval "first=\\\${$((pairs + 1))}"`,
+  `if [ -n "$timed" ]; then skip=5; else skip=0; fi`,
+  `eval "first=\\\${$((pairs + skip + 1))}"`,
   `case $first in`,
   `  *=*) printf '%s: not run, as env takes a word holding = for a variable\\n' "$first" >&2; exit 127 ;;`,
   `  -) printf '%s: not run, as env takes a lone - for -i\\n' "$first" >&2; exit 127 ;;`,
@@ -141,6 +153,7 @@ export const guestCommand = ({
   env,
   user,
   stdin,
+  timeoutSeconds,
 }: Invocation): Command => {
   const values = [
     ...Object.entries(env ?? {}).map(([name, value]) => `${name}=${value}`),
@@ -151,7 +164,7 @@ export const guestCommand = ({
     argv: ["/bin/sh", "-c", launcher, "clankerbox"],
     user,
     stdin: [
-      `${values.length} ${values.length - argv.length}\n`,
+      `${values.length} ${values.length - argv.length} ${timeoutSeconds ?? 0}\n`,
       ...values.map((value) => `${value.split("\n").length} ${value}\n`),
       stdin ?? "",
     ].join(""),
@@ -229,7 +242,12 @@ const ran = (
   Effect.gen(function* () {
     const output = keptOutput();
 
-    const drain = drained(runtime, machine, { argv, env, user, stdin }, output);
+    const drain = drained(
+      runtime,
+      machine,
+      { argv, env, user, stdin, timeoutSeconds },
+      output
+    );
 
     const exitCode =
       timeoutSeconds === undefined
