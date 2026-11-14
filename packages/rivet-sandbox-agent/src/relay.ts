@@ -27,22 +27,16 @@ const relayed = (socket: Socket, to: string | undefined) => {
 };
 
 /**
- * A sandbox's port on loopback, which the provider holds for the sandbox's whole life, so no other
- * program can listen there while its tunnel is down. Each connection goes to the socket `to` names
- * as it comes, that of a tunnel that is open, with each side's end of it, and one that comes while
- * `to` names none is reset. Neither the port nor a connection keeps the process running.
+ * `server` on a loopback port the OS picks, until the scope ends. An error the server meets once
+ * it listens, as an accept that fails, costs at most that connection, and the port stays held.
  */
-export const listen = (
+export const listenOn = (
   machine: string,
-  to: () => string | undefined
+  server: Server
 ): Effect.Effect<Relay, LocalTunnelError, Scope.Scope> =>
   Effect.acquireRelease(
     Effect.callback<Server, LocalTunnelError>((resume) => {
-      const server = createServer({ allowHalfOpen: true }, (socket) => {
-        relayed(socket, to());
-      });
-
-      server.once("error", (error) => {
+      const refused = (error: Error) => {
         resume(
           Effect.fail(
             new LocalTunnelError({
@@ -50,20 +44,23 @@ export const listen = (
             })
           )
         );
-      });
+      };
 
+      server.once("error", refused);
       server.listen(0, "127.0.0.1", () => {
+        server.off("error", refused);
+        server.on("error", Function.constVoid);
         server.unref();
         resume(Effect.succeed(server));
       });
     }),
-    (server) =>
+    (listening) =>
       Effect.sync(() => {
-        server.close();
+        listening.close();
       })
   ).pipe(
-    Effect.flatMap((server) => {
-      const address = server.address();
+    Effect.flatMap((listening) => {
+      const address = listening.address();
 
       return address === null || Predicate.isString(address)
         ? Effect.fail(
@@ -73,4 +70,20 @@ export const listen = (
           )
         : Effect.succeed({ port: address.port });
     })
+  );
+
+/**
+ * A sandbox's port on loopback, which the provider holds for the sandbox's whole life, so no other
+ * program can listen there while its tunnel is down. Each connection goes to the socket `to` names
+ * as it comes, that of a tunnel that is open, with each side's end of it, and one that comes while
+ * `to` names none is reset. Neither the port nor a connection keeps the process running.
+ */
+export const listen = (machine: string, to: () => string | undefined) =>
+  Effect.suspend(() =>
+    listenOn(
+      machine,
+      createServer({ allowHalfOpen: true }, (socket) => {
+        relayed(socket, to());
+      })
+    )
   );

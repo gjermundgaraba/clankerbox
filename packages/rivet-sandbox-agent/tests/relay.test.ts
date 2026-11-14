@@ -7,8 +7,8 @@ import { layer } from "@effect/vitest";
 import { Effect } from "effect";
 import { afterEach, expect } from "vite-plus/test";
 
-import { listen } from "../src/relay.ts";
-import { cleanUp, cleanups, scratch } from "./support.ts";
+import { listen, listenOn } from "../src/relay.ts";
+import { cleanUp, cleanups, free, scratch } from "./support.ts";
 
 const agentEndingFirst = async () => {
   const socket = path.join(await scratch(), "agent.sock");
@@ -73,6 +73,23 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           greeted,
           heard: yield* Effect.promise(async () => await heard),
         }).toStrictEqual({ greeted: "hello", heard: "late" });
+      }).pipe(Effect.scoped)
+  );
+
+  it.effect(
+    "a listening relay takes each error its server meets, as a failed accept, and keeps its port",
+    () =>
+      Effect.gen(function* () {
+        const server = createServer();
+        const { port } = yield* listenOn("kept", server);
+
+        const emitted = () => {
+          server.emit("error", new Error("accept EMFILE"));
+          server.emit("error", new Error("accept EMFILE"));
+        };
+
+        expect(emitted).not.toThrow();
+        expect(yield* Effect.promise(async () => await free(port))).toBe(false);
       }).pipe(Effect.scoped)
   );
 });
