@@ -22,6 +22,47 @@ import {
   stubInfo as info,
 } from "./support.ts";
 
+const execPagedHost = (id: string, status: number) =>
+  Effect.acquireRelease(
+    Effect.callback<Server>((resume) => {
+      const answers = new Map<string, unknown>([
+        ["/host/readHost", { ...info, id }],
+        ["/host/adoptMachines", { adopted: [], unresolved: [] }],
+      ]);
+
+      const server = createServer((incoming, response) => {
+        const paged = incoming.url === "/host/execMachine";
+
+        response.writeHead(paged ? status : 200, {
+          "content-type": paged ? "text/html" : "application/json",
+        });
+        response.end(
+          paged
+            ? `<html>${status}</html>`
+            : JSON.stringify(answers.get(incoming.url ?? "") ?? [])
+        );
+      });
+
+      server.listen({ host: "127.0.0.1", port: 0 }, () => {
+        resume(Effect.succeed(server));
+      });
+    }),
+    (server) =>
+      Effect.callback<undefined>((resume) => {
+        server.close(() => {
+          resume(Effect.undefined);
+        });
+      })
+  ).pipe(
+    Effect.map((server) => {
+      const { port } = Schema.decodeUnknownSync(
+        Schema.Struct({ port: Schema.Finite })
+      )(server.address(), { onExcessProperty: "ignore" });
+
+      return `http://127.0.0.1:${port}`;
+    })
+  );
+
 layer(NodeServices.layer, { excludeTestServices: true })(
   "a host's log",
   (it) => {
@@ -66,6 +107,48 @@ layer(NodeServices.layer, { excludeTestServices: true })(
               /^host smolvm didn't answer: the connection to it failed \(Transport error .+\)$/u
             ),
             "host smolvm answers again",
+          ]);
+        })
+    );
+
+    it.effect(
+      "a call that a host answers as its contract doesn't is logged at warn with what its HTTP client said, once until the host answers again",
+      () =>
+        Effect.gen(function* () {
+          const lines: string[] = [];
+          const url = yield* execPagedHost("flaky", 503);
+
+          const served = yield* running({
+            members: [{ id: "flaky", url, draining: false }],
+            logger: Logger.make(({ logLevel, message }) => {
+              lines.push(`${logLevel} ${String(message)}`);
+            }),
+          });
+
+          const client = yield* clientOf(served.url);
+
+          yield* client.create("dev", request("dev", { host: "smolvm" }));
+          yield* patched(served.store, "dev", { host: "flaky" });
+
+          for (const _ of [1, 2]) {
+            yield* Effect.flip(
+              client.execMachine({ id: "dev", argv: ["true"] })
+            );
+          }
+
+          yield* client.capacity;
+          yield* Effect.flip(client.execMachine({ id: "dev", argv: ["true"] }));
+
+          expect(
+            lines.filter((line) => /^\w+ host flaky /u.test(line))
+          ).toStrictEqual([
+            expect.stringMatching(
+              /^Warn host flaky didn't answer as the host contract says: .+ \(.*503 POST http:\/\/127\.0\.0\.1:\d+\/host\/execMachine\)\)$/u
+            ),
+            "Info host flaky answers again",
+            expect.stringMatching(
+              /^Warn host flaky didn't answer .+\/host\/execMachine\)\)$/u
+            ),
           ]);
         })
     );
@@ -258,6 +341,7 @@ layer(NodeServices.layer, { excludeTestServices: true })(
               report.unreported.map(({ host, state }) => [host, state]),
               `${status}`
             ).toStrictEqual([["paged", "unreachable"]]);
+
             expect(
               [report.unreported[0]?.problem, exec.message],
               `${status}`

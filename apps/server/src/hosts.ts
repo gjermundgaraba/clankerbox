@@ -77,16 +77,16 @@ export interface Interface {
    * One call to a host, bounded by `readTimeout` unless `within` says otherwise, as a command runs
    * as long as its request does. It fails with an error its action declares, as the host answered
    * it, and with `Unreachable` for every way it got no answer: `Unsent` for one that never left.
+   * A call or a read that gets no answer logs at warn, with what the HTTP client said, the first
+   * time since the host last answered one, and at debug after; the next answer logs that the host
+   * answers again.
    */
   readonly call: <A, E>(
     host: string,
     run: (api: HostApi) => Effect.Effect<A, E>,
     within?: Duration.Duration
   ) => Effect.Effect<A, Extract<E, HostError> | Unreachable>;
-  /**
-   * Reads the host, and checks it calls itself what the config says. Every look at a host comes
-   * through here, so this logs when it stops answering and when it answers again, and no one else.
-   */
+  /** Reads the host, and checks it calls itself what the config says. */
   readonly read: (host: string) => Effect.Effect<Fresh, Unreachable>;
   /** What the host last said, read or not since, unless a read since found it incompatible. */
   readonly known: (host: string) => HostInfo | undefined;
@@ -222,15 +222,16 @@ export const make = (
 
     const unanswering = ({ host, message, logOnly }: Unreachable) =>
       Effect.suspend(() => {
+        const line =
+          logOnly === undefined ? message : `${message} (${logOnly})`;
+
         if (unanswered.has(host)) {
-          return Effect.void;
+          return Effect.logDebug(line);
         }
 
         unanswered.add(host);
 
-        return Effect.logWarning(
-          logOnly === undefined ? message : `${message} (${logOnly})`
-        );
+        return Effect.logWarning(line);
       });
 
     const reaching = <A, E>(
@@ -262,16 +263,7 @@ export const make = (
                       error: E | HttpClientError.HttpClientError
                     ): error is Extract<E, HostError> => isHostError(error),
                     Effect.fail,
-                    (error) => {
-                      const failed = unusable(host, error);
-
-                      return Effect.andThen(
-                        failed.logOnly === undefined
-                          ? Effect.void
-                          : Effect.logDebug(`host ${host}: ${failed.logOnly}`),
-                        Effect.fail(failed)
-                      );
-                    }
+                    (error) => Effect.fail(unusable(host, error))
                   )
                 ),
                 within
@@ -284,7 +276,12 @@ export const make = (
         const refused = incompatibles.get(host);
 
         return refused === undefined
-          ? reaching(host, run, within)
+          ? reaching(host, run, within).pipe(
+              Effect.tap(() => answered(host)),
+              Effect.tapError((error) =>
+                isHostError(error) ? answered(host) : unanswering(error)
+              )
+            )
           : Effect.fail(new Unsent({ host, message: refused.message }));
       });
 
