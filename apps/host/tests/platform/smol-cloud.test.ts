@@ -798,6 +798,40 @@ describe("the smol cloud runtime over an account without a card", () => {
   );
 
   it.live(
+    "a delete of a machine whose fork lives fails with smol cloud's reason, and is done once the fork is gone",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { fake, runtime } = yield* onCloud;
+          const dev = yield* made(runtime, "dev");
+
+          yield* runtime.start(dev, new Set());
+
+          const twin = machineOf("twin");
+
+          const { handle } = yield* runtime.make(
+            twin,
+            { _tag: "machine", machine: { ...dev, ...sizes } },
+            { _tag: "none" }
+          );
+
+          const refused = yield* Effect.flip(runtime.delete(dev, new Set()));
+
+          expect(refused.message).toContain("delete its branches");
+          expect(fake.machines.has(dev.handle)).toBe(true);
+
+          yield* runtime.delete(
+            { name: "twin", instance: twin.instance, handle },
+            new Set()
+          );
+          yield* runtime.delete(dev, new Set());
+
+          expect([...fake.machines.keys()]).toStrictEqual([]);
+        })
+      )
+  );
+
+  it.live(
     "a resize whose request was lost sends it again until smol cloud holds the sizes asked",
     () =>
       Effect.scoped(

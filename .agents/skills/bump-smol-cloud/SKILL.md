@@ -101,6 +101,13 @@ Each is an assertion of the live suite, in the case named.
   `Authorization`, carries raw TCP to sshd, and doesn't wake a stopped machine.
 - Memory, vCPUs and disk grow on a running machine and on a stopped one;
   memory doesn't shrink (400).
+- A branch answers its source's `autoStopSeconds` and `ttlSeconds`, and the
+  source's delete answers 409 `conflict`, `checkpoint has 1 live branch;
+  delete its branches before deleting it`, while the branch lives (measured
+  in fix round 1's probe-9b). The adapter's delete fails with that reason
+  after three refusals, and the control plane runs it again at its next
+  check. (`smol-cloud.ts`'s `settle`; the fake's `branchedFrom` and the
+  fork-delete test.)
 - A resize is absolute, so the adapter follows boat's rule for a lost
   answer: it reads the machine until it rests, is done when it holds the
   sizes asked, and sends the resize again otherwise, at most three times.

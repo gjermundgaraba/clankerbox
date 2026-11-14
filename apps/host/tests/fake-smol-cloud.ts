@@ -39,6 +39,7 @@ export interface FakeMachine {
   readonly createdAt: string;
   readonly root: string;
   readonly restoredFrom: string | undefined;
+  readonly branchedFrom: string | undefined;
   pausedWith: string | undefined;
 }
 
@@ -384,6 +385,7 @@ export const fakeSmolCloud = (
         memoryMb: body.resources.memoryMb ?? 8192,
         diskGb: body.resources.diskGb ?? 20,
         restoredFrom: undefined,
+        branchedFrom: undefined,
       };
 
       const tooBig = oversized(fields);
@@ -508,7 +510,19 @@ export const fakeSmolCloud = (
       return answer(200, recordOf(machine));
     };
 
-    const deleteMachine = async (machine: FakeMachine) => {
+    const deleteMachine = async (machine: FakeMachine): Promise<Answer> => {
+      const branches = [...machines.values()].filter(
+        (each) => each.branchedFrom === machine.id
+      ).length;
+
+      if (branches > 0) {
+        return problem(
+          409,
+          "conflict",
+          `checkpoint has ${branches} live branch; delete its branches before deleting it`
+        );
+      }
+
       killAll(machine);
       machines.delete(machine.id);
       await rm(machine.root, { recursive: true, force: true });
@@ -557,6 +571,7 @@ export const fakeSmolCloud = (
           state: "stopped",
           ...checkpoint.sizes,
           restoredFrom: checkpoint.id,
+          branchedFrom: undefined,
         },
         checkpoint.root
       );
@@ -588,6 +603,7 @@ export const fakeSmolCloud = (
           memoryMb: source.memoryMb,
           diskGb: source.diskGb,
           restoredFrom: undefined,
+          branchedFrom: source.id,
         },
         source.root
       );
