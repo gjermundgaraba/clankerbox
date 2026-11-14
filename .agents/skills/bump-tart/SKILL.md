@@ -124,9 +124,9 @@ Each: what Tart does, where, and what of ours depends on it.
   and one of a running VM's disk is crash-consistent at best. One whose source
   began to run while it cloned is refused `WrongState` after the clone, and
   its copy is left to the fork's undo and the host's discard of a failed
-  capture. A make whose boot Apple refuses removes its clone, and fails
-  `Capacity` whether or not that removal does, which the make's undo then
-  finishes (the tests of Apple's refusal and of a hand run during a copy).
+  capture. A make whose boot Apple refuses fails `Capacity` and leaves its
+  clone to the make's undo, which removes it before the create moves (the
+  tests of Apple's refusal and of a hand run during a copy).
 - Clone regenerates a colliding MAC, checking one Tart home only
   (`hasVMsWithMACAddress`, Commands/Clone.swift;
   `hasRunningMACCollision`, Commands/Run.swift). Ours: no `--random-mac`;

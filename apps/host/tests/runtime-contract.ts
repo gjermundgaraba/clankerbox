@@ -695,7 +695,10 @@ export const runtimeContract = (subject: Subject): void => {
     );
 
     it.live.skipIf(lacks("quota"))(
-      needing("quota", "refuses a make for want of room and makes nothing"),
+      needing(
+        "quota",
+        "refuses a make for want of room as Capacity, and the undo that follows leaves nothing"
+      ),
       () =>
         withFixture(({ runtime, faults }) =>
           Effect.gen(function* () {
@@ -706,6 +709,15 @@ export const runtimeContract = (subject: Subject): void => {
             const refused = yield* Effect.flip(made(runtime, "dev"));
 
             yield* quota(false);
+
+            const left = yield* runtime.find(sized("dev"));
+
+            if (left !== undefined) {
+              yield* runtime.delete(
+                { ...sized("dev"), handle: left },
+                new Set()
+              );
+            }
 
             expect(refused).toBeInstanceOf(Capacity);
             expect(yield* runtime.find(sized("dev"))).toBeUndefined();

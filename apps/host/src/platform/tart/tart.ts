@@ -774,14 +774,7 @@ export const make = (
       return Effect.gen(function* () {
         yield* copy(made.handle);
         yield* set(made, machine, ["--random-serial", ...sizes]);
-        yield* boot(made).pipe(
-          Effect.catchTag("Capacity", (refused) =>
-            Effect.andThen(
-              Effect.ignore(removed(made.handle), { log: "Warn" }),
-              Effect.fail(refused)
-            )
-          )
-        );
+        yield* boot(made);
 
         return made.handle;
       });

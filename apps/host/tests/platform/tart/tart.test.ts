@@ -571,7 +571,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "Apple's refusal of a third VM, read from the job's log, is Capacity",
+    "Apple's refusal of a third VM, read from the job's log, is Capacity, and leaves its clone, which no VM count holds, to the control plane's undo",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -595,35 +595,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(error.message).toBe(
           "Apple's limit of 2 running macOS VMs per Mac refused third: The number of VMs exceeds the system limit (other running VMs: a1, a2)"
         );
-        expect(mac.vms.has(vm)).toBe(false);
-      })
-  );
-
-  it.effect(
-    "Apple's refusal stays Capacity when tart can't delete the clone, which the control plane's undo removes",
-    () =>
-      Effect.gen(function* () {
-        const { mac, runtime } = yield* runtimeOn();
-        const machine = machineOn("third");
-        const vm = vmOf(machine);
-        const log = path.join(jobsDir(mac.settings.stateDir), `${vm}.log`);
-
-        mac.hooks.kickstart = (label) => {
-          mac.exited.set(label, 1);
-          writeFileSync(
-            log,
-            "The number of VMs exceeds the system limit (other running VMs: a1, a2)\n"
-          );
-        };
-
-        mac.hooks.delete = () => ({ exitCode: 3, stderr: "tart is busy\n" });
-
-        const error = yield* Effect.flip(
-          runtime.make(machine, fromImage("base"), sshPort)
-        );
-
-        expect(error._tag).toBe("Capacity");
-        expect(mac.vms.has(vm)).toBe(true);
+        expect(mac.vms.get(vm)).toBe("stopped");
+        expect(
+          (yield* runtime.capacity([{ _tag: "found", machine }])).find(
+            ({ resource }) => resource === "runningVms"
+          )
+        ).toMatchObject({ used: 0 });
       })
   );
 
