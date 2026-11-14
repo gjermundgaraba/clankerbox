@@ -29,6 +29,7 @@ import { Runtime } from "../../src/runtime.ts";
 import type { Handle, Target } from "../../src/runtime.ts";
 import { Tailnet } from "../../src/tailnet.ts";
 import { hostConfig, loopbackServer, suitePorts } from "../support.ts";
+import { ended, endsACutCommand } from "./cut.ts";
 import { liveHostId, liveMark, runOfName } from "./marks.ts";
 import {
   ledgerOf,
@@ -1114,6 +1115,47 @@ describe.runIf(live)("the smol cloud runtime on a host, live", () => {
         Effect.provide(NodeHttpClient.layerNodeHttp)
       ),
     Duration.toMillis(Duration.minutes(30))
+  );
+
+  it.live(
+    "ends in the guest a command its exec's timeout cut, and not one beside it",
+    () =>
+      Effect.gen(function* () {
+        expect(key, "SMOL_MACHINES_API_KEY is set").not.toBe("");
+
+        yield* clearLeftovers;
+
+        const { runtime } = yield* onHost;
+        const source = refOf("cut");
+
+        const made = yield* runtime.make(
+          source,
+          { _tag: "image", image },
+          { _tag: "none" }
+        );
+
+        noted(made.handle);
+
+        const target: Target = { ...source, handle: made.handle };
+
+        yield* Effect.addFinalizer(() =>
+          Effect.ignore(runtime.delete(target, new Set()))
+        );
+
+        yield* runtime.start(target, new Set());
+        expect(
+          yield* endsACutCommand(runtime, target, (line) =>
+            Effect.sync(() => {
+              answered("an exec cut by its timeout", line);
+            })
+          )
+        ).toStrictEqual(ended);
+      }).pipe(
+        Effect.scoped,
+        Effect.ensuring(clearLeftovers),
+        Effect.provide(NodeHttpClient.layerNodeHttp)
+      ),
+    Duration.toMillis(Duration.minutes(10))
   );
 });
 
