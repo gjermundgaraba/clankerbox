@@ -36,7 +36,8 @@ $S/cleanup.sh "$RUN"
 it builds, builds the CLI, makes a fresh run directory under `$TMPDIR`,
 starts the hosts and the control plane in the background and waits until they
 serve. It prints the control plane's URL on stderr and the run directory on
-stdout. A build or start that fails prints its log and the evidence directory.
+stdout. A build that fails prints its log and the evidence directory, and a
+host or control plane that exits before it serves prints its log.
 Each launch is a new run: runs never share a directory, port or evidence.
 
 The fleet is a runtime, `smolvm` by default, with `hosts` of it, 1 by default:
@@ -63,19 +64,27 @@ fleet's order and are named `<runtime>-<n>`, numbered per runtime: `fixed-1`,
   or `large` (8, 16G, 149G); a capture or fork takes a stopped machine; and
   `CLANKERBOX_FAKE_BOAT_WARM_SECONDS` sets how long a stopped sandbox stays warm,
   so a start within it spends no start, which the fake keeps for minutes
-  otherwise. Set `CLANKERBOX_FAKE_TAILNET=1` for `fault.sh start-host` too, or
-  the restarted host joins nothing.
+  otherwise.
 
 A host runs `apps/host/tests/<runtime>/serve.ts` where its runtime has one, and
 `apps/host/tests/serve.ts` otherwise. Each is a thin entry over
 `apps/host/tests/serving.ts`, which serves a host for the run's protocol and, for
 a provider, its fake API and the faults it takes.
 
+Each serve program reads its settings from the environment `launch.sh` and
+`fault.sh start-host` run it in. `CLANKERBOX_FAKE_TAILNET=1` has every host join
+its machines to a fake tailnet; set it for `start-host` too, or the restarted
+host joins nothing. A fake runtime's host also reads `CLANKERBOX_FAKE_PIN`, the
+runtime pin its fake runs, `CLANKERBOX_FAKE_UBUNTU_IMAGE`, the image smolvm's
+`ubuntu` names, and `CLANKERBOX_FAKE_BUILDS`, a JSON file of the host's `builds`
+setting, for a build store.
+
 The budget applies to each host. A `fixed` host's fake has no admission, so no
 start there is checked against it; it shows only as the limit its `capacity`
 reports. The control plane lists its hosts as it finds them in `hosts/`, not in
-the fleet's order, so name a host with `--host` where placement matters.
-
+the fleet's order, so name a host with `--host` where placement matters. A host
+is draining while `hosts/<id>.draining` exists. The control plane checks for
+the file at each placement and each `hosts` read.
 
 While it serves, the run directory holds `runtime` (the first host's runtime,
 whose base the recipes name), `server.ready` and `server.url` (the control
@@ -89,6 +98,7 @@ outlives its host as a real runtime's does) and `evidence/`.
 | ------------------- | --------------------------------------------------------------------- |
 | `sources`           | the git tree of the sources built, for the report                     |
 | `build.log`         | the build's output                                                    |
+| `upgrade-build.log` | `upgrade.sh`'s build of the worktree it moves the run to              |
 | `server.log`        | the control plane's log, warnings included                            |
 | `host-<id>.log`     | that host's log                                                       |
 | `runtime-calls.txt` | one line per runtime call as it happens, such as `capture snap`; `find <name>` each time the host searches its runtime for a machine whose handle it wasn't given; and on `tart`, whose fake is relayed as Tart is, `relay <name>` each time a relay opens |
@@ -149,7 +159,10 @@ launch a new run. A control plane that is down answers `Unavailable`, exit 1.
 `fault.sh <run> start-server` starts it again on the same port and state.
 `fault.sh <run> kill-host <id>` kills a host, `fault.sh <run> stop-host <id>`
 stops it with `TERM`, as its unit's stop does, and `fault.sh <run> start-host <id>`
-starts either again on the same port under a new `boot`.
+starts either again on the same port under a new `boot`. `stop-host` waits for
+the host to exit. A `smol-cloud` or `boat` host exits only once each step in
+flight has ended, which a rented step bounds at 10 minutes, so kill a host that
+holds a capture rather than stop it.
 `fault.sh <run> freeze-host <id>` sends `STOP` to a host, so every call to it
 times out while it keeps its machines and steps, and `fault.sh <run> thaw-host
 <id>` sends `CONT`.
@@ -163,7 +176,7 @@ recheck that reads it.
 make the machine anyway 5 seconds later, as `landed <machine>` on fixed. The
 failed make's undo searches for the machine well within that and finds nothing,
 so the row rests undone with its instance retired, and the host's sweep deletes
-the machine at the first recheck after it lands, logging `sweep: deleting machine <instance> (<handle>)` in
+the machine at the first recheck after it lands, logging `sweep: deleting machine <instance> (<handle>), which the control plane retired` in
 `host-<id>.log`, and `delete <instance>` in `runtime-calls.txt` on fixed.
 `fault.sh <run> quota <id> on|off` has the host's fake refuse every make for
 want of room until it is off, which a create reads as `Capacity`.
@@ -184,7 +197,7 @@ host logs the answer as a `fault:` line in `host-<id>.log`, with its time, and
 1: `smolvm` and `tart`, whose fakes keep their machines running, refuse
 `drift`, as does `smol-cloud`, which isn't told a machine's instance by its
 name, and any host with no running machine of that name; one whose fake marks nothing refuses `land-late`, since nothing would
-sweep what landed; and `boat` refuses `hold-capture`, and `smol-cloud` and `boat` refuse `repin`. A host started with `CLANKERBOX_FAKE_FAIL_FIND` set to
+sweep what landed; and `boat` refuses `hold-capture`, and `smol-cloud` and `boat` refuse `repin`. A fake runtime's host started with `CLANKERBOX_FAKE_FAIL_FIND` set to
 names, comma-separated, as by `start-host` or `upgrade.sh`, fails each search
 for a machine of those names, as smolvm does when its database is locked.
 
@@ -204,7 +217,7 @@ So does what a restarted host held:
 
 | What the host held when it died     | Where it must end                                                               |
 | ----------------------------------- | ------------------------------------------------------------------------------- |
-| A capture                           | `capturing` while the host is down, then `failed` with its error: the row went `discarding`, which a client reads as `failed`, and the restarted host deletes the checkpoint its runtime names for that instance, which holds nothing: `deleteCheckpoint <name>` in `runtime-calls.txt` on `smolvm` and `tart`, and nothing on `fixed` and `smol-cloud`, whose runtimes derive no checkpoint's name |
+| A capture                           | `capturing` while the host is down, then `failed` with its error: the row went `discarding`, which a client reads as `failed`, and the restarted host deletes the checkpoint its runtime names for that instance, which holds nothing: `deleteCheckpoint <name>` in `runtime-calls.txt` on `smolvm` and `tart`, and nothing on `fixed` and `smol-cloud`, whose runtimes derive no checkpoint's handle. On `smol-cloud` the fake API made the checkpoint before it held the answer, and it stays until the machine's next start or delete, each of which deletes the machine's checkpoints that no row keeps |
 | A delete of a checkpoint            | `deleting` while the host is down, then `NotFound`                              |
 
 Run them with `hold-capture <id>`, then `checkpoint capture <machine> <name>
@@ -242,8 +255,8 @@ evidence directory and its `sources` with the result.
 
 ## Cleanup
 
-`cleanup.sh <run>` stops the control plane and the hosts this run started, and
-only while each PID still runs `serve.ts` for this run. It deletes nothing
+`cleanup.sh <run>` stops the control plane, the hosts and any fake provider API
+this run started, and only while each PID still runs `serve.ts` for this run. It deletes nothing
 itself. A stopped host removes its scratch directory under `$TMPDIR`, and a host
 killed with `fault.sh` leaves it behind. Run it after every run, failed ones
 included, and never kill by process name. Delete the run directory once you have

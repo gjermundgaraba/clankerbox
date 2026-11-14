@@ -17,10 +17,10 @@ that drive it here, with `--json` fields to check. `cb` is
 | RAM budget, one host | `RUN=$(launch.sh smolvm 2048)`; create 2G, then 1G | the second create's `error.tag` is `Capacity`, `retryable` `true`; `capacity --json` has `limit` |
 | A create moves to the next host | `RUN=$(launch.sh smolvm 2048 2)`; create 2G, then 2G | both `settled` with bare IDs; `capacity --json` shows one on each host; the client saw no host |
 | An unreachable host | `fault.sh "$RUN" kill-host smolvm-2` on a two-host run | `hosts --json` lists `smolvm-2` as down; a machine there reads `state` `unknown`; a create lands on `smolvm-1` |
-| Runtime traits | `cb hosts`, `cb hosts --json`, `cb get dev --json` | the hosts table has a `RUNTIME` column; each host that answers has `runtime` and `traits`, `traits.checkpoint` `ram` on smolvm and `disk` on tart; a machine has `traits` and no `kind` |
+| A runtime's name | `cb hosts`, `cb hosts --json`, `cb get dev --json` | the hosts table has a `RUNTIME` column; each host that answers has `runtime`, and a machine has `runtime`, with no `traits` on either |
 | A create on a named host | `RUN=$(launch.sh smolvm 2048 2)`; `cb create pin --base ubuntu --cpu 1 --ram 1G --disk 10G --host smolvm-2`, then `--host nope` | `capacity --json` counts `pin` on `smolvm-2`; `--host nope` answers `NotOffered`; `template build --host` lands the builder alike |
 | An image reference as the base | `cb create img --base docker.io/library/ubuntu:24.04 --cpu 1 --ram 1G --disk 10G` | `settled` on smolvm; `NotOffered` on tart, whose runtime takes only its named bases |
-| An upgrade from trunk | launch from a trunk worktree, create `keep` and capture `snap`, then `upgrade.sh "$RUN" <worktree>` | `get keep --json` has `traits`; `checkpoint get snap --json` keeps its `kind` |
+| An upgrade from trunk | launch from a trunk worktree, create `keep` and capture `snap`, then `upgrade.sh "$RUN" <worktree>` | `get keep --json` has `runtime`; `checkpoint get snap --json` keeps its `kind` |
 | A mixed fleet | `RUN=$(launch.sh fixed:1,smolvm:1)`, `cb hosts --json` | `fixed-1` and `smolvm-1` both `up`, with `runtime` `fixed` and `smolvm` |
 | Size classes | on `launch.sh fixed:1`, `cb create ci --base ubuntu --cpu 1 --ram 1G --disk 10G`, then `cb create odd --base ubuntu --cpu 3 --ram 6G --disk 40G --json` | `ci` is `settled` with the `small` class's sizes; `odd` is refused with no `create odd` in `runtime-calls.txt` |
 | A pause that stops | `cb pause ci` on a fixed host | `get ci --json`: `state` `stopped`, `desired` `paused`, `phase` `settled` |
