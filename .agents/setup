@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Prepares an Amp orb the way CI does: Vite+ (`vp`) at the version the catalog
+# pins, the Node.js `.node-version` pins, the workspace's dependencies, and the
+# guest shells the host's tests run the launcher under.
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+step() {
+  local started=$SECONDS
+  echo "==> $1"
+  shift
+  "$@"
+  echo "    done in $((SECONDS - started))s"
+}
+
+# An orb's clock can trail Debian's, which then rejects the index as not yet
+# valid, so apt-get skips that date check.
+apt_packages() {
+  local missing=()
+  for package in zsh busybox-static; do
+    dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q 'install ok installed' ||
+      missing+=("$package")
+  done
+  if ((${#missing[@]})); then
+    sudo apt-get update -qq -o Acquire::Check-Date=false
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "${missing[@]}"
+  fi
+}
+
+vp_bin="$HOME/.local/share/vite-plus/bin/vp"
+vp_version=$(sed -n 's/^  vite-plus: *//p' pnpm-workspace.yaml)
+
+# One vp serves every repository in the orb, so one pinning an older
+# version keeps the newer one.
+install_vp() {
+  local installed
+  installed=$("$vp_bin" --version 2>/dev/null | sed -n '1s/^vp v//p') || true
+  if [[ -z "$installed" || "$(printf '%s\n' "$vp_version" "$installed" | sort -V | head -1)" != "$vp_version" ]]; then
+    curl -fsSL https://vite.plus | VP_VERSION="$vp_version" VP_NODE_MANAGER=yes bash
+  fi
+}
+
+step "apt packages" apt_packages
+step "Vite+ $vp_version or newer" install_vp
+# The installer adds this to the login profiles, which this running script never reads.
+# shellcheck disable=SC1091
+. "$HOME/.config/vite-plus/env"
+step "Node.js and pnpm" vp env install
+step "dependencies" vp install --frozen-lockfile
