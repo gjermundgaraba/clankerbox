@@ -2913,7 +2913,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a create, a resize or a fork past the most vCPUs smolvm gives a machine is refused Unsizable, naming it, before anything is recorded",
     () =>
       Effect.gen(function* () {
-        const { client, fake, rows } = yield* served();
+        const { client, fake, row, rows } = yield* served();
 
         const created = yield* Effect.flip(
           client.create("big", request("big", { cpu: 255 }))
@@ -2924,6 +2924,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* client.create("dev", request("dev"));
         yield* client.stopMachine({ id: "dev" });
+
+        const stopped = yield* row("dev");
+
         fake.calls.length = 0;
 
         const resized = yield* Effect.flip(
@@ -2932,6 +2935,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(resized._tag).toBe("Unsizable");
         expect(resized.message).toContain("up to 254 vCPUs");
+        expect(yield* row("dev")).toStrictEqual(stopped);
+        expect(fake.calls).toStrictEqual([]);
 
         yield* client.startMachine({ id: "dev" });
 
@@ -3760,6 +3765,28 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         name: yield* copyOf("web@2"),
       });
     })
+  );
+
+  it.effect(
+    "a clone of a template past what its host grows a copy to live is refused Unsizable, naming the limit, before anything is recorded",
+    () =>
+      Effect.gen(function* () {
+        const { client, fake, rows } = yield* built();
+
+        const refused = yield* Effect.flip(
+          client.create("big", { template: "web", cpu: 17 })
+        );
+
+        expect(refused).toMatchObject({
+          _tag: "Unsizable",
+          message:
+            "machine big's host grows a copy live from the source's 2 vCPUs and 2G once it runs, to at most 16 vCPUs, and it was asked 17 vCPUs",
+        });
+        expect(yield* rows).toStrictEqual([]);
+        expect(fake.calls.filter((call) => call.includes("big"))).toStrictEqual(
+          []
+        );
+      })
   );
 
   it.effect(
