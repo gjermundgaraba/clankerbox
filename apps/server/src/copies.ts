@@ -4,7 +4,6 @@ import {
   fitted,
   formatSizes,
   givenSizes,
-  grownPast,
 } from "@clankerbox/host-contract/traits";
 import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
 import {
@@ -62,15 +61,9 @@ const copyRefusal = (
     }
 
     case "grow": {
-      const past = grownPast(traits, from, spec);
-
-      if (spec.diskGib < from.diskGib) {
-        return shrunkDisk;
-      }
-
-      return past === undefined
-        ? `machine ${name}'s host copies a machine only at its source's sizes or larger, so its vCPUs and RAM only grow from ${held}`
-        : `machine ${name}'s host grows a copy live from ${held} once it runs, to at most ${past.limit}, and it was asked ${past.asked}`;
+      return spec.diskGib < from.diskGib
+        ? shrunkDisk
+        : `machine ${name}'s host copies a machine only at its source's sizes or larger, so its vCPUs and RAM only grow from ${held}`;
     }
 
     case "any": {

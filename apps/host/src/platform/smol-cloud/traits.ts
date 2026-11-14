@@ -14,5 +14,5 @@ export const traits = (
   copies: "same",
   resize: { running: "grow", stopped: "grow" },
   sizes: { _tag: "free" },
-  limits: { least: {}, most, live: {} },
+  limits: { least: {}, most },
 });

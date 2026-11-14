@@ -42,8 +42,7 @@ type Bounds = typeof Bounds.Type;
  * - `sizes`: `free`, any sizes, or `classes`, named sizes a machine's vCPUs, RAM and disk must
  *   together equal one of.
  * - `limits`: what the runtime gives a machine of each size it caps: at `least` and at `most` that,
- *   at its create, its copy's make and its resize, and at most `live` that, where a running machine
- *   grows to it, by a resize or as a copy that grows does once it runs.
+ *   at its create, its copy's make and its resize, also where a running machine grows to it.
  */
 export const RuntimeTraits = Schema.Struct({
   runtime: RuntimeName,
@@ -62,7 +61,7 @@ export const RuntimeTraits = Schema.Struct({
       ),
     }),
   ]),
-  limits: Schema.Struct({ least: Bounds, most: Bounds, live: Bounds }),
+  limits: Schema.Struct({ least: Bounds, most: Bounds }),
 }).annotate({ identifier: "RuntimeTraits" });
 
 export type RuntimeTraits = typeof RuntimeTraits.Type;
@@ -135,29 +134,6 @@ const bounded = ({ least, most }: RuntimeTraits["limits"], sizes: Sizes) =>
   );
 
 /**
- * The first size a running machine would grow past its runtime's `live` limit to, from `from` to
- * `to`, as a refusal names the limit and what was asked: none where it grows to none.
- */
-export const grownPast = (
-  { limits: { live } }: RuntimeTraits,
-  from: Sizes,
-  to: Sizes
-): { readonly limit: string; readonly asked: string } | undefined => {
-  const size = sizeNames.find((each) => {
-    const bound = live[each];
-
-    return bound !== undefined && to[each] > from[each] && to[each] > bound;
-  });
-
-  return size === undefined
-    ? undefined
-    : {
-        limit: amount(size, live[size] ?? 0),
-        asked: amount(size, to[size]),
-      };
-};
-
-/**
  * Whether a runtime gives a machine `sizes`: sizes within its limits, any or one of its classes
  * exactly.
  */
@@ -204,8 +180,8 @@ const resizedStates = ({ resize }: RuntimeTraits): string => {
 /**
  * Why a runtime refuses a resize of machine `name` from `from` to `to`, none where it takes it: a
  * disk that would shrink, and sizes it doesn't give; where the machine's `state` is known, also a
- * state it takes no resize in, which a paused machine is in on every runtime, vCPUs or RAM that
- * shrink where it only grows them, and what a running machine would grow past its `live` limit to.
+ * state it takes no resize in, which a paused machine is in on every runtime, and vCPUs or RAM
+ * that shrink where it only grows them.
  * The control plane asks it before it records the resize, and the host before it runs the step.
  */
 export const resizeRefusal = (
@@ -247,24 +223,13 @@ export const resizeRefusal = (
     });
   }
 
-  if (!fitted(traits, to)) {
-    return unfitted;
-  }
-
-  const past = state === "running" ? grownPast(traits, from, to) : undefined;
-
-  return past === undefined
-    ? undefined
-    : new Unsizable({
-        message: `a running machine grows to at most ${past.limit} on the ${runtime} runtime, and ${name} was asked ${past.asked}${traits.resize.stopped === "none" ? "" : ": stop it to give it more"}`,
-      });
+  return fitted(traits, to) ? undefined : unfitted;
 };
 
 /**
  * Whether a fork or restore of a source sized `from` can be sized `to` by a runtime of `traits`: it
- * gives `to`, a disk only grows, a runtime whose copies `grow` keeps the vCPUs and RAM it holds and
- * grows them live no further than its `live` limit, and one whose copies are the source's `same`
- * takes no other sizes.
+ * gives `to`, a disk only grows, a runtime whose copies `grow` keeps the vCPUs and RAM it holds, and
+ * one whose copies are the source's `same` takes no other sizes.
  */
 export const copySizable = (
   traits: RuntimeTraits,
@@ -284,8 +249,7 @@ export const copySizable = (
       return (
         to.cpu >= from.cpu &&
         to.ramMib >= from.ramMib &&
-        to.diskGib >= from.diskGib &&
-        grownPast(traits, from, to) === undefined
+        to.diskGib >= from.diskGib
       );
     }
 

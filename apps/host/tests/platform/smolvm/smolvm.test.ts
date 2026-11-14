@@ -2,7 +2,11 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 
 import type { MachineRef } from "@clankerbox/host-contract";
-import { fitted, resizeRefusal } from "@clankerbox/host-contract/traits";
+import {
+  copySizable,
+  fitted,
+  resizeRefusal,
+} from "@clankerbox/host-contract/traits";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
@@ -2937,7 +2941,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "smolvm's traits bound a machine at 64M of RAM at least, and at most at the vCPUs and RAM its CLI parses, 254 vCPUs on x86_64, which libkrun's MP table holds, and a running one's vCPUs at 16; a live grow of RAM off its 128M steps or of vCPUs off x86_64 is Unsizable before anything native",
+    "smolvm's traits bound a machine at 64M of RAM at least, and at most at 16 vCPUs, the most its guest kernel boots, on every architecture, and the RAM its CLI parses, also for a running one, so a machine an older host gave more vCPUs is resized only to 16 or fewer and never copied; a live grow of RAM off its 128M steps or of vCPUs off x86_64 is Unsizable before anything native",
     () =>
       Effect.gen(function* () {
         const settings = yield* prepared();
@@ -2949,11 +2953,16 @@ layer(NodeServices.layer)((it) => {
         const fits = (on: typeof runtime, sizes: Partial<typeof machine>) =>
           fitted(on.traits, { ...machine, ...sizes });
 
-        const grows = (cpu: number) =>
-          resizeRefusal(runtime.traits, "dev", "running", machine, {
+        const old = { ...machine, cpu: 32 };
+
+        const resized = (
+          state: "running" | "stopped",
+          cpu: number
+        ): string | undefined =>
+          resizeRefusal(runtime.traits, "dev", state, machine, {
             ...machine,
             cpu,
-          })?._tag;
+          })?.message;
 
         expect({
           ramMib: [
@@ -2964,15 +2973,38 @@ layer(NodeServices.layer)((it) => {
             fits(runtime, { ramMib: 2 ** 32 - 1 }),
             fits(runtime, { ramMib: 2 ** 32 }),
           ],
-          x64: [fits(runtime, { cpu: 254 }), fits(runtime, { cpu: 255 })],
-          arm64: [fits(arm, { cpu: 255 }), fits(arm, { cpu: 256 })],
-          live: [grows(16), grows(17)],
+          x64: [fits(runtime, { cpu: 16 }), fits(runtime, { cpu: 17 })],
+          arm64: [fits(arm, { cpu: 16 }), fits(arm, { cpu: 17 })],
+          resized: [
+            resized("running", 16),
+            resized("running", 17),
+            resized("stopped", 16),
+            resized("stopped", 32),
+          ],
+          given32: [
+            resizeRefusal(runtime.traits, "old", "stopped", old, {
+              ...old,
+              ramMib: 4096,
+            })?._tag,
+            resizeRefusal(runtime.traits, "old", "stopped", old, {
+              ...old,
+              cpu: 16,
+              ramMib: 4096,
+            })?._tag,
+            copySizable(runtime.traits, old, old),
+          ],
         }).toStrictEqual({
           ramMib: [true, false],
           mostRamMib: [true, false],
           x64: [true, false],
           arm64: [true, false],
-          live: [undefined, "Unsizable"],
+          resized: [
+            undefined,
+            "the smolvm runtime gives any sizes from 64M of RAM up to 16 vCPUs and 4294967295M of RAM, and dev was asked 17 vCPUs, 2G of RAM and 20G of disk",
+            undefined,
+            "the smolvm runtime gives any sizes from 64M of RAM up to 16 vCPUs and 4294967295M of RAM, and dev was asked 32 vCPUs, 2G of RAM and 20G of disk",
+          ],
+          given32: ["Unsizable", undefined, false],
         });
 
         const refused = [

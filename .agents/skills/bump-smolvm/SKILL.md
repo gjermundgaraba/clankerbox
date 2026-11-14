@@ -346,15 +346,24 @@ as it is.
   when it knows the machine's host and the machine is made. Otherwise it
   records the resize, and the host refuses it. The host checks them again
   before it runs a resize. They are: at
-  least `MIN_MEMORY_MIB` of RAM; at most the vCPUs and RAM the CLI parses,
-  and on x86_64 254 vCPUs, libkrun's `MAX_SUPPORTED_CPUS`
-  (src/arch/src/x86_64/mptable.rs in the pinned `libkrun` submodule, whose
-  `setup_mptable` refuses more at boot; above 16, `validate` only warns, and
-  a Linux VM boots with all of them); and a running machine's vCPUs grown to
-  at most 16, the slots `configure_live_resize` reserves only for a boot of
-  16 or fewer (src/agent/krun.rs; `topology.vcpu_count = 16` in libkrun's
-  src/vmm/src/builder.rs), past which `grow_cpus_locked` refuses with the
-  VMM's `PROTOTYPE_CPU_STATUS` capacity. A live RAM grow past the region
+  least `MIN_MEMORY_MIB` of RAM; at most the RAM the CLI parses, which
+  `krun_set_vm_config` takes as a `u32` too (src/libkrun/src/lib.rs in the
+  pinned `libkrun` submodule), and which a host's RAM budget refuses long
+  before; and at most 16 vCPUs, created, stopped or running alike, the
+  `CONFIG_NR_CPUS` of the guest kernel the `libkrunfw` submodule builds for
+  each architecture (`config-libkrunfw_x86_64`, `config-libkrunfw_aarch64`,
+  copied as the kernel's `.config` before `olddefconfig` in its `Makefile`;
+  the bundled `libkrunfw.so` is that submodule's, `lib/linux-*/libkrun.provenance`).
+  A machine asked more boots with 16, logging "CPU limit of 16 reached",
+  while its record keeps the count asked (measured on 1.34.1 with 17 and 32):
+  `validate` only warns, and libkrun's MP table would take 254 on x86_64
+  (`MAX_SUPPORTED_CPUS`, src/arch/src/x86_64/mptable.rs). libkrun reserves a
+  running machine's live-resize slots for a boot of 16 or fewer, up to 16,
+  and refuses a checkpoint whose CPU capacity is past "the current firmware
+  limit" of 16 (`topology.vcpu_count = 16`, src/vmm/src/builder.rs; src/agent/krun.rs),
+  past which `grow_cpus_locked` refuses with the VMM's
+  `PROTOTYPE_CPU_STATUS` capacity. A bump re-reads `CONFIG_NR_CPUS` at the
+  new `libkrunfw` commit. A live RAM grow past the region
   libkrun reserves, 64 GiB above the boot RAM cut to the guest's physical
   address width (`memory_growth_region_size`), is refused "within the
   platform aperture", which `grown` answers `Unsizable` (`apertureRefusal`):

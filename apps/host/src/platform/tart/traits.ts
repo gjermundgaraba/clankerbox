@@ -25,6 +25,5 @@ export const traits: RuntimeTraits = {
       cpu: mostFlag,
       diskGib: diskGibOf(mostFlag),
     },
-    live: {},
   },
 };

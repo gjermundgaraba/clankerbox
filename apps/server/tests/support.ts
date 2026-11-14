@@ -424,7 +424,7 @@ export const stubInfo = {
     copies: "grow",
     resize: { running: "grow", stopped: "any" },
     sizes: { _tag: "free" },
-    limits: { least: {}, most: {}, live: {} },
+    limits: { least: {}, most: {} },
   },
   version,
   runtimeVersion: "fake",
