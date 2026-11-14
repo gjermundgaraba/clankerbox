@@ -233,11 +233,7 @@ export const migrations: readonly string[] = [
     retired_at TEXT NOT NULL,
     told_at TEXT,
     PRIMARY KEY (host, resource, instance)
-  ) STRICT;
-  INSERT INTO retired (host, resource, instance, retired_at)
-    SELECT host, 'machine', instance, undone_at FROM machines WHERE undone_at IS NOT NULL;
-  INSERT INTO retired (host, resource, instance, retired_at)
-    SELECT host, 'checkpoint', instance, failed_at FROM checkpoints WHERE failed_at IS NOT NULL`,
+  ) STRICT`,
 ];
 
 const isSqliteError = (
