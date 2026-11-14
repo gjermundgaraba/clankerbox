@@ -46,20 +46,37 @@ export type { FakeRuntimeName } from "./fake-runtime.ts";
 
 export const image = "registry.example/ubuntu@sha256:00";
 
+/** The variable `port-slot.ts` sets to the first port of the slot it claims for the run. */
+export const testPortsVariable = "CLANKERBOX_HOST_TEST_PORTS";
+
+export const slotsFrom = 21_100;
+
+export const slotsTo = 32_000;
+
+export const slotSize = 100;
+
+const slotFirst = Number(process.env[testPortsVariable] ?? slotsFrom);
+
+const inSlot = (offset: number): PortRange => ({
+  first: slotFirst + offset,
+  last: slotFirst + offset + 9,
+});
+
 /**
- * The machine ports of each suite whose hosts or relays listen on fixed ports, one range apiece, so
- * suites that run at once never share one. A test that only needs some port to listen on takes
- * `freePort` instead.
+ * The machine ports of each suite whose hosts or relays listen on ports it knows, one range apiece
+ * within the run's slot, which no other run on the machine holds while this one lasts. Hosts of no
+ * such suite share `shared`, and probe each port before they take it. A test that only needs some
+ * port to listen on takes `freePort` instead.
  */
 export const suitePorts = {
   shared: { first: 21_000, last: 21_099 },
-  tailnet: { first: 21_120, last: 21_129 },
-  routes: { first: 21_130, last: 21_139 },
-  host: { first: 21_140, last: 21_149 },
-  smolCloud: { first: 21_300, last: 21_309 },
-  operations: { first: 21_600, last: 21_609 },
-  tart: { first: 21_900, last: 21_909 },
-  liveSmolCloud: { first: 21_950, last: 21_959 },
+  tailnet: inSlot(0),
+  routes: inSlot(10),
+  host: inSlot(20),
+  smolCloud: inSlot(30),
+  operations: inSlot(40),
+  tart: inSlot(50),
+  liveSmolCloud: inSlot(60),
 } as const satisfies Readonly<Record<string, PortRange>>;
 
 export const quiet = Duration.hours(1);

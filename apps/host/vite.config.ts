@@ -10,6 +10,7 @@ export default defineConfig({
   test: {
     setupFiles: ["@gjermundgaraba/clankerbox-sdk/testing/equality"],
     include: ["tests/**/*.test.ts"],
+    globalSetup: ["tests/port-slot.ts"],
   },
   run: {
     tasks: {

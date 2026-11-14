@@ -487,7 +487,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(answer.status).toBeLessThan(300);
         expect(logged.flat()).toContainEqual(
           expect.stringMatching(
-            /^adopt: no relay for blocked: the relay couldn't listen on 127\.0\.0\.1:21139: /u
+            new RegExp(
+              `^adopt: no relay for blocked: the relay couldn't listen on 127\\.0\\.0\\.1:${suitePorts.routes.last}: `,
+              "u"
+            )
           )
         );
         expect([
