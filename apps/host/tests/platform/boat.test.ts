@@ -13,7 +13,7 @@ import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it } from "@effect/vitest";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import type { Scope } from "effect";
+import type { Scope, Duration } from "effect";
 import {
   Cause,
   Context,
@@ -43,7 +43,7 @@ import {
   make,
 } from "../../src/platform/boat/boat.ts";
 import { types } from "../../src/platform/boat/traits.ts";
-import { Runtime } from "../../src/runtime.ts";
+import { Handle, Runtime } from "../../src/runtime.ts";
 import type { Interface, RuntimeError, Target } from "../../src/runtime.ts";
 import { fakeBoat } from "../fake-boat.ts";
 import type { FakeBoat, FakeBoatOptions } from "../fake-boat.ts";
@@ -1228,6 +1228,174 @@ describe("a boat request's bound", () => {
               Cause.squash(ended.cause)
           ).toMatchObject({ _tag: "Internal" });
         }).pipe(Effect.provide(NodeServices.layer))
+      )
+  );
+});
+
+interface Scripted {
+  readonly runtime: Interface;
+  readonly asked: readonly string[];
+}
+
+const boatLimits = {
+  activeSandboxes: 0,
+  maxActiveSandboxes: 4,
+  machineTypes: [
+    { type: "small", available: true },
+    { type: "default", available: true },
+  ],
+};
+
+const scriptedBoat = (
+  answer: (route: string) => Response | undefined
+): Effect.Effect<Scripted, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const dir = yield* scratch;
+    const apiKeyFile = path.join(dir, "key");
+    const asked: string[] = [];
+
+    writeFileSync(apiKeyFile, "fake\n", { mode: 0o600 });
+
+    const client = HttpClient.make((request, url) =>
+      Effect.sync(() => {
+        const route = `${request.method} ${url.pathname.replace(/^\/api\/v1/u, "")}`;
+
+        asked.push(route);
+
+        return HttpClientResponse.fromWeb(
+          request,
+          answer(route) ??
+            (route === "GET /limits"
+              ? Response.json(boatLimits)
+              : Response.json(
+                  { error: { code: "not_found", message: "no route" } },
+                  { status: 404 }
+                ))
+        );
+      })
+    );
+
+    const runtime = yield* make(
+      { apiKeyFile, api: "https://boat.test/api/v1" },
+      { id: "boat", stateDir: dir, listen: { address: "127.0.0.1", port: 0 } }
+    ).pipe(Effect.provideService(HttpClient.HttpClient, client));
+
+    return { runtime, asked };
+  }).pipe(Effect.provide(NodeServices.layer), Effect.orDie);
+
+const sandboxIn = (state: string, type = "small") =>
+  Response.json({ sandbox: { id: "bx1", state, type } });
+
+const bx1 = {
+  name: "dev",
+  instance: "a".repeat(32),
+  handle: Handle.make("bx1"),
+};
+
+const endedWithin = <A, E>(
+  effect: Effect.Effect<A, E>,
+  within: Duration.Input
+) =>
+  Effect.gen(function* () {
+    const running = yield* Effect.forkChild(effect);
+
+    yield* TestClock.adjust(within);
+
+    return running.pollUnsafe();
+  });
+
+const failureOf = <A, E>(ended: Exit.Exit<A, E> | undefined) =>
+  ended !== undefined && Exit.isFailure(ended)
+    ? Cause.squash(ended.cause)
+    : undefined;
+
+describe("a boat refusal that asks to be waited out", () => {
+  it.effect(
+    "is a bare 429, waited as its Retry-After asks, and the call sent again",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          let throttled = 1;
+          let state = "archived";
+
+          const { runtime, asked } = yield* scriptedBoat((route) => {
+            if (route === "POST /sandboxes/bx1/resume") {
+              if (throttled > 0) {
+                throttled -= 1;
+
+                return new Response(null, {
+                  status: 429,
+                  headers: { "retry-after": "2" },
+                });
+              }
+
+              state = "ready";
+
+              return Response.json(
+                { sandbox: { id: "bx1", state } },
+                { status: 202 }
+              );
+            }
+
+            if (route === "GET /sandboxes/bx1") {
+              return sandboxIn(state);
+            }
+
+            return route === "POST /sandboxes/bx1/sshkey"
+              ? Response.json({
+                  sshEndpoint: "127.0.0.1:2222",
+                  hostKey: "ssh-ed25519 AAAA",
+                })
+              : undefined;
+          });
+
+          const starting = yield* Effect.forkChild(
+            runtime.start(bx1, new Set())
+          );
+
+          yield* TestClock.adjust("1 second");
+          expect(
+            asked.filter((route) => route === "POST /sandboxes/bx1/resume")
+          ).toHaveLength(1);
+
+          yield* TestClock.adjust("1 minute");
+
+          const ended = starting.pollUnsafe();
+
+          expect(
+            ended !== undefined && Exit.isSuccess(ended),
+            String(failureOf(ended))
+          ).toBe(true);
+          expect(
+            asked.filter((route) => route === "POST /sandboxes/bx1/resume")
+          ).toHaveLength(2);
+        })
+      )
+  );
+
+  it.effect(
+    "is not a 429 that says the account has no room, which is Capacity",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { runtime } = yield* scriptedBoat((route) =>
+            route === "POST /sandboxes"
+              ? Response.json(
+                  {
+                    error: {
+                      code: "limit_reached",
+                      message: "the concurrent-sandbox cap",
+                    },
+                  },
+                  { status: 429, headers: { "retry-after": "30" } }
+                )
+              : undefined
+          );
+
+          const ended = yield* endedWithin(made(runtime, "dev"), "1 minute");
+
+          expect(failureOf(ended)).toMatchObject({ _tag: "Capacity" });
+        })
       )
   );
 });

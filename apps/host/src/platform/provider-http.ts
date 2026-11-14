@@ -1,4 +1,4 @@
-import { Duration, Effect, Option, Schedule, Schema } from "effect";
+import { DateTime, Duration, Effect, Option, Schedule, Schema } from "effect";
 import type { HttpClientResponse } from "effect/http";
 
 import { timeoutFail } from "../runtime.ts";
@@ -74,19 +74,32 @@ export const fromGateway = (
       })
     : undefined;
 
-const longestWait = Duration.seconds(30);
+const waits = { minimum: Duration.seconds(1), maximum: Duration.seconds(30) };
 
-/** The wait a refusal's `Retry-After` asks, a second when it names none, and at most 30 seconds. */
+/**
+ * The wait a refusal's `Retry-After` asks, in seconds or until an HTTP date, within 1 and 30
+ * seconds, so one that names none or less waits a second.
+ */
 export const retryAfter = (
   response: HttpClientResponse.HttpClientResponse
-): Duration.Duration => {
-  const seconds = Number(response.headers["retry-after"] ?? "1");
+): Effect.Effect<Duration.Duration> =>
+  Effect.map(DateTime.now, (now) => {
+    const asked = response.headers["retry-after"]?.trim() ?? "";
+    const seconds = Number(asked);
 
-  return Duration.min(
-    Duration.seconds(Number.isFinite(seconds) && seconds > 0 ? seconds : 1),
-    longestWait
-  );
-};
+    const wait =
+      asked !== "" && Number.isFinite(seconds)
+        ? Duration.millis(seconds * 1000)
+        : Option.match(DateTime.make(asked), {
+            onNone: () => Duration.zero,
+            onSome: (at) => DateTime.distance(now, at),
+          });
+
+    return Duration.clamp(wait, waits);
+  });
+
+/** HTTP 429: the provider took nothing and asks to be waited out, unless its answer says there is no room. */
+export const tooManyRequests = 429;
 
 /** Waits as `response` asks, within the clamp, and fails `Busy`, so `askedAgain` sends the call again. */
 export const waitedOut = (
@@ -94,25 +107,44 @@ export const waitedOut = (
   response: HttpClientResponse.HttpClientResponse,
   why: string
 ): Effect.Effect<never, Busy> =>
-  Effect.andThen(
-    Effect.sleep(retryAfter(response)),
-    Effect.fail(new Busy({ message: `${call}: ${why}, waited out` }))
+  Effect.flatMap(retryAfter(response), (wait) =>
+    Effect.andThen(
+      Effect.sleep(wait),
+      Effect.fail(
+        new Busy({
+          message: `${call} answered ${why}, which asks to be waited out`,
+        })
+      )
+    )
   );
 
 /** How many times a call is sent while its answer is lost or asks to be waited out. */
 export const triesPerCall = 6;
 
-/** Sends `call` again, backing off, while it fails with one of `tags`, at most `triesPerCall` sends in all. */
+/**
+ * Sends `call` again, backing off, while it fails with one of `tags`, at most `triesPerCall` sends
+ * in all; a call still asked to be waited out at its last send fails saying so.
+ */
 export const askedAgain =
   (tags: ReadonlySet<string>) =>
   <A, E extends { readonly _tag: string }, R>(
     call: Effect.Effect<A, E, R>
-  ): Effect.Effect<A, E, R> =>
+  ): Effect.Effect<A, E | Busy, R> =>
     Effect.retry(call, {
       while: (error) => tags.has(error._tag),
       schedule: Schedule.exponential(Duration.millis(250)),
       times: triesPerCall - 1,
-    });
+    }).pipe(
+      Effect.catchIf(
+        (error): error is E & Busy => error instanceof Busy && tags.has("Busy"),
+        (busy) =>
+          Effect.fail(
+            new Busy({
+              message: `${busy.message}, still at the last of its ${triesPerCall} sends`,
+            })
+          )
+      )
+    );
 
 /** How many times a change whose answer is lost is sent, the resource read until it rests between sends. */
 export const triesAfterLoss = 3;

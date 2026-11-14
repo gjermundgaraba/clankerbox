@@ -6,6 +6,7 @@ import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it } from "@effect/vitest";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import type { Duration } from "effect";
 import {
   Cause,
   Context,
@@ -970,6 +971,7 @@ const scripted = (
                   code: "internal",
                   detail: "the account store failed",
                   retryable: false,
+                  status: 500,
                 });
           }
 
@@ -989,6 +991,7 @@ const scripted = (
               code: "unprocessable",
               detail: failing.create,
               retryable: false,
+              status: 422,
             });
           }
 
@@ -998,7 +1001,12 @@ const scripted = (
 
               return reply(
                 503,
-                { code: "insufficient_capacity", detail: "", retryable: true },
+                {
+                  code: "insufficient_capacity",
+                  detail: "",
+                  retryable: true,
+                  status: 503,
+                },
                 "86400"
               );
             }
@@ -1226,6 +1234,7 @@ const acting = (machine: { state: string | undefined; refusals: number }) =>
             code: "conflict",
             detail: "machine is locked by an operation",
             retryable: false,
+            status: 409,
           });
         }
 
@@ -1240,6 +1249,7 @@ const acting = (machine: { state: string | undefined; refusals: number }) =>
               code: "not_found",
               detail: "no machine",
               retryable: false,
+              status: 404,
             })
           : reply(200, recordIn(machine.state));
       }
@@ -1307,6 +1317,173 @@ describe("a smol cloud start", () => {
           Exit.isFailure(ended) &&
           Cause.squash(ended.cause)
       ).toMatchObject({ _tag: "Missing", machine: "dev" });
+    })
+  );
+});
+
+const smolAccount = {
+  plan: { allowAlwaysOn: false },
+  effectiveMaxMachines: 20,
+  effectiveMaxConcurrentMachines: 4,
+  effectiveMaxCpus: 4,
+  effectiveMaxMemoryMb: 16_384,
+  effectiveMaxDiskGb: 200,
+};
+
+const answering = (answer: (route: string) => Response | undefined) => {
+  const asked: string[] = [];
+
+  const client = HttpClient.make((request, url) =>
+    Effect.sync(() => {
+      const route = `${request.method} ${url.pathname}`;
+
+      asked.push(route);
+
+      return HttpClientResponse.fromWeb(
+        request,
+        answer(route) ??
+          (route === "GET /v1/account"
+            ? Response.json(smolAccount)
+            : Response.json(
+                {
+                  code: "not_found",
+                  detail: "no route",
+                  retryable: false,
+                  status: 404,
+                },
+                { status: 404 }
+              ))
+      );
+    })
+  );
+
+  return { asked, client };
+};
+
+const dev1 = {
+  name: "dev",
+  instance: machineOf("dev").instance,
+  handle: Handle.make("mach-1"),
+};
+
+const endedWithin = <A, E>(
+  effect: Effect.Effect<A, E>,
+  within: Duration.Input
+) =>
+  Effect.gen(function* () {
+    const running = yield* Effect.forkChild(effect);
+
+    yield* TestClock.adjust(within);
+
+    return running.pollUnsafe();
+  });
+
+const failureOf = <A, E>(ended: Exit.Exit<A, E> | undefined) =>
+  ended !== undefined && Exit.isFailure(ended)
+    ? Cause.squash(ended.cause)
+    : undefined;
+
+describe("a smol cloud answer a gateway gives", () => {
+  it.effect(
+    "is a 5xx whose JSON body is no problem of the provider's, a lost answer, so the create is looked for by its name",
+    () =>
+      Effect.gen(function* () {
+        let landed = false;
+
+        const { asked, client } = answering((route) => {
+          if (route === "POST /v1/machines") {
+            landed = true;
+
+            return Response.json(
+              { message: "Internal server error" },
+              { status: 502 }
+            );
+          }
+
+          if (route === "GET /v1/machines") {
+            return Response.json(landed ? [recordIn("stopped")] : []);
+          }
+
+          if (route === "POST /v1/machines/mach-1/start") {
+            return Response.json(recordIn("started"));
+          }
+
+          return route === "GET /v1/machines/mach-1"
+            ? Response.json(recordIn("started"))
+            : undefined;
+        });
+
+        const runtime = yield* scriptedRuntime(client);
+
+        const ended = yield* endedWithin(
+          runtime.make(
+            machineOf("dev"),
+            { _tag: "image", image },
+            { _tag: "none" }
+          ),
+          "1 minute"
+        );
+
+        expect(
+          ended !== undefined && Exit.isSuccess(ended),
+          String(failureOf(ended))
+        ).toBe(true);
+        expect(
+          asked.filter((route) => route === "POST /v1/machines")
+        ).toHaveLength(1);
+      })
+  );
+});
+
+describe("a smol cloud 429", () => {
+  it.effect("is waited as its Retry-After asks, and the call sent again", () =>
+    Effect.gen(function* () {
+      let throttled = 1;
+      let state = "stopped";
+
+      const { asked, client } = answering((route) => {
+        if (route === "POST /v1/machines/mach-1/start") {
+          if (throttled > 0) {
+            throttled -= 1;
+
+            return new Response("slow down", {
+              status: 429,
+              headers: { "retry-after": "2" },
+            });
+          }
+
+          state = "started";
+
+          return Response.json(recordIn(state));
+        }
+
+        if (route === "GET /v1/checkpoints") {
+          return Response.json([]);
+        }
+
+        return route === "GET /v1/machines/mach-1"
+          ? Response.json(recordIn(state))
+          : undefined;
+      });
+
+      const runtime = yield* scriptedRuntime(client);
+      const starting = yield* Effect.forkChild(runtime.start(dev1, new Set()));
+
+      const starts = () =>
+        asked.filter((route) => route === "POST /v1/machines/mach-1/start");
+
+      yield* TestClock.adjust("1 second");
+      expect(starts()).toHaveLength(1);
+
+      yield* TestClock.adjust("1 minute");
+
+      const ended = starting.pollUnsafe();
+
+      expect(
+        ended !== undefined && Exit.isSuccess(ended),
+        String(failureOf(ended))
+      ).toBe(true);
+      expect(starts()).toHaveLength(2);
     })
   );
 });
@@ -1383,6 +1560,9 @@ describe("a smol cloud step's deadline", () => {
   );
 });
 
+const asks = (asked: readonly string[], route: string) =>
+  asked.filter((each) => each === route).length;
+
 const planted = "PLANTED-TOKEN-7f3a";
 
 describe("what a smol cloud answer puts in a log or an error", () => {
@@ -1448,6 +1628,133 @@ describe("what a smol cloud answer puts in a log or an error", () => {
       expect(failed).toMatchObject({ _tag: "Internal" });
       expect(failed.message).not.toContain(planted);
     })
+  );
+});
+
+const throttled = (retryAfter: string, times = 1) => {
+  let left = times;
+  let state = "stopped";
+
+  return answering((route) => {
+    if (route === "POST /v1/machines/mach-1/start") {
+      if (left > 0) {
+        left -= 1;
+
+        return new Response("slow down", {
+          status: 429,
+          headers: { "retry-after": retryAfter },
+        });
+      }
+
+      state = "started";
+
+      return Response.json(recordIn(state));
+    }
+
+    if (route === "GET /v1/checkpoints") {
+      return Response.json([]);
+    }
+
+    return route === "GET /v1/machines/mach-1"
+      ? Response.json(recordIn(state))
+      : undefined;
+  });
+};
+
+const startsBy = (
+  { asked, client }: ReturnType<typeof answering>,
+  at: readonly Duration.Input[]
+) =>
+  Effect.gen(function* () {
+    const runtime = yield* scriptedRuntime(client);
+    const starting = yield* Effect.forkChild(runtime.start(dev1, new Set()));
+    const counts: number[] = [];
+
+    for (const step of at) {
+      yield* TestClock.adjust(step);
+      counts.push(asks(asked, "POST /v1/machines/mach-1/start"));
+    }
+
+    return { counts, ended: starting.pollUnsafe() };
+  });
+
+describe("a smol cloud 429's wait", () => {
+  it.effect("is as long as an HTTP-date Retry-After names", () =>
+    Effect.gen(function* () {
+      const { counts, ended } = yield* startsBy(
+        throttled(new Date(20_000).toUTCString()),
+        ["10 seconds", "1 minute"]
+      );
+
+      expect(counts).toStrictEqual([1, 2]);
+      expect(ended !== undefined && Exit.isSuccess(ended)).toBe(true);
+    })
+  );
+
+  it.effect("is a second at least, whatever less Retry-After asks", () =>
+    Effect.gen(function* () {
+      const { counts } = yield* startsBy(throttled("0.001"), [
+        "900 millis",
+        "1 minute",
+      ]);
+
+      expect(counts).toStrictEqual([1, 2]);
+    })
+  );
+
+  it.effect(
+    "is not counted in a request's bound, so a read throttled each time is sent six times in all, and fails saying it was throttled",
+    () =>
+      Effect.gen(function* () {
+        const { asked, client } = answering((route) =>
+          route === "GET /v1/machines/mach-1"
+            ? new Response("slow down", {
+                status: 429,
+                headers: { "retry-after": "30" },
+              })
+            : undefined
+        );
+
+        const runtime = yield* scriptedRuntime(client);
+        const ended = yield* endedWithin(runtime.sizes(dev1), "10 minutes");
+
+        expect(asks(asked, "GET /v1/machines/mach-1")).toBe(6);
+        expect(failureOf(ended)).toMatchObject({ _tag: "Internal" });
+        expect(String(failureOf(ended))).toContain("429");
+        expect(String(failureOf(ended))).not.toContain("no answer");
+      })
+  );
+
+  it.effect(
+    "of a create throttled at every send ends after six sends, saying it was throttled",
+    () =>
+      Effect.gen(function* () {
+        const { asked, client } = answering((route) => {
+          if (route === "POST /v1/machines") {
+            return new Response("slow down", {
+              status: 429,
+              headers: { "retry-after": "30" },
+            });
+          }
+
+          return route === "GET /v1/machines" ? Response.json([]) : undefined;
+        });
+
+        const runtime = yield* scriptedRuntime(client);
+
+        const ended = yield* endedWithin(
+          runtime.make(
+            machineOf("dev"),
+            { _tag: "image", image },
+            { _tag: "none" }
+          ),
+          "10 minutes"
+        );
+
+        expect(asks(asked, "POST /v1/machines")).toBe(6);
+        expect(String(failureOf(ended))).toContain("429");
+        expect(String(failureOf(ended))).not.toContain("no answer");
+      })
   );
 });
 

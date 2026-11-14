@@ -8,6 +8,7 @@ import {
   fromGateway,
   lost,
   recordReader,
+  tooManyRequests,
   Unanswered,
   waitedOut,
   within,
@@ -267,7 +268,10 @@ export const make = (settings: Settings) =>
             return yield* gateway;
           }
 
-          if (asksToWait.has(refused.code)) {
+          if (
+            asksToWait.has(refused.code) ||
+            (response.status === tooManyRequests && !noRoom.has(refused.code))
+          ) {
             return yield* waitedOut(what, response, refused.code);
           }
 

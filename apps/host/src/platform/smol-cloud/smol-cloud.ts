@@ -114,6 +114,8 @@ const transitional = new Set(["creating", "pausing", "starting", "stopping"]);
 
 const checkpointEnds = new Set(["available", "failed"]);
 
+const apiErrors = ["Refused", "Unanswered", "Busy", "Unreadable"] as const;
+
 const standingAfter = 3;
 
 interface Conflicted {
@@ -437,9 +439,7 @@ export const make = (
         `${goal === "gone" ? "delete" : goal} ${machine.name}`
       );
 
-      return settle(machine, goal).pipe(
-        Effect.catchTag(["Refused", "Unanswered", "Unreadable"], refused)
-      );
+      return settle(machine, goal).pipe(Effect.catchTag(apiErrors, refused));
     };
 
     const settled = (machine: Target, goal: Goal) =>
@@ -793,10 +793,7 @@ export const make = (
                   })
                 )
             ),
-            Effect.catchTag(
-              ["Refused", "Unanswered", "Unreadable"],
-              failed(`make ${machine.name}`)
-            )
+            Effect.catchTag(apiErrors, failed(`make ${machine.name}`))
           );
 
           yield* toward(targetOf(machine, handle), "running");
@@ -870,7 +867,7 @@ export const make = (
           memoryMb: to.ramMib,
           diskGb: to.diskGib,
         }).pipe(
-          Effect.catchTag(["Refused", "Unanswered", "Unreadable"], (error) =>
+          Effect.catchTag(apiErrors, (error) =>
             Effect.fail(
               error._tag === "Refused" &&
                 (error.status === 400 || error.status === 422)

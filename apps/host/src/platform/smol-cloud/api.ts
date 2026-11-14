@@ -5,14 +5,17 @@ import type { HttpMethod } from "effect/http";
 
 import { Handle } from "../../runtime.ts";
 import {
+  askedAgain,
   fromGateway,
   lost,
   recordReader,
   retryAfter,
+  tooManyRequests,
   Unanswered,
+  waitedOut,
   within,
 } from "../provider-http.ts";
-import type { Asked, Unreadable } from "../provider-http.ts";
+import type { Asked, Busy, Unreadable } from "../provider-http.ts";
 
 export const MachineRecord = Schema.Struct({
   id: Handle,
@@ -66,7 +69,8 @@ const Named = Schema.Struct({ name: Schema.String });
 const OfMachine = Schema.Struct({ machineId: Schema.String });
 
 const Problem = Schema.Struct({
-  code: Schema.optionalKey(Schema.String),
+  code: Schema.String,
+  status: Schema.Int,
   detail: Schema.optionalKey(Schema.String),
   retryable: Schema.optionalKey(Schema.Boolean),
 });
@@ -88,7 +92,7 @@ export class Refused extends Schema.TaggedError<
   retryAfterSeconds: Schema.Finite,
 }) {}
 
-export type ApiError = Refused | Unanswered | Unreadable;
+export type ApiError = Refused | Unanswered | Busy | Unreadable;
 
 export interface Sizes {
   readonly cpus?: number | undefined;
@@ -163,6 +167,52 @@ const marksOf = (record: unknown): Marks => ({
 
 const open = { mode: "open" };
 
+type Exchanged<A> =
+  | { readonly refused: false; readonly value: A }
+  | {
+      readonly refused: true;
+      readonly response: HttpClientResponse.HttpClientResponse;
+      readonly text: string;
+    };
+
+const busy: ReadonlySet<ApiError["_tag"]> = new Set(["Busy"]);
+
+const refusal = (
+  call: string,
+  response: HttpClientResponse.HttpClientResponse,
+  text: string
+): Effect.Effect<never, ApiError> => {
+  const problem = Option.getOrUndefined(
+    Option.filter(problemOf(text), ({ status }) => status === response.status)
+  );
+
+  const gateway = fromGateway(call, response.status, problem !== undefined);
+
+  if (gateway !== undefined) {
+    return Effect.fail(gateway);
+  }
+
+  if (response.status === tooManyRequests) {
+    return waitedOut(call, response, `HTTP 429 ${problem?.code ?? ""}`.trim());
+  }
+
+  const code = problem?.code ?? "unknown";
+  const detail = problem?.detail ?? "";
+
+  return Effect.flatMap(retryAfter(response), (wait) =>
+    Effect.fail(
+      new Refused({
+        message: `${call} answered ${response.status} ${code}: ${detail}`,
+        status: response.status,
+        code,
+        detail,
+        retryable: problem?.retryable ?? false,
+        retryAfterSeconds: Duration.toSeconds(wait),
+      })
+    )
+  );
+};
+
 /**
  * smol cloud's API, the routes the adapter uses. Requests are encoded exactly; answers are read
  * leniently, keeping only the fields the adapter reads, and `state` and `status` stay open strings.
@@ -173,14 +223,18 @@ export const make = (url: string, key: Redacted.Redacted) =>
     const http = yield* HttpClient.HttpClient;
     const readRecords = recordReader();
 
-    const send = (
+    const send = <A>(
       method: HttpMethod.HttpMethod,
       route: string,
-      body?: unknown
-    ): Effect.Effect<HttpClientResponse.HttpClientResponse, ApiError> => {
+      asked: Asked,
+      body: unknown,
+      answered: (
+        response: HttpClientResponse.HttpClientResponse
+      ) => Effect.Effect<A, Unanswered>
+    ): Effect.Effect<A, ApiError> => {
       const call = `${method} ${route}`;
 
-      return http
+      const exchange = http
         .execute(
           HttpClientRequest.make(method)(`${url}${route}`).pipe(
             HttpClientRequest.bearerToken(Redacted.value(key)),
@@ -192,43 +246,27 @@ export const make = (url: string, key: Redacted.Redacted) =>
         )
         .pipe(
           Effect.mapError(lost(call)),
-          Effect.filterOrElse(
-            (response) => response.status < 400,
-            (response) =>
-              Effect.flatMap(
-                Effect.orElseSucceed(response.text, () => ""),
-                (text): Effect.Effect<never, ApiError> => {
-                  const problem = Option.getOrUndefined(problemOf(text));
-
-                  const gateway = fromGateway(
-                    call,
-                    response.status,
-                    problem !== undefined
-                  );
-
-                  if (gateway !== undefined) {
-                    return Effect.fail(gateway);
-                  }
-
-                  const code = problem?.code ?? "unknown";
-                  const detail = problem?.detail ?? "";
-
-                  return Effect.fail(
-                    new Refused({
-                      message: `${call} answered ${response.status} ${code}: ${detail}`,
-                      status: response.status,
-                      code,
-                      detail,
-                      retryable: problem?.retryable ?? false,
-                      retryAfterSeconds: Duration.toSeconds(
-                        retryAfter(response)
-                      ),
-                    })
-                  );
-                }
-              )
-          )
+          Effect.flatMap((response): Effect.Effect<Exchanged<A>, Unanswered> =>
+            response.status < 400
+              ? Effect.map(answered(response), (value) => ({
+                  refused: false as const,
+                  value,
+                }))
+              : Effect.map(
+                  Effect.orElseSucceed(response.text, () => ""),
+                  (text) => ({ refused: true as const, response, text })
+                )
+          ),
+          within(asked, call)
         );
+
+      return askedAgain(busy)(
+        Effect.flatMap(exchange, (outcome) =>
+          outcome.refused
+            ? refusal(call, outcome.response, outcome.text)
+            : Effect.succeed(outcome.value)
+        )
+      );
     };
 
     const json =
@@ -241,7 +279,7 @@ export const make = (url: string, key: Redacted.Redacted) =>
         asked: Asked,
         body?: unknown
       ): Effect.Effect<S["Type"], ApiError> =>
-        Effect.flatMap(send(method, route, body), (response) =>
+        send(method, route, asked, body, (response) =>
           HttpClientResponse.schemaBodyJson(schema)(response).pipe(
             Effect.mapError(
               (error) =>
@@ -250,12 +288,14 @@ export const make = (url: string, key: Redacted.Redacted) =>
                 })
             )
           )
-        ).pipe(within(asked, `${method} ${route}`));
+        );
 
-    const done = (method: HttpMethod.HttpMethod, route: string, asked: Asked) =>
-      Effect.asVoid(send(method, route)).pipe(
-        within(asked, `${method} ${route}`)
-      );
+    const done = (
+      method: HttpMethod.HttpMethod,
+      route: string,
+      asked: Asked,
+      body?: unknown
+    ) => send(method, route, asked, body, () => Effect.void);
 
     const listed =
       <S extends Schema.Top & { readonly DecodingServices: never }>(
@@ -312,9 +352,7 @@ export const make = (url: string, key: Redacted.Redacted) =>
       act: (id: Handle, verb: Verb) =>
         done("POST", `/v1/machines/${id}/${verb}`, "settle"),
       resize: (id: Handle, sizes: Sizes) =>
-        Effect.asVoid(send("POST", `/v1/machines/${id}/resize`, sizes)).pipe(
-          within("settle", `POST /v1/machines/${id}/resize`)
-        ),
+        done("POST", `/v1/machines/${id}/resize`, "settle", sizes),
       deleteMachine: (id: Handle) =>
         done("DELETE", `/v1/machines/${id}`, "change"),
       checkpoints: listed(CheckpointRecord, "checkpoint", "/v1/checkpoints"),
@@ -333,8 +371,12 @@ export const make = (url: string, key: Redacted.Redacted) =>
         body: ExecBody
       ): Effect.Effect<Stream.Stream<Frame, Unanswered>, ApiError> =>
         Effect.map(
-          send("POST", `/v1/machines/${id}/exec/stream`, body).pipe(
-            within("settle", `POST /v1/machines/${id}/exec/stream`)
+          send(
+            "POST",
+            `/v1/machines/${id}/exec/stream`,
+            "settle",
+            body,
+            Effect.succeed
           ),
           (response) =>
             Stream.mapError(

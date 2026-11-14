@@ -92,6 +92,13 @@ Each is an assertion of the live suite, in the case named.
 - Each request is bounded by `answerWithin` in `platform/provider-http.ts`: 30
   seconds for a read, a minute for a create, restore or delete, 5 minutes for
   what the provider answers once the machine settles.
+- Every refusal the provider answers is a problem with `code` and the
+  `status` it answered, as each probe recorded; a 5xx with any other body,
+  such as a gateway's `{message}`, is a lost answer (`api.ts`'s `Problem` and
+  `send`). A 429, never provoked, is waited as its `Retry-After` asks, in
+  seconds or until an HTTP date, within `provider-http.ts`'s clamp of 1 to
+  30 seconds, and sent again, six sends in all; each send has its own bound,
+  and the wait is outside it. (`api.ts`'s `send`; the 429 tests.)
 - A create answers 201 `stopped`; a start answers `started`.
 - `POST /exec/stream` refuses an empty argument with 400, answers a missing
   user with an error, takes string `stdin`, and sends each output line as a

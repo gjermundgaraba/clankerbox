@@ -102,13 +102,14 @@ Each line names where the code holds it and how to check it again.
   `no_ready_machine` mean no room, which moves a create to the next host;
   `IP_RATE_LIMIT_EXCEEDED`, `sandbox_starting`, `sandbox_stopping`,
   `save_in_progress` and `ssh_host_key_unavailable` are waited out by
-  `Retry-After`. The YAML says `type_too_small` refuses a resume onto a
-  type whose disk is smaller than the data, but the operator's account took
+  `Retry-After`, and so is a 429 with any other code or none, as the YAML
+  says every 429 carries `Retry-After`. The YAML says `type_too_small`
+  refuses a resume onto a type whose disk is smaller than the data, but the operator's account took
   a sandbox holding 85G of written data on `large` onto `small`, so the
   adapter maps no such refusal: one fails the resize `Internal` with boat's
   code. A `/sshkey` 503 was never provoked either: `/sshkey` answered 200
-  right after a create's answer. (`boat.ts`'s `capacityCodes`, `api.ts`'s
-  `waitedOut`; grep the YAML for each code.)
+  right after a create's answer. (`api.ts`'s `noRoom` and `asksToWait`,
+  `provider-http.ts`'s `waitedOut`; grep the YAML for each code.)
 - A resize sends its typed resume to an archived sandbox only: once boat
   takes it, the sandbox comes back at the new type or the resize fails
   naming both types, as each resume counts a start; a lost one is read back
