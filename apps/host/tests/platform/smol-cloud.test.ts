@@ -920,6 +920,49 @@ describe("the smol cloud runtime over an account without a card", () => {
   );
 
   it.live(
+    "a resize whose request was lost while the machine starts reads it until it rests, and only then sends it again",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { fake, runtime } = yield* onCloud;
+          const dev = yield* made(runtime, "dev");
+
+          yield* runtime.stop(dev);
+          yield* fake.faults.settleStarts("1500 millis");
+          yield* fake.faults.loseResize(1);
+
+          const creating = Effect.repeat(
+            Effect.sync(() => fake.machines.get(dev.handle)?.state),
+            {
+              until: (state) => state === "creating",
+              schedule: Schedule.spaced("20 millis"),
+            }
+          );
+
+          yield* Effect.all(
+            [
+              runtime.start(dev, new Set()),
+              Effect.andThen(
+                creating,
+                runtime.resize(
+                  { ...dev, ...sizes },
+                  { cpu: 1, ramMib: 2048, diskGib: 10 },
+                  true
+                )
+              ),
+            ],
+            { concurrency: 2 }
+          );
+
+          expect([
+            fake.machines.get(dev.handle)?.state,
+            fake.machines.get(dev.handle)?.memoryMb,
+          ]).toStrictEqual(["started", 2048]);
+        })
+      )
+  );
+
+  it.live(
     "a resize whose answer was lost reads the machine, and ends done when it holds the sizes asked",
     () =>
       Effect.scoped(
@@ -1419,6 +1462,9 @@ const answering = (answer: (route: string) => Response | undefined) => {
   return { asked, client };
 };
 
+const asks = (asked: readonly string[], route: string) =>
+  asked.filter((each) => each === route).length;
+
 const dev1 = {
   name: "dev",
   instance: machineOf("dev").instance,
@@ -1496,43 +1542,159 @@ describe("a smol cloud delete of a machine on its way", () => {
 
 describe("a smol cloud answer a gateway gives", () => {
   it.effect(
-    "is a 5xx whose JSON body is no problem of the provider's, a lost answer, so the create is looked for by its name",
+    "is a 5xx whose JSON body is no problem of the provider's, or one of another status, a lost answer, so the create is looked for by its name",
     () =>
       Effect.gen(function* () {
-        let landed = false;
+        const gateways = [
+          [502, { message: "Internal server error" }],
+          [500, { message: "Internal server error" }],
+          [
+            502,
+            {
+              code: "invalid_request",
+              detail: "an upstream's",
+              retryable: false,
+              status: 400,
+            },
+          ],
+        ] as const;
 
+        for (const [status, body] of gateways) {
+          let landed = false;
+
+          const { asked, client } = answering((route) => {
+            if (route === "POST /v1/machines") {
+              landed = true;
+
+              return Response.json(body, { status });
+            }
+
+            if (route === "GET /v1/machines") {
+              return Response.json(landed ? [recordIn("stopped")] : []);
+            }
+
+            if (route === "POST /v1/machines/mach-1/start") {
+              return Response.json(recordIn("started"));
+            }
+
+            return route === "GET /v1/machines/mach-1"
+              ? Response.json(recordIn("started"))
+              : undefined;
+          });
+
+          const runtime = yield* scriptedRuntime(client);
+
+          const ended = yield* endedWithin(
+            runtime.make(
+              machineOf("dev"),
+              { _tag: "image", image },
+              { _tag: "none" }
+            ),
+            "1 minute"
+          );
+
+          const answer = `${status} ${JSON.stringify(body)}`;
+
+          expect(
+            ended !== undefined && Exit.isSuccess(ended),
+            `${answer}: ${String(failureOf(ended))}`
+          ).toBe(true);
+          expect(asks(asked, "POST /v1/machines"), answer).toBe(1);
+        }
+      })
+  );
+});
+
+describe("a smol cloud create whose every answer is lost", () => {
+  it.effect(
+    "is sent five times in all, each looked for by its name a poll after, then fails",
+    () =>
+      Effect.gen(function* () {
         const { asked, client } = answering((route) => {
           if (route === "POST /v1/machines") {
-            landed = true;
-
-            return Response.json(
-              { message: "Internal server error" },
-              { status: 502 }
-            );
+            return new Response("bad gateway", { status: 502 });
           }
 
-          if (route === "GET /v1/machines") {
-            return Response.json(landed ? [recordIn("stopped")] : []);
-          }
+          return route === "GET /v1/machines" ? Response.json([]) : undefined;
+        });
 
+        const runtime = yield* scriptedRuntime(client);
+
+        const making = yield* Effect.forkChild(
+          runtime.make(
+            machineOf("dev"),
+            { _tag: "image", image },
+            { _tag: "none" }
+          )
+        );
+
+        yield* TestClock.adjust("900 millis");
+
+        const early = [
+          asks(asked, "POST /v1/machines"),
+          asks(asked, "GET /v1/machines"),
+        ];
+
+        yield* TestClock.adjust("5 minutes");
+
+        const ended = making.pollUnsafe();
+
+        expect(failureOf(ended), "ended within 5 minutes").toMatchObject({
+          _tag: "Internal",
+        });
+        expect([
+          early,
+          asks(asked, "POST /v1/machines"),
+          asks(asked, "GET /v1/machines"),
+        ]).toStrictEqual([[1, 0], 5, 5]);
+      })
+  );
+});
+
+describe("a smol cloud refusal while the machine moves between states", () => {
+  it.effect(
+    "counts toward its standing only while the machine stays in one, so a start refused four times across changes runs the machine",
+    () =>
+      Effect.gen(function* () {
+        let refusals = 4;
+        let state = "stopped";
+
+        const { asked, client } = answering((route) => {
           if (route === "POST /v1/machines/mach-1/start") {
-            return Response.json(recordIn("started"));
+            if (refusals > 0) {
+              refusals -= 1;
+              state = state === "stopped" ? "created" : "stopped";
+
+              return Response.json(
+                {
+                  code: "conflict",
+                  detail: "machine is locked by an operation",
+                  retryable: false,
+                  status: 409,
+                },
+                { status: 409 }
+              );
+            }
+
+            state = "started";
+
+            return Response.json(recordIn(state));
           }
 
-          return route === "GET /v1/machines/mach-1"
-            ? Response.json(recordIn("started"))
+          if (route === "GET /v1/machines/mach-1") {
+            return Response.json(recordIn(state));
+          }
+
+          return route === "GET /v1/checkpoints"
+            ? Response.json([])
             : undefined;
         });
 
         const runtime = yield* scriptedRuntime(client);
 
         const ended = yield* endedWithin(
-          runtime.make(
-            machineOf("dev"),
-            { _tag: "image", image },
-            { _tag: "none" }
-          ),
-          "1 minute"
+          runtime.start(dev1, new Set()),
+          "5 minutes"
         );
 
         expect(
@@ -1540,8 +1702,8 @@ describe("a smol cloud answer a gateway gives", () => {
           String(failureOf(ended))
         ).toBe(true);
         expect(
-          asked.filter((route) => route === "POST /v1/machines")
-        ).toHaveLength(1);
+          asked.filter((route) => route === "POST /v1/machines/mach-1/start")
+        ).toHaveLength(5);
       })
   );
 });
@@ -1671,9 +1833,6 @@ describe("a smol cloud step's deadline", () => {
   );
 });
 
-const asks = (asked: readonly string[], route: string) =>
-  asked.filter((each) => each === route).length;
-
 const planted = "PLANTED-TOKEN-7f3a";
 
 const problem = (status: number, detail: string, retryable = false) =>
@@ -1686,6 +1845,36 @@ const problem = (status: number, detail: string, retryable = false) =>
     },
     { status }
   );
+
+describe("a smol cloud create refused 409", () => {
+  it.effect(
+    "fails at its one send when no machine of its name is listed, as it took nothing",
+    () =>
+      Effect.gen(function* () {
+        const { asked, client } = answering((route) => {
+          if (route === "POST /v1/machines") {
+            return problem(409, "a machine of this name is being deleted");
+          }
+
+          return route === "GET /v1/machines" ? Response.json([]) : undefined;
+        });
+
+        const runtime = yield* scriptedRuntime(client);
+
+        const ended = yield* endedWithin(
+          runtime.make(
+            machineOf("dev"),
+            { _tag: "image", image },
+            { _tag: "none" }
+          ),
+          "5 minutes"
+        );
+
+        expect(failureOf(ended)).toMatchObject({ _tag: "Internal" });
+        expect(asks(asked, "POST /v1/machines")).toBe(1);
+      })
+  );
+});
 
 describe("what a smol cloud answer puts in a log or an error", () => {
   it.effect(
@@ -1820,8 +2009,11 @@ describe("a smol cloud delete a live fork holds", () => {
     "stands at the first refusal and stops the source, whether or not the refusal says it may be retried",
     () =>
       Effect.gen(function* () {
-        for (const retryable of [false, true]) {
-          let state = "started";
+        for (const [retryable, source] of [
+          [false, "started"],
+          [true, "running"],
+        ] as const) {
+          let state: string = source;
 
           const { asked, client } = answering((route) => {
             if (route === "DELETE /v1/machines/mach-1") {
@@ -1854,7 +2046,10 @@ describe("a smol cloud delete a live fork holds", () => {
             "1 minute"
           );
 
-          expect(failureOf(ended), `retryable ${retryable}`).toMatchObject({
+          expect(
+            failureOf(ended),
+            `${source}, retryable ${retryable}`
+          ).toMatchObject({
             _tag: "Internal",
           });
           expect([
@@ -1937,6 +2132,62 @@ describe("a smol cloud delete a live fork holds", () => {
         expect(told).toContain(
           "while a fork of it lives: twin; by-hand at smol cloud, which this host didn't make."
         );
+      })
+  );
+});
+
+describe("a smol cloud delete refused while a fork it lists is deleted", () => {
+  it.effect(
+    "takes the fork as gone, stops nothing, and goes through once smol cloud takes it",
+    () =>
+      Effect.gen(function* () {
+        let refusals = 1;
+        let state: string | undefined = "stopped";
+
+        const { asked, client } = answering((route) => {
+          if (route === "DELETE /v1/machines/mach-1") {
+            if (refusals > 0) {
+              refusals -= 1;
+
+              return problem(409, "machine is locked by an operation");
+            }
+
+            state = undefined;
+
+            return new Response(null, { status: 204 });
+          }
+
+          if (route === "GET /v1/machines/mach-1" && state !== undefined) {
+            return Response.json(recordIn(state));
+          }
+
+          if (route === "GET /v1/checkpoints") {
+            return Response.json([]);
+          }
+
+          return route === "GET /v1/machines"
+            ? Response.json([
+                ...(state === undefined ? [] : [recordIn(state)]),
+                forkOf("deleted"),
+              ])
+            : undefined;
+        });
+
+        const runtime = yield* scriptedRuntime(client);
+
+        const ended = yield* endedWithin(
+          runtime.delete(dev1, new Set()),
+          "1 minute"
+        );
+
+        expect(
+          ended !== undefined && Exit.isSuccess(ended),
+          String(failureOf(ended))
+        ).toBe(true);
+        expect([
+          asks(asked, "DELETE /v1/machines/mach-1"),
+          asks(asked, "POST /v1/machines/mach-1/stop"),
+        ]).toStrictEqual([2, 0]);
       })
   );
 });
@@ -2065,6 +2316,80 @@ describe("a smol cloud 429's wait", () => {
         expect(String(failureOf(ended))).toContain("429");
         expect(String(failureOf(ended))).not.toContain("no answer");
       })
+  );
+});
+
+describe("a smol cloud start refused in a way it sends again", () => {
+  it.effect(
+    "waits the refusal out, a second at least, before it sends the start again",
+    () =>
+      Effect.gen(function* () {
+        const refusals = [
+          () => problem(409, "machine is locked by an operation"),
+          () => problem(503, "try again", true),
+        ];
+
+        for (const refused of refusals) {
+          let left = 1;
+          let state = "stopped";
+
+          const script = answering((route) => {
+            if (route === "POST /v1/machines/mach-1/start") {
+              if (left > 0) {
+                left -= 1;
+
+                return refused();
+              }
+
+              state = "started";
+
+              return Response.json(recordIn(state));
+            }
+
+            if (route === "GET /v1/checkpoints") {
+              return Response.json([]);
+            }
+
+            return route === "GET /v1/machines/mach-1"
+              ? Response.json(recordIn(state))
+              : undefined;
+          });
+
+          const { counts, ended } = yield* startsBy(script, [
+            "900 millis",
+            "1 minute",
+          ]);
+
+          expect(counts).toStrictEqual([1, 2]);
+          expect(ended !== undefined && Exit.isSuccess(ended)).toBe(true);
+        }
+      })
+  );
+});
+
+describe("a smol cloud checkpoint delete whose every answer is lost", () => {
+  it.effect("is sent six times in all, then fails", () =>
+    Effect.gen(function* () {
+      const { asked, client } = answering((route) =>
+        route === "DELETE /v1/checkpoints/ckpt-1"
+          ? new Response("<html>bad gateway</html>", { status: 502 })
+          : undefined
+      );
+
+      const runtime = yield* scriptedRuntime(client);
+
+      const ended = yield* endedWithin(
+        runtime.deleteCheckpoint({
+          name: "snap",
+          instance: machineOf("snap").instance,
+          handle: Handle.make("ckpt-1"),
+        }),
+        "10 minutes"
+      );
+
+      expect(failureOf(ended)).toMatchObject({ _tag: "Internal" });
+      expect(asks(asked, "DELETE /v1/checkpoints/ckpt-1")).toBe(6);
+    })
   );
 });
 

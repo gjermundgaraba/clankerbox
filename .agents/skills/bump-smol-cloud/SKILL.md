@@ -142,7 +142,10 @@ Each is an assertion of the live suite, in the case named.
   and sends nothing until it rests; a 409 at one settled state three times in
   a row is a standing refusal, and so is a refusal smol cloud marks
   `retryable`, each waited as its `Retry-After` asks. A DELETE sent 40 ms into a stop was taken, 204.
-  (`smol-cloud.ts`'s `moveOf` and `settle`.)
+  (`smol-cloud.ts`'s `moveOf` and `settle`; the fake's `settleStarts`, which
+  has a start read `creating` and refuses a resize then as smol cloud does,
+  and the test of a resize lost while the machine starts; the scripted test
+  of a refusal across changes of state.)
 - A capture with `wait=true` can answer `creating`, so the adapter polls it to
   `available`.
 - A pause leaves a checkpoint of its own, which outlives the resume. While

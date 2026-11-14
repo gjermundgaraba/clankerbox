@@ -192,6 +192,14 @@ describe("a live run's ledger", () => {
 
     expect(() => ledgersIn(dir, "boat")).toThrow(/chmod 600/u);
 
+    chmodSync(dir, 0o750);
+
+    expect(() => {
+      writer.copy("cbx-10");
+    }).toThrow(/chmod 700/u);
+
+    chmodSync(dir, 0o700);
+
     retired(dir, "boat", run);
 
     expect(ledgersIn(dir, "boat")).toStrictEqual([]);

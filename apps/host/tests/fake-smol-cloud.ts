@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { cp, mkdir, rm } from "node:fs/promises";
 import { IncomingMessage } from "node:http";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import {
   Context,
@@ -27,7 +28,7 @@ import { loopbackServer } from "./support.ts";
 
 export { traits } from "../src/platform/smol-cloud/traits.ts";
 
-export type FakeState = "stopped" | "started" | "paused";
+export type FakeState = "stopped" | "creating" | "started" | "paused";
 
 export interface FakeMachine {
   readonly id: string;
@@ -65,6 +66,8 @@ export interface FakeFaults extends Faults {
   readonly dropAnswer: (dropping: Dropping) => Effect.Effect<void>;
   /** Loses the next `times` resize requests before the provider takes them. */
   readonly loseResize: (times: number) => Effect.Effect<void>;
+  /** Has each start of a stopped machine read `creating` for `after`, answering once it reads `started`, as smol cloud's start does. */
+  readonly settleStarts: (after: Duration.Input) => Effect.Effect<void>;
 }
 
 export interface FakeSmolCloud {
@@ -233,6 +236,8 @@ export const fakeSmolCloud = (
     const calls: string[] = [];
     const dropping = new Set<Dropping>();
     let losingResizes = 0;
+
+    let startsSettleIn = Duration.zero;
     const landsLate: Duration.Duration[] = [];
     let quotaOn = false;
     const malformed: object[] = [];
@@ -436,6 +441,8 @@ export const fakeSmolCloud = (
               return noRoom;
             }
 
+            machine.state = "creating";
+            await sleep(Duration.toMillis(startsSettleIn));
             await boot(machine);
           }
 
@@ -492,6 +499,14 @@ export const fakeSmolCloud = (
     ): Answer => {
       if (machine.state === "paused") {
         return problem(409, "conflict", "machine is paused");
+      }
+
+      if (machine.state === "creating") {
+        return problem(
+          409,
+          "conflict",
+          "resize needs a started, stopped or paused machine, and this one is creating; retry once it settles"
+        );
       }
 
       if (to.memoryMb !== undefined && to.memoryMb < machine.memoryMb) {
@@ -963,6 +978,10 @@ export const fakeSmolCloud = (
       loseResize: (times) =>
         Effect.sync(() => {
           losingResizes = times;
+        }),
+      settleStarts: (after) =>
+        Effect.sync(() => {
+          startsSettleIn = Duration.fromInputUnsafe(after);
         }),
     };
 

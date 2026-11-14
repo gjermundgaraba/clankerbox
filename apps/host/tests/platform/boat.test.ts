@@ -1375,29 +1375,43 @@ describe("a boat refusal that asks to be waited out", () => {
   );
 
   it.effect(
-    "is not a 429 that says the account has no room, which is Capacity",
+    "is not a 429 that says the account has no room, which is Capacity at its one send",
     () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { runtime } = yield* scriptedBoat((route) =>
-            route === "POST /sandboxes"
-              ? Response.json(
-                  {
-                    error: {
-                      code: "limit_reached",
-                      message: "the concurrent-sandbox cap",
-                    },
-                  },
-                  { status: 429, headers: { "retry-after": "30" } }
-                )
-              : undefined
+      Effect.gen(function* () {
+        for (const code of ["limit_reached", "rate_limited"]) {
+          const { ended, asked } = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const scripted = yield* scriptedBoat((route) =>
+                route === "POST /sandboxes"
+                  ? Response.json(
+                      {
+                        error: {
+                          code,
+                          message: "the concurrent-sandbox cap",
+                        },
+                      },
+                      { status: 429, headers: { "retry-after": "30" } }
+                    )
+                  : undefined
+              );
+
+              return {
+                ...scripted,
+                ended: yield* endedWithin(
+                  made(scripted.runtime, "dev"),
+                  "1 minute"
+                ),
+              };
+            })
           );
 
-          const ended = yield* endedWithin(made(runtime, "dev"), "1 minute");
-
-          expect(failureOf(ended)).toMatchObject({ _tag: "Capacity" });
-        })
-      )
+          expect(failureOf(ended), code).toMatchObject({ _tag: "Capacity" });
+          expect(
+            asked.filter((route) => route === "POST /sandboxes"),
+            code
+          ).toHaveLength(1);
+        }
+      })
   );
 });
 
@@ -1449,18 +1463,26 @@ describe("a boat saved-snapshot list holding a record the host can't read", () =
 const resumes = (asked: readonly string[]) =>
   asked.filter((route) => route === "POST /sandboxes/bx1/resume");
 
-const lostStart = (takes: boolean) =>
+const lostStart = (takes: boolean, movingReads = 0) =>
   Effect.gen(function* () {
     let state = "archived";
+    let moving = 0;
 
     const scripted = yield* scriptedBoat((route) => {
       if (route === "POST /sandboxes/bx1/resume") {
         state = takes ? "ready" : state;
+        moving = takes ? movingReads : 0;
 
         return new Response("<html>bad gateway</html>", { status: 502 });
       }
 
       if (route === "GET /sandboxes/bx1") {
+        if (moving > 0) {
+          moving -= 1;
+
+          return sandboxIn("resuming");
+        }
+
         return sandboxIn(state);
       }
 
@@ -1481,21 +1503,90 @@ const lostStart = (takes: boolean) =>
     };
   });
 
+describe("a boat create whose every answer is lost", () => {
+  it.effect(
+    "is sent three times in all, each looked for by its labels, then fails",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { runtime, asked } = yield* scriptedBoat((route) => {
+            if (route === "POST /sandboxes") {
+              return new Response("bad gateway", { status: 502 });
+            }
+
+            return route === "GET /sandboxes"
+              ? Response.json({ sandboxes: [] })
+              : undefined;
+          });
+
+          const ended = yield* endedWithin(made(runtime, "dev"), "5 minutes");
+
+          expect(failureOf(ended), "ended within 5 minutes").toMatchObject({
+            _tag: "Internal",
+          });
+          expect(
+            asked.filter((route) => route === "POST /sandboxes")
+          ).toHaveLength(3);
+        })
+      )
+  );
+});
+
+describe("a boat create boat says is in progress under its key", () => {
+  it.effect(
+    "is looked for by its labels, and fails at its one send when boat lists nothing of it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { runtime, asked } = yield* scriptedBoat((route) => {
+            if (route === "POST /sandboxes") {
+              return Response.json(
+                {
+                  error: {
+                    code: "idempotency_in_progress",
+                    message: "a request with this key is in progress",
+                  },
+                },
+                { status: 409 }
+              );
+            }
+
+            return route === "GET /sandboxes"
+              ? Response.json({ sandboxes: [] })
+              : undefined;
+          });
+
+          const ended = yield* endedWithin(made(runtime, "dev"), "5 minutes");
+
+          expect(failureOf(ended), "ended within 5 minutes").toBeDefined();
+          expect(
+            asked.filter((route) => route === "POST /sandboxes")
+          ).toHaveLength(1);
+          expect(
+            asked.filter((route) => route === "GET /sandboxes").length
+          ).toBeGreaterThan(0);
+        })
+      )
+  );
+});
+
 describe("a boat start whose answer is lost", () => {
   it.effect(
     "reads the sandbox until it rests, and sends no resume again once it runs",
     () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { asked, ended } = yield* lostStart(true);
+      Effect.gen(function* () {
+        for (const movingReads of [0, 2]) {
+          const { asked, ended } = yield* Effect.scoped(
+            lostStart(true, movingReads)
+          );
 
           expect(
             ended !== undefined && Exit.isSuccess(ended),
-            String(failureOf(ended))
+            `${movingReads} reads moving: ${String(failureOf(ended))}`
           ).toBe(true);
-          expect(resumes(asked)).toHaveLength(1);
-        })
-      )
+          expect(resumes(asked), `${movingReads} reads moving`).toHaveLength(1);
+        }
+      })
   );
 
   it.effect(
@@ -1561,6 +1652,46 @@ describe("a boat resize refused as running while boat reads the sandbox archived
           expect(resumes(asked)).toHaveLength(3);
         })
       )
+  );
+});
+
+describe("a boat resize of a sandbox boat moves", () => {
+  it.effect("reads it a poll apart until it rests", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const clock = yield* TestClock.testClockWith(Effect.succeed);
+        const readAt: number[] = [];
+
+        const { runtime } = yield* scriptedBoat((route) => {
+          if (route !== "GET /sandboxes/bx1") {
+            return undefined;
+          }
+
+          readAt.push(clock.currentTimeMillisUnsafe());
+
+          return readAt.length > 3
+            ? sandboxIn("archived", "default")
+            : sandboxIn("resuming");
+        });
+
+        const ended = yield* endedWithin(
+          runtime.resize(
+            { ...bx1, ...types.small },
+            { cpu: 4, ramMib: 8192 },
+            false
+          ),
+          "1 minute"
+        );
+
+        expect(
+          ended !== undefined && Exit.isSuccess(ended),
+          String(failureOf(ended))
+        ).toBe(true);
+        expect(
+          readAt.slice(1).map((at, index) => at - (readAt[index] ?? 0))
+        ).toStrictEqual([500, 500, 500]);
+      })
+    )
   );
 });
 

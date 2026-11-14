@@ -40,11 +40,13 @@ describe("what a listed resource says of its live run", () => {
         "0live-",
         "0live-A1",
         "live-a1b2c3",
+        "prod0live-a1b2c3",
         "prod",
         undefined,
       ].map(runOfLabel)
     ).toStrictEqual([
       "0live-a1b2c3",
+      undefined,
       undefined,
       undefined,
       undefined,

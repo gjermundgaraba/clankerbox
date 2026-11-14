@@ -44,7 +44,12 @@ import type {
 } from "../../runtime.ts";
 import { KeyedApiUrl } from "../../settings.ts";
 import type { HostSettings } from "../../settings.ts";
-import { sentUntilHeld, triesAfterLoss, untilRest } from "../provider-http.ts";
+import {
+  sentUntilHeld,
+  triesAfterLoss,
+  triesPerCall,
+  untilRest,
+} from "../provider-http.ts";
 import * as Api from "./api.ts";
 import type { ApiError, MachineRecord, Refused } from "./api.ts";
 import { traits } from "./traits.ts";
@@ -1034,7 +1039,7 @@ export const make = (
           Effect.retry({
             while: unknownOutcome,
             schedule: Schedule.spaced(poll),
-            times: 5,
+            times: triesPerCall - 1,
           }),
           Effect.mapError((error) =>
             isConflict(error)
