@@ -41,6 +41,7 @@ import {
   forwarding,
   LocalTunnelError,
   open,
+  refusal,
   socketIn,
   sweepLeft,
   tunnelDirectory,
@@ -148,7 +149,15 @@ export type Services =
   | Path.Path
   | ChildProcessSpawner.ChildProcessSpawner;
 
+/** Refuses, as `Invalid`, `sshArguments` a tunnel can't take. */
 export const make = (options: Options, ssh = "ssh") => {
+  const extra = options.sshArguments ?? [];
+  const refused = refusal(extra);
+
+  if (refused !== undefined) {
+    throw new Invalid({ message: refused });
+  }
+
   const sandboxes = new Map<string, Sandbox>();
   const closing = Deferred.makeUnsafe<undefined>();
   const calls = new Set<Fiber.Fiber<unknown, unknown>>();
@@ -273,7 +282,7 @@ export const make = (options: Options, ssh = "ssh") => {
         const args = yield* pinnedSsh(
           target,
           target.login.user,
-          forwarding(socket, options.sshArguments ?? [])
+          forwarding(socket, extra)
         );
 
         return yield* open({

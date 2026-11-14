@@ -149,10 +149,70 @@ export const socketIn = (
     : Effect.succeed(socket);
 };
 
+// https://github.com/openssh/openssh-portable/blob/V_10_2_P1/ssh.c#L768-L769
+const withValue = new Set("bceilmopBDEFIJLOPQRSwW");
+
+const flagRefusals = new Map([
+  ["f", "forks ssh away from the tunnel"],
+  ["M", "makes ssh a connection master, which can outlive the tunnel"],
+  ["N", "leaves out the session cat runs in"],
+  ["n", "takes the session's input"],
+  ["O", "sends a command to a connection master"],
+  ["S", "hands the forward to a connection master, which outlives the tunnel"],
+  ["s", "replaces the session cat runs in"],
+  ["t", "asks for a terminal, which garbles the echo"],
+  ["W", "replaces the session with a stdio forward"],
+  ["G", "prints ssh's configuration and exits before it connects"],
+  ["Q", "prints what ssh supports and exits before it connects"],
+  ["V", "prints ssh's version and exits before it connects"],
+]);
+
 /**
- * These precede `extra`: OpenSSH keeps an option's first value. `cat` holds the session open and
- * echoes `answer`, so with `ClearAllForwardings` held off the echo comes only once the forward is
- * bound.
+ * Why `extra` can't go to a tunnel's ssh, if it can't: ssh takes a short flag wherever it stands,
+ * so the flags that would change the session or who holds the forward, or keep ssh from
+ * connecting, are refused, and so is a word that isn't an option, which ssh would run as the
+ * command.
+ */
+export const refusal = (extra: readonly string[]): string | undefined => {
+  for (let at = 0; at < extra.length; at += 1) {
+    const arg = extra[at] ?? "";
+
+    if (arg === "--" || !arg.startsWith("-") || arg === "-") {
+      return `sshArguments: ${arg === "" ? "an empty word" : arg} isn't an option, and ssh would run what follows it as the tunnel's command`;
+    }
+
+    for (let index = 1; index < arg.length; index += 1) {
+      const flag = arg.charAt(index);
+      const why = flagRefusals.get(flag);
+
+      if (why !== undefined) {
+        return arg === `-${flag}`
+          ? `sshArguments: ${arg} ${why}`
+          : `sshArguments: ${arg} holds -${flag}, which ${why}`;
+      }
+
+      if (withValue.has(flag)) {
+        if (index === arg.length - 1) {
+          at += 1;
+
+          if (at === extra.length) {
+            return `sshArguments: ${arg} needs a value`;
+          }
+        }
+
+        break;
+      }
+    }
+  }
+
+  return undefined;
+};
+
+/**
+ * These precede `extra`: OpenSSH keeps the first value of an option given with `-o` or in a config
+ * file, so neither can clear the forward, fork it, leave out its session or the session's input,
+ * hand it to a connection master or replace its command. `cat` holds the session open and echoes
+ * `answer`, so the echo comes only once the forward is bound.
  */
 export const forwarding = (
   socket: string,
@@ -169,6 +229,14 @@ export const forwarding = (
   "ControlMaster=no",
   "-o",
   "ControlPath=none",
+  "-o",
+  "SessionType=default",
+  "-o",
+  "StdinNull=no",
+  "-o",
+  "ForkAfterAuthentication=no",
+  "-o",
+  "RemoteCommand=none",
   "-o",
   "ServerAliveInterval=15",
   "-o",

@@ -40,6 +40,28 @@ const version = async (manifest: string) => {
   return decodeManifest(text).version;
 };
 
+const made = (sshArguments: readonly string[]) => {
+  try {
+    clankerbox({
+      server: "http://server.test",
+      from: { template: "agent" },
+      sshArguments,
+    });
+
+    return "made";
+  } catch (error) {
+    return error instanceof Invalid ? error.message : String(error);
+  }
+};
+
+const refused = (arg: string, why: string) => `sshArguments: ${arg} ${why}`;
+
+const holds = (arg: string, flag: string, why: string) =>
+  `sshArguments: ${arg} holds -${flag}, which ${why}`;
+
+const command = (word: string) =>
+  `sshArguments: ${word} isn't an option, and ssh would run what follows it as the tunnel's command`;
+
 describe("provider", () => {
   afterEach(cleanUp);
 
@@ -77,6 +99,14 @@ describe("provider", () => {
       "ControlMaster=no",
       "-o",
       "ControlPath=none",
+      "-o",
+      "SessionType=default",
+      "-o",
+      "StdinNull=no",
+      "-o",
+      "ForkAfterAuthentication=no",
+      "-o",
+      "RemoteCommand=none",
       "-o",
       "ServerAliveInterval=15",
       "-o",
@@ -478,6 +508,80 @@ describe("provider", () => {
     await Promise.all([sandbox.reconnect("kept"), sandbox.reconnect("kept")]);
 
     expect(most).toBe(1);
+  });
+
+  it("clankerbox() takes ssh's options and their values as sshArguments, and refuses as Invalid a flag that would change a tunnel's session or who holds its forward or keep ssh from connecting, a word ssh would run as the command, and an option without its value", () => {
+    const asked: ReadonlyArray<readonly string[]> = [
+      [],
+      ["-i", "/keys/agent"],
+      ["-i", "-f"],
+      ["-i-N"],
+      ["-o", "SessionType=none", "-oStdinNull=yes"],
+      ["-vvv", "-4C", "-F", "/dev/null", "-J", "jump", "-T"],
+      ["-f"],
+      ["-M"],
+      ["-N"],
+      ["-n"],
+      ["-O", "check"],
+      ["-S", "/tmp/master"],
+      ["-S/tmp/master"],
+      ["-s"],
+      ["-tt"],
+      ["-W", "127.0.0.1:22"],
+      ["-G"],
+      ["-Q", "cipher"],
+      ["-V"],
+      ["-vG"],
+      ["-v", "-Tn"],
+      ["-i", "/keys/agent", "uptime"],
+      ["--", "-i"],
+      [""],
+      ["-i"],
+      ["-v", "-l"],
+    ];
+
+    expect(asked.map((each) => made(each))).toStrictEqual([
+      "made",
+      "made",
+      "made",
+      "made",
+      "made",
+      "made",
+      refused("-f", "forks ssh away from the tunnel"),
+      refused(
+        "-M",
+        "makes ssh a connection master, which can outlive the tunnel"
+      ),
+      refused("-N", "leaves out the session cat runs in"),
+      refused("-n", "takes the session's input"),
+      refused("-O", "sends a command to a connection master"),
+      refused(
+        "-S",
+        "hands the forward to a connection master, which outlives the tunnel"
+      ),
+      holds(
+        "-S/tmp/master",
+        "S",
+        "hands the forward to a connection master, which outlives the tunnel"
+      ),
+      refused("-s", "replaces the session cat runs in"),
+      holds("-tt", "t", "asks for a terminal, which garbles the echo"),
+      refused("-W", "replaces the session with a stdio forward"),
+      refused("-G", "prints ssh's configuration and exits before it connects"),
+      refused("-Q", "prints what ssh supports and exits before it connects"),
+      refused("-V", "prints ssh's version and exits before it connects"),
+      holds(
+        "-vG",
+        "G",
+        "prints ssh's configuration and exits before it connects"
+      ),
+      holds("-Tn", "n", "takes the session's input"),
+      command("uptime"),
+      command("--"),
+      command("an empty word"),
+      "sshArguments: -i needs a value",
+      "sshArguments: -l needs a value",
+    ]);
   });
 
   it("clankerbox() builds its client over the server URL it is given", async () => {

@@ -1,8 +1,10 @@
+import { execFileSync } from "node:child_process";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import http, { createServer } from "node:http";
 import { connect } from "node:net";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { Internal, WrongState } from "@gjermundgaraba/clankerbox-sdk";
@@ -18,7 +20,7 @@ import {
 } from "vite-plus/test";
 
 import { healthPath } from "../src/agent.ts";
-import { LocalTunnelError } from "../src/tunnel.ts";
+import { forwarding, LocalTunnelError } from "../src/tunnel.ts";
 import { run, testLimit } from "./child.ts";
 import {
   callsIn,
@@ -179,6 +181,95 @@ describe("tunnel", () => {
       proxied,
       tunnel: liveTunnel(await calls()).pid,
     }).toStrictEqual({ requests: [], proxied: [], tunnel: pid });
+  });
+
+  it("the provider's own ssh options hold against sshArguments and ssh config that would change the forward or its session, as OpenSSH resolves them", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "clankerbox-resolved-"));
+
+    cleanups.push(async () => {
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    const config = path.join(dir, "config");
+    const socket = path.join(dir, "agent.sock");
+
+    await writeFile(
+      config,
+      [
+        "Host *",
+        "  SessionType none",
+        "  StdinNull yes",
+        "  ForkAfterAuthentication yes",
+        "  RemoteCommand echo config",
+        "  RequestTTY force",
+        "  ClearAllForwardings yes",
+        "  ExitOnForwardFailure no",
+        "  ControlMaster auto",
+        "  ControlPath /tmp/config-master",
+        "  BatchMode no",
+        "",
+      ].join("\n")
+    );
+
+    const stdout = execFileSync(
+      "ssh",
+      [
+        "-G",
+        "-F",
+        config,
+        "127.0.0.1",
+        ...forwarding(socket, [
+          "-o",
+          "SessionType=none",
+          "-o",
+          "StdinNull=yes",
+          "-o",
+          "RemoteCommand=echo arguments",
+          "-o",
+          "ClearAllForwardings=yes",
+          "-o",
+          "ControlPath=/tmp/arguments-master",
+        ]),
+      ],
+      { encoding: "utf-8" }
+    );
+
+    const resolved = new Map(
+      stdout
+        .split("\n")
+        .map((line) => line.split(" "))
+        .map(([name = "", ...value]) => [name, value.join(" ")])
+    );
+
+    expect(
+      Object.fromEntries(
+        [
+          "batchmode",
+          "clearallforwardings",
+          "controlmaster",
+          "controlpath",
+          "exitonforwardfailure",
+          "forkafterauthentication",
+          "localforward",
+          "remotecommand",
+          "requesttty",
+          "sessiontype",
+          "stdinnull",
+        ].map((name) => [name, resolved.get(name)])
+      )
+    ).toStrictEqual({
+      batchmode: "yes",
+      clearallforwardings: "no",
+      controlmaster: "false",
+      controlpath: undefined,
+      exitonforwardfailure: "yes",
+      forkafterauthentication: "no",
+      localforward: `${socket} [127.0.0.1]:2468`,
+      remotecommand: undefined,
+      requesttty: "false",
+      sessiontype: "default",
+      stdinnull: "no",
+    });
   });
 
   it("a tunnel whose ssh fails says what ssh printed or why it couldn't run, and a machine without an endpoint is WrongState", async () => {

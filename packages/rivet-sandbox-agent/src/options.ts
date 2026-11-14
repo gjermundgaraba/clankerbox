@@ -21,11 +21,12 @@ export interface Options {
   /** `sandbox` by default. */
   readonly namePrefix?: string | undefined;
   /**
-   * Such as `["-i", "/path/to/key"]`. Neither these nor ssh config may fork the forward (`-f`,
-   * `-N`, `ForkAfterAuthentication`, `SessionType none`) or give it to a connection master (`-M`,
-   * `-S`): the tunnel ends with its ssh, and those would outlive it. Nor may they take the
-   * session's input (`-n`, `StdinNull`): a tunnel opens only once its `cat` echoes back a line
-   * it was sent.
+   * ssh's options and their values, such as `["-i", "/path/to/key"]`, after the provider's own.
+   * OpenSSH keeps the first value of an option given with `-o` or in ssh config, so neither can
+   * change the forward or its session, but a short flag takes effect wherever it stands: these may
+   * not hold `-f`, `-M`, `-N`, `-n`, `-O`, `-S`, `-s`, `-t` or `-W`, `-G`, `-Q` or `-V`, which
+   * print and exit before ssh connects, `--`, or a word that isn't an option, which ssh would run
+   * as the command. The provider refuses them as `Invalid` when it is made.
    */
   readonly sshArguments?: readonly string[] | undefined;
   /** `/home/admin` by default, the login user's home, where the Ubuntu recipe runs the server. */
