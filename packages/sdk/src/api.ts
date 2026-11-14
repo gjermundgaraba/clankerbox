@@ -196,7 +196,7 @@ export const Http = ActionHttp.make(
         Internal,
       ] as const,
       description:
-        "Run a command in a running machine, as the user it names or root, with the environment given, and answer its exit code and output once it exits, whatever the code. It waits for a step under way on the machine before it begins, and a stop, pause or delete ends it. It runs as long as the request does: ending the request, or its timeout, ends the command and what it started in the guest, and a timeout answers exit code 124 once they have ended, or Internal, saying why, when the host couldn't end them, so they may still run. Nothing of it is stored or logged.",
+        "Run a command in a running machine, as the user it names or root, with the environment given, and answer its exit code and output once it exits, whatever the code. It waits for a step under way on the machine before it begins, and a stop, pause or delete ends it. It runs as long as the request does: ending the request, or its timeout, ends the command and what it started in the guest, and a timeout answers exit code 124 with the output, within endTimeout of it, with mayStillRun saying why when the host couldn't confirm they had ended, so they may still run. Nothing of it is stored or logged.",
       input: ExecRequest,
       success: Executed,
     }),

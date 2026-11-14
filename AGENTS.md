@@ -355,10 +355,13 @@ the run.
   arguments and every process's environment. An exec whose scope closes before
   its command exits and its output closes, by its limit, its request ending or
   the host's stop, runs `endScript` through the runtime's own `exec` before the
-  scope's close goes on, bounded by `endTimeout`: TERM, then STOP and KILL, to
-  each process whose own arguments or environment hold the mark, the exec's or
-  another's, and what descends from one. An end that leaves any running answers
-  the caller `Internal`. README's `exec` bullet states the rest. Smolvm's agent
+  scope's close goes on, bounded by the SDK's `endTimeout`, which the control
+  plane's and the client's waits on a timed exec add: TERM, then STOP and KILL,
+  to each process whose own arguments or environment hold the mark, the exec's
+  or another's, and what descends from one, each listing one `awk` pass, until
+  the deadline the host gives it. A timed-out exec whose end isn't confirmed
+  answers 124 with its output and `mayStillRun`. README's `exec` bullet states
+  the rest. Smolvm's agent
   ends a cut command too; a Tart guest, boat and smol cloud leave it running,
   measured on each, and the fake runtime's `cut` models each.
 - **Setup scripts stay in memory, on both sides, but for a macOS guest's
