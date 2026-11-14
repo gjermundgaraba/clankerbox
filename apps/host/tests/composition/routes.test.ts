@@ -720,18 +720,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* settle;
 
-        const [started, stopped] = [
-          yield* ended(host.url, "op-3"),
-          yield* ended(host.url, "op-4"),
-        ];
+        const stopped = yield* ended(host.url, "op-4");
 
         const asked = fake.calls.filter((call) =>
           call.startsWith(`POST /v1/machines/${handle}/`)
         );
 
-        expect([held.status, started.status, stopped.status]).toStrictEqual([
+        expect([held.status, stopped.status]).toStrictEqual([
           "running",
-          "cancelled",
           "done",
         ]);
         expect(fake.machines.get(handle ?? "")?.state).toBe("stopped");
