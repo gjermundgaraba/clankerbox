@@ -2053,20 +2053,30 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a host that starts removes every image seed build a killed smolvm call left, the VM its record lost included",
+    "a host that starts removes each image seed build whose smolvm call has ended, the VM its record lost included, and keeps one whose call still runs",
     () =>
       Effect.gen(function* () {
         const model = smolvmModel();
         const left = "image-seed-0123456789abcdef-4242";
+        const running = "image-seed-fedcba9876543210-4243";
 
+        model.running.add(4243);
         model.orphanVmm(left);
+        model.orphanVmm(running);
 
-        const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
+        const runtime = yield* runtimeOf(
+          yield* prepared(),
+          model.spawner,
+          model.box()
+        );
 
         yield* runtime.startup;
 
-        expect(model.vms.has(left)).toBe(false);
-        expect(model.vmmsLeft()).toStrictEqual([]);
+        expect([model.vms.has(left), model.vms.has(running)]).toStrictEqual([
+          false,
+          true,
+        ]);
+        expect(model.vmmsLeft()).toStrictEqual([running]);
       })
   );
 

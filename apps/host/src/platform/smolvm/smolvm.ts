@@ -1430,7 +1430,7 @@ export const make = (
           Effect.gen(function* () {
             const vms = yield* listed;
 
-            yield* removeSeedBuilds(vms, () => Effect.succeed(true));
+            yield* removeSeedBuilds(vms, ended);
 
             for (const { name, state: recorded } of vms) {
               if (recorded === "pausing") {
