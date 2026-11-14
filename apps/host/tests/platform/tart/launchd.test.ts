@@ -18,19 +18,25 @@ const program = [
 ];
 
 describe("launchctl print, as macOS 27.2 prints a job through its life", () => {
-  it("reads a VM's job running, starting, exited and never run, and a job launchd waits to respawn as running", () => {
+  it("reads a VM's job running and starting, exited, refused, never run, and a job launchd waits to respawn as exited", () => {
     expect([
       parse(printed("running")),
       parse(printed("starting")),
       parse(printed("exited")),
+      parse(printed("refused")),
       parse(printed("never-ran")),
       parse(printed("spawn-scheduled")),
     ]).toStrictEqual([
       Result.succeed({ _tag: "running", program }),
       Result.succeed({ _tag: "running", program }),
       Result.succeed({ _tag: "exited", program, lastExit: 0 }),
+      Result.succeed({ _tag: "exited", program, lastExit: 2 }),
       Result.succeed({ _tag: "exited", program, lastExit: undefined }),
-      Result.succeed({ _tag: "running", program: ["/usr/bin/false"] }),
+      Result.succeed({
+        _tag: "exited",
+        program: ["/usr/bin/false"],
+        lastExit: 1,
+      }),
     ]);
   });
 

@@ -1,4 +1,10 @@
-import { appendFileSync, existsSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -143,6 +149,9 @@ const calls = (mac: ScriptedMac) =>
     );
 
 const vmOf = (machine: Identity) => machineName("mac", machine);
+
+const launchctlPrint = (name: string) =>
+  readFileSync(new URL(`launchctl/${name}.txt`, import.meta.url), "utf-8");
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it("native names carry the host ID, the kind and the instance, and disk sizes round up to GB", () => {
@@ -1729,6 +1738,44 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(yield* runtime.observe([machine])).toStrictEqual(
           new Map([[machine.name, "stopped"]])
         );
+      })
+  );
+
+  it.effect(
+    "a stopped VM whose job launchd has scheduled to spawn, with no run holding its lock, reads stopped, capacity charges nothing, and a start boots it",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const machine = machineOn("dev");
+        const vm = vmOf(machine);
+
+        yield* runtime.make(machine, fromImage("base"), unbound);
+        yield* runtime.stop(machine);
+        mac.hooks.print = () => ({ stdout: launchctlPrint("spawn-scheduled") });
+
+        const observed = yield* runtime.observe([machine]);
+        const used = yield* runtime.capacity([{ _tag: "found", machine }]);
+        const before = calls(mac).length;
+
+        yield* runtime.start(machine, new Set());
+
+        expect({
+          observed,
+          used,
+          kickstarted: calls(mac)
+            .slice(before)
+            .filter((line) => line.startsWith("launchctl kickstart")),
+          after: yield* runtime.observe([machine]),
+        }).toStrictEqual({
+          observed: new Map([[machine.name, "stopped"]]),
+          used: [
+            { resource: "runningVms", limit: 2, used: 0 },
+            { resource: "cpu", used: 0 },
+            { resource: "ramMib", used: 0 },
+          ],
+          kickstarted: [`launchctl kickstart gui/501/${vm}`],
+          after: new Map([[machine.name, "running"]]),
+        });
       })
   );
 

@@ -234,14 +234,19 @@ Each: what Tart does, where, and what of ours depends on it.
   naming it: `not running` before a job's first run and after each, with
   `last exit code`, a number or `(never exited)`; `xpcproxy` while launchd
   starts a VM's job; `spawn scheduled` while it waits to respawn a job
-  `KeepAlive` restarts; and `running`. A VM's job kickstarted while a hand run
-  holds the VM's lock exits 2, its log `VM "<vm>" is already running!`
-  (Commands/Run.swift), and goes `spawn scheduled` under the host's
-  `KeepAlive`, measured on macOS 27.2, so it runs again once launchd's throttle
-  passes; the host reads such a VM running, by its lock. A label launchd doesn't hold exits 113,
-  as does a `launchctl kickstart` of it ("Could not find service"). Re-capture
-  them on a macOS upgrade, from a job of a scratch VM and of `/usr/bin/false`
-  under `KeepAlive`, and compare.
+  `KeepAlive` restarts, which runs no process, so the host reads it as exited;
+  and `running`. The host's jobs have no `KeepAlive`, and on macOS 27.2 one
+  never printed `spawn scheduled`: one whose run Apple's two-VM cap refused
+  (exit 1) printed `not running` 0.3 s later, and one kickstarted while a hand
+  run held the VM's lock (exit 2, its log `VM "<vm>" is already running!`,
+  Commands/Run.swift) 0.55 s later, and launchd ran neither again in 300 s;
+  the host reads the latter VM running, by its lock. A kickstart 1 s after a
+  job's run ended blocked 9 s, until launchd's throttle of 10 s passed, and
+  then ran it. A label launchd doesn't hold exits 113, as does a
+  `launchctl kickstart` of it ("Could not find service"). Re-capture them on a
+  macOS upgrade, from a job of a scratch VM written as the host writes it, run
+  free, refused by the cap and kickstarted under a hand run, and from
+  `/usr/bin/false` under `KeepAlive`, and compare.
 - `ps -axo pid=,ucomm=,args=` pads a process's name, which may hold spaces, to
   16 characters, and shows another user's arguments: on macOS 27.2 an
   unprivileged `ps` showed root's and the system users' processes with theirs
