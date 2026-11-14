@@ -129,6 +129,26 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a machine adopt moves takes no port another machine it adopts holds, and each machine whose own port is free keeps it",
+    () =>
+      Effect.gen(function* () {
+        const reaches = yield* reachesOf(relayed);
+        const { first } = suitePorts.reach;
+
+        const [taken, next] = [at("dev", first), at("next", first + 1)];
+
+        const reached = yield* Effect.scoped(
+          Effect.andThen(holding(taken.port), reaches.adopt([taken, next]))
+        );
+
+        expect([...reached]).toStrictEqual([
+          ["dev", first + 2],
+          ["next", first + 1],
+        ]);
+      })
+  );
+
+  it.effect(
     "an open moves a machine whose port another program holds to the first free port none of the given ones is, and answers where it relays it",
     () =>
       Effect.gen(function* () {
