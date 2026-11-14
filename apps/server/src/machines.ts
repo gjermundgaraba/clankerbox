@@ -106,12 +106,14 @@ export interface Interface {
   ) => Effect.Effect<Machine, Declared<"createMachine">>;
   /**
    * A machine for a template's build to capture, deleted if the control plane restarts: on the
-   * first of `hosts`, and on `Capacity` on the next, as a create moves.
+   * first of `hosts`, and on `Capacity` on the next, as a create moves. `sending` is told each host
+   * its make is sent to, as the read that sends it found that host, before the make goes.
    */
   readonly build: (
     name: string,
     spec: Spec & { readonly setup: Setup },
-    hosts: Arr.NonEmptyReadonlyArray<HostInfo>
+    hosts: Arr.NonEmptyReadonlyArray<HostInfo>,
+    sending: (host: HostInfo) => Effect.Effect<void, Internal>
   ) => Effect.Effect<void, Declared<"createMachine">>;
   readonly start: (
     id: string
@@ -165,6 +167,7 @@ const movesOn = (error: MachineRow["error"]): boolean =>
 interface CreateHeldInMemory {
   readonly setup: Setup | undefined;
   readonly untried: readonly Candidate[];
+  readonly sending?: (host: HostInfo) => Effect.Effect<void, Internal>;
 }
 
 type TemplateCreate = Extract<CreateRequest, { readonly template: string }>;
@@ -414,10 +417,7 @@ export const make = (
           creates.delete(name);
           tailnets.delete(name);
         } else if (next.state === "making.due" && held !== undefined) {
-          creates.set(name, {
-            setup: held.setup,
-            untried: held.untried.slice(1),
-          });
+          creates.set(name, { ...held, untried: held.untried.slice(1) });
         } else if (next.state === "undone" || stageOf(next.state) === "made") {
           creates.delete(name);
         }
@@ -561,12 +561,16 @@ export const make = (
             (yield* unbegun(found.after)),
         });
 
-        if (
-          answer.at === "written" &&
-          answer.next !== "removed" &&
-          answer.next.state === "made.settled"
-        ) {
-          tailnets.set(name, ticked(check));
+        if (answer.at === "written" && answer.next !== "removed") {
+          if (answer.next.state === "made.settled") {
+            tailnets.set(name, ticked(check));
+          }
+
+          const sending = creates.get(name)?.sending;
+
+          if (answer.next.state === "making.sent" && sending !== undefined) {
+            yield* sending(info);
+          }
         }
 
         return answer;
@@ -744,7 +748,7 @@ export const make = (
     const create: Interface["create"] = (request) =>
       "template" in request ? fromTemplate(request) : fromBase(request);
 
-    const build: Interface["build"] = (name, spec, [first, ...rest]) =>
+    const build: Interface["build"] = (name, spec, [first, ...rest], sending) =>
       Effect.gen(function* () {
         const info = yield* answering(hosts, first.id);
 
@@ -753,7 +757,7 @@ export const make = (
           { spec, labels: undefined, ephemeral: true },
           onBase(info),
           info,
-          { setup: spec.setup, untried: rest.map(onBase) }
+          { setup: spec.setup, untried: rest.map(onBase), sending }
         );
       });
 

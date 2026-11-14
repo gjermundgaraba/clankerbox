@@ -38,7 +38,6 @@ import { Checkpoints } from "./checkpoints.ts";
 import { apart } from "./driver.ts";
 import { answering, Hosts } from "./hosts.ts";
 import type { Reached } from "./hosts.ts";
-import type { MachineRow } from "./machine-chart.ts";
 import { Machines } from "./machines.ts";
 import { builtUnder, outdated, placing } from "./placement.ts";
 import type { BuiltUnder } from "./placement.ts";
@@ -205,14 +204,13 @@ const ended = (
 
 const imageOf = (host: HostInfo, base: string) => host.images[base] ?? base;
 
-const placedOn = (
-  { host, pin }: Pick<MachineRow, "host" | "pin">,
-  info: HostInfo,
+const sentTo = (
+  host: HostInfo,
   base: string
 ): Pick<BuildRow, "host" | "pin" | "image"> => ({
-  host,
-  pin,
-  image: imageOf(info, base),
+  host: host.id,
+  pin: host.pin,
+  image: imageOf(host, base),
 });
 
 const begun =
@@ -242,9 +240,7 @@ const begun =
         createdAt: now,
         phase: "building",
         error: undefined,
-        host: host.id,
-        pin: host.pin,
-        image: imageOf(host, asked.base),
+        ...sentTo(host, asked.base),
       }),
     });
   };
@@ -406,6 +402,11 @@ export const make = (settings: {
           return resting.value;
         });
 
+        const sending = (host: HostInfo) =>
+          revising(name, number, (row) =>
+            revised(row, number, sentTo(host, spec.base))
+          ).pipe(Effect.asVoid);
+
         yield* Effect.gen(function* () {
           yield* machines.build(
             builder,
@@ -416,15 +417,12 @@ export const make = (settings: {
                 ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
               },
             },
-            placed
+            placed,
+            sending
           );
 
           const made = yield* atRest;
           const host = yield* answering(hosts, made.host);
-
-          yield* revising(name, number, (row) =>
-            revised(row, number, placedOn(made, host, spec.base))
-          );
 
           if (stopsBeforeCapture(host.traits)) {
             yield* machines.stop(builder);

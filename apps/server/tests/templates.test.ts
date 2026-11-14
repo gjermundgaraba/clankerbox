@@ -34,7 +34,7 @@ import {
   running,
   withClient,
 } from "./support.ts";
-import type { Started } from "./support.ts";
+import type { Plane, Started } from "./support.ts";
 
 const setup = {
   script: `#!/bin/sh\n`,
@@ -54,6 +54,23 @@ const web = (fields?: Partial<BuildRequest>): BuildRequest => ({
 const exits3 = { script: "#!/bin/sh\nexit 3\n" };
 
 const on = (as: FakeRuntimeName) => ({ hosts: [{ id: as, as }] });
+
+const movedHosts = [
+  { id: "full" },
+  { id: "roomy", options: { bases: new Map([["ubuntu", "image/roomy"]]) } },
+];
+
+const roomyAfterFull = (planned: Pick<Plane, "hosts">) => {
+  const [full, roomy] = planned.hosts;
+
+  if (full === undefined || roomy === undefined) {
+    throw new Error("a plane without two hosts");
+  }
+
+  full.fake.failNext("admit", new Capacity({ message: "no room" }));
+
+  return roomy;
+};
 
 const noMachines = (served: Pick<Started, "store">) =>
   eventually(machineNames(served), (names) => names.length === 0);
@@ -604,6 +621,61 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           served.hosts.map((host) => callsTo(host, "capture").length)
         ).toStrictEqual([0, 1]);
         expect(clone).toMatchObject({ phase: "settled", template: "web@1" });
+      })
+  );
+
+  it.effect(
+    "a build whose builder moved names the host it runs on while it builds, and when its setup fails there",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* running({ hosts: movedHosts });
+        const client = yield* clientOf(served.url);
+        const held = roomyAfterFull(served).fake.holdNext("exec");
+
+        const building = yield* Effect.forkChild(
+          Effect.flip(client.buildTemplate(web({ setup: exits3 })))
+        );
+
+        yield* held.entered;
+
+        const during = yield* client.getTemplate({ id: "web" });
+
+        yield* held.release;
+
+        const error = yield* Fiber.join(building);
+        const after = yield* client.getTemplate({ id: "web" });
+
+        expect(during.builds).toMatchObject([
+          { phase: "building", host: "roomy", image: "image/roomy" },
+        ]);
+        expect(error._tag).toBe("ScriptFailed");
+        expect(after.builds).toMatchObject([
+          { phase: "failed", host: "roomy", image: "image/roomy" },
+        ]);
+      })
+  );
+
+  it.effect(
+    "a restart that ends a build whose builder moved names the host the builder ran on",
+    () =>
+      Effect.gen(function* () {
+        const planned = yield* plane({ hosts: movedHosts });
+        const first = yield* planned.start();
+        const held = roomyAfterFull(planned).fake.holdNext("exec");
+
+        yield* first.templates.build(web());
+        yield* held.entered;
+        yield* first.crash;
+
+        const second = yield* planned.start();
+
+        yield* Effect.addFinalizer(() => second.crash);
+
+        const read = yield* second.templates.get("web");
+
+        expect(read.builds).toMatchObject([
+          { phase: "failed", host: "roomy", image: "image/roomy" },
+        ]);
       })
   );
 
