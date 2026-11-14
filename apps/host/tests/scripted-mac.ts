@@ -43,6 +43,7 @@ interface Hooks {
   get?: (vm: string) => Reply;
   locks?: () => Reply | undefined;
   ps?: () => Reply | undefined;
+  clock?: (vm: string) => Reply | undefined;
 }
 
 const programIn = (plistText: string) =>
@@ -110,6 +111,7 @@ export const scriptedMac = (stateDir: string, tart = binary) => {
   const starting = new Set<string>();
   const programs = new Map<string, readonly string[]>();
   const exited = new Map<string, number>();
+  const clockSets: Array<{ readonly vm: string; readonly stamp: string }> = [];
 
   const hooks: Hooks = {};
   const tartHome = path.join(path.dirname(stateDir), "tart");
@@ -306,6 +308,12 @@ export const scriptedMac = (stateDir: string, tart = binary) => {
 
         if (!runs.has(vm)) {
           return { exitCode: 2, stderr: `Error: VM "${vm}" is not running\n` };
+        }
+
+        if (rest.includes("/bin/date")) {
+          clockSets.push({ vm, stamp: rest.at(-1) ?? "" });
+
+          return hooks.clock?.(vm);
         }
 
         if (rest.includes("/sbin/shutdown")) {
@@ -575,6 +583,7 @@ export const scriptedMac = (stateDir: string, tart = binary) => {
   return {
     vms,
     runs,
+    clockSets,
     elsewhere,
     jobs,
     starting,

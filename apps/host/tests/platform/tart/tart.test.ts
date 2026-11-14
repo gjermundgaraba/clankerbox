@@ -17,6 +17,7 @@ import {
   Deferred,
   Duration,
   Effect,
+  DateTime,
   Exit,
   Fiber,
   Layer,
@@ -31,6 +32,7 @@ import * as Operations from "../../../src/operations.ts";
 import * as Relay from "../../../src/platform/relay.ts";
 import {
   checkpointName,
+  dateStamp,
   diskGb,
   diskGibOf,
   environment,
@@ -129,7 +131,9 @@ const calls = (mac: ScriptedMac) =>
       [
         call.file === mac.settings.binary ? "tart" : path.basename(call.file),
         ...call.args,
-      ].join(" ")
+      ]
+        .join(" ")
+        .replace(/ \/bin\/date -u \d{12}\.\d{2}$/u, " /bin/date -u <now>")
     )
     .filter(
       (line) =>
@@ -253,6 +257,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           `launchctl bootstrap gui/501 ${path.join(jobsDir(mac.settings.stateDir), `${vm}.plist`)}`,
           `launchctl kickstart gui/501/${vm}`,
           `tart exec ${vm} true`,
+          `tart exec ${vm} sudo -n /bin/date -u <now>`,
         ]);
 
         const log = path.join(jobsDir(mac.settings.stateDir), `${vm}.log`);
@@ -361,6 +366,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           `launchctl kickstart gui/501/${vm}`,
           `tart exec ${vm} true`,
           `tart exec ${vm} true`,
+          `tart exec ${vm} sudo -n /bin/date -u <now>`,
         ]);
       })
   );
@@ -421,6 +427,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           `launchctl bootstrap gui/501 ${path.join(jobsDir(mac.settings.stateDir), `${vm}.plist`)}`,
           `launchctl kickstart gui/501/${vm}`,
           `tart exec ${vm} true`,
+          `tart exec ${vm} sudo -n /bin/date -u <now>`,
         ]);
       })
   );
@@ -664,12 +671,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           [
             `launchctl kickstart gui/501/${vmOf(current)}`,
             `tart exec ${vmOf(current)} true`,
+            `tart exec ${vmOf(current)} sudo -n /bin/date -u <now>`,
           ],
           [
             `launchctl bootout gui/501/${vmOf(older)}`,
             `launchctl bootstrap gui/501 ${plistOf(vmOf(older))}`,
             `launchctl kickstart gui/501/${vmOf(older)}`,
             `tart exec ${vmOf(older)} true`,
+            `tart exec ${vmOf(older)} sudo -n /bin/date -u <now>`,
           ],
         ]);
         expect(mac.programs.get(vmOf(older))).toStrictEqual([
@@ -1056,9 +1065,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           `tart clone ${vmOf(source)} ${vmOf(forked)}`,
           `tart set ${vmOf(forked)} --random-serial`,
           `tart exec ${vmOf(forked)} true`,
+          `tart exec ${vmOf(forked)} sudo -n /bin/date -u <now>`,
           `tart clone ${snap} ${vmOf(restored)}`,
           `tart set ${vmOf(restored)} --random-serial`,
           `tart exec ${vmOf(restored)} true`,
+          `tart exec ${vmOf(restored)} sudo -n /bin/date -u <now>`,
           `tart delete ${snap}`,
           `tart delete ${snap}`,
         ]);
@@ -1397,7 +1408,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           hosts: run(false),
         }).toStrictEqual({
           own: ["--version", "clone", "launchctl", "perl", "set"],
-          hosts: ["exec", "exec", "exec", "exec"],
+          hosts: ["exec", "exec", "exec", "exec", "exec"],
         });
       })
   );
@@ -1535,6 +1546,71 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(
           mac.spawner.calls.slice(before).filter(({ file }) => file === binary)
         ).toStrictEqual([]);
+      })
+  );
+
+  it("a guest's clock is set in the form macOS's date -u takes, mmddHHMMyyyy.SS, in UTC", () => {
+    expect(
+      [Date.UTC(2026, 0, 2, 3, 4, 5), Date.UTC(2026, 11, 31, 23, 59, 59)].map(
+        (at) => dateStamp(DateTime.makeUnsafe(at))
+      )
+    ).toStrictEqual(["010203042026.05", "123123592026.59"]);
+  });
+
+  it.effect(
+    "each boot of a Tart machine, its make, a start and a resume, ends with its guest's clock set to the host's",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const machine = machineOn("dev");
+        const vm = vmOf(machine);
+        const set = () => mac.clockSets.map((each) => each.vm);
+
+        yield* runtime.make(machine, fromImage("base"), unbound);
+        const made = set();
+        yield* runtime.stop(machine);
+        yield* runtime.start(machine, new Set());
+        const started = set();
+        yield* runtime.pause(machine);
+        yield* runtime.start(machine, new Set());
+        const resumed = set();
+
+        const now = DateTime.toEpochMillis(yield* DateTime.now);
+
+        const lately = [0, 1, 2, 3, 4].map((ago) =>
+          dateStamp(DateTime.makeUnsafe(now - ago * 1000))
+        );
+
+        expect({ made, started, resumed }).toStrictEqual({
+          made: [vm],
+          started: [vm, vm],
+          resumed: [vm, vm, vm],
+        });
+        expect(lately).toContain(mac.clockSets.at(-1)?.stamp);
+      })
+  );
+
+  it.effect(
+    "a boot whose guest refuses the host's clock fails Internal naming the date, and a resume's says nothing of a locked session",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const machine = machineOn("dev");
+        const vm = vmOf(machine);
+
+        yield* runtime.make(machine, fromImage("base"), unbound);
+        yield* runtime.pause(machine);
+        mac.hooks.clock = () => ({
+          exitCode: 1,
+          stderr: "sudo: a password is required\n",
+        });
+
+        const error = yield* Effect.flip(runtime.start(machine, new Set()));
+
+        expect(error._tag).toBe("Internal");
+        expect(error.message).toBe(
+          `tart exec ${vm} date exited 1: sudo: a password is required`
+        );
       })
   );
 
@@ -1743,6 +1819,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(calls(mac).slice(before)).toStrictEqual([
         `launchctl kickstart gui/501/${vm}`,
         `tart exec ${vm} true`,
+        `tart exec ${vm} sudo -n /bin/date -u <now>`,
       ]);
       expect(yield* runtime.observe([machine])).toStrictEqual(
         new Map([[machine.name, "running"]])

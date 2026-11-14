@@ -12,6 +12,7 @@ import {
 import type { HostError, Sizing } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Clock,
+  DateTime,
   Duration,
   Effect,
   FileSystem,
@@ -96,6 +97,8 @@ const shutdownWait = Duration.minutes(1);
 const suspendWait = Duration.minutes(2);
 
 const forcedStopWait = Duration.seconds(10);
+
+const clockWait = Duration.seconds(30);
 
 const stopPause = Duration.millis(500);
 
@@ -227,6 +230,15 @@ export const qualified = releases(minimumVersion, testedVersion);
 
 const refusal = (binary: string, reported: string): string =>
   `${binary} reports version "${reported}", ${release.test(reported) ? "" : "which names no Tart release, "}and this host runs ${qualified} it was qualified on, as it reads Tart's own VM directories and processes: install Tart ${testedVersion} and set runtime.tart.binary to its tart executable`;
+
+const twoDigits = (value: number) => String(value).padStart(2, "0");
+
+/** The UTC time `now` as macOS's `date -u` takes it to set the clock: `mmddHHMMyyyy.SS`. */
+export const dateStamp = (now: DateTime.Utc): string => {
+  const { year, month, day, hour, minute, second } = DateTime.toPartsUtc(now);
+
+  return `${[month, day, hour, minute].map(twoDigits).join("")}${year}.${twoDigits(second)}`;
+};
 
 const ended = (job: Launchd.Job | undefined, target: string): string => {
   if (job === undefined) {
@@ -501,6 +513,25 @@ export const make = (
       );
     };
 
+    const clockSet = (machine: Target) =>
+      Effect.gen(function* () {
+        const vm = machine.handle;
+        const stamp = dateStamp(yield* DateTime.now);
+
+        yield* expect(
+          yield* tartExec(vm, ["sudo", "-n", "/bin/date", "-u", stamp]),
+          `tart exec ${vm} date`
+        );
+      }).pipe(
+        timeoutFail(
+          clockWait,
+          () =>
+            new Internal({
+              message: `${machine.name}'s guest didn't take the host's clock within ${Duration.format(clockWait)}`,
+            })
+        )
+      );
+
     const halted = (vm: string, wait: Duration.Duration) =>
       running(vm).pipe(
         Effect.repeat({
@@ -580,8 +611,11 @@ export const make = (
         yield* started(vm, since);
       });
 
-    const boot = (machine: Target) =>
+    const booted = (machine: Target) =>
       Effect.andThen(launch(machine), ready(machine));
+
+    const boot = (machine: Target) =>
+      Effect.andThen(booted(machine), clockSet(machine));
 
     const stop = (machine: Target) =>
       Effect.gen(function* () {
@@ -711,14 +745,15 @@ export const make = (
       });
 
     const resume = (machine: Target) =>
-      boot(machine).pipe(
+      booted(machine).pipe(
         Effect.catchTag("Internal", (error) =>
           Effect.fail(
             new Internal({
               message: `${error.message}; macOS resumes a saved state only while the Mac's session is unlocked, so if it is locked, unlock it and start ${machine.name} again: a restore that fails keeps the saved state, and a stop discards it`,
             })
           )
-        )
+        ),
+        Effect.andThen(clockSet(machine))
       );
 
     const suspend = (machine: Target) =>
