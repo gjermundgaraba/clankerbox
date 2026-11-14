@@ -72,19 +72,24 @@ when it was measured on the operator's account.
   sends in all, and on a 409 waits and reads the name instead.)
 - `autoStopSeconds: 0` with a published port answers 422 on a plan whose
   `GET /v1/account` says `plan.allowAlwaysOn` false; the adapter sends 86400
-  then, reading the account at each create and restore, so a plan that
-  changes takes effect at the next one. (`smol-cloud.ts`'s `autoStopSeconds`;
+  then, reading the account at each make, so a plan that changes takes
+  effect at the next one. (`smol-cloud.ts`'s `autoStopSeconds`;
   the test of a make on an account whose plan changes.)
 - `GET /v1/account` gives `effectiveMaxMachines`,
   `effectiveMaxConcurrentMachines`, and one machine's most,
   `effectiveMaxCpus`, `effectiveMaxMemoryMb` and `effectiveMaxDiskGb`;
   `GET /v1/capacity` gives `machines`, `startedMachines` and
   `startedMemoryMb`. The account has no limit on vCPUs in all: five 1-vCPU
-  machines ran at once on an account whose `effectiveMaxCpus` is 4.
+  machines ran at once on an account whose `effectiveMaxCpus` is 4. The host
+  reads one machine's most at its start, and fails to start if it can't, as
+  its traits' limits, so placement passes it over past them, and each make,
+  a fork's included, reads them again and refuses `Unsizable` sizes past a
+  plan changed since. (`smol-cloud.ts`'s `perMachine` and `planned`;
+  `traits.ts`; the tests of an unreadable plan and of a make past it.)
 - A create or resize past one machine's most answers 422 `unprocessable`,
   `machine size exceeds what an account without a card can run, …`, the one
-  text the adapter reads: a create answers `Capacity`, so it moves to a host
-  that may take it, and a resize `Unsizable`. A start, or an exec that starts
+  text the adapter reads: a create and a resize answer `Unsizable`. A start,
+  or an exec that starts
   a machine, past `effectiveMaxConcurrentMachines` answers 422
   `unprocessable`, `concurrency limit reached: …` (measured on the
   operator's account on 2026-11-13). The adapter decides any 422 but the size one, to a create, a
