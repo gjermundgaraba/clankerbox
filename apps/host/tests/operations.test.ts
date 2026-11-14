@@ -1091,6 +1091,43 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a fake runtime made again over the same directory holds the checkpoints the last one made, as a runtime keeps them on disk, so a host restarted over it restores from one",
+    () =>
+      Effect.gen(function* () {
+        const before = yield* runner();
+
+        yield* finished(before, makes("dev"));
+
+        const captured = yield* finished(before, capturingSnap);
+
+        const host = yield* runner({
+          fake: fakeRuntime({ dir: before.dir, as: "smolvm" }),
+        });
+
+        const restored = yield* finished(
+          host,
+          makes("web", {
+            source: {
+              _tag: "checkpoint",
+              checkpoint: {
+                ...checkpoint("snap"),
+                ...(captured.outcome.handle === undefined
+                  ? {}
+                  : { handle: captured.outcome.handle }),
+              },
+              pin: "fake 1",
+            },
+          })
+        );
+
+        expect([captured.status, errorOf(restored)]).toStrictEqual([
+          "done",
+          ["done", undefined],
+        ]);
+      })
+  );
+
+  it.effect(
     "a make has the runtime bind the port it reports, from a base, a checkpoint or a machine",
     () =>
       Effect.gen(function* () {

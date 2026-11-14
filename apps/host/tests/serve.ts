@@ -7,6 +7,7 @@ import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { Effect, FileSystem, Logger, Schema } from "effect";
 
 import { BuildsSettings } from "../src/platform/s3.ts";
+import { fakeRuntime } from "./fake-runtime.ts";
 import type { FakeRuntimeName } from "./fake-runtime.ts";
 import {
   fakeTailnet,
@@ -83,9 +84,10 @@ runServe(
     return yield* serveHost(run, id, (port) =>
       Effect.gen(function* () {
         const dir = path.join(yield* scratch, "host");
+        const kept = path.join(run, "runtimes", id);
 
         if (fakeTailnet) {
-          writeTailscaleStubs(path.join(dir, "bin"));
+          writeTailscaleStubs(path.join(kept, "bin"));
         }
 
         const builds = yield* buildsSetting;
@@ -99,7 +101,9 @@ runServe(
           logger: Logger.consolePretty({ colors: false }),
           ...(builds === undefined ? {} : { buildsSettings: builds }),
           http: NodeHttpClient.layerNodeHttp,
-          runtime: {
+          fake: fakeRuntime({
+            dir: kept,
+            as: runtime,
             ramBudgetMib,
             pin: process.env["CLANKERBOX_FAKE_PIN"],
             relayed: runtime === "tart",
@@ -109,7 +113,7 @@ runServe(
                 `${call}\n`
               );
             },
-          },
+          }),
         });
 
         for (const name of failingFinds) {

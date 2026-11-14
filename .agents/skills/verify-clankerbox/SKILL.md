@@ -81,7 +81,8 @@ While it serves, the run directory holds `runtime` (the first host's runtime,
 whose base the recipes name), `server.ready` and `server.url` (the control
 plane's URL), `server.pid`, `hosts/<id>.url`, `hosts/<id>.pid` and
 `hosts/<id>.runtime`, `home` (the path of the scratch HOME), `recipes/`,
-`server-state` and `evidence/`.
+`server-state`, `runtimes/<id>` (what a fake runtime keeps on disk, which
+outlives its host as a real runtime's does) and `evidence/`.
 `evidence/` holds:
 
 | File                | What                                                                  |
@@ -260,9 +261,12 @@ The fake stands in for the VM, so this proves none of:
 - setup and preparation in a real guest;
 - `ssh` and `ssh-proxy` (see the index);
 - the tailnet;
-- what a restarted host keeps: on `smolvm`, `tart` and `fixed`, `start-host`
-  starts a new fake with no machines, so each of its machines reads `missing`,
-  where a real runtime keeps its VMs. On `smol-cloud` and `boat` the fake API
+- what a restarted host keeps of its VMs: on `smolvm`, `tart` and `fixed`,
+  `start-host` starts a new fake with no machines, so each of its machines reads
+  `missing`, where a real runtime keeps its VMs. It keeps every checkpoint the
+  host's runtime held, in `runtimes/<id>`, as a real runtime keeps them on disk,
+  so a create from a template build after a restart restores from it. On
+  `smol-cloud` and `boat` the fake API
   is its own process and outlives the host, so the restarted host finds its
   machines there and each reads as it was, such as `running`.
 

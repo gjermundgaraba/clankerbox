@@ -3,6 +3,7 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -29,7 +30,7 @@ import type {
   Sizing,
   Unsizable,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Deferred, Effect, Layer, Scope, Stream } from "effect";
+import { Deferred, Effect, Layer, Schema, Scope, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { traits as smolvm } from "../src/platform/smolvm/traits.ts";
@@ -374,6 +375,20 @@ interface FakeCheckpoint {
   readonly of: Handle | undefined;
 }
 
+const decodeKept = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Array(
+      Schema.Struct({
+        handle: Handle,
+        name: Schema.String,
+        instance: Schema.String,
+        marked: Schema.Boolean,
+        of: Schema.NullOr(Handle),
+      })
+    )
+  )
+);
+
 const minted = (prefix: string): Handle =>
   Handle.make(`${prefix}-${randomUUID().slice(0, 13)}`);
 
@@ -573,7 +588,32 @@ export const fakeRuntime = (options: FakeOptions) => {
   const machineOf = (target: Target): FakeMachine | undefined =>
     machines.get(target.handle);
 
-  const checkpoints = new Map<Handle, FakeCheckpoint>();
+  const checkpointsFile = path.join(options.dir, "checkpoints.json");
+
+  const checkpoints = new Map<Handle, FakeCheckpoint>(
+    existsSync(checkpointsFile)
+      ? decodeKept(readFileSync(checkpointsFile, "utf-8")).map(
+          ({ handle, of, ...held }) => [
+            handle,
+            { ...held, of: of ?? undefined },
+          ]
+        )
+      : []
+  );
+
+  const remembered = () => {
+    mkdirSync(options.dir, { recursive: true });
+    writeFileSync(
+      checkpointsFile,
+      JSON.stringify(
+        [...checkpoints].map(([handle, held]) => ({
+          handle,
+          ...held,
+          of: held.of ?? null,
+        }))
+      )
+    );
+  };
 
   const kept = (
     what: Parameters<Interface["find"]>[0],
@@ -606,6 +646,7 @@ export const fakeRuntime = (options: FakeOptions) => {
     for (const [handle, held] of heldBy(machine)) {
       if (!keep.has(handle)) {
         checkpoints.delete(handle);
+        remembered();
         await rm(checkpointRoot(held), { recursive: true, force: true });
       }
     }
@@ -631,6 +672,7 @@ export const fakeRuntime = (options: FakeOptions) => {
       marked: true,
       of,
     });
+    remembered();
 
     return handle;
   };
@@ -1246,6 +1288,7 @@ export const fakeRuntime = (options: FakeOptions) => {
               const root = heldCheckpoint(checkpoint);
 
               checkpoints.delete(checkpoint.handle);
+              remembered();
               await rm(root, { recursive: true, force: true });
             })
           ),
@@ -1376,6 +1419,7 @@ export const fakeRuntime = (options: FakeOptions) => {
         marked: false,
         of: owned?.checkpoints === "held" ? handle : undefined,
       });
+      remembered();
     }),
     resizedTo: (name: string, sizing: Sizing) => {
       const found = byName.get(name);
