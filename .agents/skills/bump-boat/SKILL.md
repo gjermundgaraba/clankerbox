@@ -77,8 +77,8 @@ Each line names where the code holds it and how to check it again.
   A sandbox is listed by its labels about half a second after boat took
   its create, before the create's answer. (`boat.ts`'s `landed` looks for
   a create whose answer was lost by its labels for five seconds before it
-  sends it again, and waits as long for the listing on
-  `idempotency_in_progress` instead of sending a third; the key is
+  sends it again, three sends in all, and on `idempotency_in_progress`
+  waits as long for the listing instead of sending it again; the key is
   `cbx-<host id>-<instance>`; the live suite's first finding, and the fake's
   `make`.)
 - A save of a sandbox that is deleted at once still ends, `ready` from a

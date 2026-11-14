@@ -67,6 +67,9 @@ when it was measured on the operator's account.
 
 - A machine name is at most 63 characters (`64` answers 400), so a host ID is
   at most 26 (`cbx-` + ID + `-` + 32 hex). A second create of a name answers 409.
+  (`smol-cloud.ts`'s `created` reads a create whose answer was lost by its
+  name a second later and sends it again only when that finds none, three
+  sends in all, and on a 409 waits and reads the name instead.)
 - `autoStopSeconds: 0` with a published port answers 422 on a plan whose
   `GET /v1/account` says `plan.allowAlwaysOn` false; the adapter sends 86400
   then, reading the account at each create and restore, so a plan that
