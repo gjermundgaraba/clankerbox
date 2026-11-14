@@ -22,6 +22,7 @@ import {
   Layer,
   Logger,
   Option,
+  Redacted,
   Schema,
   Stream,
 } from "effect";
@@ -1255,21 +1256,14 @@ const paging = (cursors: ReadonlyArray<string | null>) => {
 };
 
 const listedBy = (client: HttpClient.HttpClient) =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const dir = yield* scratch;
-      const apiKeyFile = path.join(dir, "key");
+  Effect.gen(function* () {
+    const api = yield* BoatApi.make(
+      "https://boat.test/api/v1",
+      Redacted.make("fake")
+    ).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
-      writeFileSync(apiKeyFile, "fake\n", { mode: 0o600 });
-
-      const api = yield* BoatApi.make({
-        api: "https://boat.test/api/v1",
-        apiKeyFile,
-      }).pipe(Effect.provideService(HttpClient.HttpClient, client));
-
-      return yield* Effect.exit(api.sandboxes({ "cbx-host": "boat" }));
-    }).pipe(Effect.provide(NodeServices.layer))
-  );
+    return yield* Effect.exit(api.sandboxes({ "cbx-host": "boat" }));
+  });
 
 describe("boat's sandbox list", () => {
   it.effect(
@@ -1427,7 +1421,7 @@ const failureOf = <A, E>(ended: Exit.Exit<A, E> | undefined) =>
 
 describe("a boat refusal that asks to be waited out", () => {
   it.effect(
-    "is a bare 429, waited as its Retry-After asks, and the call sent again",
+    "is a bare 429, waited as its Retry-After asks, and the call sent again once that wait ends",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -1469,10 +1463,16 @@ describe("a boat refusal that asks to be waited out", () => {
             runtime.start(bx1, new Set())
           );
 
-          yield* TestClock.adjust("1 second");
-          expect(
-            asked.filter((route) => route === "POST /sandboxes/bx1/resume")
-          ).toHaveLength(1);
+          const resumes = () =>
+            asked.filter((route) => route === "POST /sandboxes/bx1/resume");
+
+          yield* TestClock.adjust("1999 millis");
+          expect(resumes(), "before its wait").toHaveLength(1);
+
+          yield* TestClock.adjust("1 millis");
+          expect(resumes(), "once it waited 2 seconds, no more").toHaveLength(
+            2
+          );
 
           yield* TestClock.adjust("1 minute");
 
@@ -1957,4 +1957,36 @@ describe("the boat settings", () => {
       expect(accepts(api), api).toBe(false);
     }
   });
+});
+
+describe("a boat host whose API key file can't be read", () => {
+  it.effect("refuses to start, naming the file and why", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        const apiKeyFile = path.join(dir, "missing.key");
+
+        const refused = yield* Effect.flip(
+          make(
+            { apiKeyFile, api: "https://boat.test/api/v1" },
+            {
+              id: "boat",
+              stateDir: dir,
+              listen: { address: "127.0.0.1", port: 0 },
+            }
+          )
+        );
+
+        expect(refused).toMatchObject({ _tag: "CannotStart" });
+        expect(refused.message).toContain(apiKeyFile);
+        expect(refused.message).toContain("NotFound");
+      }).pipe(
+        Effect.provide(NodeServices.layer),
+        Effect.provideService(
+          HttpClient.HttpClient,
+          HttpClient.make(() => Effect.die("no request is sent"))
+        )
+      )
+    )
+  );
 });

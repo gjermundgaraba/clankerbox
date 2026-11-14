@@ -6,14 +6,13 @@ import type { HttpMethod } from "effect/http";
 import { Handle } from "../../runtime.ts";
 import {
   askedAgain,
+  askedToWait,
+  exchanged,
   fromGateway,
-  lost,
   recordReader,
   retryAfter,
   tooManyRequests,
   Unanswered,
-  waitedOut,
-  within,
 } from "../provider-http.ts";
 import type { Asked, Busy, Unreadable } from "../provider-http.ts";
 
@@ -193,11 +192,15 @@ const refusal = (
   }
 
   if (response.status === tooManyRequests) {
-    return waitedOut(call, response, `HTTP 429 ${problem?.code ?? ""}`.trim());
+    return askedToWait(
+      call,
+      response,
+      `HTTP 429 ${problem?.code ?? ""}`.trim()
+    );
   }
 
   if (asked === "read" && problem?.retryable === true) {
-    return waitedOut(call, response, `${response.status} ${problem.code}`);
+    return askedToWait(call, response, `${response.status} ${problem.code}`);
   }
 
   const code = problem?.code ?? "unknown";
@@ -240,31 +243,27 @@ export const make = (url: string, key: Redacted.Redacted) =>
     ): Effect.Effect<A, ApiError> => {
       const call = `${method} ${route}`;
 
-      const exchange = http
-        .execute(
-          HttpClientRequest.make(method)(`${url}${route}`).pipe(
-            HttpClientRequest.bearerToken(Redacted.value(key)),
-            HttpClientRequest.acceptJson,
-            body === undefined
-              ? (unchanged) => unchanged
-              : HttpClientRequest.bodyJsonUnsafe(body)
-          )
-        )
-        .pipe(
-          Effect.mapError(lost(call)),
-          Effect.flatMap((response): Effect.Effect<Exchanged<A>, Unanswered> =>
-            response.status < 400
-              ? Effect.map(answered(response), (value) => ({
-                  refused: false as const,
-                  value,
-                }))
-              : Effect.map(
-                  Effect.orElseSucceed(response.text, () => ""),
-                  (text) => ({ refused: true as const, response, text })
-                )
-          ),
-          within(asked, call)
-        );
+      const exchange = exchanged(
+        http,
+        url,
+        key,
+        HttpClientRequest.make(method)(route).pipe(
+          body === undefined
+            ? (unchanged) => unchanged
+            : HttpClientRequest.bodyJsonUnsafe(body)
+        ),
+        asked,
+        (response): Effect.Effect<Exchanged<A>, Unanswered> =>
+          response.status < 400
+            ? Effect.map(answered(response), (value) => ({
+                refused: false as const,
+                value,
+              }))
+            : Effect.map(
+                Effect.orElseSucceed(response.text, () => ""),
+                (text) => ({ refused: true as const, response, text })
+              )
+      );
 
       return askedAgain(asked === "read" ? "idempotent" : "once")(
         Effect.flatMap(exchange, (outcome) =>

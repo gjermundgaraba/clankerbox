@@ -16,14 +16,12 @@ import {
   Deferred,
   Duration,
   Effect,
-  FileSystem,
   Layer,
-  Redacted,
   Schedule,
   Schema,
   Stream,
 } from "effect";
-import type { Scope } from "effect";
+import type { Scope, FileSystem } from "effect";
 import { Hex } from "effect/encoding";
 import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
@@ -45,6 +43,7 @@ import type {
 import { KeyedApiUrl } from "../../settings.ts";
 import type { HostSettings } from "../../settings.ts";
 import {
+  apiKey,
   sentUntilHeld,
   triesAfterLoss,
   triesPerCall,
@@ -1068,19 +1067,10 @@ export const layer = (
         });
       }
 
-      const fs = yield* FileSystem.FileSystem;
-
-      const key = yield* fs.readFileString(settings.apiKeyFile).pipe(
-        Effect.map((text) => Redacted.make(text.trim())),
-        Effect.mapError(
-          () =>
-            new CannotStart({
-              message: `couldn't read the smol cloud API key from ${settings.apiKeyFile}`,
-            })
-        )
+      const api = yield* Api.make(
+        settings.api ?? defaultApi,
+        yield* apiKey("smol cloud", settings.apiKeyFile)
       );
-
-      const api = yield* Api.make(settings.api ?? defaultApi, key);
 
       return yield* make(
         settings,

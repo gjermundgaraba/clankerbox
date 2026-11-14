@@ -29,7 +29,10 @@ describe("a provider's call asked again", () => {
     "is sent six times in all while it is lost, if idempotent, or asked to be waited out",
     () =>
       Effect.gen(function* () {
-        const busy = counted(() => new Busy({ message: "wait" }));
+        const busy = counted(
+          () => new Busy({ message: "wait", wait: Duration.seconds(1) })
+        );
+
         const lost = counted(() => new Unanswered({ message: "lost" }));
         const retried = askedAgain("idempotent");
 

@@ -169,11 +169,13 @@ directories in `home.ts`, a VM's lock read through macOS's Perl in `locks.ts`,
 channel in `ssh.ts`, OpenSSH from the host pinned to the host key boat answers),
 each with its `RuntimeTraits` in its `traits.ts`, and what they share:
 `process.ts`, a child process's run, and `provider-http.ts`, what the smol
-cloud and boat clients keep with their provider's API: each request's bound by
+cloud and boat clients keep with their provider's API: the key, read from its
+file, which a host that can't read refuses to start, each request sent with it,
+each request's bound by
 what it asks, a gateway's 5xx and an unanswered request as a lost answer, a
 refusal that asks to be waited out waited as `Retry-After` says, in seconds or
-to a date, within 1 and 30 seconds and outside the request's bound, and sent
-again, six sends in all, a lost answer to a read, or to a change that does no
+to a date, within 1 and 30 seconds and outside the request's bound, or the
+backoff if longer, and sent again, six sends in all, a lost answer to a read, or to a change that does no
 more sent twice, as boat's stop, delete, unsave and SSH key, asked again the
 same way, any other change whose answer was lost read
 until its resource rests and sent again only when that doesn't hold it, three

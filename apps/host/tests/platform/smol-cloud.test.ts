@@ -1854,55 +1854,63 @@ describe("a smol cloud refusal while the machine moves between states", () => {
 });
 
 describe("a smol cloud 429", () => {
-  it.effect("is waited as its Retry-After asks, and the call sent again", () =>
-    Effect.gen(function* () {
-      let throttled = 1;
-      let state = "stopped";
+  it.effect(
+    "is waited as its Retry-After asks, and the call sent again once that wait ends",
+    () =>
+      Effect.gen(function* () {
+        let throttled = 1;
+        let state = "stopped";
 
-      const { asked, client } = answering((route) => {
-        if (route === "POST /v1/machines/mach-1/start") {
-          if (throttled > 0) {
-            throttled -= 1;
+        const { asked, client } = answering((route) => {
+          if (route === "POST /v1/machines/mach-1/start") {
+            if (throttled > 0) {
+              throttled -= 1;
 
-            return new Response("slow down", {
-              status: 429,
-              headers: { "retry-after": "2" },
-            });
+              return new Response("slow down", {
+                status: 429,
+                headers: { "retry-after": "2" },
+              });
+            }
+
+            state = "started";
+
+            return Response.json(recordIn(state));
           }
 
-          state = "started";
+          if (route === "GET /v1/checkpoints") {
+            return Response.json([]);
+          }
 
-          return Response.json(recordIn(state));
-        }
+          return route === "GET /v1/machines/mach-1"
+            ? Response.json(recordIn(state))
+            : undefined;
+        });
 
-        if (route === "GET /v1/checkpoints") {
-          return Response.json([]);
-        }
+        const runtime = yield* scriptedRuntime(client);
 
-        return route === "GET /v1/machines/mach-1"
-          ? Response.json(recordIn(state))
-          : undefined;
-      });
+        const starting = yield* Effect.forkChild(
+          runtime.start(dev1, new Set())
+        );
 
-      const runtime = yield* scriptedRuntime(client);
-      const starting = yield* Effect.forkChild(runtime.start(dev1, new Set()));
+        const starts = () =>
+          asked.filter((route) => route === "POST /v1/machines/mach-1/start");
 
-      const starts = () =>
-        asked.filter((route) => route === "POST /v1/machines/mach-1/start");
+        yield* TestClock.adjust("1999 millis");
+        expect(starts(), "before its wait").toHaveLength(1);
 
-      yield* TestClock.adjust("1 second");
-      expect(starts()).toHaveLength(1);
+        yield* TestClock.adjust("1 millis");
+        expect(starts(), "once it waited 2 seconds, no more").toHaveLength(2);
 
-      yield* TestClock.adjust("1 minute");
+        yield* TestClock.adjust("1 minute");
 
-      const ended = starting.pollUnsafe();
+        const ended = starting.pollUnsafe();
 
-      expect(
-        ended !== undefined && Exit.isSuccess(ended),
-        String(failureOf(ended))
-      ).toBe(true);
-      expect(starts()).toHaveLength(2);
-    })
+        expect(
+          ended !== undefined && Exit.isSuccess(ended),
+          String(failureOf(ended))
+        ).toBe(true);
+        expect(starts()).toHaveLength(2);
+      })
   );
 });
 
@@ -2567,4 +2575,30 @@ describe("the smol cloud settings", () => {
       expect(accepts(api), api).toBe(false);
     }
   });
+});
+
+const unasked = HttpClient.make(() => Effect.die("no request is sent"));
+
+describe("a smol cloud host whose API key file can't be read", () => {
+  it.effect("refuses to start, naming the file and why", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        const apiKeyFile = path.join(dir, "missing.key");
+
+        const refused = yield* Effect.flip(
+          Layer.build(
+            SmolCloud.layer({ apiKeyFile }, hostConfig(dir, undefined, hostId))
+          )
+        );
+
+        expect(refused).toMatchObject({ _tag: "CannotStart" });
+        expect(refused.message).toContain(apiKeyFile);
+        expect(refused.message).toContain("NotFound");
+      }).pipe(
+        Effect.provide(NodeServices.layer),
+        Effect.provideService(HttpClient.HttpClient, unasked)
+      )
+    )
+  );
 });

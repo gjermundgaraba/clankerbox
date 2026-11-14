@@ -41,7 +41,12 @@ import type {
 } from "../../runtime.ts";
 import { KeyedApiUrl } from "../../settings.ts";
 import type { HostSettings } from "../../settings.ts";
-import { sentUntilHeld, triesAfterLoss, untilRest } from "../provider-http.ts";
+import {
+  apiKey,
+  sentUntilHeld,
+  triesAfterLoss,
+  untilRest,
+} from "../provider-http.ts";
 import * as Api from "./api.ts";
 import type { ApiError, ListedSnapshot, Sandbox, SshKey } from "./api.ts";
 import * as Ssh from "./ssh.ts";
@@ -271,10 +276,10 @@ export const make = (
   | HttpClient.HttpClient
 > =>
   Effect.gen(function* () {
-    const api = yield* Api.make({
-      api: settings.api ?? defaultApi,
-      apiKeyFile: settings.apiKeyFile,
-    });
+    const api = yield* Api.make(
+      settings.api ?? defaultApi,
+      yield* apiKey("boat", settings.apiKeyFile)
+    );
 
     const limits = yield* api.limits.pipe(
       Effect.mapError(internal("couldn't read the account's limits"))

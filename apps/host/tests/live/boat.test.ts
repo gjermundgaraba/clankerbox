@@ -32,6 +32,7 @@ import type {
 } from "../../src/platform/boat/api.ts";
 import * as Boat from "../../src/platform/boat/boat.ts";
 import { types } from "../../src/platform/boat/traits.ts";
+import { apiKey } from "../../src/platform/provider-http.ts";
 import { Runtime } from "../../src/runtime.ts";
 import type { Target } from "../../src/runtime.ts";
 import { ended, endsACutCommand } from "./cut.ts";
@@ -111,7 +112,7 @@ const client = Effect.gen(function* () {
 
   yield* fs.writeFileString(file, key ?? "", { mode: 0o600 });
 
-  return { api: yield* Api.make({ api, apiKeyFile: file }), dir };
+  return { api: yield* Api.make(api, yield* apiKey("boat", file)), dir };
 });
 
 const leftovers = (boat: Api.Api) =>

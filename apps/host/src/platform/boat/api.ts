@@ -1,17 +1,15 @@
-import { Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, FileSystem, Option, Redacted, Result, Schema } from "effect";
+import { Effect, Option, Result, Schema } from "effect";
+import type { Redacted } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 
-import { describe } from "../process.ts";
 import {
   askedAgain,
+  askedToWait,
+  exchanged,
   fromGateway,
-  lost,
   recordReader,
   tooManyRequests,
   Unanswered,
-  waitedOut,
-  within,
 } from "../provider-http.ts";
 import type { Busy, Repeats, Unreadable } from "../provider-http.ts";
 
@@ -155,11 +153,6 @@ export interface Body {
 
 const sealed = { noEnv: true, monitoring: false, ttlSeconds: null };
 
-export interface Settings {
-  readonly api: string;
-  readonly apiKeyFile: string;
-}
-
 const refusalOf = (status: number, body: unknown) => {
   const envelope = Option.getOrUndefined(
     Schema.decodeUnknownOption(Envelope)(body)
@@ -199,43 +192,23 @@ const resumeOf = (id: string, type: BoatType | undefined) =>
  * can't read only when `ours` claims its name: that snapshot may be held by a sandbox being
  * deleted, and a delete that went on past it would leave it billed with nothing to find it again.
  */
-export const make = (settings: Settings) =>
+export const make = (url: string, key: Redacted.Redacted) =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
     const http = yield* HttpClient.HttpClient;
 
-    const key = yield* fs.readFileString(settings.apiKeyFile).pipe(
-      Effect.map((text) => Redacted.make(text.trim())),
-      Effect.mapError(
-        (error) =>
-          new Internal({
-            message: `couldn't read boat's API key from ${settings.apiKeyFile}: ${describe(error)}`,
-          })
-      )
-    );
-
-    const exchange = (request: HttpClientRequest.HttpClientRequest) => {
-      const what = `${request.method} ${request.url}`;
-
-      return http
-        .execute(
-          request.pipe(
-            HttpClientRequest.prependUrl(settings.api),
-            HttpClientRequest.bearerToken(key),
-            HttpClientRequest.acceptJson
-          )
-        )
-        .pipe(
-          Effect.flatMap((response) =>
-            Effect.map(Effect.result(response.json), (body) => ({
-              response,
-              body,
-            }))
-          ),
-          Effect.mapError(lost(what)),
-          within(request.method === "GET" ? "read" : "change", what)
-        );
-    };
+    const exchange = (request: HttpClientRequest.HttpClientRequest) =>
+      exchanged(
+        http,
+        url,
+        key,
+        request,
+        request.method === "GET" ? "read" : "change",
+        (response) =>
+          Effect.map(Effect.result(response.json), (body) => ({
+            response,
+            body,
+          }))
+      );
 
     const once = <A>(
       request: HttpClientRequest.HttpClientRequest,
@@ -265,7 +238,7 @@ export const make = (settings: Settings) =>
             asksToWait.has(refused.code) ||
             (response.status === tooManyRequests && !noRoom.has(refused.code))
           ) {
-            return yield* waitedOut(what, response, refused.code);
+            return yield* askedToWait(what, response, refused.code);
           }
 
           return yield* refused;

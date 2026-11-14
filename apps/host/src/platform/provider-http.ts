@@ -1,7 +1,18 @@
-import { DateTime, Duration, Effect, Option, Schedule, Schema } from "effect";
-import type { HttpClientResponse } from "effect/http";
+import {
+  DateTime,
+  Duration,
+  Effect,
+  FileSystem,
+  Option,
+  Redacted,
+  Schedule,
+  Schema,
+} from "effect";
+import { HttpClientRequest } from "effect/http";
+import type { HttpClient, HttpClientResponse } from "effect/http";
 
-import { timeoutFail } from "../runtime.ts";
+import { CannotStart, timeoutFail } from "../runtime.ts";
+import { describe } from "./process.ts";
 
 export type Asked = "read" | "change" | "settle";
 
@@ -25,12 +36,13 @@ export class Unanswered extends Schema.TaggedError<
   message: Schema.String,
 }) {}
 
-/** The provider asked to be waited out, so it didn't take the request, which is sent again. */
+/** The provider asked to be waited out `wait`, so it didn't take the request, which is sent again. */
 export class Busy extends Schema.TaggedError<
   Busy,
   { readonly brand: unique symbol }
 >()("Busy", {
   message: Schema.String,
+  wait: Schema.Duration,
 }) {}
 
 /** A list answered a record of this host's that the adapter can't read; asking again reads the same. */
@@ -101,22 +113,71 @@ export const retryAfter = (
 /** HTTP 429: the provider took nothing and asks to be waited out, unless its answer says there is no room. */
 export const tooManyRequests = 429;
 
-/** Waits as `response` asks, within the clamp, and fails `Busy`, so `askedAgain` sends the call again. */
-export const waitedOut = (
+/** Fails `Busy` with the wait `response` asks, within the clamp, which `askedAgain` waits. */
+export const askedToWait = (
   call: string,
   response: HttpClientResponse.HttpClientResponse,
   why: string
 ): Effect.Effect<never, Busy> =>
   Effect.flatMap(retryAfter(response), (wait) =>
-    Effect.andThen(
-      Effect.sleep(wait),
-      Effect.fail(
-        new Busy({
-          message: `${call} answered ${why}, which asks to be waited out`,
-        })
-      )
+    Effect.fail(
+      new Busy({
+        message: `${call} answered ${why}, which asks to be waited out`,
+        wait,
+      })
     )
   );
+
+/** Reads a provider's API key from `file`, a host that can't refusing to start. */
+export const apiKey = (
+  provider: string,
+  file: string
+): Effect.Effect<Redacted.Redacted, CannotStart, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+
+    return yield* fs.readFileString(file).pipe(
+      Effect.map((text) => Redacted.make(text.trim())),
+      Effect.mapError(
+        (error) =>
+          new CannotStart({
+            message: `couldn't read ${provider}'s API key from ${file}: ${describe(error)}`,
+          })
+      )
+    );
+  });
+
+/**
+ * Sends `request` to the API at `url` with the account's `key`, asking JSON, and answers what
+ * `read` makes of the response, within the bound of what it `asked`; no answer, or one that
+ * couldn't be received, is a lost answer.
+ */
+export const exchanged = <A>(
+  http: HttpClient.HttpClient,
+  url: string,
+  key: Redacted.Redacted,
+  request: HttpClientRequest.HttpClientRequest,
+  asked: Asked,
+  read: (
+    response: HttpClientResponse.HttpClientResponse
+  ) => Effect.Effect<A, Unanswered>
+): Effect.Effect<A, Unanswered> => {
+  const call = `${request.method} ${request.url}`;
+
+  return http
+    .execute(
+      request.pipe(
+        HttpClientRequest.prependUrl(url),
+        HttpClientRequest.bearerToken(key),
+        HttpClientRequest.acceptJson
+      )
+    )
+    .pipe(
+      Effect.mapError(lost(call)),
+      Effect.flatMap(read),
+      within(asked, call)
+    );
+};
 
 /** How many times a call is sent while its answer is lost or asks to be waited out. */
 export const triesPerCall = 6;
@@ -128,10 +189,19 @@ export const triesPerCall = 6;
  */
 export type Repeats = "idempotent" | "once";
 
+const backoff = Schedule.exponential(Duration.millis(250)).pipe(
+  Schedule.modifyDelay(({ input, duration }) =>
+    Effect.succeed(
+      input instanceof Busy ? Duration.max(duration, input.wait) : duration
+    )
+  )
+);
+
 /**
  * Sends `call` again, backing off, while the provider asks to be waited out, and while its answer
- * is lost if it is `idempotent`, at most `triesPerCall` sends in all; a call still asked to be
- * waited out at its last send fails saying so.
+ * is lost if it is `idempotent`, at most `triesPerCall` sends in all. A send the provider asked to
+ * wait out waits the longer of that and the backoff; a call still asked to wait at its last send
+ * fails saying so.
  */
 export const askedAgain =
   (repeats: Repeats) =>
@@ -140,7 +210,7 @@ export const askedAgain =
       while: (error) =>
         error instanceof Busy ||
         (repeats === "idempotent" && error instanceof Unanswered),
-      schedule: Schedule.exponential(Duration.millis(250)),
+      schedule: backoff,
       times: triesPerCall - 1,
     }).pipe(
       Effect.catchIf(
@@ -149,6 +219,7 @@ export const askedAgain =
           Effect.fail(
             new Busy({
               message: `${busy.message}, still at the last of its ${triesPerCall} sends`,
+              wait: busy.wait,
             })
           )
       )
