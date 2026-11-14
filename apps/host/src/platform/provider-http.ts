@@ -1,15 +1,16 @@
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import {
-  DateTime,
+  Clock,
   Duration,
   Effect,
   FileSystem,
   Option,
   Redacted,
+  Result,
   Schedule,
   Schema,
 } from "effect";
-import { HttpClientRequest } from "effect/http";
+import { Headers, HttpClientRequest } from "effect/http";
 import type { HttpClient, HttpClientResponse } from "effect/http";
 
 import { CannotStart, timeoutFail } from "../runtime.ts";
@@ -111,26 +112,25 @@ export const fromGateway = (
 const waits = { minimum: Duration.seconds(1), maximum: Duration.seconds(30) };
 
 /**
- * The wait a refusal's `Retry-After` asks, in seconds or until an HTTP date, within 1 and 30
- * seconds, so one that names none or less waits a second.
+ * The wait a refusal's `Retry-After` asks, in whole seconds or until an HTTP date, within 1 and 30
+ * seconds, so one that names neither, or less, waits a second.
  */
 export const retryAfter = (
   response: HttpClientResponse.HttpClientResponse
 ): Effect.Effect<Duration.Duration> =>
-  Effect.map(DateTime.now, (now) => {
-    const asked = response.headers["retry-after"]?.trim() ?? "";
-    const seconds = Number(asked);
-
-    const wait =
-      asked !== "" && Number.isFinite(seconds)
-        ? Duration.millis(seconds * 1000)
-        : Option.match(DateTime.make(asked), {
-            onNone: () => Duration.zero,
-            onSome: (at) => DateTime.distance(now, at),
-          });
-
-    return Duration.clamp(wait, waits);
-  });
+  Effect.map(Clock.currentTimeMillis, (now) =>
+    Duration.clamp(
+      Option.match(Headers.get(response.headers, "retry-after"), {
+        onNone: () => Duration.zero,
+        onSome: (asked) =>
+          Result.match(Headers.parseRetryAfter(asked), {
+            onFailure: () => Duration.zero,
+            onSuccess: (parsed) => Headers.retryAfterDelay(parsed, now),
+          }),
+      }),
+      waits
+    )
+  );
 
 /** HTTP 429: the provider took nothing and asks to be waited out, unless its answer says there is no room. */
 export const tooManyRequests = 429;

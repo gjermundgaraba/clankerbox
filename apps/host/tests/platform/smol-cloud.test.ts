@@ -2484,6 +2484,20 @@ describe("a smol cloud 429's wait", () => {
     })
   );
 
+  it.effect(
+    "is a second where Retry-After names neither whole seconds nor an HTTP date",
+    () =>
+      Effect.gen(function* () {
+        const { counts } = yield* startsBy(throttled("2.5"), [
+          "900 millis",
+          "200 millis",
+          "1 minute",
+        ]);
+
+        expect(counts).toStrictEqual([1, 2, 2]);
+      })
+  );
+
   it.effect("is a second at least, whatever less Retry-After asks", () =>
     Effect.gen(function* () {
       const { counts } = yield* startsBy(throttled("0.001"), [
