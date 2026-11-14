@@ -204,7 +204,7 @@ So does what a restarted host held:
 
 | What the host held when it died     | Where it must end                                                               |
 | ----------------------------------- | ------------------------------------------------------------------------------- |
-| A capture                           | `capturing` while the host is down, then `failed` with its error: the row went `discarding`, which a client reads as `failed`, and the restarted host finds no checkpoint of its instance, so no `deleteCheckpoint <name>` reaches `runtime-calls.txt` |
+| A capture                           | `capturing` while the host is down, then `failed` with its error: the row went `discarding`, which a client reads as `failed`, and the restarted host deletes the checkpoint its runtime names for that instance, which holds nothing, as `deleteCheckpoint <name>` in `runtime-calls.txt` |
 | A delete of a checkpoint            | `deleting` while the host is down, then `NotFound`                              |
 
 Run them with `hold-capture <id>`, then `checkpoint capture <machine> <name>
