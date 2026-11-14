@@ -59,9 +59,11 @@ export interface ClankerboxProvider extends SandboxProvider {
   /**
    * Ends every tunnel, lets every port go and leaves the machines; the SDK never calls it. A
    * `getUrl` or `ensureServer` in flight ends at once as `ProviderDisposedError`, though a start it
-   * sent may still run. A create, destroy, pause, resize or reconnect in flight is awaited, so a
-   * create answers the machine it made. Each call after it begins is `ProviderDisposedError`, and a
-   * second `dispose` waits on the first.
+   * sent may still run. A destroy, pause, resize or reconnect in flight is awaited, and so is a
+   * create, which then deletes the machine it made and is `ProviderDisposedError` with that
+   * machine's name as `made`. Each call after it begins is `ProviderDisposedError` but `destroy`,
+   * which deletes its machine once `dispose` is done, as `SandboxAgent.start` does when a call
+   * after its create fails, and a second `dispose` waits on the first.
    */
   readonly dispose: () => Promise<void>;
 }

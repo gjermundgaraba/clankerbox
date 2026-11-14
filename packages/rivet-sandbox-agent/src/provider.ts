@@ -1,5 +1,5 @@
-import { ManagedRuntime } from "effect";
-import type { Effect, Layer } from "effect";
+import { Effect, ManagedRuntime } from "effect";
+import type { Layer } from "effect";
 
 import type { ClankerboxProvider, Options } from "./options.ts";
 import { defaultCwd, disposed, make, name } from "./sandboxes.ts";
@@ -27,7 +27,14 @@ export const provider = <E>(
     defaultCwd: options.cwd ?? defaultCwd,
     create: async () => await run(sandboxes.create),
     destroy: async (id) => {
-      await run(sandboxes.destroy(id));
+      if (disposal === undefined) {
+        await runtime.runPromise(sandboxes.destroy(id));
+
+        return;
+      }
+
+      await disposal;
+      await Effect.runPromise(Effect.provide(sandboxes.destroy(id), layer));
     },
     pause: async (id) => {
       await run(sandboxes.pause(id));

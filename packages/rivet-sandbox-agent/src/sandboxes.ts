@@ -58,16 +58,21 @@ const Health = Schema.Struct({ status: Schema.Literal("ok") });
 
 const isHealth = Schema.is(Health);
 
-/** What a call gets once `dispose` has begun, and a `getUrl` or `ensureServer` it ended. */
+/**
+ * What a call but `destroy` gets once `dispose` has begun, a `getUrl` or `ensureServer` it ended,
+ * and a create whose machine it deleted, which that machine's name is `made` of.
+ */
 export class ProviderDisposedError extends Data.TaggedError(
   "ProviderDisposedError"
 )<{
   readonly message: string;
+  readonly made?: string | undefined;
 }> {}
 
-export const disposed = () =>
+export const disposed = (made?: string) =>
   new ProviderDisposedError({
     message: "the clankerbox provider was disposed",
+    made,
   });
 
 interface Scoped<A> {
@@ -122,26 +127,24 @@ const isGone = (error: unknown): error is NotFound | Superseded =>
   error instanceof NotFound ||
   (error instanceof Superseded && error.by === "deleted");
 
+const undone = <E>(made: string, error: E) =>
+  Effect.flatMap(Client.Client, (client) =>
+    Effect.andThen(
+      Effect.ignore(client.deleteMachine({ id: made })),
+      Effect.fail(error)
+    )
+  );
+
 const discard = (error: ClankerboxError) =>
-  Effect.gen(function* () {
-    const client = yield* Client.Client;
-
-    if (
-      error.made !== undefined &&
-      !(
-        error instanceof Conflict ||
-        error instanceof Invalid ||
-        error instanceof NotBuilt ||
-        error instanceof NotOffered ||
-        error instanceof Superseded ||
-        error instanceof Unavailable
-      )
-    ) {
-      yield* Effect.ignore(client.deleteMachine({ id: error.made }));
-    }
-
-    return yield* error;
-  });
+  error.made === undefined ||
+  error instanceof Conflict ||
+  error instanceof Invalid ||
+  error instanceof NotBuilt ||
+  error instanceof NotOffered ||
+  error instanceof Superseded ||
+  error instanceof Unavailable
+    ? Effect.fail(error)
+    : undone(error.made, error);
 
 export type Services =
   | Client.Client
@@ -346,8 +349,12 @@ export const make = (options: Options, ssh = "ssh") => {
         const named = `${options.namePrefix ?? "sandbox"}-${Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(4)))}`;
 
         return made(named).pipe(
-          Effect.map((machine) => machine.id),
-          Effect.catch(discard)
+          Effect.catch(discard),
+          Effect.flatMap((machine) =>
+            Deferred.isDoneUnsafe(closing)
+              ? undone(machine.id, disposed(machine.id))
+              : Effect.succeed(machine.id)
+          )
         );
       })
     ),

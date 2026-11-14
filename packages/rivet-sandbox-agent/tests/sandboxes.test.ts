@@ -6,6 +6,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { Unavailable } from "@gjermundgaraba/clankerbox-sdk";
 import type { Client } from "@gjermundgaraba/clankerbox-sdk";
 import { Deferred, Effect } from "effect";
+import { SandboxAgent } from "sandbox-agent";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { healthPath } from "../src/agent.ts";
@@ -16,6 +17,7 @@ import {
   cleanUp,
   free,
   gone,
+  live,
   liveTunnel,
   portOf,
   promptFor,
@@ -340,28 +342,81 @@ describe("dispose", () => {
     await expect(free(portOf(url))).resolves.toBe(true);
   });
 
-  it("waits for a create still waiting on its machine, which then answers its ID", async () => {
+  it("waits for a create still waiting on its machine, which then deletes it and rejects as ProviderDisposedError with its name as made", async () => {
     const { stub, sandbox, dispose } = await setup({
       created: ["creating", "down", "down", "settled"],
     });
 
     const settled: string[] = [];
 
-    const creating = sandbox.create().then((id) => {
-      settled.push("create");
+    const creating = sandbox.create().then(
+      () => "resolved",
+      (error: unknown) => {
+        settled.push("create");
 
-      return id;
-    });
+        return error;
+      }
+    );
 
     await until(
       "the create to be recorded",
       async () => stub.held().length > 0
     );
+
+    const [named] = stub.held();
+
     await dispose();
     settled.push("dispose");
 
-    await expect(creating).resolves.toBe(stub.held()[0]);
+    await expect(creating).resolves.toMatchObject({ ...disposed, made: named });
     expect(settled).toStrictEqual(["create", "dispose"]);
+    expect(requests(stub)).toStrictEqual(["machine.create", "machine.delete"]);
+    expect(stub.held()).toStrictEqual([]);
+  });
+
+  it("deletes the machine of a SandboxAgent.start whose create it waits for, and the start rejects with its name as made", async () => {
+    const { stub, sandbox, dispose } = await setup({
+      created: ["creating", "down", "down", "settled"],
+    });
+
+    const starting = SandboxAgent.start({ sandbox }).then(
+      () => "resolved",
+      (error: unknown) => error
+    );
+
+    await until(
+      "the create to be recorded",
+      async () => stub.held().length > 0
+    );
+
+    const [named] = stub.held();
+
+    await dispose();
+
+    await expect(starting).resolves.toMatchObject({ ...disposed, made: named });
+    expect(requests(stub)).toStrictEqual(["machine.create", "machine.delete"]);
+    expect(stub.held()).toStrictEqual([]);
+  });
+
+  it("deletes the machine of a SandboxAgent.start whose getUrl it ends, through the destroy the start then sends", async () => {
+    const { dir, stub, sandbox, calls, dispose } = await setup();
+
+    await writeFile(path.join(dir, "never-opens"), "");
+
+    const starting = SandboxAgent.start({ sandbox }).then(
+      () => "resolved",
+      (error: unknown) => error
+    );
+
+    await until(
+      "the tunnel's ssh to start",
+      async () => live(await calls()).length === 1
+    );
+    await dispose();
+
+    await expect(starting).resolves.toMatchObject(disposed);
+    expect(requests(stub)).toStrictEqual(["machine.create", "machine.delete"]);
+    expect(stub.held()).toStrictEqual([]);
   });
 
   it.each(awaited)(
@@ -404,15 +459,19 @@ describe("dispose", () => {
     }
   );
 
-  it("refuses each call after it as ProviderDisposedError, and a second dispose resolves", async () => {
-    const { sandbox, dispose } = await setup({ machines: [reachable("kept")] });
+  it("refuses each call after it but destroy as ProviderDisposedError, a destroy still deletes its machine, and a second dispose resolves", async () => {
+    const { stub, sandbox, dispose } = await setup({
+      machines: [reachable("kept")],
+    });
 
     await sandbox.getUrl("kept");
     await dispose();
 
+    await expect(sandbox.destroy("kept")).resolves.toBeUndefined();
+    expect(requests(stub)).toStrictEqual(["machine.delete"]);
+
     const calls = [
       sandbox.create(),
-      sandbox.destroy("kept"),
       sandbox.pause("kept"),
       sandbox.resize("kept", { cpu: 4 }),
       sandbox.reconnect("kept"),
