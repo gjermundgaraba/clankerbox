@@ -1475,7 +1475,7 @@ export const make = (
           checkpoint: ({ checkpoint }) =>
             Effect.flatMap(
               stored(checkpoint.handle),
-              (held): Effect.Effect<void, Internal | Missing> =>
+              (held): Effect.Effect<void, Internal | Missing | Unsizable> =>
                 held
                   ? restored(checkpoint, machine, port)
                   : Effect.fail(missingCheckpoint(traits.runtime, checkpoint))
