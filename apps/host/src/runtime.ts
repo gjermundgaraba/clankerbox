@@ -5,11 +5,10 @@ import type {
   Ref,
 } from "@clankerbox/host-contract";
 import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
-import { Missing, readTimeout } from "@gjermundgaraba/clankerbox-sdk";
+import { Internal, Missing, readTimeout } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   Capacity,
   Conflict,
-  Internal,
   Invalid,
   Reading,
   RuntimeName,
@@ -80,11 +79,26 @@ export const timeoutFail =
       orElse: () => Effect.fail(error()),
     });
 
+/** Fails `Internal`, naming `what`, past the time a read of the runtime may take. */
+export const inTime = (what: string) =>
+  timeoutFail(
+    stateReadWait,
+    () =>
+      new Internal({
+        message: `${what} didn't answer within ${Duration.format(stateReadWait)}`,
+      })
+  );
+
 export interface Target {
   readonly name: string;
   readonly instance: string;
   readonly handle: Handle;
 }
+
+export const targetOf = (
+  { name, instance }: Identity,
+  handle: Handle
+): Target => ({ name, instance, handle });
 
 export type Sized = Target & Sizes;
 

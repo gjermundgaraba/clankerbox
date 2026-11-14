@@ -113,9 +113,12 @@ domain file never imports `platform/` or `composition/`.
 **Host** (`apps/host/src`). Domain files sit flat in `src/`:
 
 - `operations.ts`: the `Operations` service. It runs a step to its end, keeps its
-  report until collected, fences by sequence, and tells a restart by `boot`. Its
-  `sweep` deletes each machine the runtime's `owned` facet lists whose instance
-  the control plane retired and no step it holds names, and answers what it left.
+  report until collected, fences by sequence, and tells a restart by `boot`, and
+  serves the recheck's adopt and sweep from `recheck.ts`.
+- `recheck.ts`: the recheck's adopt, which gives a restarted host its machines,
+  and its sweep, which deletes each machine the runtime's `owned` facet lists
+  whose instance the control plane retired and no step it holds names, and
+  answers what it left. Both only read the steps the host holds.
 - `guest.ts`: setup, preparation, and the hook a stop, pause or delete
   runs first, all run in the guest, and the end of a command cut short.
 - `usage.ts`: the machines in use, and the RAM a runtime holds beside them, for the RAM budget and capacity.

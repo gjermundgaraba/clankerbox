@@ -2,13 +2,7 @@ import path from "node:path";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 
-import type {
-  MachineRef,
-  Operation,
-  Report,
-  Source,
-  Step,
-} from "@clankerbox/host-contract";
+import type { Step } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import {
@@ -25,42 +19,49 @@ import {
   exists,
   mkdir,
   read,
-  scratch,
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import {
-  Cause,
-  Context,
   Deferred,
-  Duration,
   Effect,
   Exit,
   Fiber,
-  Layer,
   Logger,
   Redacted,
   Ref,
-  References,
   Scope,
 } from "effect";
 import { TestClock } from "effect/testing";
 import { expect } from "vite-plus/test";
 
-import type { BuildStore } from "../src/builds.ts";
-import { PortProbe } from "../src/machine-ports.ts";
-import type { Probe } from "../src/machine-ports.ts";
-import * as Operations from "../src/operations.ts";
-import * as Relay from "../src/platform/relay.ts";
-import * as Reach from "../src/reach.ts";
-import { Handle, Runtime } from "../src/runtime.ts";
-import { Tailnet } from "../src/tailnet.ts";
+import { Handle } from "../src/runtime.ts";
+import { baseResolver, fakeRuntime } from "./fake-runtime.ts";
 import {
-  baseResolver,
-  fakeRuntime,
-  writeTailscaleStubs,
-} from "./fake-runtime.ts";
-import type { FakeRuntime, FakeRuntimeName } from "./fake-runtime.ts";
+  firstPort,
+  relayPorts,
+  runner,
+  ref,
+  checkpoint,
+  reached,
+  portIn,
+  keptByRuntime,
+  capturingSnap,
+  stored,
+  ofSnap,
+  makes,
+  delivery,
+  deliver,
+  ended,
+  finished,
+  stillRunning,
+  counted,
+  capturing,
+  errorOf,
+  portOf,
+  locked,
+} from "./operations-kit.ts";
+import type { Runner } from "./operations-kit.ts";
 import {
   accepts,
   holding,
@@ -70,247 +71,7 @@ import {
   pause,
   roundTrip,
   strangerBinds,
-  suitePorts,
 } from "./support.ts";
-
-const firstPort = 10_000;
-
-const relayPorts = suitePorts.operations.first;
-
-const allFree: Probe = { free: () => Effect.succeed(true) };
-
-const freePorts: ReadonlyMap<FakeRuntimeName, string> = new Map([
-  ["smolvm", "ubuntu"],
-  ["tart", "macos"],
-]);
-
-interface RunnerOptions {
-  readonly fake?: FakeRuntime;
-  readonly builds?: Layer.Layer<BuildStore>;
-  readonly as?: FakeRuntimeName;
-  readonly pin?: string;
-  readonly ramBudgetMib?: number;
-  readonly ports?: number;
-  readonly probe?: Probe;
-  readonly relayed?: boolean;
-  readonly runtime?: (fake: Runtime["Service"]) => Runtime["Service"];
-  readonly tailnet?: Tailnet["Service"];
-  readonly tailscale?: boolean;
-}
-
-const runner = (options?: RunnerOptions) =>
-  Effect.gen(function* () {
-    const dir = yield* scratch;
-    const faked = options?.as ?? "smolvm";
-
-    const fake =
-      options?.fake ??
-      fakeRuntime({
-        dir,
-        as: faked,
-        ramBudgetMib: options?.ramBudgetMib,
-        pin: options?.pin,
-        relayed: options?.relayed,
-      });
-
-    const first = options?.relayed === true ? relayPorts : firstPort;
-
-    if (options?.tailscale === true) {
-      writeTailscaleStubs(path.join(dir, "bin"));
-    }
-
-    const operations = yield* Layer.build(
-      Operations.layer({
-        id: faked,
-        bases: new Map([[freePorts.get(faked) ?? "ubuntu", image]]),
-      }).pipe(
-        Layer.provide(
-          Reach.layer({ first, last: first + (options?.ports ?? 10) - 1 })
-        ),
-        Layer.provideMerge(
-          options?.runtime === undefined
-            ? fake.layer
-            : Layer.effect(Runtime, Effect.map(Runtime, options.runtime)).pipe(
-                Layer.provide(fake.layer)
-              )
-        ),
-        Layer.provide(
-          Layer.merge(
-            Layer.succeed(PortProbe, options?.probe ?? allFree),
-            Relay.layer
-          )
-        ),
-        Layer.provide(
-          options?.tailnet === undefined
-            ? Layer.empty
-            : Layer.succeed(Tailnet, options.tailnet)
-        ),
-        Layer.provide(options?.builds ?? Layer.empty)
-      )
-    ).pipe(Effect.map(Context.get(Operations.Operations)));
-
-    return { dir, fake, operations };
-  });
-
-type Runner = Effect.Success<ReturnType<typeof runner>>;
-
-const ref = (name: string, fields?: Partial<MachineRef>): MachineRef => ({
-  name,
-  instance: `${name}-instance`,
-  cpu: 1,
-  ramMib: 1024,
-  diskGib: 10,
-  ...fields,
-});
-
-const checkpoint = (name: string) => ref(name);
-
-const reached = (port: number) => ({ port });
-
-const portIn = ({ port }: MachineRef) => port ?? 0;
-
-const keptByRuntime = (host: Runner, name: string) => {
-  host.fake.hold({
-    state: "running",
-    name,
-    root: "",
-    instance: `${name}-instance`,
-    handle: Handle.make(`held-${name}`),
-  });
-};
-
-const capturingSnap: Step = {
-  _tag: "capture",
-  machine: ref("dev"),
-  checkpoint: checkpoint("snap"),
-  pin: "fake 1",
-};
-
-const stored = (host: Runner, name: string, suffix = "") =>
-  exists(path.join(host.dir, "checkpoints", `${name}-instance${suffix}`));
-
-const ofSnap = (host: Runner) =>
-  host.fake.calls.filter((call) => call.endsWith(" snap"));
-
-const makes = (
-  name: string,
-  fields?: {
-    readonly machine?: Partial<MachineRef>;
-    readonly source?: Source;
-    readonly setup?: Setup;
-    readonly authorizedKeys?: string;
-    readonly join?: { readonly hostname: string };
-    readonly taken?: readonly number[];
-    readonly machines?: readonly MachineRef[];
-  }
-): Step => ({
-  _tag: "make",
-  machine: ref(name, fields?.machine),
-  source: fields?.source ?? {
-    _tag: "base",
-    base: "ubuntu",
-    ...(fields?.setup === undefined ? {} : { setup: fields.setup }),
-  },
-  ...(fields?.authorizedKeys === undefined
-    ? {}
-    : { authorizedKeys: fields.authorizedKeys }),
-  ...(fields?.join === undefined ? {} : { join: fields.join }),
-  taken: fields?.taken ?? [],
-  machines: fields?.machines ?? [],
-});
-
-let delivered = 0;
-
-const scopeOf = (step: Step): Operation["scope"] =>
-  "checkpoint" in step
-    ? { resource: "checkpoint", name: step.checkpoint.name }
-    : { resource: "machine", name: step.machine.name };
-
-const delivery = (step: Step, sequence = 1): Omit<Operation, "boot"> => {
-  delivered += 1;
-
-  return { id: `op-${delivered}`, scope: scopeOf(step), sequence, step };
-};
-
-const deliver = (
-  { operations }: Pick<Runner, "operations">,
-  operation: Omit<Operation, "boot">
-) => operations.run({ ...operation, boot: operations.boot });
-
-const ended = ({ operations }: Pick<Runner, "operations">, id: string) =>
-  Effect.gen(function* () {
-    for (let tries = 0; tries < 200; tries += 1) {
-      const report = yield* operations.wait(id);
-
-      if (report.status !== "running") {
-        return report;
-      }
-
-      yield* pause;
-    }
-
-    return yield* Effect.die(`operation ${id} never ended`);
-  });
-
-const finished = (host: Pick<Runner, "operations">, step: Step, sequence = 1) =>
-  Effect.gen(function* () {
-    const operation = delivery(step, sequence);
-
-    yield* deliver(host, operation);
-
-    return yield* ended(host, operation.id);
-  });
-
-const stillRunning = ({ operations }: Runner, id: string) =>
-  Effect.gen(function* () {
-    const waiting = yield* Effect.forkChild(operations.wait(id));
-
-    yield* pause;
-
-    const answered = waiting.pollUnsafe() !== undefined;
-
-    yield* Fiber.interrupt(waiting);
-
-    return !answered;
-  });
-
-const counted = (calls: readonly string[], call: string) =>
-  calls.filter((seen) => seen === call).length;
-
-const capturing = (lines: string[]) =>
-  Logger.make(({ message, cause }) => {
-    lines.push(
-      [
-        String(message),
-        ...(cause.reasons.length === 0 ? [] : [Cause.pretty(cause)]),
-      ].join("\n")
-    );
-  });
-
-const sweepLogged =
-  (lines: Array<readonly [string, string]>) =>
-  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    effect.pipe(
-      Effect.provide(
-        Logger.layer([
-          Logger.make(({ logLevel, message }) => {
-            lines.push([
-              logLevel,
-              [message]
-                .flat()
-                .map(String)
-                .join(" ")
-                .replaceAll(/\((?:mach|ckpt|held)-[0-9a-z-]+\)/gu, "(handle)"),
-            ]);
-          }),
-        ])
-      ),
-      Effect.provideService(References.MinimumLogLevel, "All")
-    );
-
-const errorOf = (report: Report) => [report.status, report.error?._tag];
-
-const portOf = (report: Report) => report.outcome.endpoint?.port;
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
@@ -332,177 +93,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           counted(host.fake.calls, "create dev"),
           counted(host.fake.calls, "lost the answer of make"),
         ]).toStrictEqual([1, 1, 1]);
-      })
-  );
-
-  it.effect(
-    "a sweep answers each retired instance whose delete failed, and nothing once a sweep deletes it",
-    () =>
-      Effect.gen(function* () {
-        const host = yield* runner({ as: "fixed" });
-
-        keptByRuntime(host, "dev");
-
-        const retired = { machines: ["dev-instance"] };
-
-        host.fake.failNext("delete", new Internal({ message: "EBUSY" }));
-
-        const failed = yield* host.operations.sweep(retired);
-        const then = yield* host.operations.sweep(retired);
-
-        expect(failed).toStrictEqual(retired);
-        expect(then).toStrictEqual({ machines: [] });
-        expect(host.fake.machines.has("dev")).toBe(false);
-      })
-  );
-
-  it.effect(
-    "a sweep warns once of a retired instance whose delete fails, naming its host, logs each sweep after that leaves it at debug, and the one that deletes it at info",
-    () => {
-      const lines: Array<readonly [string, string]> = [];
-
-      return Effect.gen(function* () {
-        const host = yield* runner({ as: "fixed" });
-
-        keptByRuntime(host, "dev");
-
-        const retired = { machines: ["dev-instance"] };
-
-        const refused = () => {
-          host.fake.failNext("delete", new Internal({ message: "EBUSY" }));
-        };
-
-        refused();
-        yield* host.operations.sweep(retired);
-        refused();
-        yield* host.operations.sweep(retired);
-        yield* host.operations.sweep(retired);
-
-        expect(
-          lines.filter(([, line]) => line.startsWith("sweep:"))
-        ).toStrictEqual([
-          [
-            "Info",
-            "sweep: deleting machine dev-instance (handle), which the control plane retired",
-          ],
-          [
-            "Warn",
-            "sweep: couldn't delete machine dev-instance (handle), which stays at its provider until a sweep deletes it, so each sweep of host fixed tries again: EBUSY",
-          ],
-          ["Debug", "sweep: deleting machine dev-instance (handle) again"],
-          [
-            "Debug",
-            "sweep: still couldn't delete machine dev-instance (handle) on host fixed: EBUSY",
-          ],
-          ["Debug", "sweep: deleting machine dev-instance (handle) again"],
-          [
-            "Info",
-            "sweep: deleted machine dev-instance (handle), which an earlier sweep couldn't",
-          ],
-        ]);
-      }).pipe(sweepLogged(lines));
-    }
-  );
-
-  it.effect(
-    "a sweep forgets the failed delete of an instance no longer retired, so it warns again once that instance is retired again",
-    () => {
-      const lines: Array<readonly [string, string]> = [];
-
-      return Effect.gen(function* () {
-        const host = yield* runner({ as: "fixed" });
-
-        keptByRuntime(host, "dev");
-
-        const retired = { machines: ["dev-instance"] };
-
-        host.fake.failNext("delete", new Internal({ message: "EBUSY" }));
-        yield* host.operations.sweep(retired);
-        yield* host.operations.sweep({ machines: ["other-instance"] });
-        host.fake.failNext("delete", new Internal({ message: "EBUSY" }));
-        yield* host.operations.sweep(retired);
-
-        expect(lines.filter(([level]) => level === "Warn")).toStrictEqual(
-          Array.from({ length: 2 }, () => [
-            "Warn",
-            "sweep: couldn't delete machine dev-instance (handle), which stays at its provider until a sweep deletes it, so each sweep of host fixed tries again: EBUSY",
-          ])
-        );
-      }).pipe(sweepLogged(lines));
-    }
-  );
-
-  it.effect(
-    "a sweep deletes a retired machine with every checkpoint it holds kept",
-    () =>
-      Effect.gen(function* () {
-        const host = yield* runner({ as: "fixed" });
-
-        const made = yield* finished(host, makes("dev"));
-
-        const stopped = yield* finished(
-          host,
-          { _tag: "stop", machine: ref("dev"), machines: [] },
-          2
-        );
-
-        const captured = yield* finished(host, {
-          _tag: "capture",
-          machine: ref("dev"),
-          checkpoint: checkpoint("snap"),
-        });
-
-        yield* Effect.forEach([made, stopped, captured], ({ id }) =>
-          host.operations.collect(id)
-        );
-
-        const left = yield* host.operations.sweep({
-          machines: ["dev-instance"],
-        });
-
-        expect(
-          host.fake.removals.map(([name, keep]) => [name, [...keep]])
-        ).toStrictEqual([["dev-instance", [captured.outcome.handle]]]);
-        expect(left).toStrictEqual({ machines: [] });
-      })
-  );
-
-  it.effect(
-    "a sweep spares a retired machine a step the host holds names, and deletes it once that step is collected",
-    () =>
-      Effect.gen(function* () {
-        const host = yield* runner({ as: "fixed" });
-
-        keptByRuntime(host, "dev");
-
-        const held = host.fake.holdNext("stop");
-
-        const stop = delivery(
-          { _tag: "stop", machine: ref("dev"), machines: [] },
-          1
-        );
-
-        yield* deliver(host, stop);
-        yield* held.entered;
-        yield* Effect.sleep(Duration.millis(5));
-
-        const retired = { machines: ["dev-instance"] };
-
-        const named = yield* host.operations.sweep(retired);
-
-        const whileHeld = counted(host.fake.calls, "delete dev-instance");
-
-        yield* held.release;
-        yield* ended(host, stop.id);
-        yield* host.operations.collect(stop.id);
-
-        const collected = yield* host.operations.sweep(retired);
-
-        expect([
-          whileHeld,
-          counted(host.fake.calls, "delete dev-instance"),
-        ]).toStrictEqual([0, 1]);
-        expect([named, collected]).toStrictEqual([retired, { machines: [] }]);
       })
   );
 
@@ -3412,47 +3002,6 @@ layer(NodeServices.layer)((it) => {
       })
   );
 
-  it.effect(
-    "a sweep waits out a delete its runtime masks, so a sweep while it runs starts no second delete of the instance",
-    () =>
-      Effect.gen(function* () {
-        const host = yield* runner({ as: "fixed" });
-
-        keptByRuntime(host, "dev");
-
-        const { entered, release } = host.fake.holdNext("delete", {
-          runsOn: true,
-        });
-
-        const retired = { machines: ["dev-instance"] };
-        const first = yield* Effect.forkChild(host.operations.sweep(retired));
-
-        yield* entered;
-        yield* TestClock.adjust(readTimeout);
-
-        const second = yield* Effect.forkChild(host.operations.sweep(retired));
-
-        yield* TestClock.adjust(readTimeout);
-
-        const whileHeld = [
-          counted(host.fake.calls, "delete dev-instance"),
-          first.pollUnsafe() === undefined,
-          second.pollUnsafe() === undefined,
-        ];
-
-        yield* release;
-
-        const none = { machines: [] };
-
-        expect([
-          whileHeld,
-          yield* Fiber.join(first),
-          yield* Fiber.join(second),
-          counted(host.fake.calls, "delete dev-instance"),
-        ]).toStrictEqual([[1, true, true], none, none, 1]);
-      })
-  );
-
   it.effect("a runtime that doesn't answer a read answers Internal", () =>
     Effect.gen(function* () {
       const host = yield* runner();
@@ -3513,39 +3062,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(
           host.fake.calls.filter((call) => call.startsWith("relay"))
         ).toStrictEqual(["relay dev", "relay app"]);
-      })
-  );
-
-  it.effect(
-    "an adopt the control plane sent before a remove that the host has since run and forgotten opens no relay for the deleted machine",
-    () =>
-      Effect.gen(function* () {
-        const host = yield* runner({ relayed: true });
-        const made = yield* finished(host, makes("dev"));
-
-        const dev = ref("dev", {
-          ...reached(portOf(made) ?? 0),
-          ...(made.outcome.handle === undefined
-            ? {}
-            : { handle: made.outcome.handle }),
-        });
-
-        const removed = yield* finished(
-          host,
-          { _tag: "remove", machine: dev, keep: [] },
-          2
-        );
-
-        yield* host.operations.collect(made.id);
-        yield* host.operations.collect(removed.id);
-
-        const adoption = yield* host.operations.adopt([dev]);
-
-        expect([
-          removed.status,
-          adoption.adopted.map(({ name }) => name),
-          yield* accepts(portIn(dev)),
-        ]).toStrictEqual(["done", ["dev"], false]);
       })
   );
 
@@ -3745,10 +3261,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 });
 
-const locked = new Internal({
-  message: "smolvm machine status broken failed: database is locked",
-});
-
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
     "a machine whose search fails reads unknown, and every other machine on its host reads as it is",
@@ -3913,62 +3425,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "an adopt answers the handle and endpoint of each machine it resolved, names the one whose search failed, reopens every relay it can, and resolves that one once its search answers",
-    () =>
-      Effect.gen(function* () {
-        const host = yield* runner({ relayed: true });
-
-        keptByRuntime(host, "ok");
-        keptByRuntime(host, "broken");
-        host.fake.failFind("broken", locked);
-
-        const ok = ref("ok", { port: relayPorts + 1 });
-        const broken = ref("broken", { port: relayPorts + 2 });
-        const first = yield* host.operations.adopt([ok, broken]);
-
-        yield* pause;
-
-        const reachedFirst = [
-          yield* accepts(relayPorts + 1),
-          yield* accepts(relayPorts + 2),
-        ];
-
-        host.fake.mendFind("broken");
-
-        const again = yield* host.operations.adopt([
-          { ...ok, handle: Handle.make("held-ok") },
-          broken,
-        ]);
-
-        yield* pause;
-
-        expect(first).toStrictEqual({
-          adopted: [
-            {
-              name: "ok",
-              instance: "ok-instance",
-              handle: Handle.make("held-ok"),
-              endpoint: { host: "127.0.0.1", port: relayPorts + 1 },
-            },
-          ],
-          unresolved: ["broken"],
-        });
-        expect(reachedFirst).toStrictEqual([true, false]);
-        expect(again.unresolved).toStrictEqual([]);
-        expect(
-          again.adopted.map(({ name, handle }) => [name, handle])
-        ).toStrictEqual([
-          ["ok", Handle.make("held-ok")],
-          ["broken", Handle.make("held-broken")],
-        ]);
-        expect(yield* accepts(relayPorts + 2)).toBe(true);
-        expect(
-          host.fake.calls.filter((call) => call.startsWith("relay"))
-        ).toStrictEqual(["relay ok", "relay broken"]);
-      })
-  );
-
-  it.effect(
     "a step whose checkpoint carries no handle reaches the one its runtime derives, with no search that could fail, and on a runtime that derives none a make from it is Missing",
     () =>
       Effect.gen(function* () {
@@ -4012,60 +3468,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(errorOf(refused)).toStrictEqual(["failed", "Missing"]);
         expect(refused.error).toMatchObject({ checkpoint: "snap" });
         expect(rented.fake.calls).not.toContain("restore copy");
-      })
-  );
-
-  it.effect(
-    "an adopt leaves closed the relay of a machine removed while it searched for another",
-    () =>
-      Effect.gen(function* () {
-        const gate = yield* Deferred.make<undefined>();
-
-        const host = yield* runner({
-          relayed: true,
-          runtime: (fake) => ({
-            ...fake,
-            find: (machine) =>
-              machine.name === "slow"
-                ? Effect.andThen(Deferred.await(gate), fake.find(machine))
-                : fake.find(machine),
-          }),
-        });
-
-        keptByRuntime(host, "gone");
-        keptByRuntime(host, "slow");
-
-        const gone = ref("gone", {
-          handle: Handle.make("held-gone"),
-          port: relayPorts + 1,
-        });
-
-        const slow = ref("slow", { port: relayPorts + 2 });
-
-        yield* host.operations.adopt([gone]);
-        yield* pause;
-
-        const openBefore = yield* accepts(relayPorts + 1);
-
-        const again = yield* Effect.forkChild(
-          host.operations.adopt([gone, slow])
-        );
-
-        yield* pause;
-
-        const removed = yield* finished(
-          host,
-          { _tag: "remove", machine: gone, keep: [] },
-          2
-        );
-
-        yield* Deferred.succeed(gate, undefined);
-        yield* Fiber.join(again);
-        yield* pause;
-
-        expect([openBefore, removed.status]).toStrictEqual([true, "done"]);
-        expect(yield* accepts(relayPorts + 1)).toBe(false);
-        expect(yield* accepts(relayPorts + 2)).toBe(true);
       })
   );
 });

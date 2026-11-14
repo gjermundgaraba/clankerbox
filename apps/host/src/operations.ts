@@ -1,5 +1,4 @@
 import type {
-  Adoption,
   ExecCommand,
   MachineRef,
   MachineState,
@@ -7,7 +6,6 @@ import type {
   Outcome,
   Ref,
   Report,
-  Retired,
   Scope as Resource,
   Source,
   Step,
@@ -60,13 +58,15 @@ import {
 } from "./guest.ts";
 import type { Leaving, TailnetReport } from "./guest.ts";
 import { Reaches } from "./reach.ts";
+import * as Recheck from "./recheck.ts";
 import {
+  inTime,
   missing,
   missingCheckpoint,
   Runtime,
   sizedBy,
   stateIn,
-  stateReadWait,
+  targetOf,
   timeoutFail,
 } from "./runtime.ts";
 import type {
@@ -74,8 +74,6 @@ import type {
   CheckpointFiles,
   Handle,
   Held,
-  Identity,
-  MarkedMachine,
   Observed,
   Origin,
   Sized,
@@ -99,8 +97,8 @@ export interface Interface {
   readonly capacity: (
     machines: readonly MachineRef[]
   ) => ReturnType<Runtime["Service"]["capacity"]>;
-  readonly adopt: (machines: readonly MachineRef[]) => Effect.Effect<Adoption>;
-  readonly sweep: (retired: Retired) => Effect.Effect<Retired, Internal>;
+  readonly adopt: Recheck.Interface["adopt"];
+  readonly sweep: Recheck.Interface["sweep"];
   readonly exec: (
     command: ExecCommand
   ) => Effect.Effect<Executed, Invalid | Missing | WrongState | Internal>;
@@ -156,37 +154,12 @@ const sourceSizes = (source: Exclude<Source, { _tag: "base" }>) =>
 
 const keyOf = ({ resource, name }: Resource) => `${resource} ${name}`;
 
-const heldAs = (machine: Ref, handle: Handle | undefined): string => {
-  if (machine.handle !== undefined) {
-    return `reached by its row's handle ${machine.handle}`;
-  }
-
-  return handle === undefined
-    ? "the runtime holds no machine of its instance"
-    : `the runtime found it as ${handle}`;
-};
-
-const targetOf = ({ name, instance }: Identity, handle: Handle): Target => ({
-  name,
-  instance,
-  handle,
-});
-
 const sizedOf = (machine: MachineRef, handle: Handle): Sized => ({
   ...targetOf(machine, handle),
   cpu: machine.cpu,
   ramMib: machine.ramMib,
   diskGib: machine.diskGib,
 });
-
-const inTime = (what: string) =>
-  timeoutFail(
-    stateReadWait,
-    () =>
-      new Internal({
-        message: `${what} didn't answer within ${Duration.format(stateReadWait)}`,
-      })
-  );
 
 const surviving = <A, E>(what: string, work: Effect.Effect<A, E>) =>
   Effect.catchCauseFilter(work, Cause.findDefect, (_defect, cause) =>
@@ -1310,172 +1283,30 @@ export const make = (
       return last === undefined || last.leavesInstance === instance;
     };
 
-    const adopt: Interface["adopt"] = (machines) =>
-      Effect.gen(function* () {
-        const [adopted, unresolved] = yield* Effect.partition(
-          machines,
-          (machine) =>
-            found(machine).pipe(
-              Effect.tap((handle) =>
-                Effect.logInfo(
-                  `adopt ${machine.name}: ${heldAs(machine, handle)}`
-                )
-              ),
-              Effect.map((handle) => ({ machine, handle })),
-              Effect.mapError((error) => ({ machine, error }))
-            ),
-          { concurrency: "unbounded" }
-        );
+    const recheck = yield* Recheck.make(config.id, {
+      found,
+      accepting,
+      reachable,
+      named: () => {
+        const named = new Set<string>();
 
-        yield* Effect.forEach(
-          unresolved,
-          ({ machine, error }) =>
-            Effect.logWarning(
-              `adopt ${machine.name}: couldn't find it, so the next adopt tries again: ${error.message}`
-            ),
-          { discard: true }
-        );
+        for (const { names, progress } of entries.values()) {
+          for (const { instance, handle } of names) {
+            named.add(instance);
 
-        const reached = yield* accepting.withPermits(1)(
-          Effect.suspend(() =>
-            reaches.adopt(
-              adopted.flatMap(({ machine, handle }) =>
-                handle === undefined ||
-                machine.port === undefined ||
-                !reachable(machine)
-                  ? []
-                  : [{ machine: targetOf(machine, handle), port: machine.port }]
-              )
-            )
-          )
-        );
-
-        return {
-          adopted: adopted.map(({ machine, handle }) => ({
-            name: machine.name,
-            instance: machine.instance,
-            ...(handle === undefined ? {} : { handle }),
-            ...(machine.port === undefined
-              ? {}
-              : {
-                  endpoint: reaches.endpoint(
-                    reached.get(machine.name) ?? machine.port
-                  ),
-                }),
-          })),
-          unresolved: unresolved.map(({ machine }) => machine.name),
-        };
-      });
-
-    const namedBySteps = () => {
-      const named = new Set<string>();
-
-      for (const { names, progress } of entries.values()) {
-        for (const { instance, handle } of names) {
-          named.add(instance);
-
-          if (handle !== undefined) {
-            named.add(handle);
-          }
-        }
-
-        if (progress.outcome.handle !== undefined) {
-          named.add(progress.outcome.handle);
-        }
-      }
-
-      return ({ instance, handle }: MarkedMachine) =>
-        named.has(instance) || named.has(handle);
-    };
-
-    const sweeping = yield* Semaphore.make(1);
-    const undeleted = new Set<string>();
-
-    const swept = (machine: MarkedMachine): Effect.Effect<boolean> =>
-      Effect.suspend(() => {
-        const { instance } = machine;
-        const what = `machine ${instance} (${machine.handle})`;
-        const again = undeleted.has(instance);
-
-        return Effect.andThen(
-          again
-            ? Effect.logDebug(`sweep: deleting ${what} again`)
-            : Effect.logInfo(
-                `sweep: deleting ${what}, which the control plane retired`
-              ),
-          runtime
-            .delete(
-              targetOf({ name: instance, instance }, machine.handle),
-              new Set(machine.checkpoints)
-            )
-            .pipe(
-              Effect.tap(() =>
-                Effect.andThen(
-                  Effect.sync(() => undeleted.delete(instance)),
-                  again
-                    ? Effect.logInfo(
-                        `sweep: deleted ${what}, which an earlier sweep couldn't`
-                      )
-                    : Effect.void
-                )
-              ),
-              Effect.as(true),
-              Effect.catch((error) =>
-                Effect.as(
-                  Effect.andThen(
-                    Effect.sync(() => undeleted.add(instance)),
-                    again
-                      ? Effect.logDebug(
-                          `sweep: still couldn't delete ${what} on host ${config.id}: ${error.message}`
-                        )
-                      : Effect.logWarning(
-                          `sweep: couldn't delete ${what}, which stays at its provider until a sweep deletes it, so each sweep of host ${config.id} tries again: ${error.message}`
-                        )
-                  ),
-                  false
-                )
-              )
-            )
-        );
-      });
-
-    const sweep: Interface["sweep"] = (retired) => {
-      const { owned } = runtime;
-
-      if (owned === undefined || retired.machines.length === 0) {
-        return Effect.succeed({ machines: [] });
-      }
-
-      return sweeping.withPermits(1)(
-        Effect.gen(function* () {
-          const wanted = new Set(retired.machines);
-
-          for (const instance of undeleted) {
-            if (!wanted.has(instance)) {
-              undeleted.delete(instance);
+            if (handle !== undefined) {
+              named.add(handle);
             }
           }
 
-          const machines = yield* owned.machines.pipe(
-            inTime(`the ${traits.runtime} runtime's list of what it marked`)
-          );
+          if (progress.outcome.handle !== undefined) {
+            named.add(progress.outcome.handle);
+          }
+        }
 
-          const named = namedBySteps();
-
-          const left = yield* Effect.forEach(
-            machines.filter(({ instance }) => wanted.has(instance)),
-            (machine) =>
-              named(machine)
-                ? Effect.succeed([machine.instance])
-                : Effect.map(swept(machine), (deleted) =>
-                    deleted ? [] : [machine.instance]
-                  )
-          );
-
-          return { machines: left.flat() };
-        })
-      );
-    };
+        return named;
+      },
+    });
 
     return {
       boot,
@@ -1497,8 +1328,8 @@ export const make = (
         Effect.flatMap(heldBy(machines), runtime.capacity).pipe(
           inTime(`the ${traits.runtime} runtime`)
         ),
-      adopt,
-      sweep,
+      adopt: recheck.adopt,
+      sweep: recheck.sweep,
       exec: Effect.fn("Operations.exec")(exec),
     } satisfies Interface;
   });
