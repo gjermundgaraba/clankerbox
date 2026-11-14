@@ -191,8 +191,7 @@ A pass says nothing of these, which rest on tests or on nothing:
 
 ## Coverage and sync
 
-Last confirmed against the commit that adds this table. Each model part stands
-for this code:
+Each model part stands for this code:
 
 | Model                            | Code                                                                       |
 | -------------------------------- | -------------------------------------------------------------------------- |

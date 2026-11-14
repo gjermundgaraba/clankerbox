@@ -46,7 +46,8 @@ with no `hosts` argument: `launch.sh fixed:1,smolvm:1`. Hosts start in the
 fleet's order and are named `<runtime>-<n>`, numbered per runtime: `fixed-1`,
 `smolvm-1`. Each fakes its runtime with that runtime's traits:
 
-- `smolvm` and `tart`, as the real runtimes are;
+- `smolvm` and `tart`, as the real runtimes are, smolvm's as on x86_64 on
+  every architecture, so its most vCPUs is 254 on an arm64 machine too;
 - `fixed`, which stands for no provider: size classes (`small` 1 vCPU, 1G, 10G;
   `default` 2, 4G, 20G; `large` 4, 8G, 40G), a pause that stops, disk
   checkpoints, machines that stop unasked, and machines that carry the host's

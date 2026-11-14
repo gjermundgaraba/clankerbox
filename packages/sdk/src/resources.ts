@@ -291,8 +291,9 @@ export type BuildCopy = typeof BuildCopy.Type;
 /**
  * One build of a template: a machine made from `base` on `host` at the sizes given, its setup run
  * within `setupTimeoutSeconds`, captured under the runtime `pin`, and deleted. `image` is what the
- * base named on that host. A create clones a build only `ready`, at its sizes or larger ones, and a
- * ready build never changes. A failed one, also one a restart of the control plane ended, keeps
+ * base named on that host. A create clones a build only `ready`, at its sizes, or at larger ones
+ * where its host's runtime gives a copy other sizes than its source's, and a ready build never
+ * changes. A failed one, also one a restart of the control plane ended, keeps
  * its `error` until a later build ends. `copies` are where it is, by
  * host: a create clones it on a host whose copy is ready.
  */
