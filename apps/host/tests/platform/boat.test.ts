@@ -107,7 +107,7 @@ const made = (runtime: Interface, name: string) =>
     const { handle } = yield* runtime.make(
       machine,
       { _tag: "image", image },
-      { _tag: "none" }
+      10_022
     );
 
     return { ...machine, handle };
@@ -684,7 +684,7 @@ describe("the boat runtime over fake boat", () => {
               ...types.small,
             };
 
-            const copy = yield* runtime.make(machine, origin, { _tag: "none" });
+            const copy = yield* runtime.make(machine, origin, 10_022);
 
             expect(startsSince(boat, from)).toBe(1);
             expect(
@@ -1472,7 +1472,7 @@ describe("a boat make of sizes no type gives", () => {
               diskGib: 80,
             },
             { _tag: "image", image: "ubuntu-24.04" },
-            { _tag: "none" }
+            10_022
           )
         );
 
@@ -1510,7 +1510,7 @@ describe("a boat make of a type the account's plan no longer offers", () => {
           runtime.make(
             { name: "dev", instance: bx1.instance, ...types.small },
             { _tag: "image", image: "ubuntu-24.04" },
-            { _tag: "none" }
+            10_022
           )
         );
 

@@ -99,10 +99,6 @@ export type Origin =
   | { readonly _tag: "checkpoint"; readonly checkpoint: Sized }
   | { readonly _tag: "machine"; readonly machine: Sized };
 
-export type Bind =
-  | { readonly _tag: "forward"; readonly port: number }
-  | { readonly _tag: "none" };
-
 export interface Made {
   readonly handle: Handle;
   readonly sizes: Sizes;
@@ -264,13 +260,15 @@ export interface Interface {
     machines: readonly Held[]
   ) => Effect.Effect<readonly Reading[], RuntimeError>;
   /**
-   * Makes the machine, from an image or a copy. A name the runtime can't give a VM is `Invalid`, and
-   * a checkpoint it no longer holds is `Missing`, naming the checkpoint, with nothing made.
+   * Makes the machine, from an image or a copy. `port` is the host's port its sshd is reached at,
+   * which a published runtime forwards to the guest's port 22 and a relayed one leaves to the relay.
+   * A name the runtime can't give a VM is `Invalid`, and a checkpoint it no longer holds is
+   * `Missing`, naming the checkpoint, with nothing made.
    */
   readonly make: (
     machine: Identity & Sizes,
     origin: Origin,
-    bind: Bind
+    port: number
   ) => Effect.Effect<Made, RoomError | StateError | Unsizable | Invalid>;
   /**
    * Starts a stopped machine, or resumes a paused one. A runtime that holds checkpoints through its

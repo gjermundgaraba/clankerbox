@@ -8,7 +8,6 @@ import { expect } from "vite-plus/test";
 
 import { runCommand } from "../src/guest.ts";
 import type {
-  Bind,
   Execution,
   Identity,
   Interface as Runtime,
@@ -112,12 +111,10 @@ const cutAt = <A, E>(stalled: Stalled, call: Fiber.Fiber<A, E>) =>
 
 let nextPort = 23_000;
 
-const bindFor = (runtime: Runtime): Bind => {
+const nextFree = () => {
   nextPort += 1;
 
-  return runtime.reach._tag === "published"
-    ? { _tag: "forward", port: nextPort }
-    : { _tag: "none" };
+  return nextPort;
 };
 
 const first = "0123456789abcdef".repeat(2);
@@ -172,7 +169,7 @@ export const runtimeContract = (subject: Subject): void => {
 
   const made = (runtime: Runtime, name: string, instance = first) =>
     Effect.map(
-      runtime.make(sized(name, instance), fromImage, bindFor(runtime)),
+      runtime.make(sized(name, instance), fromImage, nextFree()),
       ({ handle }): Sized => ({ ...sized(name, instance), handle })
     );
 
@@ -186,11 +183,7 @@ export const runtimeContract = (subject: Subject): void => {
 
             expect(fitted(runtime.traits, subject.sizes)).toBe(true);
 
-            const answer = yield* runtime.make(
-              machine,
-              fromImage,
-              bindFor(runtime)
-            );
+            const answer = yield* runtime.make(machine, fromImage, nextFree());
 
             const target = { ...machine, handle: answer.handle };
 
@@ -323,7 +316,7 @@ export const runtimeContract = (subject: Subject): void => {
                 _tag: "checkpoint",
                 checkpoint: { ...snap, ...subject.sizes, handle },
               },
-              bindFor(runtime)
+              nextFree()
             );
 
             expect(refused).toBeInstanceOf(WrongState);
@@ -388,7 +381,7 @@ export const runtimeContract = (subject: Subject): void => {
                   _tag: "checkpoint",
                   checkpoint: { ...snap, ...subject.sizes, handle },
                 },
-                bindFor(runtime)
+                nextFree()
               )
             );
 
@@ -595,7 +588,7 @@ export const runtimeContract = (subject: Subject): void => {
                     handle,
                   },
                 },
-                bindFor(runtime)
+                nextFree()
               );
 
             expect(yield* owned.machines).toStrictEqual([]);
@@ -790,7 +783,7 @@ export const runtimeContract = (subject: Subject): void => {
                 const reached = yield* stall(after, at);
 
                 const making = yield* Effect.forkChild(
-                  runtime.make(machine, fromImage, bindFor(runtime))
+                  runtime.make(machine, fromImage, nextFree())
                 );
 
                 if (!(yield* cutAt(reached, making))) {
@@ -812,7 +805,7 @@ export const runtimeContract = (subject: Subject): void => {
                 const again = yield* runtime.make(
                   machine,
                   fromImage,
-                  bindFor(runtime)
+                  nextFree()
                 );
 
                 yield* runtime.delete(

@@ -5,7 +5,7 @@ import { Context, Effect, Layer, Option, Semaphore } from "effect";
 import { PortProbe } from "./machine-ports.ts";
 import type { PortRange } from "./machine-ports.ts";
 import { Runtime } from "./runtime.ts";
-import type { Bind, Dial, Identity, Reach, Target } from "./runtime.ts";
+import type { Dial, Identity, Reach, Target } from "./runtime.ts";
 
 /** A port a relay has bound. It closes each connection until `relay` gives it the dial to carry them through. */
 export interface Listener {
@@ -42,7 +42,6 @@ export interface Interface {
     taken: ReadonlySet<number>
   ) => Effect.Effect<Claim, Capacity | Internal>;
   readonly endpoint: (port: number) => SshEndpoint;
-  readonly bind: (port: number) => Bind;
   readonly open: (
     machine: Target,
     port: number
@@ -93,7 +92,6 @@ export const make = (
             return yield* noneFree;
           }),
         endpoint,
-        bind: (port) => ({ _tag: "forward", port }),
         open: () => Effect.void,
         close: () => Effect.void,
         adopt: (machines) =>
@@ -220,7 +218,6 @@ export const make = (
           })
         ),
       endpoint,
-      bind: () => ({ _tag: "none" }),
       open: (machine, port) =>
         holding.withPermits(1)(
           Effect.asVoid(opened(machine, port, Effect.fail(takenBy(port))))

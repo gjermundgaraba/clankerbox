@@ -460,27 +460,11 @@ const ran = (
     };
   });
 
-/**
- * Runs a caller's command, refusing one that holds a NUL, which no process takes, or that sets the
- * mark's variable, which is the exec's own, as `Invalid`.
- */
+/** Runs a caller's command, refusing one that sets the mark's variable, which is the exec's own, as `Invalid`. */
 export const runCommand = (
   runtime: Runtime,
   command: GuestCommand
 ): Effect.Effect<Executed, Invalid | RuntimeError> => {
-  if (
-    [...command.argv, ...Object.values(command.env ?? {})].some((value) =>
-      value.includes("\0")
-    )
-  ) {
-    return Effect.fail(
-      new Invalid({
-        message:
-          "a command's arguments and environment can't hold a NUL character, which no process takes",
-      })
-    );
-  }
-
   if (command.env !== undefined && Object.hasOwn(command.env, markName)) {
     return Effect.fail(
       new Invalid({

@@ -307,13 +307,7 @@ const madeOn = (as: FakeRuntimeName) =>
     const fake = fakeRuntime({ dir, as });
     const runtime = Context.get(yield* Layer.build(fake.layer), Runtime);
 
-    const { handle } = yield* runtime.make(
-      dev,
-      { _tag: "image", image },
-      runtime.reach._tag === "relayed"
-        ? { _tag: "none" }
-        : { _tag: "forward", port: 2222 }
-    );
+    const { handle } = yield* runtime.make(dev, { _tag: "image", image }, 2222);
 
     return {
       runtime,
@@ -1279,30 +1273,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(missing.exitCode).toBe(127);
         expect(missing.output).toContain("no-such-command-3e1f");
-      })
-  );
-
-  it.effect(
-    "a command whose arguments or env hold a NUL, which no process takes, is refused Invalid and never runs",
-    () =>
-      Effect.gen(function* () {
-        const { runtime, fake, machine } = yield* based;
-        const before = [...fake.calls];
-
-        const inArgv = yield* Effect.flip(
-          runCommand(runtime, { machine, argv: ["/bin/echo", "a\0b"] })
-        );
-
-        const inEnv = yield* Effect.flip(
-          runCommand(runtime, {
-            machine,
-            argv: ["/bin/true"],
-            env: { TOKEN: "a\0b" },
-          })
-        );
-
-        expect([inArgv._tag, inEnv._tag]).toStrictEqual(["Invalid", "Invalid"]);
-        expect(fake.calls).toStrictEqual(before);
       })
   );
 

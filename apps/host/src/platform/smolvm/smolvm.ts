@@ -44,7 +44,6 @@ import {
   timeoutFail,
 } from "../../runtime.ts";
 import type {
-  Bind,
   Command,
   Identity,
   Interface,
@@ -141,8 +140,7 @@ const instanceChars = 8;
 export const nativeName = (resource: Identity): Handle =>
   Handle.make(`${resource.name}-${resource.instance.slice(0, instanceChars)}`);
 
-const forwarded = (bind: Bind): readonly string[] =>
-  bind._tag === "forward" ? [`${bind.port}:22`] : [];
+const forwarded = (port: number) => `${port}:22`;
 
 const nameOf = (native: string): string =>
   native.slice(0, -(instanceChars + 1));
@@ -801,12 +799,12 @@ export const make = (
       from: string,
       source: Sizes,
       machine: Identity & Sizes,
-      bind: Bind
+      port: number
     ) =>
       Effect.gen(function* () {
         const native = nativeName(machine);
 
-        yield* createdFrom(native, from, forwarded(bind));
+        yield* createdFrom(native, from, [forwarded(port)]);
         yield* boot(native);
         yield* grown(native, source, changes(source, machine));
       });
@@ -1107,7 +1105,7 @@ export const make = (
       return Math.ceil(bytes / mib);
     });
 
-    const branched = (base: string, machine: Identity, bind: Bind) =>
+    const branched = (base: string, machine: Identity, port: number) =>
       Effect.gen(function* () {
         const native = nativeName(machine);
 
@@ -1122,7 +1120,8 @@ export const make = (
               native,
               "--freeze-source",
               "--branchable",
-              ...forwarded(bind).flatMap((forward) => ["-p", forward]),
+              "-p",
+              forwarded(port),
             ],
             `machine branch ${native}`
           )
@@ -1174,7 +1173,7 @@ export const make = (
       );
     });
 
-    const created = (machine: Identity & Sizes, image: string, bind: Bind) =>
+    const created = (machine: Identity & Sizes, image: string, port: number) =>
       Effect.gen(function* () {
         const native = nativeName(machine);
 
@@ -1193,7 +1192,8 @@ export const make = (
             "--net",
             "--net-backend",
             "virtio-net",
-            ...forwarded(bind).flatMap((forward) => ["-p", forward]),
+            "-p",
+            forwarded(port),
             "--storage",
             String(machine.diskGib),
           ],
@@ -1206,7 +1206,7 @@ export const make = (
     const restored = (
       checkpoint: Target & Sizes,
       machine: Identity & Sizes,
-      bind: Bind
+      port: number
     ) =>
       Effect.gen(function* () {
         const base = baseOf(checkpoint.handle);
@@ -1227,14 +1227,14 @@ export const make = (
           storedAt(checkpoint.handle),
           checkpoint,
           machine,
-          bind
+          port
         );
 
         if (!(yield* frozen)) {
           return yield* copied;
         }
 
-        const went = yield* branched(base, machine, bind).pipe(
+        const went = yield* branched(base, machine, port).pipe(
           Effect.as(false),
           Effect.catch((error) =>
             Effect.flatMap(frozen, (still) =>
@@ -1272,7 +1272,7 @@ export const make = (
     const forked = (
       source: Target & Sizes,
       machine: Identity & Sizes,
-      bind: Bind
+      port: number
     ) => {
       const store = path.join(paths.forks, nativeName(machine));
       const output = path.join(store, `${nativeName(machine)}.checkpoint`);
@@ -1284,7 +1284,7 @@ export const make = (
         ),
         Effect.andThen(
           captureRam(source, store, output),
-          restoreRam(output, source, machine, bind)
+          restoreRam(output, source, machine, port)
         ).pipe(
           Effect.ensuring(
             removeAll(store).pipe(
@@ -1463,7 +1463,7 @@ export const make = (
 
         return handle;
       }),
-      make: Effect.fn("Smolvm.make")(function* (machine, origin, bind) {
+      make: Effect.fn("Smolvm.make")(function* (machine, origin, port) {
         const taken = takenForBuilder(machine);
 
         if (taken !== undefined) {
@@ -1471,16 +1471,16 @@ export const make = (
         }
 
         yield* Match.valueTags(origin, {
-          image: ({ image }) => created(machine, image, bind),
+          image: ({ image }) => created(machine, image, port),
           checkpoint: ({ checkpoint }) =>
             Effect.flatMap(
               stored(checkpoint.handle),
               (held): Effect.Effect<void, Internal | Missing> =>
                 held
-                  ? restored(checkpoint, machine, bind)
+                  ? restored(checkpoint, machine, port)
                   : Effect.fail(missingCheckpoint(traits.runtime, checkpoint))
             ),
-          machine: (source) => forked(source.machine, machine, bind),
+          machine: (source) => forked(source.machine, machine, port),
         });
 
         return {

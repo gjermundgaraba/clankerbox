@@ -787,7 +787,7 @@ export const make = (
         const { handle, sizes } = yield* Effect.scoped(
           Effect.andThen(
             admitted(booted[source._tag], machine, machines),
-            runtime.make(machine, origin, reaches.bind(port))
+            runtime.make(machine, origin, port)
           )
         );
 
@@ -863,12 +863,10 @@ export const make = (
               yield* pinned({ resume: machine.name }, pin);
             }
 
-            const { endpoint } = step.machine;
+            const { port } = step.machine;
 
             const started = Effect.andThen(
-              endpoint === undefined
-                ? Effect.void
-                : reaches.open(machine, endpoint.port),
+              port === undefined ? Effect.void : reaches.open(machine, port),
               runtime.start(machine, keep)
             );
 
@@ -1343,15 +1341,10 @@ export const make = (
             reaches.adopt(
               adopted.flatMap(({ machine, handle }) =>
                 handle === undefined ||
-                machine.endpoint === undefined ||
+                machine.port === undefined ||
                 !reachable(machine)
                   ? []
-                  : [
-                      {
-                        machine: targetOf(machine, handle),
-                        port: machine.endpoint.port,
-                      },
-                    ]
+                  : [{ machine: targetOf(machine, handle), port: machine.port }]
               )
             )
           )
@@ -1362,11 +1355,11 @@ export const make = (
             name: machine.name,
             instance: machine.instance,
             ...(handle === undefined ? {} : { handle }),
-            ...(machine.endpoint === undefined
+            ...(machine.port === undefined
               ? {}
               : {
                   endpoint: reaches.endpoint(
-                    reached.get(machine.name) ?? machine.endpoint.port
+                    reached.get(machine.name) ?? machine.port
                   ),
                 }),
           })),

@@ -218,7 +218,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const ref = {
           ...dev,
           handle: outcome.handle,
-          endpoint: outcome.endpoint,
+          port: outcome.endpoint?.port,
         };
 
         const states = yield* post(url, "readMachines", {
@@ -387,14 +387,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const gone = {
           ...dev,
           name: "gone",
-          endpoint: { port: suitePorts.routes.first + 1 },
+          port: suitePorts.routes.first + 1,
         };
 
         const answer = yield* post(url, "adoptMachines", {
-          machines: [
-            { ...dev, endpoint: { port: outcome.endpoint?.port } },
-            gone,
-          ],
+          machines: [{ ...dev, port: outcome.endpoint?.port }, gone],
         });
 
         expect(outcome.handle).toBeDefined();
@@ -429,13 +426,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const up = {
           ...dev,
           name: "up",
-          endpoint: { port: suitePorts.routes.last - 1 },
+          port: suitePorts.routes.last - 1,
         };
 
         keptByRuntime(fake, up);
 
         const answer = yield* post(url, "adoptMachines", { machines: [up] });
-        const listening = yield* accepts(up.endpoint.port);
+        const listening = yield* accepts(up.port);
 
         yield* deliver(url, removed("op-1", up));
 
@@ -446,7 +443,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           fake.calls.includes("relay up"),
           listening,
           report.status,
-          yield* accepts(up.endpoint.port),
+          yield* accepts(up.port),
         ]).toStrictEqual([true, true, true, "done", false]);
       })
   );
@@ -460,14 +457,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const blocked = {
           ...dev,
           name: "blocked",
-          endpoint: { port: suitePorts.routes.last },
+          port: suitePorts.routes.last,
         };
 
         keptByRuntime(fake, blocked);
 
         const [answer, listening, report] = yield* Effect.scoped(
           Effect.andThen(
-            holding(blocked.endpoint.port),
+            holding(blocked.port),
             Effect.gen(function* () {
               const adopted = yield* post(url, "adoptMachines", {
                 machines: [blocked],
@@ -499,6 +496,31 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
+  it.effect(
+    "an exec whose argument, user or environment value holds a NUL is refused and runs nothing",
+    () =>
+      Effect.gen(function* () {
+        const { url, fake } = yield* serve();
+
+        const refused = yield* Effect.forEach(
+          [
+            { argv: ["/bin/echo", "a\0b"] },
+            { argv: ["/bin/true"], user: "a\0b" },
+            { argv: ["/bin/true"], env: { TOKEN: "a\0b" } },
+          ],
+          (command) => post(url, "execMachine", { machine: dev, ...command })
+        );
+
+        expect(
+          refused.map(
+            ({ status, body }) =>
+              status === 400 && body.includes('"_tag":"InvalidInput"')
+          )
+        ).toStrictEqual([true, true, true]);
+        expect(fake.calls).toStrictEqual(["startup"]);
+      })
+  );
+
   it.effect("a malformed operation is refused and runs nothing", () =>
     Effect.gen(function* () {
       const { url, fake } = yield* serve();
@@ -524,7 +546,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { url, fake } = yield* serve();
-        const ref = { ...dev, endpoint: { host: "127.0.0.1", port: 10_022 } };
+        const ref = { ...dev, port: 10_022 };
 
         const bodies = {
           readHost: {},

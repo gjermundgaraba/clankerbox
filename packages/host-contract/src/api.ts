@@ -50,21 +50,11 @@ export const Ref = Schema.Struct(identity);
 
 export type Ref = typeof Ref.Type;
 
-/**
- * Where a client reaches a machine's sshd: a port of its host, at the address its host answers. A
- * row from a store that kept only the port has no `host` until its host's next adopt answers it.
- */
-export const Endpoint = Schema.Struct({
-  host: Schema.optionalKey(Schema.String),
-  port: Port,
-});
-
-export type Endpoint = typeof Endpoint.Type;
-
+/** A machine as a step names it: `port`, once its make gave it one, is the host's port its sshd is reached at. */
 export const MachineRef = Schema.Struct({
   ...identity,
   ...sizes,
-  endpoint: Schema.optionalKey(Endpoint),
+  port: Schema.optionalKey(Port),
 });
 
 export type MachineRef = typeof MachineRef.Type;
@@ -101,9 +91,9 @@ const hooked = {
  * `machines` the host's other machines, which admission counts beside the one a step boots. A step
  * acts on the machine or checkpoint its ref's `handle` names, or else on the machine the runtime
  * finds by its `instance` and the checkpoint whose handle the runtime derives from its identity; a
- * remove or a delete of a checkpoint that finds none is done. A make that finds its
- * instance made answers that machine, keeps an endpoint its ref has, and gives a new one a port off
- * `taken`, every port the host's other machines hold. A step
+ * remove or a delete of a checkpoint that finds none is done. A make gives its machine a port off
+ * `taken`, every port the host's other machines hold, and answers that machine when it finds its
+ * instance made. A step
  * that acts by what its VM is doing reads it from the runtime as it begins. A make's
  * `authorizedKeys` go to the login user once the machine is made, after its setup if it has one,
  * beside the keys already there. A make's `join` puts the machine on the tailnet as `hostname` for

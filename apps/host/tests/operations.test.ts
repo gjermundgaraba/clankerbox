@@ -54,7 +54,6 @@ import * as Operations from "../src/operations.ts";
 import * as Relay from "../src/platform/relay.ts";
 import * as Reach from "../src/reach.ts";
 import { Handle, Runtime } from "../src/runtime.ts";
-import type { Bind } from "../src/runtime.ts";
 import { Tailnet } from "../src/tailnet.ts";
 import {
   baseResolver,
@@ -166,11 +165,9 @@ const ref = (name: string, fields?: Partial<MachineRef>): MachineRef => ({
 
 const checkpoint = (name: string) => ref(name);
 
-const reached = (port: number) => ({
-  endpoint: { host: "127.0.0.1", port },
-});
+const reached = (port: number) => ({ port });
 
-const portIn = ({ endpoint }: MachineRef) => endpoint?.port ?? 0;
+const portIn = ({ port }: MachineRef) => port ?? 0;
 
 const keptByRuntime = (host: Runner, name: string) => {
   host.fake.hold({
@@ -1006,20 +1003,20 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a make has the runtime bind the port it reports, from a base, a checkpoint or a machine",
+    "a make gives the runtime the port it reports, from a base, a checkpoint or a machine",
     () =>
       Effect.gen(function* () {
-        const given: Array<readonly [string, string, Bind]> = [];
+        const given: Array<readonly [string, string, number]> = [];
 
         const host = yield* runner({
           runtime: (fake) => ({
             ...fake,
-            make: (machine, origin, bind) =>
+            make: (machine, origin, port) =>
               Effect.andThen(
                 Effect.sync(() =>
-                  given.push([machine.name, origin._tag, bind])
+                  given.push([machine.name, origin._tag, port])
                 ),
-                fake.make(machine, origin, bind)
+                fake.make(machine, origin, port)
               ),
           }),
         });
@@ -1052,9 +1049,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           firstPort + 2,
         ]);
         expect(given).toStrictEqual([
-          ["dev", "image", { _tag: "forward", port: firstPort }],
-          ["web", "checkpoint", { _tag: "forward", port: firstPort + 1 }],
-          ["twin", "machine", { _tag: "forward", port: firstPort + 2 }],
+          ["dev", "image", firstPort],
+          ["web", "checkpoint", firstPort + 1],
+          ["twin", "machine", firstPort + 2],
         ]);
       })
   );
@@ -3925,8 +3922,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         keptByRuntime(host, "broken");
         host.fake.failFind("broken", locked);
 
-        const ok = ref("ok", { endpoint: { port: relayPorts + 1 } });
-        const broken = ref("broken", { endpoint: { port: relayPorts + 2 } });
+        const ok = ref("ok", { port: relayPorts + 1 });
+        const broken = ref("broken", { port: relayPorts + 2 });
         const first = yield* host.operations.adopt([ok, broken]);
 
         yield* pause;
@@ -4040,10 +4037,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const gone = ref("gone", {
           handle: Handle.make("held-gone"),
-          endpoint: { port: relayPorts + 1 },
+          port: relayPorts + 1,
         });
 
-        const slow = ref("slow", { endpoint: { port: relayPorts + 2 } });
+        const slow = ref("slow", { port: relayPorts + 2 });
 
         yield* host.operations.adopt([gone]);
         yield* pause;

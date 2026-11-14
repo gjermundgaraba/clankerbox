@@ -1131,7 +1131,7 @@ describe.runIf(live)("the smol cloud runtime on a host, live", () => {
         const made = yield* runtime.make(
           source,
           { _tag: "image", image },
-          { _tag: "none" }
+          10_022
         );
 
         noted(made.handle);

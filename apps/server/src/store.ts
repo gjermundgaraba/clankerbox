@@ -1,4 +1,4 @@
-import { Endpoint, Handle, Step } from "@clankerbox/host-contract";
+import { Handle, Step } from "@clankerbox/host-contract";
 import type { Retired } from "@clankerbox/host-contract";
 import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
 import {
@@ -8,6 +8,7 @@ import {
   HostError,
   Labels,
   NotFound,
+  Port,
   RuntimeName,
   Sizing,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -28,6 +29,18 @@ import type { CheckpointRow } from "./checkpoint-chart.ts";
 import type { MachineRow } from "./machine-chart.ts";
 
 export type { MachineState } from "@clankerbox/host-contract";
+
+/**
+ * Where a client reaches a machine's sshd: a port of its host, at the address its host answers. A
+ * row migrated from schema 6, which kept only the port, has no `host` until its host's next adopt
+ * answers it.
+ */
+export const Endpoint = Schema.Struct({
+  host: Schema.optionalKey(Schema.String),
+  port: Port,
+});
+
+export type Endpoint = typeof Endpoint.Type;
 
 export class CannotStart extends Schema.TaggedError<
   CannotStart,

@@ -49,7 +49,6 @@ import type { Settings } from "../../../src/platform/smolvm/smolvm.ts";
 import * as Reach from "../../../src/reach.ts";
 import { Runtime } from "../../../src/runtime.ts";
 import type {
-  Bind,
   Held,
   Identity,
   Interface,
@@ -157,8 +156,6 @@ const sized = (ref: Identity & Sizes): Sized => ({
   ...ref,
   handle: nativeName(ref),
 });
-
-const on = (port: number): Bind => ({ _tag: "forward", port });
 
 const fromImage: Origin = { _tag: "image", image };
 
@@ -575,7 +572,7 @@ layer(NodeServices.layer)((it) => {
         const spawner = scripted(() => {});
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-        yield* runtime.make(machine, fromImage, on(10_000));
+        yield* runtime.make(machine, fromImage, 10_000);
 
         expect(smolvmArgs(spawner.calls)).toStrictEqual([
           [
@@ -618,7 +615,7 @@ layer(NodeServices.layer)((it) => {
           runtime.make(
             machine,
             { _tag: "image", image: "mirror.gcr.io/library/ubuntu@sha256:00" },
-            on(10_000)
+            10_000
           )
         );
 
@@ -1766,7 +1763,7 @@ layer(NodeServices.layer)((it) => {
     instance: "abcdefabcdefabcdefabcdefabcdefab",
   });
 
-  const copyPort = on(10_001);
+  const copyPort = 10_001;
 
   it.effect(
     "a later smolvm release starts, and the runtime pins the release it reports",
@@ -1935,7 +1932,7 @@ layer(NodeServices.layer)((it) => {
         const model = smolvmModel();
         const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
         const later = { ...machine, instance: "76543210".repeat(4) };
-        const { handle } = yield* runtime.make(machine, fromImage, on(10_000));
+        const { handle } = yield* runtime.make(machine, fromImage, 10_000);
 
         expect({
           machine: yield* runtime.find(machine),
@@ -2161,9 +2158,7 @@ layer(NodeServices.layer)((it) => {
           };
 
           const making = yield* Effect.forkChild(
-            Effect.exit(
-              runtime.make(machine, { _tag: "image", image }, { _tag: "none" })
-            )
+            Effect.exit(runtime.make(machine, { _tag: "image", image }, 10_022))
           );
 
           yield* waitFor(
@@ -2200,9 +2195,7 @@ layer(NodeServices.layer)((it) => {
           ["image-seed", "image-seed-x", "init-bake-x"],
           (name) =>
             Effect.flip(
-              runtime.make(sized({ ...machine, name }), fromImage, {
-                _tag: "none",
-              })
+              runtime.make(sized({ ...machine, name }), fromImage, 10_022)
             )
         );
 
@@ -2219,9 +2212,11 @@ layer(NodeServices.layer)((it) => {
         expect(model.spawner.calls.slice(before)).toStrictEqual([]);
         expect(
           yield* Effect.exit(
-            runtime.make(sized({ ...machine, name: "image" }), fromImage, {
-              _tag: "none",
-            })
+            runtime.make(
+              sized({ ...machine, name: "image" }),
+              fromImage,
+              10_022
+            )
           )
         ).toMatchObject({ _tag: "Success" });
       })
@@ -2253,7 +2248,7 @@ layer(NodeServices.layer)((it) => {
             ? { exitCode: 1, stderr: "Error: image seed failed\n" }
             : undefined;
 
-        yield* Effect.exit(runtime.make(machine, fromImage, { _tag: "none" }));
+        yield* Effect.exit(runtime.make(machine, fromImage, 10_022));
 
         expect([
           model.vms.get(kept.handle)?.state,
@@ -2727,7 +2722,7 @@ layer(NodeServices.layer)((it) => {
 
       const parked = [...model.vms].map(([name, { state }]) => [name, state]);
 
-      yield* runtime.make(child, fromCheckpoint(buildRef), on(10_001));
+      yield* runtime.make(child, fromCheckpoint(buildRef), 10_001);
 
       const branched = model.vms.get(nativeName(child));
 
@@ -2760,7 +2755,7 @@ layer(NodeServices.layer)((it) => {
         building(model);
         yield* runtime.capture(builderRef, buildRef);
         model.vms.delete(nativeName(builderRef));
-        yield* runtime.make(child, fromCheckpoint(buildRef), on(10_001));
+        yield* runtime.make(child, fromCheckpoint(buildRef), 10_001);
         yield* runtime.deleteCheckpoint(buildRef);
 
         model.faults.reply = ({ args }) =>
@@ -2792,7 +2787,7 @@ layer(NodeServices.layer)((it) => {
         building(model);
         yield* runtime.capture(builderRef, buildRef);
         model.vms.delete(nativeName(builderRef));
-        yield* runtime.make(child, fromCheckpoint(buildRef), on(10_001));
+        yield* runtime.make(child, fromCheckpoint(buildRef), 10_001);
         yield* runtime.deleteCheckpoint(buildRef);
 
         model.faults.reply = ({ args }) =>
@@ -2828,7 +2823,7 @@ layer(NodeServices.layer)((it) => {
         const restored = (name: string, port: number) =>
           Effect.map(
             Effect.exit(
-              runtime.make(childOf(name), fromCheckpoint(buildRef), on(port))
+              runtime.make(childOf(name), fromCheckpoint(buildRef), port)
             ),
             (exit) => ({
               done: Exit.isSuccess(exit),
@@ -2908,7 +2903,7 @@ layer(NodeServices.layer)((it) => {
         };
 
         const error = yield* Effect.flip(
-          runtime.make(child, fromCheckpoint(buildRef), on(10_001))
+          runtime.make(child, fromCheckpoint(buildRef), 10_001)
         ).pipe(Effect.provide(logging(logged)));
 
         expect(error.message).toContain(`machine '${base}' not found`);
@@ -2930,7 +2925,7 @@ layer(NodeServices.layer)((it) => {
 
       yield* holdingSnap(settings);
 
-      yield* runtime.make(copy, fromCheckpoint(ramCheckpoint), on(10_000));
+      yield* runtime.make(copy, fromCheckpoint(ramCheckpoint), 10_000);
 
       expect(smolvmArgs(spawner.calls).map((args) => args[1])).toStrictEqual([
         "status",
@@ -3021,11 +3016,11 @@ layer(NodeServices.layer)((it) => {
           diskGib: 30,
         };
 
-        yield* runtime.make(larger, fromCheckpoint(ramCheckpoint), on(10_000));
+        yield* runtime.make(larger, fromCheckpoint(ramCheckpoint), 10_000);
         yield* runtime.make(
           { ...larger, cpu: 2 },
           fromMachine(machine),
-          on(10_000)
+          10_000
         );
 
         const resizes = smolvmArgs(spawner.calls).filter(
@@ -3382,7 +3377,7 @@ layer(NodeServices.layer)((it) => {
           return { ...notFound(`${base}_freeze`), until: Deferred.await(gate) };
         };
 
-        yield* runtime.make(child, fromCheckpoint(buildRef), on(10_001));
+        yield* runtime.make(child, fromCheckpoint(buildRef), 10_001);
         yield* waitFor(
           Effect.sync(() => held),
           (parking) => parking
@@ -3446,7 +3441,7 @@ layer(NodeServices.layer)((it) => {
           return { until: Deferred.await(gate) };
         };
 
-        yield* runtime.make(child, fromCheckpoint(buildRef), on(10_001));
+        yield* runtime.make(child, fromCheckpoint(buildRef), 10_001);
         yield* waitFor(
           Effect.sync(() => held),
           (parking) => parking
@@ -3536,7 +3531,7 @@ layer(NodeServices.layer)((it) => {
             args[1] === "status" && args.includes(`${base}_freeze`)
               ? notFound(`${base}_freeze`)
               : undefined,
-          (scoped) => scoped.make(child, fromCheckpoint(buildRef), on(10_001))
+          (scoped) => scoped.make(child, fromCheckpoint(buildRef), 10_001)
         );
 
         let lists = 0;
@@ -3591,7 +3586,7 @@ layer(NodeServices.layer)((it) => {
         yield* fetches.make(
           child,
           fromCheckpoint({ ...fetched, handle }),
-          on(10_001)
+          10_001
         );
 
         const rebooted = yield* runtimeOf(
@@ -3654,7 +3649,7 @@ layer(NodeServices.layer)((it) => {
           Effect.sync(() => model.vms.has(base)),
           (kept) => !kept
         );
-        yield* upgraded.make(child, fromCheckpoint(buildRef), on(10_001));
+        yield* upgraded.make(child, fromCheckpoint(buildRef), 10_001);
         yield* waitFor(
           Effect.sync(
             () =>
@@ -3700,7 +3695,7 @@ layer(NodeServices.layer)((it) => {
           Effect.sync(() => model.vms.get(base)?.state),
           (state) => state === "frozen"
         );
-        yield* restarted.make(child, fromCheckpoint(buildRef), on(10_001));
+        yield* restarted.make(child, fromCheckpoint(buildRef), 10_001);
 
         expect(model.vms.get(nativeName(child))?.parent).toBe(base);
       })
@@ -3719,7 +3714,7 @@ layer(NodeServices.layer)((it) => {
 
         building(model);
         yield* runtime.capture(builderRef, buildRef);
-        yield* runtime.make(child, fromCheckpoint(buildRef), on(10_001));
+        yield* runtime.make(child, fromCheckpoint(buildRef), 10_001);
 
         for (const vm of model.vms.values()) {
           vm.state = "stopped";
@@ -3880,7 +3875,7 @@ const migrated = (name: string, port: number): MachineRef => ({
   cpu: 1,
   ramMib: 1024,
   diskGib: 10,
-  endpoint: { port },
+  port,
 });
 
 const operationsOver = (runtime: Interface) =>
@@ -3910,7 +3905,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         for (const each of [dev, two]) {
           model.vms.set(nativeName(each), {
             state: "running",
-            forwards: [`${each.endpoint?.port}:22`],
+            forwards: [`${each.port}:22`],
           });
         }
 

@@ -1,6 +1,5 @@
 import type {
   CheckpointRef,
-  Endpoint,
   MachineRef,
   Ref,
   Step,
@@ -12,7 +11,7 @@ import { isPublished } from "./checkpoint-chart.ts";
 import type { CheckpointRow } from "./checkpoint-chart.ts";
 import { stageOf } from "./machine-chart.ts";
 import type { MachineRow } from "./machine-chart.ts";
-import type { Operation, Interface as Store } from "./store.ts";
+import type { Endpoint, Operation, Interface as Store } from "./store.ts";
 
 export const identityOf = ({
   name,
@@ -29,7 +28,7 @@ export const refOf = (row: MachineRow): MachineRef => ({
   cpu: row.cpu,
   ramMib: row.ramMib,
   diskGib: row.diskGib,
-  ...(row.endpoint === undefined ? {} : { endpoint: row.endpoint }),
+  ...(row.endpoint === undefined ? {} : { port: row.endpoint.port }),
 });
 
 const checkpointRefOf = (record: CheckpointRow): CheckpointRef => ({

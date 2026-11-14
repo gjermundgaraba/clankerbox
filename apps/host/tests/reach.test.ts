@@ -173,29 +173,21 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
-  it.effect(
-    "either reach answers a port at its host's address, and only a published one has the runtime bind it",
-    () =>
-      Effect.gen(function* () {
-        const address = "127.0.0.1";
+  it.effect("either reach answers a port at its host's address", () =>
+    Effect.gen(function* () {
+      const address = "127.0.0.1";
 
-        const [published, relaying] = yield* Effect.all([
-          reachesOf({ _tag: "published", address }),
-          reachesOf(relayed),
-        ]);
+      const [published, relaying] = yield* Effect.all([
+        reachesOf({ _tag: "published", address }),
+        reachesOf(relayed),
+      ]);
 
-        expect(
-          [published, relaying].map((reaches) => [
-            reaches.endpoint(2222),
-            reaches.bind(2222),
-          ])
-        ).toStrictEqual([
-          [
-            { host: address, port: 2222 },
-            { _tag: "forward", port: 2222 },
-          ],
-          [{ host: address, port: 2222 }, { _tag: "none" }],
-        ]);
-      })
+      expect(
+        [published, relaying].map((reaches) => reaches.endpoint(2222))
+      ).toStrictEqual([
+        { host: address, port: 2222 },
+        { host: address, port: 2222 },
+      ]);
+    })
   );
 });

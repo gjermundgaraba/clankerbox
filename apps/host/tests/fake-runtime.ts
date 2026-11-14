@@ -1042,15 +1042,7 @@ export const fakeRuntime = (options: FakeOptions) => {
         checkpointHandle,
         observe,
         capacity,
-        make: (machine, origin, bind) => {
-          if (relayed !== (bind._tag === "none")) {
-            return Effect.die(
-              new Error(
-                `make ${machine.name}: a ${relayed ? "relayed" : "published"} reach was given a ${bind._tag} bind`
-              )
-            );
-          }
-
+        make: (machine, origin) => {
           const held = lateMakes.next();
 
           if (held !== undefined) {
