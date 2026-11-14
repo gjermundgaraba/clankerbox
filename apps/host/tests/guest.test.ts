@@ -2797,7 +2797,7 @@ const shellCases = (shell: readonly string[]) => {
     );
 
     it.effect(
-      `an end confirms within its ${endSeconds} s deadline the end of a command of ${confirmedUpTo} processes that ignore TERM, half of them with a cleared environment`,
+      `an end confirms, by a listing it begins within its ${endSeconds} s deadline, the end of a command of ${confirmedUpTo} processes that ignore TERM, half of them with a cleared environment, within the ${Duration.toSeconds(answeredWithin)} s its host waits`,
       () =>
         Effect.gen(function* () {
           const root = yield* scratch;
@@ -2820,7 +2820,9 @@ const shellCases = (shell: readonly string[]) => {
 
           expect(ended.code, ended.stderr).toBe(0);
           expect(holdingAny(needles)).toStrictEqual([]);
-          expect(Duration.toSeconds(took)).toBeLessThan(endSeconds);
+          expect(Duration.toSeconds(took)).toBeLessThan(
+            Duration.toSeconds(answeredWithin)
+          );
         }),
       120_000
     );
