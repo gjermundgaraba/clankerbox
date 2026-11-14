@@ -1,4 +1,4 @@
-import { execFile, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
@@ -39,9 +39,23 @@ const until = <A, E>(what: string, attempt: Effect.Effect<A, E>) =>
     )
   );
 
+const runningWhileStdinOpen = (args: readonly string[]) =>
+  Effect.acquireRelease(
+    Effect.sync(() =>
+      spawn("docker", ["run", "-i", "--rm", ...args], {
+        stdio: ["pipe", "ignore", "ignore"],
+      })
+    ),
+    (client) =>
+      Effect.sync(() => {
+        client.stdin.end();
+      })
+  );
+
 /**
  * A SeaweedFS S3 store in a container of its own, with the bucket `templates`, removed when the
- * scope closes. Its settings are as a host's config holds them under `builds`.
+ * scope closes or the test process ends. Its settings are as a host's config holds them under
+ * `builds`.
  */
 export const seaweedfs: Effect.Effect<
   typeof BuildsSettings.Encoded,
@@ -54,9 +68,7 @@ export const seaweedfs: Effect.Effect<
 
   yield* Effect.addFinalizer(() => Effect.ignore(docker(["rm", "-f", name])));
 
-  yield* docker([
-    "run",
-    "-d",
+  yield* runningWhileStdinOpen([
     "--name",
     name,
     "-p",
@@ -65,7 +77,12 @@ export const seaweedfs: Effect.Effect<
     `AWS_ACCESS_KEY_ID=${accessKeyId}`,
     "-e",
     `AWS_SECRET_ACCESS_KEY=${secretAccessKey}`,
+    "--entrypoint",
+    "sh",
     image,
+    "-c",
+    '/entrypoint.sh "$@" & read -r _; kill $!',
+    "sh",
     "server",
     "-ip=127.0.0.1",
     "-ip.bind=0.0.0.0",
@@ -78,7 +95,11 @@ export const seaweedfs: Effect.Effect<
     "-volume.max=0",
   ]);
 
-  const bound = yield* docker(["port", name, "8333/tcp"]);
+  const bound = yield* until(
+    "published its S3 port",
+    docker(["port", name, "8333/tcp"])
+  );
+
   const endpoint = `http://127.0.0.1:${bound.slice(bound.lastIndexOf(":") + 1)}`;
 
   yield* until(
