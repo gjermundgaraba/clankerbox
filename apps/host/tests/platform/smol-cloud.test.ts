@@ -822,6 +822,60 @@ describe("the smol cloud runtime over an account without a card", () => {
   );
 
   it.live(
+    "an exec starts before its command prints, as smol cloud answers its head first, unless the fake stalls the attach",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { fake, runtime } = yield* onCloud;
+          const dev = yield* made(runtime, "dev");
+          const root = fake.machines.get(dev.handle)?.root ?? "";
+
+          for (const stalled of [false, true]) {
+            const go = path.join(root, `go-${stalled}`);
+
+            yield* fake.faults.stallAttach(stalled);
+
+            const starting = yield* Effect.forkChild(
+              runtime.exec(dev, {
+                argv: [
+                  "sh",
+                  "-c",
+                  'while [ ! -e "$1" ]; do sleep 0.05; done; echo went',
+                  "sh",
+                  go,
+                ],
+              })
+            );
+
+            const early = yield* Fiber.await(starting).pipe(
+              Effect.timeout("2 seconds"),
+              Effect.option
+            );
+
+            expect(
+              early._tag,
+              stalled
+                ? "a stalled attach holds the exec until the command prints"
+                : "the exec starts while the command is silent"
+            ).toBe(stalled ? "None" : "Some");
+
+            writeFileSync(go, "");
+
+            const { output, exitCode } = yield* Fiber.join(starting);
+
+            expect(
+              yield* Effect.all([
+                Stream.mkString(Stream.decodeText(output)),
+                exitCode,
+              ])
+            ).toStrictEqual(["went\n", 0]);
+          }
+        })
+      ),
+    20_000
+  );
+
+  it.live(
     "an exec its caller cuts short leaves its command running, as smol cloud does, until a stop ends it",
     () =>
       Effect.scoped(

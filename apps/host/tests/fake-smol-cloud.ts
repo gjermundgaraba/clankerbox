@@ -68,6 +68,12 @@ export interface FakeFaults extends Faults {
    * smol cloud's capture of a pause can still run once the machine is resumed.
    */
   readonly holdCaptures: Effect.Effect<Effect.Effect<void>>;
+  /**
+   * While on, holds each exec's response head until its command's first output, as a provider whose
+   * attach stalls would, so a silent command's exec never starts; off, the head comes at once, as
+   * smol cloud's does.
+   */
+  readonly stallAttach: (on: boolean) => Effect.Effect<void>;
 }
 
 export interface FakeSmolCloud {
@@ -206,6 +212,8 @@ const json = (reply: Answer) =>
     ? HttpServerResponse.empty({ status: reply.status })
     : HttpServerResponse.jsonUnsafe(reply.body, { status: reply.status });
 
+const emptyWriteSendingTheHead = Stream.make("");
+
 const promised = <A>(work: () => Promise<A>) => Effect.promise(work);
 
 const now = () => new Date().toISOString();
@@ -246,6 +254,7 @@ export const fakeSmolCloud = (
 
     let startsHeld: Promise<void> | undefined;
     let capturesHeld: FakeCheckpoint[] | undefined;
+    let attachStalled = false;
     const lateMakes = lateLandings();
     let quotaOn = false;
     const malformed: object[] = [];
@@ -922,8 +931,14 @@ export const fakeSmolCloud = (
               return problem(500, "internal", `no user ${user}`);
             }
 
+            const frames = execStream(machine, body.value);
+
             return HttpServerResponse.stream(
-              Stream.encodeText(execStream(machine, body.value)),
+              Stream.encodeText(
+                attachStalled
+                  ? frames
+                  : Stream.concat(emptyWriteSendingTheHead, frames)
+              ),
               { contentType: "text/event-stream" }
             );
           }
@@ -1011,6 +1026,10 @@ export const fakeSmolCloud = (
           held.resolve(undefined);
         });
       }),
+      stallAttach: (on) =>
+        Effect.sync(() => {
+          attachStalled = on;
+        }),
       holdCaptures: Effect.sync(() => {
         const held: FakeCheckpoint[] = [];
 
