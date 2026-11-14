@@ -1,4 +1,12 @@
-import { Effect, Result, Schema, SchemaIssue } from "effect";
+import {
+  Effect,
+  Predicate,
+  Result,
+  Schema,
+  SchemaIssue,
+  SchemaParser,
+  SchemaTransformation,
+} from "effect";
 
 import { Desired, HostError } from "./errors.ts";
 import { CheckpointName, HostId, Name } from "./ids.ts";
@@ -478,40 +486,53 @@ export const MachineSpec = Schema.Union([TemplateSpec, BaseSpec]);
 
 export type MachineSpec = typeof MachineSpec.Type;
 
-const misses = (issue: SchemaIssue.Issue, key: string) =>
-  (issue._tag === "Composite" ? issue.issues : [issue]).some(
-    (inner) =>
-      inner._tag === "Pointer" &&
-      inner.path.length === 1 &&
-      inner.path[0] === key &&
-      inner.issue._tag === "MissingKey"
-  );
+const TemplateCreate = Schema.Struct({
+  id: Name,
+  ...fromTemplate,
+  ...labelled,
+});
 
-const namedOnly = (issue: SchemaIssue.Issue) => {
-  if (issue._tag !== "AnyOf") {
-    return Effect.fail(issue);
-  }
+const BaseCreate = Schema.Struct({ id: Name, ...fromBase, ...labelled });
 
-  const named = issue.issues.find(
-    (member) => !misses(member, "template") && !misses(member, "base")
-  );
+type Create = typeof TemplateCreate.Type | typeof BaseCreate.Type;
 
-  return Effect.fail(
-    named ??
-      new SchemaIssue.InvalidValue({
-        message: "a create names a template or a base",
-      })
-  );
-};
+const unnamed = "a create names a template or a base";
+
+const isCreate = (input: unknown): input is Create => Predicate.isObject(input);
 
 /**
- * A create from a template or from a base, read as the one it names, a template whatever else it
- * holds, so a refusal says what is wrong with that one alone.
+ * A create from a template or from a base, read as the one it names: a template whatever else it
+ * holds, else a base. A refusal is that one's alone.
  */
-export const CreateRequest = Schema.Union([
-  Schema.Struct({ id: Name, ...fromTemplate, ...labelled }),
-  Schema.Struct({ id: Name, ...fromBase, ...labelled }),
-]).pipe(Schema.catchDecoding(namedOnly), Schema.catchEncoding(namedOnly));
+export const CreateRequest = Schema.Record(Schema.String, Schema.Unknown).pipe(
+  Schema.decodeTo(
+    Schema.declare(isCreate),
+    SchemaTransformation.transformEffect({
+      decode: (request, options): Effect.Effect<Create, SchemaIssue.Issue> => {
+        if ("template" in request) {
+          return SchemaParser.decodeUnknownEffect(TemplateCreate)(
+            request,
+            options
+          );
+        }
+
+        return "base" in request
+          ? SchemaParser.decodeUnknownEffect(BaseCreate)(request, options)
+          : Effect.fail(
+              new SchemaIssue.InvalidValue(
+                { message: unnamed },
+                request,
+                options
+              )
+            );
+      },
+      encode: (create, options) =>
+        "template" in create
+          ? SchemaParser.encodeEffect(TemplateCreate)(create, options)
+          : SchemaParser.encodeEffect(BaseCreate)(create, options),
+    })
+  )
+);
 
 export type CreateRequest = typeof CreateRequest.Type;
 

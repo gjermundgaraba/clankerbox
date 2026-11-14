@@ -83,7 +83,7 @@ it.effect(
         ],
         (input) =>
           Effect.forEach(["all", "first"] as const, (errors) =>
-            Schema.decodeUnknownEffect(CreateRequest)(input, { errors }).pipe(
+            Schema.decodeEffect(CreateRequest)(input, { errors }).pipe(
               Effect.flip,
               Effect.map((error) => describeIssues(error))
             )
@@ -99,5 +99,43 @@ it.effect(
         [name, name],
         Array.from({ length: 2 }, () => "a create names a template or a base"),
       ]);
+    })
+);
+
+it.effect(
+  "a create read as the server reads it, refusing unknown fields, says what is wrong with the one it names, once, in either decode mode",
+  () =>
+    Effect.gen(function* () {
+      const sizes = { cpu: 1, ramMib: 1024, diskGib: 10 };
+
+      const said = yield* Effect.forEach(
+        [
+          { id: "dev", template: "web", base: "ubuntu", ...sizes },
+          { id: "dev", base: "ubuntu", ...sizes, extra: 1 },
+          { id: 5, base: "ubuntu", ...sizes },
+          { id: "dev", base: "ubuntu", cpu: 1, ramMib: 1024 },
+          { id: 5 },
+        ],
+        (input) =>
+          Effect.forEach(["all", "first"] as const, (errors) =>
+            Schema.decodeEffect(CreateRequest)(input, {
+              errors,
+              onExcessProperty: "error",
+            }).pipe(
+              Effect.flip,
+              Effect.map((error) => describeIssues(error))
+            )
+          )
+      );
+
+      expect(said).toStrictEqual(
+        [
+          "base: not a known field",
+          "extra: not a known field",
+          "id: Expected string",
+          "diskGib: missing",
+          "a create names a template or a base",
+        ].map((one) => [one, one])
+      );
     })
 );
