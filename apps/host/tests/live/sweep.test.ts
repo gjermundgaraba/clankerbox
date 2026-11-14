@@ -3,9 +3,11 @@ import { once } from "node:events";
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
@@ -158,7 +160,8 @@ describe("a live run's ledger", () => {
         { ...ledger, pid: Number.NaN },
         { hostname: "here", alive: () => false }
       ),
-    ]).toStrictEqual([true, false, false, false]);
+      over({ ...ledger, pid: 0 }, { hostname: "here", alive: () => false }),
+    ]).toStrictEqual([true, false, false, false, false]);
   });
 
   it("is kept in a folder and a file of the user's alone, and refused once open to others", () => {
@@ -194,6 +197,42 @@ describe("a live run's ledger", () => {
     expect(ledgersIn(dir, "boat")).toStrictEqual([]);
     rmSync(path.dirname(dir), { recursive: true, force: true });
   });
+});
+
+describe("a live ledger the sweep reads", () => {
+  it("is refused as a symbolic link, of a ledger or of its folder", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "live-ledger-"));
+    const dir = path.join(root, "ledgers");
+    const elsewhere = path.join(root, "elsewhere");
+
+    mkdirSync(elsewhere, { mode: 0o700 });
+    writeFileSync(path.join(elsewhere, "ledger"), `run ${run} here 7\n`, {
+      mode: 0o600,
+    });
+    mkdirSync(dir, { mode: 0o700 });
+    symlinkSync(
+      path.join(elsewhere, "ledger"),
+      path.join(dir, `boat-${run}.ledger`)
+    );
+
+    expect(() => ledgersIn(dir, "boat")).toThrow(/symbolic link/u);
+
+    const linked = path.join(root, "linked");
+
+    symlinkSync(elsewhere, linked);
+
+    expect(() => ledgersIn(linked, "boat")).toThrow(/symbolic link/u);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    "is refused in a folder another user owns",
+    () => {
+      expect(() => ledgersIn(path.parse(tmpdir()).root, "boat")).toThrow(
+        /owned by uid 0, not this user/u
+      );
+    }
+  );
 });
 
 describe("a sweep's reading of the runs that are over", () => {

@@ -1,11 +1,11 @@
 import {
   appendFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, hostname } from "node:os";
@@ -172,7 +172,20 @@ export const namedOver: ReadonlySet<string> = new Set(
 export const listOnly = process.env["CLANKERBOX_LIVE_LIST_ONLY"] === "1";
 
 const privateTo = (file: string, mends: string) => {
-  const mode = statSync(file).mode & 0o777;
+  const found = lstatSync(file);
+  const mode = found.mode & 0o777;
+
+  if (found.isSymbolicLink()) {
+    throw new Error(
+      `the live ledger ${file} is a symbolic link, which a ledger never is: remove it`
+    );
+  }
+
+  if (found.uid !== process.getuid?.()) {
+    throw new Error(
+      `the live ledger ${file} is owned by uid ${found.uid}, not this user: move it aside`
+    );
+  }
 
   if ((mode & 0o077) !== 0) {
     throw new Error(

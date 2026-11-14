@@ -29,7 +29,7 @@ import { Runtime } from "../../src/runtime.ts";
 import type { Handle, Target } from "../../src/runtime.ts";
 import { Tailnet } from "../../src/tailnet.ts";
 import { hostConfig, loopbackServer, suitePorts } from "../support.ts";
-import { liveHostId, liveMark } from "./marks.ts";
+import { liveHostId, liveMark, runOfName } from "./marks.ts";
 import {
   ledgerOf,
   listOnly,
@@ -281,9 +281,6 @@ const bannerOf = (id: string) =>
     )
   );
 
-const runOf = (name: string | null | undefined) =>
-  /^cbx-(?<run>0live-[^-]*)-/u.exec(name ?? "")?.groups?.["run"];
-
 type Listed = typeof MachineInfo.Type;
 
 type Kept = typeof Checkpoint.Type;
@@ -303,7 +300,7 @@ const leftovers = sweepRead(
     run: hostId,
     over: (each) => over(each, thisHost),
     named: namedOver,
-    runOf: ({ name }) => runOf(name),
+    runOf: ({ name }) => runOfName(name),
     idOf: ({ id }) => id,
     keyOf: ({ id }) => id,
     sourceOf: ({ machineId }) => machineId,

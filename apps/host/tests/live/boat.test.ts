@@ -34,6 +34,7 @@ import * as Boat from "../../src/platform/boat/boat.ts";
 import { types } from "../../src/platform/boat/traits.ts";
 import { Runtime } from "../../src/runtime.ts";
 import type { Target } from "../../src/runtime.ts";
+import { runOfLabel } from "./marks.ts";
 import {
   ledgerOf,
   listOnly,
@@ -88,11 +89,7 @@ const finding = (text: string) =>
 
 const ofTheRun = (sandbox: Sandbox) => sandbox.labels?.["cbx-host"] === host;
 
-const runOf = (sandbox: Sandbox) => {
-  const run = sandbox.labels?.["cbx-host"];
-
-  return run?.startsWith("0live-") === true ? run : undefined;
-};
+const runOf = (sandbox: Sandbox) => runOfLabel(sandbox.labels?.["cbx-host"]);
 
 const labels = (instance: string) => ({
   "cbx-host": host,
