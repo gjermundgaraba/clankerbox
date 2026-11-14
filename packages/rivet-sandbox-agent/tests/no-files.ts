@@ -1,10 +1,10 @@
 import { closeSync, openSync } from "node:fs";
 
-import { endsWithParent, reachable, setup } from "./support.ts";
+import { cleanUp, endsWithParent, reachable, setup } from "./support.ts";
 
 endsWithParent();
 
-const { sandbox } = await setup({ machines: [reachable("kept")] });
+const { dir, sandbox } = await setup({ machines: [reachable("kept")] });
 
 const opened = () => {
   try {
@@ -29,4 +29,6 @@ for (const fd of held) {
   closeSync(fd);
 }
 
-console.log(JSON.stringify({ outcome }));
+await cleanUp();
+
+console.log(JSON.stringify({ outcome, dir }));

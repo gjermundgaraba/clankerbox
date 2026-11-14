@@ -60,6 +60,10 @@ const Left = Schema.Struct({
 
 const decodeLeft = Schema.decodeSync(Schema.fromJsonString(Left));
 
+const NoFiles = Schema.Struct({ outcome: Schema.String, dir: Schema.String });
+
+const decodeNoFiles = Schema.decodeSync(Schema.fromJsonString(NoFiles));
+
 const temporaryDirectory = async (length: number) => {
   const base = await mkdtemp("/tmp/cb-");
 
@@ -543,13 +547,13 @@ describe("tunnel", () => {
     "a getUrl whose port can't be listened on, as when the process holds every descriptor it may, fails so",
     async () => {
       const { code, stdout } = await run("no-files.ts", [], 256);
+      const { outcome, dir } = decodeNoFiles(stdout);
 
-      expect({ code, stdout }).toStrictEqual({
+      expect({ code, outcome, left: existsSync(dir) }).toStrictEqual({
         code: 0,
-        stdout: `${JSON.stringify({
-          outcome:
-            "couldn't take a port for the tunnel to kept: listen EMFILE: too many open files 127.0.0.1",
-        })}\n`,
+        outcome:
+          "couldn't take a port for the tunnel to kept: listen EMFILE: too many open files 127.0.0.1",
+        left: false,
       });
     },
     testLimit
