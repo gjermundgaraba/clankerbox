@@ -251,7 +251,6 @@ export const writeStubs = (dir: string, uname = "Linux"): string => {
       ].join("\n"),
     ],
     ["systemsetup", `echo "systemsetup $*" >>"$CLANKERBOX_ROOT/calls"`],
-    ["sntp", "echo '+0.000123 +/- 0.010000 time.apple.com 17.253.4.125'"],
     ["brew", `echo "brew $*" >>"$CLANKERBOX_ROOT/calls"`],
     [
       "systemctl",

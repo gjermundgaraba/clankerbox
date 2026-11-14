@@ -351,7 +351,7 @@ A host with `tailnet` joins each machine whose guest has `tailscale` and `tailsc
 A setup runs once, in a template build's machine, as the login user `admin` in its home, on a base clankerbox has prepared; the build's copy, and each clone, fork and restore of it, carry its results. The guest holds its script only while it runs, in `/dev/shm`, in memory, on Linux and in `/var/tmp`, on disk, on macOS, which has no memory-backed directory but one root mounts, and the host removes it when the setup fails, runs past its timeout or is cut short; one a host was killed holding goes with the builder, which the failed build deletes. Before the setup starts, clankerbox makes the base ready as root:
 
 - on smolvm, smol cloud and boat, it installs `openssh-server`, `sudo`, `perl`, `ca-certificates`, `curl` and `libnss-myhostname` with `apt-get`, creates `admin` where the image lacks it, and sets `PermitRootLogin no`. An image without `apt-get` is refused: build on a Debian or Ubuntu image;
-- on Tart, whose bases ship `admin`, it names public DNS resolvers, as Softnet blocks the gateway's, and waits for the clock, which the base boots behind;
+- on Tart, whose bases ship `admin`, it names public DNS resolvers, as Softnet blocks the gateway's, and `time.apple.com` for the clock;
 - on a host that joins its machines to the tailnet, it installs `tailscale` and `tailscaled` without starting them, with `apt-get` from Tailscale's repository on smolvm, smol cloud and boat and with `brew` as `admin` on Tart;
 - it gives `admin` passwordless `sudo`, and installs each key of the server config's `authorizedKeys` that its `~/.ssh/authorized_keys` lacks, so a template's build holds them.
 
