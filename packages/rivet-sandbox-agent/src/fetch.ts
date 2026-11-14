@@ -97,9 +97,32 @@ const agent = new Agent({ keepAlive: true });
  * on a sandbox takes up the connections the last one left, which the agent's server keeps open as
  * long as they last. Nothing ends that agent: a socket it keeps between requests holds no process
  * alive, and ends with its tunnel.
+ *
+ * It sends only to `held()`, the origin of the port the provider holds for the sandbox now, and
+ * fails a request to any other as one sent while the tunnel is down: once the provider lets a port
+ * go, any program may listen there.
  */
-export const agentFetch = (sandbox: string): typeof globalThis.fetch => {
+export const agentFetch = (
+  sandbox: string,
+  held: () => string | undefined
+): typeof globalThis.fetch => {
   const connections = new Map<string, AbortController>();
+
+  const send = async (
+    asked: Request,
+    body: Uint8Array | undefined,
+    signal: AbortSignal
+  ) => {
+    const { origin } = new URL(asked.url);
+
+    if (origin !== held()) {
+      throw new Error(
+        `the provider holds no port for sandbox ${sandbox} at ${origin}`
+      );
+    }
+
+    return await sent(agent, asked, body, signal);
+  };
 
   const closed = (pathname: string) => {
     connections.get(pathname)?.abort();
@@ -138,8 +161,7 @@ export const agentFetch = (sandbox: string): typeof globalThis.fetch => {
     connection: AbortSignal
   ) => {
     try {
-      const reply = await sent(
-        agent,
+      const reply = await send(
         asked,
         body,
         AbortSignal.any([asked.signal, connection])
@@ -176,7 +198,7 @@ export const agentFetch = (sandbox: string): typeof globalThis.fetch => {
     const body = asked.body === null ? undefined : await asked.bytes();
 
     return connection === undefined
-      ? await sent(agent, asked, body, asked.signal)
+      ? await send(asked, body, asked.signal)
       : await posted(asked, body, connection);
   };
 };

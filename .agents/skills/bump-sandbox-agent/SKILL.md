@@ -53,8 +53,10 @@ publish, change production hosts, or commit unless asked.
   provider's name. For a new sandbox it calls `create`; for an existing ID,
   `reconnect` then `ensureServer`. Then it calls `getUrl` once and keeps the
   URL. Ours: `reconnect` only starts the machine and `ensureServer` opens the
-  tunnel; a sandbox keeps its local port until it is destroyed, so the URL a
-  client kept still leads to it after a tunnel is opened again.
+  tunnel; the provider listens on a sandbox's local port itself until it is
+  destroyed, relaying to whichever tunnel is open, so the URL a client kept
+  still leads to it after a tunnel is opened again, and to nothing else while
+  none is.
 - The SDK's health wait polls `/v1/health` from 500 ms, doubling to 15 s, with
   no deadline unless the caller gives one, and calls `ensureServer` after
   every 3 failures in a row, swallowing its error

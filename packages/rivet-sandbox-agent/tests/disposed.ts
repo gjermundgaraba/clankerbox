@@ -9,7 +9,7 @@ endsWithParent();
 
 const sdk = await SandboxAgent.connect({
   baseUrl: url,
-  fetch: agentFetch("kept"),
+  fetch: agentFetch("kept", () => new URL(url).origin),
 });
 
 const session = await sdk.createSession({ agent: "claude" });

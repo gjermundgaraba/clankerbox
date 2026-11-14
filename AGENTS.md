@@ -209,8 +209,9 @@ YAML file a build reads, `hosts.ts`,
 `clankerbox.ts` is the command tree.
 
 **Provider** (`packages/rivet-sandbox-agent/src`). `sandboxes.ts` (the
-operations), `tunnel.ts` (the ssh tunnel), `fetch.ts` (the SDK's fetch through
-it), `options.ts`, `agent.ts`, and
+operations), `tunnel.ts` (the ssh tunnel), `relay.ts` (a sandbox's loopback
+port, which the provider holds and relays to its tunnel), `fetch.ts` (the SDK's
+fetch through it), `options.ts`, `agent.ts`, and
 `provider.ts`, which runs them for the Sandbox Agent's Promise API.
 
 **Amp orbs** (`packages/amp-orbs/src`). `dispatch.ts` (a job's spawn, pause or
@@ -400,8 +401,8 @@ the server's and the CLI's tests each run to claim a slot for the run.
   only its journal; an app command imports only
   `effect` (with its `cli`, `encoding`, `http`, `process` and `socket`), the SDK
   and its siblings, so a client can't reach the host contract; the provider takes
-  Node and `@effect/platform-node` only in `index.ts`, `tunnel.ts` and
-  `fetch.ts`, and the
+  Node and `@effect/platform-node` only in `index.ts`, `tunnel.ts`, `relay.ts`
+  and `fetch.ts`, and the
   Amp orb provider only in `main.ts`, but for `node:crypto`'s hash, and those
   files take nothing more, so no provider's `src` reaches the server or the
   host its tests take; the SDK's

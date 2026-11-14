@@ -9,7 +9,7 @@ export type { ClankerboxProvider, Options, Source } from "./options.ts";
 
 /**
  * Sandboxes on clankerbox machines, with IDs `clankerbox/<machine ID>`, so `sandboxId` reconnects
- * to a machine. Their tunnels end with the process, or at `dispose`.
+ * to a machine. A sandbox's tunnel and port end at its `destroy`, at `dispose`, or with the process.
  */
 export const clankerbox = (options: Options): ClankerboxProvider =>
   provider(

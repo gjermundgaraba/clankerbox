@@ -12,14 +12,26 @@ export const childLimit = 20_000;
 export const testLimit = childLimit + 10_000;
 
 /**
- * Runs the test program `program`, beside this file, under Node, and ends it past `childLimit` and
- * when the test ends, whatever way it ends. Its stdin is this process's, so a program that calls
+ * Runs the test program `program`, beside this file, under Node, with at most `files` descriptors
+ * open if given, and ends it past `childLimit` and when the test ends, whatever way it ends. Its stdin is this process's, so a program that calls
  * `endsWithParent` ends with this process too.
  */
-export const run = async (program: string, args: readonly string[]) => {
-  const child = spawn(
+export const run = async (
+  program: string,
+  args: readonly string[],
+  files?: number
+) => {
+  const node = [
     process.execPath,
-    [fileURLToPath(new URL(program, import.meta.url)), ...args],
+    fileURLToPath(new URL(program, import.meta.url)),
+    ...args,
+  ];
+
+  const child = spawn(
+    files === undefined ? process.execPath : "/bin/sh",
+    files === undefined
+      ? node.slice(1)
+      : ["-c", `ulimit -n ${files} && exec "$@"`, "sh", ...node],
     {
       stdio: ["pipe", "pipe", "pipe"],
       timeout: childLimit,

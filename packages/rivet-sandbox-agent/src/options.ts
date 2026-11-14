@@ -23,7 +23,9 @@ export interface Options {
   /**
    * Such as `["-i", "/path/to/key"]`. Neither these nor ssh config may fork the forward (`-f`,
    * `-N`, `ForkAfterAuthentication`, `SessionType none`) or give it to a connection master (`-M`,
-   * `-S`): the tunnel ends with its ssh, and those would outlive it.
+   * `-S`): the tunnel ends with its ssh, and those would outlive it. Nor may they take the
+   * session's input (`-n`, `StdinNull`): a tunnel opens only once its `cat` echoes back a line
+   * it was sent.
    */
   readonly sshArguments?: readonly string[] | undefined;
   /** `/home/admin` by default, the login user's home, where the Ubuntu recipe runs the server. */
@@ -31,8 +33,9 @@ export interface Options {
 }
 
 /**
- * `dispose` ends the tunnels and leaves the machines; the SDK never calls it. Each method takes the
- * machine's ID, `sdk.sandboxId` without its `clankerbox/`.
+ * Each method takes the machine's ID, `sdk.sandboxId` without its `clankerbox/`. A call that finds
+ * its machine gone, deleted elsewhere, is `SandboxDestroyedError`, and ends the sandbox's tunnel but
+ * keeps its port until `destroy` or `dispose`.
  */
 export interface ClankerboxProvider extends SandboxProvider {
   /**
@@ -49,6 +52,14 @@ export interface ClankerboxProvider extends SandboxProvider {
   pause: (sandboxId: string) => Promise<void>;
   ensureServer: (sandboxId: string) => Promise<void>;
   getUrl: (sandboxId: string) => Promise<string>;
+  getFetch: (sandboxId: string) => Promise<typeof globalThis.fetch>;
   readonly defaultCwd: string;
+  /**
+   * Ends every tunnel, lets every port go and leaves the machines; the SDK never calls it. A
+   * `getUrl` or `ensureServer` in flight ends at once as `ProviderDisposedError`, though a start it
+   * sent may still run. A create, destroy, pause, resize or reconnect in flight is awaited, so a
+   * create answers the machine it made. Each call after it begins is `ProviderDisposedError`, and a
+   * second `dispose` waits on the first.
+   */
   readonly dispose: () => Promise<void>;
 }

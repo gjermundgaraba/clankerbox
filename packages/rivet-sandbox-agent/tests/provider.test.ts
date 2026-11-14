@@ -19,7 +19,9 @@ import { clankerbox } from "../src/index.ts";
 import {
   cleanUp,
   fakeSsh,
-  listening,
+  gone,
+  live,
+  liveTunnel,
   login,
   reachable,
   recording,
@@ -57,10 +59,9 @@ describe("provider", () => {
     expect(stub.creates).toStrictEqual([{ id, template: "agent" }]);
     await expect(sdk.getHealth()).resolves.toStrictEqual({ status: "ok" });
 
-    const [call, ...more] = await calls();
-    const args = call?.args ?? [];
+    const call = liveTunnel(await calls());
+    const { args } = call;
 
-    expect(more).toStrictEqual([]);
     expect(args.slice(0, 2)).toStrictEqual(["-l", "admin"]);
     expect(args).toContain(`HostKeyAlias=${id}`);
     expect(args.slice(args.indexOf(login.host))).toStrictEqual([
@@ -70,6 +71,8 @@ describe("provider", () => {
       "BatchMode=yes",
       "-o",
       "ExitOnForwardFailure=yes",
+      "-o",
+      "ClearAllForwardings=no",
       "-o",
       "ControlMaster=no",
       "-o",
@@ -81,17 +84,14 @@ describe("provider", () => {
       "-i",
       "/keys/agent",
       "-L",
-      `127.0.0.1:${call?.port}:127.0.0.1:2468`,
+      `${call.socket}:127.0.0.1:2468`,
       "cat",
     ]);
 
     await sdk.destroySandbox();
 
     expect(stub.calls).toContain("machine.delete");
-    await until(
-      "the tunnel to end",
-      async () => !(await listening(call?.port ?? 0))
-    );
+    await until("the tunnel to end", async () => gone(call.pid));
   });
 
   it("a sandbox is a fork of a machine or a restore of a checkpoint when the provider is given one", async () => {
@@ -381,7 +381,7 @@ describe("provider", () => {
 
     await expect(sdk.getHealth()).resolves.toStrictEqual({ status: "ok" });
     expect(requests(stub)).toStrictEqual(["machine.start"]);
-    await expect(calls()).resolves.toHaveLength(1);
+    expect(live(await calls())).toHaveLength(1);
 
     await sdk.pauseSandbox();
 
@@ -402,7 +402,7 @@ describe("provider", () => {
 
   it("a destroy and a pause keep the tunnel open until the machine's delete or stop is done, so a reply the agent is still sending arrives", async () => {
     const open: Record<string, boolean> = {};
-    let port = 0;
+    let tunnel: number | undefined;
 
     const { sandbox, calls } = await setup(
       { machines: [reachable("kept"), reachable("held")] },
@@ -413,14 +413,14 @@ describe("provider", () => {
         deleteMachine: (input) =>
           Effect.andThen(
             Effect.promise(async () => {
-              open["delete"] = await listening(port);
+              open["delete"] = tunnel !== undefined && !gone(tunnel);
             }),
             client.deleteMachine(input)
           ),
         stopMachine: (input) =>
           Effect.andThen(
             Effect.promise(async () => {
-              open["stop"] = await listening(port);
+              open["stop"] = tunnel !== undefined && !gone(tunnel);
             }),
             client.stopMachine(input)
           ),
@@ -432,9 +432,7 @@ describe("provider", () => {
       sandboxId: "clankerbox/kept",
     });
 
-    const keptCalls = await calls();
-
-    port = keptCalls.at(-1)?.port ?? 0;
+    tunnel = liveTunnel(await calls()).pid;
     await kept.pauseSandbox();
 
     const held = await SandboxAgent.start({
@@ -442,13 +440,13 @@ describe("provider", () => {
       sandboxId: "clankerbox/held",
     });
 
-    const heldCalls = await calls();
-
-    port = heldCalls.at(-1)?.port ?? 0;
+    tunnel = liveTunnel(await calls()).pid;
     await held.destroySandbox();
 
     expect(open).toStrictEqual({ stop: true, delete: true });
-    await until("the tunnel to end", async () => !(await listening(port)));
+    const ended = tunnel;
+
+    await until("the tunnel to end", async () => gone(ended));
   });
 
   it("one sandbox's calls take turns: two reconnects never start its machine at the same time", async () => {

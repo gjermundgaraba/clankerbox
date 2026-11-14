@@ -1,30 +1,14 @@
-import { Effect, Scope } from "effect";
-
-import { forwarding, freePort, open } from "../src/tunnel.ts";
-import { endsWithParent } from "./support.ts";
-
-const [program = "", directory = ""] = process.argv.slice(2);
+import { healthPath } from "../src/agent.ts";
+import { endsWithParent, reachable, setup } from "./support.ts";
 
 endsWithParent();
 
-const port = await Effect.runPromise(
-  Effect.gen(function* () {
-    const free = yield* freePort;
-    const scope = yield* Scope.make();
+const { dir, sandbox } = await setup({ machines: [reachable("left")] });
+const url = await sandbox.getUrl("left");
+const sent = await sandbox.getFetch("left");
 
-    yield* Scope.provide(
-      open({
-        program,
-        args: forwarding(free, []),
-        directory,
-        port: free,
-        machine: "left",
-      }),
-      scope
-    );
+const reply = await sent(`${url}${healthPath}`);
 
-    return free;
-  })
-);
+await reply.json();
 
-console.log(String(port));
+console.log(JSON.stringify({ url, dir }));

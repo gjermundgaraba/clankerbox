@@ -44,7 +44,7 @@ const json = (reply: ServerResponse, status: number, value: unknown) => {
 
 /**
  * A stand-in Sandbox Agent server: its health check and one agent's ACP endpoint. A file in `dir`
- * sets how it answers: `unhealthy` fails the health check, `hold-replies` sends each answer on the
+ * sets how it answers: `unhealthy` fails the health check, `hold-health` never answers it, `hold-replies` sends each answer on the
  * event stream and never on its POST, `cut-prompts` cuts a prompt's POST, and `hold-prompts` never
  * answers a prompt, writing `prompted` once one comes.
  */
@@ -129,6 +129,10 @@ export const fakeAgent = (dir: string) => {
     if (request.url?.startsWith("/v1/acp/") === true) {
       void acp(request, reply);
 
+      return;
+    }
+
+    if (flagged("hold-health")) {
       return;
     }
 

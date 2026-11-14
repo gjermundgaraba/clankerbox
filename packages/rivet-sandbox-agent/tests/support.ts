@@ -1,5 +1,14 @@
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
-import { connect, Socket } from "node:net";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
+import { createServer as createHttpServer } from "node:http";
+import { createServer, Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -69,13 +78,25 @@ export const cleanUp = async () => {
 
 const Call = Schema.Struct({
   pid: Schema.Finite,
-  port: Schema.Finite,
+  socket: Schema.String,
   args: Schema.Array(Schema.String),
 });
 
 type Call = typeof Call.Type;
 
 const decodeCall = Schema.decodeSync(Schema.fromJsonString(Call));
+
+/** The ssh calls fake-ssh recorded in `dir`, in the order they started. */
+export const callsIn = async (dir: string): Promise<Call[]> => {
+  const recorded = await readFile(path.join(dir, "calls"), "utf-8").catch(
+    () => ""
+  );
+
+  return recorded
+    .split("\n")
+    .filter((line) => line !== "")
+    .map((line) => decodeCall(line));
+};
 
 export const setup = async (
   server: Pick<StubServerOptions, "machines" | "checkpoints" | "refuse"> & {
@@ -119,40 +140,24 @@ export const setup = async (
     ssh
   );
 
+  let disposed = false;
+
+  const dispose = async () => {
+    if (!disposed) {
+      disposed = true;
+      await sandbox.dispose();
+    }
+  };
+
   cleanups.push(async () => {
-    await sandbox.dispose();
+    await dispose();
     await stub.dispose();
     await rm(dir, { recursive: true, force: true });
   });
 
-  const calls = async (): Promise<Call[]> => {
-    const recorded = await readFile(path.join(dir, "calls"), "utf-8").catch(
-      () => ""
-    );
+  const calls = async () => await callsIn(dir);
 
-    return recorded
-      .split("\n")
-      .filter((line) => line !== "")
-      .map((line) => decodeCall(line));
-  };
-
-  return { dir, stub, sandbox, calls };
-};
-
-export const listening = async (port: number) => {
-  const reached = Promise.withResolvers<boolean>();
-  const socket = connect({ host: "127.0.0.1", port });
-
-  socket.once("connect", () => {
-    socket.destroy();
-    reached.resolve(true);
-  });
-
-  socket.once("error", () => {
-    reached.resolve(false);
-  });
-
-  return await reached.promise;
+  return { dir, stub, sandbox, calls, dispose };
 };
 
 /**
@@ -178,6 +183,93 @@ export const gone = (pid: number) => {
   }
 };
 
+/** The calls whose ssh still runs. */
+export const live = <A extends { readonly pid: number }>(
+  made: readonly A[]
+): A[] => made.filter(({ pid }) => !gone(pid));
+
+/** The one call whose ssh still runs, failing the test when there is none or more than one. */
+export const liveTunnel = <A extends { readonly pid: number }>(
+  made: readonly A[]
+): A => {
+  const running = live(made);
+  const [tunnel] = running;
+
+  if (tunnel === undefined || running.length > 1) {
+    throw new Error(`expected one tunnel to run, and ${running.length} do`);
+  }
+
+  return tunnel;
+};
+
+/** The loopback port of a URL `getUrl` gave out. */
+export const portOf = (given: string) => Number(new URL(given).port);
+
+export const promptFor = (id: number) => ({
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    jsonrpc: "2.0",
+    id,
+    method: "session/prompt",
+    params: { prompt: [{ type: "text", text: "SECRET PROMPT" }] },
+  }),
+});
+
+/**
+ * Another program trying to listen on `port`, which answers everything as healthy: whether it
+ * could, and each request it heard.
+ */
+export const stranger = async (port: number) => {
+  const heard: string[] = [];
+
+  const server = createHttpServer((request, reply) => {
+    let body = "";
+
+    request.on("data", (chunk) => {
+      body += String(chunk);
+    });
+    request.on("end", () => {
+      heard.push(`${request.method} ${request.url} ${body}`);
+      reply.end('{"status":"ok"}');
+    });
+  });
+
+  const binding = Promise.withResolvers<string>();
+
+  server.once("error", (error: NodeJS.ErrnoException) => {
+    binding.resolve(error.code ?? error.message);
+  });
+  server.listen(port, "127.0.0.1", () => {
+    binding.resolve("listening");
+  });
+
+  const bound = await binding.promise;
+
+  cleanups.push(async () => {
+    server.close();
+  });
+
+  return { bound, heard };
+};
+
+/** Whether another program could listen on `port` now, the probe of who holds it. */
+export const free = async (port: number) => {
+  const tried = Promise.withResolvers<boolean>();
+  const server = createServer();
+
+  server.once("error", () => {
+    tried.resolve(false);
+  });
+  server.listen({ port, host: "127.0.0.1", exclusive: true }, () => {
+    server.close(() => {
+      tried.resolve(true);
+    });
+  });
+
+  return await tried.promise;
+};
+
 export const until = async (what: string, check: () => Promise<boolean>) => {
   const deadline = performance.now() + 5000;
 
@@ -200,4 +292,32 @@ export const prompted = async (dir: string) => {
         () => false
       )
   );
+};
+
+/** A directory of the test's own, removed when it ends. */
+export const scratch = async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "clankerbox-swept-"));
+
+  cleanups.push(async () => {
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  return directory;
+};
+
+/** Two minutes ago, past the age the sweep waits for. */
+export const past = () => new Date(Date.now() - 120_000);
+
+export const aged = async (made: string) => {
+  await utimes(made, past(), past());
+};
+
+/** A directory as a tunnel leaves it, its known-hosts file in it, named `name` under `under`. */
+export const leftIn = async (under: string, name: string) => {
+  const made = path.join(under, name);
+
+  await mkdir(made);
+  await writeFile(path.join(made, "known_hosts"), "");
+
+  return made;
 };

@@ -110,7 +110,8 @@ const servedAgent = async () => {
       message = prompt,
     }: { readonly method?: string; readonly message?: unknown } = {}
   ) => {
-    const fetch = fetches.get(sandbox) ?? agentFetch(sandbox);
+    const fetch =
+      fetches.get(sandbox) ?? agentFetch(sandbox, () => new URL(url).origin);
 
     fetches.set(sandbox, fetch);
 

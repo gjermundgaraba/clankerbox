@@ -10,25 +10,41 @@ import {
   Superseded,
   Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
-import type { ClankerboxError, Sizing } from "@gjermundgaraba/clankerbox-sdk";
+import type {
+  ClankerboxError,
+  Sizing,
+  SshTarget,
+} from "@gjermundgaraba/clankerbox-sdk";
 import {
+  Data,
+  Deferred,
   Duration,
   Effect,
   Exit,
-  FileSystem,
+  Fiber,
   Option,
   Schema,
   Scope,
   Semaphore,
 } from "effect";
-import type { Path } from "effect";
+import type { Path, FileSystem } from "effect";
 import { Hex } from "effect/encoding";
 import type { ChildProcessSpawner } from "effect/process";
 import { SandboxDestroyedError } from "sandbox-agent";
 
 import { healthPath } from "./agent.ts";
+import { agentFetch } from "./fetch.ts";
 import type { Options } from "./options.ts";
-import { forwarding, freePort, LocalTunnelError, open } from "./tunnel.ts";
+import { listen } from "./relay.ts";
+import type { Relay } from "./relay.ts";
+import {
+  forwarding,
+  LocalTunnelError,
+  open,
+  socketIn,
+  sweepLeft,
+  tunnelDirectory,
+} from "./tunnel.ts";
 import type { Tunnel } from "./tunnel.ts";
 
 export const name = "clankerbox";
@@ -41,22 +57,34 @@ const Health = Schema.Struct({ status: Schema.Literal("ok") });
 
 const isHealth = Schema.is(Health);
 
-interface Held {
-  readonly tunnel: Tunnel;
+/** What a call gets once `dispose` has begun, and a `getUrl` or `ensureServer` it ended. */
+export class ProviderDisposedError extends Data.TaggedError(
+  "ProviderDisposedError"
+)<{
+  readonly message: string;
+}> {}
+
+export const disposed = () =>
+  new ProviderDisposedError({
+    message: "the clankerbox provider was disposed",
+  });
+
+interface Scoped<A> {
+  readonly value: A;
   readonly scope: Scope.Closeable;
 }
 
 interface Sandbox {
   readonly lock: Semaphore.Semaphore;
-  urlPort: number | undefined;
-  held: Held | undefined;
+  relay: Scoped<Relay> | undefined;
+  held: Scoped<Tunnel> | undefined;
 }
 
-const healthy = (port: number): Effect.Effect<boolean> =>
+const urlOf = (port: number) => `http://127.0.0.1:${port}`;
+
+const healthy = (url: string): Effect.Effect<boolean> =>
   Effect.tryPromise(async (signal) => {
-    const reply = await fetch(`http://127.0.0.1:${port}${healthPath}`, {
-      signal,
-    });
+    const reply = await fetch(`${url}${healthPath}`, { signal });
 
     return await reply.json();
   }).pipe(
@@ -68,12 +96,27 @@ const healthy = (port: number): Effect.Effect<boolean> =>
     Effect.orElseSucceed(() => false)
   );
 
-const isGone = (error: ClankerboxError): error is NotFound | Superseded =>
+const isLocal = (error: unknown): error is LocalTunnelError =>
+  error instanceof LocalTunnelError;
+
+const scoped = <A, E, R>(make: Effect.Effect<A, E, R | Scope.Scope>) =>
+  Effect.gen(function* () {
+    const scope = yield* Scope.make();
+
+    const value = yield* make.pipe(
+      Scope.provide(scope),
+      Effect.onError(() => Scope.close(scope, Exit.void))
+    );
+
+    return { value, scope };
+  });
+
+const ended = <A>(was: Scoped<A> | undefined) =>
+  was === undefined ? Effect.void : Scope.close(was.scope, Exit.void);
+
+const isGone = (error: unknown): error is NotFound | Superseded =>
   error instanceof NotFound ||
   (error instanceof Superseded && error.by === "deleted");
-
-const destroyed = (id: string) => (cause: NotFound | Superseded) =>
-  Effect.fail(new SandboxDestroyedError(id, name, { cause }));
 
 const discard = (error: ClankerboxError) =>
   Effect.gen(function* () {
@@ -104,11 +147,31 @@ export type Services =
 
 export const make = (options: Options, ssh = "ssh") => {
   const sandboxes = new Map<string, Sandbox>();
+  const closing = Deferred.makeUnsafe<undefined>();
+  const calls = new Set<Fiber.Fiber<unknown, unknown>>();
+
+  const call = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Effect.withFiber<A, E, R>((fiber) => {
+      calls.add(fiber);
+
+      return Effect.ensuring(
+        effect,
+        Effect.sync(() => calls.delete(fiber))
+      );
+    });
+
+  const endedByDispose = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    call(
+      Effect.raceFirst(
+        effect,
+        Effect.andThen(Deferred.await(closing), Effect.fail(disposed()))
+      )
+    );
 
   const sandbox = (id: string): Sandbox => {
     const known = sandboxes.get(id) ?? {
       lock: Semaphore.makeUnsafe(1),
-      urlPort: undefined,
+      relay: undefined,
       held: undefined,
     };
 
@@ -130,72 +193,91 @@ export const make = (options: Options, ssh = "ssh") => {
       );
     });
 
-  const taken = (port: number) =>
-    [...sandboxes.values()].some((other) => other.urlPort === port);
-
-  const urlPortOf = (known: Sandbox): Effect.Effect<number, LocalTunnelError> =>
-    Effect.gen(function* () {
-      if (known.urlPort !== undefined) {
-        return known.urlPort;
-      }
-
-      let port = yield* freePort;
-
-      while (taken(port)) {
-        port = yield* freePort;
-      }
-
-      known.urlPort = port;
-
-      return port;
-    });
-
   const closed = (known: Sandbox) =>
     Effect.suspend(() => {
       const was = known.held;
 
       known.held = undefined;
 
-      return was === undefined
-        ? Effect.void
-        : Scope.close(was.scope, Exit.void);
+      return ended(was);
     });
 
-  const opened = (
+  const released = (known: Sandbox) =>
+    Effect.suspend(() => {
+      const was = known.relay;
+
+      known.relay = undefined;
+
+      return Effect.andThen(closed(known), ended(was));
+    });
+
+  const onMachine = <A, E, R>(
     id: string,
-    known: Sandbox
-  ): Effect.Effect<number, ClankerboxError | LocalTunnelError, Services> =>
+    use: (known: Sandbox) => Effect.Effect<A, E, R>
+  ) =>
+    locked(id, (known) =>
+      use(known).pipe(
+        Effect.catchIf(isGone, (cause) =>
+          Effect.andThen(
+            closed(known),
+            Effect.fail(new SandboxDestroyedError(id, name, { cause }))
+          )
+        )
+      )
+    );
+
+  const fetchOf = (id: string) =>
+    agentFetch(id, () => {
+      const port = sandboxes.get(id)?.relay?.value.port;
+
+      return port === undefined ? undefined : urlOf(port);
+    });
+
+  const relayOf = (id: string, known: Sandbox) =>
     Effect.gen(function* () {
-      if (known.held?.tunnel.running() === true) {
-        return yield* urlPortOf(known);
-      }
+      known.relay ??= yield* scoped(
+        listen(id, () =>
+          known.held?.value.running() === true
+            ? known.held.value.socket
+            : undefined
+        )
+      );
 
-      yield* closed(known);
+      return known.relay.value;
+    });
 
-      const client = yield* Client.Client;
-      const target = yield* sshTarget(yield* client.getMachine({ id }));
+  let swept = false;
 
-      const port = yield* urlPortOf(known);
-      const scope = yield* Scope.make();
+  const sweptFirst = Effect.suspend(() => {
+    if (swept) {
+      return Effect.void;
+    }
 
-      const tunnel = yield* Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
+    swept = true;
 
-        const directory = yield* fs.makeTempDirectoryScoped({
-          prefix: "clankerbox-tunnel-",
-        });
+    return sweepLeft;
+  });
+
+  const tunnelled = (id: string, target: SshTarget) =>
+    scoped(
+      Effect.gen(function* () {
+        yield* sweptFirst;
+
+        const directory = yield* tunnelDirectory;
+
+        const socket = yield* socketIn(directory, id);
 
         const args = yield* pinnedSsh(
           target,
           target.login.user,
-          forwarding(port, options.sshArguments ?? [])
+          forwarding(socket, options.sshArguments ?? [])
         );
 
         return yield* open({
           program: ssh,
           args,
           directory,
-          port,
+          socket,
           machine: id,
         });
       }).pipe(
@@ -205,14 +287,26 @@ export const make = (options: Options, ssh = "ssh") => {
               message: `couldn't prepare the tunnel to ${id}: ${error.message}`,
             })
           )
-        ),
-        Scope.provide(scope),
-        Effect.onError(() => Scope.close(scope, Exit.void))
-      );
+        )
+      )
+    );
 
-      known.held = { tunnel, scope };
+  const opened = (
+    id: string,
+    known: Sandbox
+  ): Effect.Effect<number, ClankerboxError | LocalTunnelError, Services> =>
+    Effect.gen(function* () {
+      if (known.held?.value.running() !== true) {
+        yield* closed(known);
 
-      return port;
+        const client = yield* Client.Client;
+        const target = yield* sshTarget(yield* client.getMachine({ id }));
+
+        yield* relayOf(id, known);
+        known.held = yield* tunnelled(id, target);
+      }
+
+      return (yield* relayOf(id, known)).port;
     });
 
   const started = (id: string, known: Sandbox) =>
@@ -221,7 +315,7 @@ export const make = (options: Options, ssh = "ssh") => {
 
       yield* client.startMachine({ id });
       yield* closed(known);
-    }).pipe(Effect.catchIf(isGone, destroyed(id)));
+    });
 
   const made = (named: string) =>
     Effect.gen(function* () {
@@ -240,72 +334,85 @@ export const make = (options: Options, ssh = "ssh") => {
     });
 
   return {
-    create: Effect.suspend(() => {
-      const named = `${options.namePrefix ?? "sandbox"}-${Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(4)))}`;
+    create: call(
+      Effect.suspend(() => {
+        const named = `${options.namePrefix ?? "sandbox"}-${Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(4)))}`;
 
-      return made(named).pipe(
-        Effect.map((machine) => machine.id),
-        Effect.catch(discard)
-      );
-    }),
-    destroy: (id: string) =>
-      locked(id, (known) =>
-        Effect.gen(function* () {
-          const client = yield* Client.Client;
-
-          yield* client
-            .deleteMachine({ id })
-            .pipe(Effect.ensuring(closed(known)));
-          known.urlPort = undefined;
-        })
-      ),
-    pause: (id: string) =>
-      locked(id, (known) =>
-        Effect.gen(function* () {
-          const client = yield* Client.Client;
-
-          yield* client
-            .stopMachine({ id })
-            .pipe(Effect.ensuring(closed(known)));
-        })
-      ),
-    resize: (id: string, sizes: Sizing) =>
-      locked(id, () =>
-        Effect.flatMap(Client.Client, (client) =>
-          client.resizeMachine({ ...sizes, id })
-        ).pipe(
-          Effect.map(({ cpu, ramMib, diskGib }) => ({ cpu, ramMib, diskGib })),
-          Effect.catchIf(isGone, destroyed(id))
-        )
-      ),
-    reconnect: (id: string) => locked(id, (known) => started(id, known)),
-    ensureServer: (id: string) =>
-      locked(id, (known) =>
-        Effect.gen(function* () {
-          const port = yield* opened(id, known).pipe(
-            Effect.asSome,
-            Effect.catchIf(
-              (error) => !(error instanceof LocalTunnelError),
-              () => Effect.succeedNone
-            )
-          );
-
-          if (Option.isSome(port) && (yield* healthy(port.value))) {
-            return;
-          }
-
-          yield* started(id, known);
-          yield* opened(id, known);
-        })
-      ),
-    url: (id: string) =>
-      locked(id, (known) =>
-        Effect.map(opened(id, known), (port) => `http://127.0.0.1:${port}`)
-      ),
-    closeAll: Effect.suspend(() =>
-      Effect.forEach([...sandboxes.keys()], (id) => locked(id, closed), {
-        discard: true,
+        return made(named).pipe(
+          Effect.map((machine) => machine.id),
+          Effect.catch(discard)
+        );
       })
     ),
+    destroy: (id: string) =>
+      call(
+        locked(id, (known) =>
+          Effect.gen(function* () {
+            const client = yield* Client.Client;
+
+            yield* client
+              .deleteMachine({ id })
+              .pipe(Effect.ensuring(closed(known)));
+            yield* released(known);
+          })
+        )
+      ),
+    pause: (id: string) =>
+      call(
+        onMachine(id, (known) =>
+          Effect.gen(function* () {
+            const client = yield* Client.Client;
+
+            yield* client
+              .stopMachine({ id })
+              .pipe(Effect.ensuring(closed(known)));
+          })
+        )
+      ),
+    resize: (id: string, sizes: Sizing) =>
+      call(
+        onMachine(id, () =>
+          Effect.flatMap(Client.Client, (client) =>
+            client.resizeMachine({ ...sizes, id })
+          ).pipe(
+            Effect.map(({ cpu, ramMib, diskGib }) => ({ cpu, ramMib, diskGib }))
+          )
+        )
+      ),
+    reconnect: (id: string) =>
+      call(onMachine(id, (known) => started(id, known))),
+    ensureServer: (id: string) =>
+      endedByDispose(
+        onMachine(id, (known) =>
+          Effect.gen(function* () {
+            const port = yield* opened(id, known).pipe(
+              Effect.asSome,
+              Effect.catchIf(
+                (error) => !isLocal(error),
+                () => Effect.succeedNone
+              )
+            );
+
+            if (Option.isSome(port) && (yield* healthy(urlOf(port.value)))) {
+              return;
+            }
+
+            yield* started(id, known);
+            yield* opened(id, known);
+          })
+        )
+      ),
+    url: (id: string) =>
+      endedByDispose(
+        onMachine(id, (known) => Effect.map(opened(id, known), urlOf))
+      ),
+    fetch: (id: string) => call(Effect.sync(() => fetchOf(id))),
+    closeAll: Effect.gen(function* () {
+      yield* Deferred.succeed(closing, undefined);
+      yield* Fiber.awaitAll([...calls]);
+      yield* Effect.forEach([...sandboxes.values()], released, {
+        discard: true,
+      });
+    }),
   };
 };
