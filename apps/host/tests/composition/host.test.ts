@@ -166,6 +166,121 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a host that is stopping answers each request at once with 503, sends none to its runtime, and its stop ends once the exec it was ending has",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        const host = yield* started({ dir });
+        const began = path.join(dir, "began");
+        const ran = path.join(dir, "ran");
+
+        const held = (name: string, digit: string) => {
+          const machine = {
+            name,
+            instance: digit.repeat(32),
+            cpu: 1,
+            ramMib: 1024,
+            diskGib: 10,
+            handle: Handle.make(`held-${name}`),
+          };
+
+          host.fake.hold({
+            state: "running",
+            name,
+            root: "",
+            instance: machine.instance,
+            handle: machine.handle,
+          });
+
+          return machine;
+        };
+
+        const dev = held("dev", "1");
+        const other = held("other", "2");
+
+        const answered = (action: string, body: unknown) =>
+          Effect.timed(
+            Effect.promise(
+              async () =>
+                await fetch(`${host.url}/host/${action}`, {
+                  method: "POST",
+                  headers: {
+                    "content-type": "application/json",
+                    [versionHeader]: version,
+                  },
+                  body: JSON.stringify(body),
+                  signal: AbortSignal.timeout(3000),
+                }).then(
+                  (response) => response.status,
+                  () => "no answer"
+                )
+            )
+          ).pipe(
+            Effect.map(([took, status]) => ({
+              action,
+              status,
+              atOnce: Duration.toMillis(took) < 1000,
+            }))
+          );
+
+        yield* Effect.forkChild(
+          answered("execMachine", {
+            machine: dev,
+            argv: ["/bin/sh", "-c", `trap '' TERM; : >"${began}"; sleep 30`],
+          })
+        );
+
+        yield* read(began).pipe(
+          Effect.retry(Schedule.spaced(Duration.millis(20)))
+        );
+
+        const stopping = yield* Effect.forkChild(Effect.timed(host.dispose));
+
+        yield* Effect.sleep(Duration.millis(300));
+
+        const answers = yield* Effect.all(
+          [
+            answered("readHost", {}),
+            answered("readMachines", { machines: [other] }),
+            answered("readSizes", { machine: other }),
+            answered("execMachine", {
+              machine: other,
+              argv: ["/bin/sh", "-c", `: >"${ran}"`],
+            }),
+            answered("runOperation", {
+              id: "op-during-stop",
+              boot: host.operations.boot,
+              scope: { resource: "machine", name: "other" },
+              sequence: 1,
+              step: {
+                _tag: "remove",
+                keep: [],
+                machine: { name: other.name, instance: other.instance },
+              },
+            }),
+            answered("waitOperation", { id: "op-during-stop" }),
+            answered("collectOperation", { id: "op-during-stop" }),
+          ],
+          { concurrency: "unbounded" }
+        );
+
+        const [took] = yield* Fiber.join(stopping).pipe(
+          Effect.timeout(Duration.seconds(30))
+        );
+
+        expect(answers).toStrictEqual(
+          answers.map(({ action }) => ({ action, status: 503, atOnce: true }))
+        );
+        expect(
+          host.fake.calls.filter((call) => call.endsWith(" other"))
+        ).toStrictEqual([]);
+        expect(yield* Effect.flip(read(ran))).toBeDefined();
+        expect(Duration.toMillis(took)).toBeLessThan(10_000);
+      }),
+    60_000
+  );
+
+  it.effect(
     "a host whose runtime keeps no checkpoint as files refuses a builds setting, naming both, before its runtime starts anything",
     () =>
       Effect.gen(function* () {
