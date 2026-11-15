@@ -360,8 +360,13 @@ the run.
   to each process whose own arguments or environment hold the mark, the exec's
   or another's, and what descends from one, each listing one `awk` pass, until
   the deadline the host gives it. A timed-out exec whose end isn't confirmed
-  answers 124 with its output and `mayStillRun`. README's `exec` bullet states
-  the rest. Smolvm's agent
+  answers 124 with its output and `mayStillRun`. The launcher waits for its
+  command, so a process holding the mark in its arguments stands above the
+  command for its whole life. A stop, pause or remove step first ends its
+  machine's execs in flight so, before its hook and its runtime call:
+  `Operations` admits an exec only while no step runs on its machine, under the
+  semaphore that accepts steps, and the step's cut answers it `WrongState`.
+  README's `exec` bullet states the rest. Smolvm's agent
   ends a cut command too; a Tart guest, boat and smol cloud leave it running,
   measured on each, and the fake runtime's `cut` models each.
 - **Setup scripts stay in memory, on both sides, but for a macOS guest's
