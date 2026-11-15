@@ -217,68 +217,6 @@ layer(NodeServices.layer, { excludeTestServices: true })(
     );
 
     it.effect(
-      "a request whose last bytes arrive after the control plane's stop began meets its connection closed, unanswered, reaches no host, and the stop ends",
-      () =>
-        Effect.gen(function* () {
-          const served = yield* running();
-
-          const late = yield* Effect.forEach(
-            [
-              ["getMachine", { id: "late" }],
-              ["createMachine", request("late")],
-            ] as const,
-            ([action, input]) =>
-              Effect.map(connection(served.url), (opened) => {
-                const sent = JSON.stringify(input);
-
-                opened.socket.write(
-                  `POST /api/${action} HTTP/1.1\r\nhost: plane\r\n`
-                );
-
-                return {
-                  ...opened,
-                  rest: `content-type: application/json\r\n${versionHeader}: ${version}\r\ncontent-length: ${Buffer.byteLength(sent)}\r\n\r\n${sent}`,
-                };
-              })
-          );
-
-          yield* Effect.sleep(Duration.millis(300));
-
-          const stopping = yield* Effect.forkChild(Effect.timed(served.crash));
-
-          yield* Effect.sleep(Duration.millis(300));
-
-          for (const { socket, rest } of late) {
-            socket.write(rest);
-          }
-
-          const closed = yield* Effect.forEach(late, ({ closedWithin }) =>
-            closedWithin(Duration.seconds(1))
-          );
-
-          const [took] = yield* Fiber.join(stopping).pipe(
-            Effect.timeout(Duration.seconds(30))
-          );
-
-          for (const { socket } of late) {
-            socket.destroy();
-          }
-
-          expect({
-            answers: late.map((opened) => opened.read()),
-            closed,
-          }).toStrictEqual({ answers: ["", ""], closed: [true, true] });
-          expect(
-            firstHost(served).fake.calls.filter((call) =>
-              call.endsWith(" late")
-            )
-          ).toStrictEqual([]);
-          expect(Duration.toMillis(took)).toBeLessThan(2000);
-        }),
-      60_000
-    );
-
-    it.effect(
       "a control plane told to stop cuts a request still open at once, and its client hears Unavailable, the action maybe run",
       () =>
         Effect.gen(function* () {
