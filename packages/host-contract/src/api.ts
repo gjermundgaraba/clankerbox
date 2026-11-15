@@ -367,7 +367,7 @@ export const HostHttp = ActionHttp.make(
       ...write,
       error: [Invalid, Missing, WrongState, Internal] as const,
       description:
-        "Run a command in a running machine, once any step on it has ended, and answer its exit code and output. It runs as long as the request does, or until its timeout: either ends the command and what it started in the guest, and a timeout answers exit code 124 with the output, within endTimeout of it, with mayStillRun saying why when their end couldn't be confirmed, so they may still run. The command's environment can't set `CLANKERBOX_EXEC`, the host's mark of what it started. Nothing of it is kept.",
+        "Run a command in a running machine, once any step on it has ended, and answer its exit code and output. It runs as long as the request does, or until its timeout, which also bounds the runtime's attach: either ends the command and what it started in the guest, and a timeout answers exit code 124 with the output, within endTimeout of it, with mayStillRun saying why when their end couldn't be confirmed, so they may still run. A stop, pause or remove step on the machine first ends it so, before its hook and its runtime call, and it answers WrongState in the phase stopping, pausing or deleting. The command's environment can't set `CLANKERBOX_EXEC`, the host's mark of what it started. Nothing of it is kept.",
       input: ExecCommand,
       success: Executed,
     }),
