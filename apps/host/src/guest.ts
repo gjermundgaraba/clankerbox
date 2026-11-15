@@ -192,12 +192,14 @@ const recordMinutes = 60;
 // macOS's `ps -E` prints a process's environment after its arguments, also another user's to root,
 // a newline in either as `\012`, so each process on a line of its own, and `lstart` as five words.
 // A stopped process forks nothing and keeps its children's parent, so what the end stops before it
-// kills can't add a process it doesn't list.
-const membersProgram = String.raw`
+// kills can't add a process it doesn't list. sudo, on a pty, stops its parent's process group once
+// it sees its command stop, which holds smolvm's agent and the end on a restored machine:
+// https://github.com/sudo-project/sudo/blob/v1.9.17p2/src/exec_pty.c#L276-L287
+export const membersProgram = String.raw`
 function add(pid, ppid, start, state) {
   rows++
   if (state ~ /^[ZX]/ || pid == 1 || pid == self) return
-  n++; P[n] = pid; PP[pid] = ppid; ST[pid] = start
+  n++; P[n] = pid; PP[pid] = ppid; ST[pid] = start; STATE[pid] = state
 }
 function stated() {
   if (spid != "" && match(stat, /\) [^)]*$/)) {
@@ -231,14 +233,20 @@ END {
     pid = P[i]
     if (!(pid in K)) continue
     count++
-    sent[pid] = ((pid in H) && H[pid] == ST[pid]) ? F[pid] : "-"
+    if (PP[pid] in K) C[PP[pid]] = C[PP[pid]] " " pid; else O[++o] = pid
   }
-  printf "%d\n", count
-  for (pid in sent) if (!index(sent[pid], signal)) printf " %s", pid
-  printf "\n"
-  for (pid in sent) printf " %s", pid
-  printf "\n"
-  for (pid in sent) { if (!index(sent[pid], signal)) sent[pid] = sent[pid] signal; printf "%s %s %s\n", pid, ST[pid], sent[pid] }
+  for (q = 1; q <= o; q++) { placed[O[q]] = 1; if (O[q] in C) { m = split(C[O[q]], c, " "); for (j = 1; j <= m; j++) if (!(c[j] in placed)) { placed[c[j]] = 1; O[++o] = c[j] } } }
+  for (i = 1; i <= n; i++) if ((P[i] in K) && !(P[i] in placed)) O[++o] = P[i]
+  for (q = 1; q <= o; q++) {
+    pid = O[q]
+    sent = ((pid in H) && H[pid] == ST[pid]) ? F[pid] : "-"
+    if (!index(sent, signal)) {
+      if (signal != "S" || !(PP[pid] in K) || STATE[PP[pid]] ~ /^[Tt]/) { fresh = fresh " " pid; sent = sent signal } else waiting++
+    }
+    all = all " " pid; R[q] = pid " " ST[pid] " " sent
+  }
+  printf "%d %d\n%s\n%s\n", count, waiting, fresh, all
+  for (q = 1; q <= o; q++) print R[q]
 }
 `;
 
@@ -247,7 +255,10 @@ END {
  * the exec's or not, and what descends from one. It reads the mark and its deadline in seconds,
  * then TERMs what it lists, and once at least the grace has passed, or nothing it TERMed runs, STOPs
  * what it lists until a listing finds none it hasn't stopped, and KILLs them all, again until a
- * listing finds none. Each listing is two `grep`s over `/proc`, given its paths by `xargs`, as zsh
+ * listing finds none. It signals each listing's processes ancestors first, and STOPs a process only
+ * once a listing finds stopped each ancestor of it that it lists, so no parent that still runs sees
+ * its child stop, as sudo, which then stops its own parent's group, would; a process whose parent it
+ * doesn't list it STOPs at once. Each listing is two `grep`s over `/proc`, given its paths by `xargs`, as zsh
  * globs a path below each process slowly and a guest's processes may name more paths than a command
  * line holds, or one `ps`, and one `awk` pass, and `awk` picks out each of its lines again, where
  * zsh's patterns take time that grows with the square of the listing, so its cost grows with the
@@ -295,7 +306,8 @@ export const endScript = [
   "      fi",
   `    } | awk -v signal="$1" -v self="$$" -v proc="$proc" "$program"`,
   "  )",
-  `  count=$(printf '%s\\n' "$listed" | awk 'NR == 1')`,
+  `  first=$(printf '%s\\n' "$listed" | awk 'NR == 1')`,
+  "  count=${first% *} waiting=${first#* }",
   `  case $count in '' | *[!0-9]*) release "couldn't list the guest's processes, with /proc or ps, and awk" ;; esac`,
   `  fresh=$(printf '%s\\n' "$listed" | awk 'NR == 2')`,
   `  all=$(printf '%s\\n' "$listed" | awk 'NR == 3')`,
@@ -334,6 +346,8 @@ export const endScript = [
   `  [ "$count" -gt 0 ] || ended`,
   `  if [ -n "$fresh" ]; then`,
   "    kill -s STOP $fresh 2>/dev/null",
+  `  elif [ "$waiting" -gt 0 ]; then`,
+  `    sleep "$tick"`,
   "  else",
   "    kill -s KILL $all 2>/dev/null",
   `    sleep "$tick"`,

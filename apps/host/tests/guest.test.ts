@@ -46,6 +46,7 @@ import {
   lastLines,
   identityScript,
   markName,
+  membersProgram,
   leave,
   prepare as prepareGuest,
   prepareBase,
@@ -2538,6 +2539,28 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   });
 });
 
+const oneCpu = () =>
+  /(?<cpu>\d+)/u.exec(
+    spawnSync("taskset", ["-cp", String(process.pid)], { encoding: "utf-8" })
+      .stdout.split(":")
+      .at(-1) ?? ""
+  )?.groups?.["cpu"] ?? "0";
+
+const sudoLikeWatcher = [
+  'use POSIX ":sys_wait_h";',
+  '$SIG{TERM} = "IGNORE";',
+  "my $c = fork;",
+  'if (!$c) { exec "sh", "-c", "trap \\"\\" TERM; sleep 300"; }',
+  "while (1) {",
+  "  my $w = waitpid($c, WUNTRACED);",
+  "  last if $w <= 0;",
+  "  last if !WIFSTOPPED(${^CHILD_ERROR_NATIVE});",
+  '  open my $f, ">>", "$ENV{CLANKERBOX_ROOT}/saw-a-stop";',
+  '  print $f "$$\\n";',
+  "  close $f;",
+  "}",
+].join(" ");
+
 const manyLinesSeconds = 5;
 
 const shellCases = (shell: readonly string[]) => {
@@ -2996,8 +3019,170 @@ const shellCases = (shell: readonly string[]) => {
         }),
       endsTimeout(1, 5)
     );
+
+    it.effect(
+      "an end stops no process before the parent that watches it, as sudo does, so no parent that still runs sees its child stop",
+      () =>
+        Effect.gen(function* () {
+          const root = yield* scratch;
+          const mark = unsharedMark();
+          const watchers = 12;
+
+          const cpu = oneCpu();
+
+          const tree = yield* marked(
+            root,
+            `taskset -cp ${cpu} $$ >/dev/null; for i in ${Array.from({ length: watchers }, (_, i) => i).join(" ")}; do perl -e '${sudoLikeWatcher}' & done; wait`,
+            1 + watchers * 3,
+            mark
+          );
+
+          const ended = yield* endUnder(
+            ["taskset", "-c", cpu, ...shell],
+            root,
+            mark
+          );
+
+          expect(ended.code, ended.stderr).toBe(0);
+          expect(yield* runningOf(tree)).toStrictEqual([]);
+          expect(existsSync(path.join(root, "saw-a-stop"))).toBe(false);
+        }),
+      endsTimeout(1, 1)
+    );
   });
 };
+
+const guestAwks = [
+  ["awk"],
+  ["mawk"],
+  ["gawk"],
+  ["original-awk"],
+  ["busybox", "awk"],
+].filter(
+  ([file = "", ...rest]) =>
+    spawnSync(file, [...rest, "BEGIN { exit 0 }"]).status === 0
+);
+
+interface Listed {
+  readonly pid: number;
+  readonly ppid: number;
+  readonly state: "R" | "S" | "T";
+  readonly root: boolean;
+}
+
+const ascending = (a: number, b: number) => a - b;
+
+const seeded = (seed: number) => {
+  let state = seed;
+
+  return (below: number) => {
+    state = (Math.imul(state, 1_103_515_245) + 12_345) >>> 0;
+
+    return state % below;
+  };
+};
+
+const commandOfWrappedPids = (seed: number): readonly Listed[] => {
+  const pick = seeded(seed);
+  const pids = new Set<number>();
+
+  while (pids.size < 40) {
+    pids.add(2 + pick(32_000));
+  }
+
+  const inOrder = [...pids];
+
+  return inOrder.map((pid, at): Listed => {
+    const root = at === 0 || pick(8) === 0;
+
+    return {
+      pid,
+      ppid: root ? 90_000 + at : (inOrder[pick(at)] ?? 0),
+      state: (["R", "S", "T"] as const)[pick(3)] ?? "S",
+      root,
+    };
+  });
+};
+
+const listingOf = (word: string, tree: readonly Listed[]) =>
+  [
+    word,
+    ".",
+    ...tree.flatMap(({ pid, root }) => (root ? [`/proc/${pid}/cmdline`] : [])),
+    ".",
+    ...tree.map(
+      ({ pid, ppid, state }) =>
+        `/proc/${pid}/stat:${pid} (sh) ${state} ${ppid} ${pid} ${pid} 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 ${1000 + pid} 0`
+    ),
+    "",
+  ].join("\n");
+
+describe.each(guestAwks.map((argv) => ({ name: argv.join(" "), argv })))(
+  "an end's listing, by $name",
+  ({ argv }) => {
+    layer(NodeServices.layer)((it) => {
+      it("stops a process only once each ancestor of it that it lists is stopped, and lists each after its parent, for KILL, however the guest numbers them", () => {
+        const word = `${markName}=${unsharedMark()}`;
+
+        for (const seed of Array.from({ length: 25 }, (_, i) => i + 1)) {
+          const tree = commandOfWrappedPids(seed);
+          const byPid = new Map(tree.map((each) => [each.pid, each]));
+
+          const { stdout } = spawnSync(
+            argv[0] ?? "",
+            [
+              ...argv.slice(1),
+              "-v",
+              "signal=S",
+              "-v",
+              "self=1",
+              "-v",
+              "proc=1",
+              membersProgram,
+            ],
+            { input: listingOf(word, tree), encoding: "utf-8" }
+          );
+
+          const [, fresh = "", all = ""] = stdout.split("\n");
+          const order = all.trim().split(" ").map(Number);
+          const stopping = fresh.trim().split(" ").filter(Boolean).map(Number);
+
+          const listedParent = (pid: number) =>
+            byPid.get(byPid.get(pid)?.ppid ?? 0);
+
+          expect(order.toSorted(ascending)).toStrictEqual(
+            tree.map(({ pid }) => pid).toSorted(ascending)
+          );
+
+          for (const pid of order) {
+            const parent = listedParent(pid);
+
+            expect(
+              parent === undefined ||
+                order.indexOf(parent.pid) < order.indexOf(pid),
+              `seed ${seed}: ${pid} is listed before its parent`
+            ).toBe(true);
+          }
+
+          for (const pid of stopping) {
+            expect(
+              listedParent(pid)?.state ?? "T",
+              `seed ${seed}: ${pid} is stopped while its parent runs`
+            ).toBe("T");
+          }
+
+          expect(stopping.toSorted(ascending), `seed ${seed}`).toStrictEqual(
+            tree
+              .flatMap(({ pid }) =>
+                (listedParent(pid)?.state ?? "T") === "T" ? [pid] : []
+              )
+              .toSorted(ascending)
+          );
+        }
+      });
+    });
+  }
+);
 
 const shellsRequired = process.env["CI"] !== undefined;
 
