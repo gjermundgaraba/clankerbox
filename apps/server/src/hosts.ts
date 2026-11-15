@@ -133,20 +133,16 @@ const describe = (error: unknown): string =>
 
 const httpApiClientUndeclaredStatus = "undeclared status code";
 
-const replied = (
-  reason:
-    | HttpClientError.StatusCodeError
-    | HttpClientError.DecodeError
-    | HttpClientError.EmptyBodyError
-) => {
+type Reply =
+  | HttpClientError.StatusCodeError
+  | HttpClientError.DecodeError
+  | HttpClientError.EmptyBodyError;
+
+const unexpected = (reason: Reply) => {
   const { status } = reason.response;
 
   if (reason._tag === "EmptyBodyError") {
     return `it replied HTTP ${status} with no body`;
-  }
-
-  if (status === 503 && reason.response.headers["content-type"] === undefined) {
-    return "it replied HTTP 503 with no body, as a host's server does to each request while the host stops";
   }
 
   return reason._tag === "DecodeError" &&
@@ -154,6 +150,12 @@ const replied = (
     ? `it replied HTTP ${status}, which the host contract doesn't declare`
     : `it replied HTTP ${status} with a body the control plane couldn't read`;
 };
+
+const replied = (host: string, reason: Reply) =>
+  reason.response.status === 503 &&
+  reason.response.headers["content-type"] === undefined
+    ? `host ${host} is stopping: it replied HTTP 503 with no body, as a host's server does to each request while the host stops`
+    : `host ${host} didn't answer as the host contract says: ${unexpected(reason)}`;
 
 const unusable = (host: string, error: unknown): Unreachable => {
   if (Schema.isSchemaError(error)) {
@@ -196,7 +198,7 @@ const unusable = (host: string, error: unknown): Unreachable => {
     case "EmptyBodyError": {
       return new Unanswered({
         host,
-        message: `host ${host} didn't answer as the host contract says: ${replied(error.reason)}`,
+        message: replied(host, error.reason),
         logOnly,
       });
     }
