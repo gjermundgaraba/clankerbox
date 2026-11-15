@@ -7,6 +7,7 @@ import {
   outputLimit,
   ScriptFailed,
   timedOutExitCode,
+  WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Executed, Setup } from "@gjermundgaraba/clankerbox-sdk";
 import {
@@ -464,7 +465,12 @@ interface Limited {
   readonly limit: Duration.Duration;
 }
 
-type Cut = Limited;
+interface LeftUnder {
+  readonly _tag: "left";
+  readonly leaving: Leaving;
+}
+
+type Cut = Limited | LeftUnder;
 
 const limited = (limit: Duration.Duration): Effect.Effect<Limited> =>
   Effect.as(Effect.sleep(limit), { _tag: "limit", limit } as const);
@@ -476,7 +482,9 @@ const cutAt = (timeoutSeconds: number | undefined): Effect.Effect<Limited> =>
 
 const endedBy = (exit: Exit.Exit<unknown, unknown>, cut: Cut | undefined) => {
   if (cut !== undefined) {
-    return `past its ${Duration.format(cut.limit)} limit`;
+    return cut._tag === "limit"
+      ? `past its ${Duration.format(cut.limit)} limit`
+      : `that its machine's ${cut.leaving} cut short`;
   }
 
   return Exit.hasInterrupts(exit)
@@ -651,11 +659,22 @@ const executed = (
   }
 };
 
-/** Runs a caller's command, refusing one that sets the mark's variable, which is the exec's own, as `Invalid`. Its limit covers the runtime's attach too. */
+const leavingPhase = {
+  stop: "stopping",
+  pause: "pausing",
+  delete: "deleting",
+} as const satisfies Record<Leaving, string>;
+
+/**
+ * Runs a caller's command, refusing one that sets the mark's variable, which is the exec's own, as
+ * `Invalid`. Its limit covers the runtime's attach too. Once `left` answers, a step that leaves its
+ * machine has begun, so it ends the command as a cut does and answers `WrongState` in that phase.
+ */
 export const runCommand = (
   runtime: Pick<Runtime, "exec">,
-  command: GuestCommand
-): Effect.Effect<Executed, Invalid | RuntimeError> => {
+  command: GuestCommand,
+  left: Effect.Effect<Leaving> = Effect.never
+): Effect.Effect<Executed, Invalid | WrongState | RuntimeError> => {
   if (command.env !== undefined && Object.hasOwn(command.env, markName)) {
     return Effect.fail(
       new Invalid({
@@ -664,9 +683,38 @@ export const runCommand = (
     );
   }
 
-  return Effect.map(
-    ran(runtime, command, cutAt(command.timeoutSeconds)),
-    ({ ending, kept }) => executed(ending, kept)
+  const leftUnder = Effect.map(left, (leaving): LeftUnder => ({
+    _tag: "left",
+    leaving,
+  }));
+
+  return Effect.flatMap(
+    ran(
+      runtime,
+      command,
+      Effect.raceFirst(cutAt(command.timeoutSeconds), leftUnder)
+    ),
+    ({ ending, kept }) => {
+      if (ending._tag === "exited" || ending.by._tag === "limit") {
+        return Effect.succeed(executed(ending, kept));
+      }
+
+      const { name } = command.machine;
+      const { leaving } = ending.by;
+
+      const still =
+        ending._tag === "unended"
+          ? `, though it may still run in the guest: ${ending.why}`
+          : "";
+
+      return Effect.fail(
+        new WrongState({
+          message: `machine ${name} is ${leavingPhase[leaving]}, and its ${leaving} ended this exec's command first${still}`,
+          machine: name,
+          state: leavingPhase[leaving],
+        })
+      );
+    }
   );
 };
 

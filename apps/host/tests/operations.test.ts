@@ -1132,6 +1132,65 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     })
   );
 
+  const leavingSteps = {
+    stopping: { _tag: "stop", machine: ref("dev"), machines: [] },
+    pausing: { _tag: "pause", machine: ref("dev"), pin: "fake 1" },
+    deleting: { _tag: "remove", machine: ref("dev"), keep: [] },
+  } as const satisfies Record<string, Step>;
+
+  for (const [phase, leaving] of Object.entries(leavingSteps)) {
+    const verb = leaving._tag === "remove" ? "delete" : leaving._tag;
+
+    it.effect(
+      `a ${verb} with an exec in flight first ends its command, as a cut does, and the exec answers that the machine is ${phase}`,
+      () =>
+        Effect.gen(function* () {
+          const host = yield* runner();
+          const dev = ref("dev", reached(firstPort));
+
+          yield* finished(host, makes("dev"));
+
+          const pidFile = path.join(host.fake.root("dev") ?? "", "exec.pid");
+
+          const running = yield* Effect.forkChild(
+            Effect.flip(
+              host.operations.exec({
+                machine: dev,
+                argv: [
+                  "/bin/sh",
+                  "-c",
+                  'echo "$$" >"$0.partial" && mv "$0.partial" "$0" && exec sleep 8',
+                  pidFile,
+                ],
+              })
+            )
+          );
+
+          const pid = Number(yield* Effect.eventually(read(pidFile)));
+
+          host.fake.calls.length = 0;
+
+          const report = yield* finished(host, { ...leaving, machine: dev }, 2);
+          const error = yield* Fiber.join(running);
+
+          expect(report.status).toBe("done");
+          expect(error).toStrictEqual(
+            new WrongState({
+              message: `machine dev is ${phase}, and its ${verb} ended this exec's command first`,
+              machine: "dev",
+              state: phase,
+            })
+          );
+          expect(host.fake.calls.slice(0, 2)).toStrictEqual([
+            "exec dev",
+            `${verb} dev`,
+          ]);
+          expect(() => process.kill(pid, 0)).toThrow("ESRCH");
+        }),
+      30_000
+    );
+  }
+
   it.effect("a make from a base boots the image its host maps it to", () =>
     Effect.gen(function* () {
       const host = yield* runner();
