@@ -107,10 +107,8 @@ validate `state`. `composition/`: `config.ts` reads the config file, `routes.ts`
 serves the client contract, and `server.ts`, the package's entry, builds the
 server over a server Layer it is given, through the host contract's `journal`.
 Its `controlPlaneServer` is the Node server the control plane listens on, the
-entry's and the tests' alike, and answers 503 at once to a request no route
-takes, as one that completes while the control plane stops. It closes every
-connection it still holds as it closes, which the stop does once each request
-it cut has answered. A domain file never
+entry's and the tests' alike, and closes every connection it still holds as it
+closes, which the stop does once each request it cut has answered. A domain file never
 imports `platform/` or `composition/`.
 
 **Host** (`apps/host/src`). Domain files sit flat in `src/`:

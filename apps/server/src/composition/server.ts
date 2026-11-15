@@ -50,34 +50,18 @@ class ClosingEveryConnection extends Server {
  * Without the preemptive shutdown, the stop takes the routes off, cuts the requests they run, waits
  * for each to answer 503, and only then closes the server. A connection still open then is owed
  * nothing, so the server closes every one, where Node's own close closes the idle ones and waits on
- * the rest, on one whose request never completes for good.
- *
- * A request that completes once the routes are off finds no route, and answers 503 with no body,
- * as each request the stop cuts does, and its connection closes.
+ * the rest, on one whose request never completes for good. A request that comes once the routes
+ * are off meets its connection closed a few milliseconds later, unanswered, which its client reads
+ * as it reads a 503.
  */
 export const controlPlaneServer = ({
   listen,
 }: Pick<ServerSettings, "listen">) =>
-  NodeHttpServer.layer(
-    () => {
-      const server = new ClosingEveryConnection();
-
-      server.on("request", (_request, response) => {
-        const unrouted = server.listenerCount("request") === 1;
-
-        if (unrouted) {
-          response.writeHead(503, { connection: "close" }).end();
-        }
-      });
-
-      return server;
-    },
-    {
-      host: listen.address,
-      port: listen.port,
-      disablePreemptiveShutdown: true,
-    }
-  );
+  NodeHttpServer.layer(() => new ClosingEveryConnection(), {
+    host: listen.address,
+    port: listen.port,
+    disablePreemptiveShutdown: true,
+  });
 
 export const serverLayer = (
   config: ServerSettings,

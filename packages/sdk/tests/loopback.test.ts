@@ -178,11 +178,11 @@ describe("loopback", () => {
   );
 
   it.effect(
-    "a 503 with no body that closes its connection, a stopping control plane's answer to a request that came too late, is Unavailable through the Node transport: a read retryable, a mutation maybe run",
+    "a connection closed with no reply, as a stopping control plane closes one whose request came too late, is Unavailable through the Node transport: a read retryable, a mutation maybe run",
     () =>
       Effect.gen(function* () {
         const url = yield* answering((response) => {
-          response.writeHead(503, { connection: "close" }).end();
+          response.socket?.destroy();
         });
 
         const read = yield* calling(url, (client) =>
@@ -198,9 +198,10 @@ describe("loopback", () => {
         expect(mutation).toMatchObject({
           _tag: "Unavailable",
           readOnly: false,
-          message:
-            "no reply from the control plane to startMachine dev (HTTP 503); the action may have run: read dev to see",
         });
+        expect(mutation.message).toMatch(
+          /^no reply from the control plane to startMachine dev \(.+\); the action may have run: read dev to see$/u
+        );
       }).pipe(Effect.scoped)
   );
 
