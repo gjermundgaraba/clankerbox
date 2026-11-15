@@ -437,39 +437,68 @@ const ended = (
       endTimeout,
       () =>
         new Internal({
-          message: `it didn't end within ${Duration.format(endTimeout)}`,
+          message: `the end didn't finish within ${Duration.format(endTimeout)}`,
         })
     ),
-    Effect.flatMap((code) =>
-      code === 0
-        ? Effect.void
-        : Effect.fail(
-            new Internal({
-              message: `it exited ${code}: ${lastLines(output.text())}`,
-            })
-          )
-    )
+    Effect.flatMap((code) => {
+      if (code === 0) {
+        return Effect.void;
+      }
+
+      const text = lastLines(output.text());
+
+      return Effect.fail(
+        new Internal({
+          message:
+            text === ""
+              ? `the end exited ${code} and printed nothing`
+              : `the end exited ${code}: ${text}`,
+        })
+      );
+    })
   );
 };
 
-type Drained =
-  | { readonly _tag: "exited"; readonly code: number }
-  | { readonly _tag: "cut"; readonly limit: Duration.Duration }
-  | {
-      readonly _tag: "unended";
-      readonly limit: Duration.Duration;
-      readonly why: string;
-    };
+interface Limited {
+  readonly _tag: "limit";
+  readonly limit: Duration.Duration;
+}
 
-const drained = (
+type Cut = Limited;
+
+const limited = (limit: Duration.Duration): Effect.Effect<Limited> =>
+  Effect.as(Effect.sleep(limit), { _tag: "limit", limit } as const);
+
+const cutAt = (timeoutSeconds: number | undefined): Effect.Effect<Limited> =>
+  timeoutSeconds === undefined
+    ? Effect.never
+    : limited(Duration.seconds(timeoutSeconds));
+
+const endedBy = (exit: Exit.Exit<unknown, unknown>, cut: Cut | undefined) => {
+  if (cut !== undefined) {
+    return `past its ${Duration.format(cut.limit)} limit`;
+  }
+
+  return Exit.hasInterrupts(exit)
+    ? "whose request ended before its exit code"
+    : "whose runtime failed before its exit code";
+};
+
+type Drained<C extends Cut> =
+  | { readonly _tag: "exited"; readonly code: number }
+  | { readonly _tag: "cut"; readonly by: C }
+  | { readonly _tag: "unended"; readonly by: C; readonly why: string };
+
+const drained = <C extends Cut>(
   runtime: Pick<Runtime, "exec">,
   machine: Target,
   invocation: Invocation,
   output: ReturnType<typeof keptOutput>,
-  limit: Duration.Duration | undefined
-): Effect.Effect<Drained, RuntimeError> =>
+  cut: Effect.Effect<C>
+): Effect.Effect<Drained<C>, RuntimeError> =>
   Effect.suspend(() => {
     let unended: Internal | undefined;
+    let cutBy: Cut | undefined;
 
     return Effect.scoped(
       Effect.gen(function* () {
@@ -485,7 +514,7 @@ const drained = (
                   Effect.catch((error) =>
                     Effect.andThen(
                       Effect.logWarning(
-                        `couldn't end in ${machine.name} the command of an exec that ended before its exit code, which may still run there: ${error.message}`
+                        `couldn't end in ${machine.name} the command of an exec ${endedBy(exit, cutBy)}, which may still run there: ${error.message}`
                       ),
                       Effect.sync(() => {
                         unended = error;
@@ -497,29 +526,33 @@ const drained = (
           )
         );
 
-        const execution = yield* Scope.provide(
-          attached(runtime, machine, invocation, mark, output),
-          held
+        const exited = Effect.flatMap(
+          Scope.provide(
+            attached(runtime, machine, invocation, mark, output),
+            held
+          ),
+          (execution) =>
+            Effect.map(execution.exitCode, (code): Drained<C> => {
+              finished = true;
+
+              return { _tag: "exited", code };
+            })
         );
 
-        const exited = Effect.map(execution.exitCode, (code): Drained => {
-          finished = true;
+        return yield* Effect.raceFirst(
+          exited,
+          Effect.map(cut, (by): Drained<C> => {
+            cutBy = by;
 
-          return { _tag: "exited", code };
-        });
-
-        return limit === undefined
-          ? yield* exited
-          : yield* Effect.timeoutOrElse(exited, {
-              duration: limit,
-              orElse: () => Effect.succeed<Drained>({ _tag: "cut", limit }),
-            });
+            return { _tag: "cut", by };
+          })
+        );
       })
     ).pipe(
-      Effect.map((ending): Drained =>
-        ending._tag === "cut" && unended !== undefined
-          ? { ...ending, _tag: "unended", why: unended.message }
-          : ending
+      Effect.map((drain): Drained<C> =>
+        drain._tag === "cut" && unended !== undefined
+          ? { _tag: "unended", by: drain.by, why: unended.message }
+          : drain
       )
     );
   });
@@ -539,7 +572,7 @@ const runInGuest = (
       machine,
       invocation,
       output,
-      timeout
+      limited(timeout)
     );
 
     const text = output.text();
@@ -559,14 +592,14 @@ const runInGuest = (
 
       case "cut": {
         return yield* new ScriptFailed({
-          message: `${script} ran past its ${Duration.format(ending.limit)} timeout; ${tail}`,
+          message: `${script} ran past its ${Duration.format(ending.by.limit)} timeout; ${tail}`,
           script,
         });
       }
 
       case "unended": {
         return yield* new ScriptFailed({
-          message: `${script} ran past its ${Duration.format(ending.limit)} timeout and couldn't then be ended, so it may still run in the guest: ${ending.why}; ${tail}`,
+          message: `${script} ran past its ${Duration.format(ending.by.limit)} timeout and couldn't then be ended, so it may still run in the guest: ${ending.why}; ${tail}`,
           script,
         });
       }
@@ -577,10 +610,11 @@ type GuestCommand = Omit<ExecCommand, "machine"> & {
   readonly machine: Target;
 };
 
-const ran = (
-  runtime: Runtime,
-  { machine, argv, user, env, stdin, timeoutSeconds }: GuestCommand
-): Effect.Effect<Executed, RuntimeError> =>
+const ran = <C extends Cut>(
+  runtime: Pick<Runtime, "exec">,
+  { machine, argv, user, env, stdin }: Omit<GuestCommand, "timeoutSeconds">,
+  cut: Effect.Effect<C>
+) =>
   Effect.gen(function* () {
     const output = keptOutput();
 
@@ -589,31 +623,37 @@ const ran = (
       machine,
       { argv, env, user, stdin },
       output,
-      timeoutSeconds === undefined
-        ? undefined
-        : Duration.seconds(timeoutSeconds)
+      cut
     );
 
-    const kept = { output: output.text(), truncated: output.truncated() };
-
-    switch (ending._tag) {
-      case "exited": {
-        return { exitCode: ending.code, ...kept };
-      }
-
-      case "cut": {
-        return { exitCode: timedOutExitCode, ...kept };
-      }
-
-      case "unended": {
-        return { exitCode: timedOutExitCode, ...kept, mayStillRun: ending.why };
-      }
-    }
+    return {
+      ending,
+      kept: { output: output.text(), truncated: output.truncated() },
+    };
   });
 
-/** Runs a caller's command, refusing one that sets the mark's variable, which is the exec's own, as `Invalid`. */
+const executed = (
+  ending: Drained<Cut>,
+  kept: Omit<Executed, "exitCode" | "mayStillRun">
+): Executed => {
+  switch (ending._tag) {
+    case "exited": {
+      return { exitCode: ending.code, ...kept };
+    }
+
+    case "cut": {
+      return { exitCode: timedOutExitCode, ...kept };
+    }
+
+    case "unended": {
+      return { exitCode: timedOutExitCode, ...kept, mayStillRun: ending.why };
+    }
+  }
+};
+
+/** Runs a caller's command, refusing one that sets the mark's variable, which is the exec's own, as `Invalid`. Its limit covers the runtime's attach too. */
 export const runCommand = (
-  runtime: Runtime,
+  runtime: Pick<Runtime, "exec">,
   command: GuestCommand
 ): Effect.Effect<Executed, Invalid | RuntimeError> => {
   if (command.env !== undefined && Object.hasOwn(command.env, markName)) {
@@ -624,7 +664,10 @@ export const runCommand = (
     );
   }
 
-  return ran(runtime, command);
+  return Effect.map(
+    ran(runtime, command, cutAt(command.timeoutSeconds)),
+    ({ ending, kept }) => executed(ending, kept)
+  );
 };
 
 const preparationTimeout = Duration.seconds(60);
@@ -1306,15 +1349,21 @@ export const leave = (
   leaving: Leaving,
   timeoutSeconds: number
 ): Effect.Effect<Executed, RuntimeError> =>
-  ran(runtime, {
-    machine,
-    argv: [
-      "/bin/sh",
-      "-c",
-      leaveScript,
-      "clankerbox-leave",
-      leaving,
-      machine.instance,
-    ],
-    timeoutSeconds,
-  });
+  Effect.map(
+    ran(
+      runtime,
+      {
+        machine,
+        argv: [
+          "/bin/sh",
+          "-c",
+          leaveScript,
+          "clankerbox-leave",
+          leaving,
+          machine.instance,
+        ],
+      },
+      limited(Duration.seconds(timeoutSeconds))
+    ),
+    ({ ending, kept }) => executed(ending, kept)
+  );

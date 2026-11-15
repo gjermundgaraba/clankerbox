@@ -28,6 +28,7 @@ import {
   Fiber,
   Layer,
   Logger,
+  Option,
   Redacted,
   Schedule,
   Stream,
@@ -851,7 +852,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "setup ran past its 1s timeout and couldn't then be ended, so it may still run in the guest: the guest went away"
         );
         expect(logged.flat()).toStrictEqual([
-          "couldn't end in dev the command of an exec that ended before its exit code, which may still run there: the guest went away",
+          "couldn't end in dev the command of an exec past its 1s limit, which may still run there: the guest went away",
           "couldn't remove dev's setup script after its setup ended early: the guest went away",
         ]);
       }).pipe(
@@ -1100,6 +1101,37 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a timed command whose runtime never answers with its execution answers 124 at its limit, ending what the guest may have begun",
+    () =>
+      Effect.gen(function* () {
+        const { runtime, machine } = yield* madeOn("tart");
+
+        const attaching = Runtime.of({
+          ...runtime,
+          exec: (target, command) =>
+            (command.stdin ?? "").includes("clankerbox-end")
+              ? runtime.exec(target, command)
+              : Effect.never,
+        });
+
+        const answer = yield* Effect.timed(
+          runCommand(attaching, { machine, argv: ["true"], timeoutSeconds: 1 })
+        ).pipe(Effect.timeoutOption(Duration.seconds(10)));
+
+        const [took, ran] = Option.getOrThrow(answer);
+
+        expect(ran).toStrictEqual({
+          exitCode: 124,
+          output: "",
+          truncated: false,
+        });
+        expect(Duration.toSeconds(took)).toBeGreaterThanOrEqual(1);
+        expect(Duration.toSeconds(took)).toBeLessThan(3);
+      }),
+    30_000
+  );
+
+  it.effect(
     "a timed command that ignores TERM is KILLed 5 s after it, and its 124 answers within the end's bound",
     () =>
       Effect.gen(function* () {
@@ -1132,7 +1164,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a timed command whose end isn't confirmed answers 124 with its output, saying why it may still run, within 15 s of its timeout, and logs it",
+    "a timed command whose end isn't confirmed answers 124 with its output, saying why it may still run, also an end that printed nothing, within 15 s of its timeout, and logs it as cut at its limit",
     () => {
       const logged: unknown[] = [];
 
@@ -1176,19 +1208,34 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           )
         );
 
-        expect([stalled, left]).toStrictEqual([
+        const [, silent] = yield* timed(
+          ending(
+            Effect.succeed({
+              output: Stream.empty,
+              exitCode: Effect.succeed(125),
+            })
+          )
+        );
+
+        expect([stalled, left, silent]).toStrictEqual([
           {
             exitCode: 124,
             output: "owed\n",
             truncated: false,
-            mayStillRun: "it didn't end within 15s",
+            mayStillRun: "the end didn't finish within 15s",
           },
           {
             exitCode: 124,
             output: "owed\n",
             truncated: false,
             mayStillRun:
-              "it exited 1: clankerbox: 3 processes of the command still ran at its last listing when its end's 10s ran out",
+              "the end exited 1: clankerbox: 3 processes of the command still ran at its last listing when its end's 10s ran out",
+          },
+          {
+            exitCode: 124,
+            output: "owed\n",
+            truncated: false,
+            mayStillRun: "the end exited 125 and printed nothing",
           },
         ]);
         expect(Duration.toSeconds(took)).toBeGreaterThanOrEqual(
@@ -1198,8 +1245,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           2 + Duration.toSeconds(answeredWithin)
         );
         expect(logged.flat()).toStrictEqual([
-          "couldn't end in dev the command of an exec that ended before its exit code, which may still run there: it didn't end within 15s",
-          "couldn't end in dev the command of an exec that ended before its exit code, which may still run there: it exited 1: clankerbox: 3 processes of the command still ran at its last listing when its end's 10s ran out",
+          "couldn't end in dev the command of an exec past its 1s limit, which may still run there: the end didn't finish within 15s",
+          "couldn't end in dev the command of an exec past its 1s limit, which may still run there: the end exited 1: clankerbox: 3 processes of the command still ran at its last listing when its end's 10s ran out",
+          "couldn't end in dev the command of an exec past its 1s limit, which may still run there: the end exited 125 and printed nothing",
         ]);
       }).pipe(
         Effect.provide(
@@ -1240,7 +1288,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           message: "the connection dropped",
         });
         expect(logged.flat()).toStrictEqual([
-          "couldn't end in dev the command of an exec that ended before its exit code, which may still run there: the agent is gone",
+          "couldn't end in dev the command of an exec whose runtime failed before its exit code, which may still run there: the agent is gone",
         ]);
       }).pipe(
         Effect.provide(
