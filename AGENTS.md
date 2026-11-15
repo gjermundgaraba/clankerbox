@@ -364,7 +364,8 @@ the run.
   the deadline the host gives it. A timed-out exec whose end isn't confirmed
   answers 124 with its output and `mayStillRun`. The launcher waits for its
   command, so a process holding the mark in its arguments stands above the
-  command for its whole life. A stop, pause or remove step first ends its
+  command for its whole life, unless the command kills it. A stop, pause or
+  remove step first ends its
   machine's execs in flight so, before its hook and its runtime call:
   `Operations` admits an exec only while no step runs in its machine's scope,
   under the semaphore that accepts steps, so a capture of the machine and a

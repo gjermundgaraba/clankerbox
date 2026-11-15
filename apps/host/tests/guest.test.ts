@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { constants } from "node:os";
 import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -607,6 +608,43 @@ const launched = (
     shell[0] ?? "",
     [...shell.slice(1), ...command.argv.slice(1)],
     { env, input: new TextEncoder().encode(command.stdin ?? "") }
+  );
+};
+
+const launcherTraps = [
+  "HUP",
+  "INT",
+  "QUIT",
+  "USR1",
+  "USR2",
+  "PIPE",
+  "ALRM",
+  "TERM",
+  "XCPU",
+  "XFSZ",
+  "VTALRM",
+  "PROF",
+  "SYS",
+] as const;
+
+const guardExit = 99;
+
+const launchedBelowGuard = (
+  shell: readonly string[],
+  invocation: Invocation
+) => {
+  const command = guestCommand(invocation, unsharedMark());
+
+  return outputOf(
+    "sh",
+    [
+      "-c",
+      `trap 'exit ${guardExit}' ${launcherTraps.join(" ")}; "$@"; exit $?`,
+      "guard",
+      ...shell,
+      ...command.argv.slice(1),
+    ],
+    { input: new TextEncoder().encode(command.stdin ?? "") }
   );
 };
 
@@ -3050,37 +3088,41 @@ const shellCases = (shell: readonly string[]) => {
     );
 
     it.effect(
-      "the launcher outlives a TERM, HUP or INT of its own and exits as its command then does, which keeps each signal's default",
+      "the launcher outlives each signal it traps, sent to it alone, and exits as its command then does, which keeps each signal's default",
       () =>
         Effect.gen(function* () {
           const codes = yield* Effect.forEach(
-            ["TERM", "HUP", "INT"] as const,
+            launcherTraps,
             (signal) =>
-              Effect.all([
-                Effect.map(
-                  launched(shell, {
+              Effect.map(
+                Effect.all([
+                  launchedBelowGuard(shell, {
                     argv: [
                       "sh",
                       "-c",
                       `kill -s ${signal} $PPID; sleep 0.5; exit 7`,
                     ],
                   }),
-                  ({ code }) => code
-                ),
-                Effect.map(
-                  launched(shell, {
-                    argv: ["sh", "-c", `kill -s ${signal} $$; sleep 0.5`],
+                  launchedBelowGuard(shell, {
+                    argv: ["perl", "-e", `kill "${signal}", $$; sleep 1`],
                   }),
-                  ({ code }) => code
-                ),
-              ])
+                ]),
+                ([toLauncher, toCommand]) => ({
+                  signal,
+                  toLauncher: toLauncher.code,
+                  toCommand: toCommand.code,
+                })
+              ),
+            { concurrency: "unbounded" }
           );
 
-          expect(codes).toStrictEqual([
-            [7, 143],
-            [7, 129],
-            [7, 130],
-          ]);
+          expect(codes).toStrictEqual(
+            launcherTraps.map((signal) => ({
+              signal,
+              toLauncher: 7,
+              toCommand: 128 + constants.signals[`SIG${signal}`],
+            }))
+          );
         })
     );
 
