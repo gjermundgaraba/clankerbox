@@ -13,7 +13,9 @@ import {
   Exit,
   Layer,
   Logger,
+  Option,
   Predicate,
+  Schedule,
   Scope,
 } from "effect";
 import { HttpClient, HttpServer } from "effect/http";
@@ -346,3 +348,51 @@ export const filesOf = (runtime: RuntimeInterface) =>
   runtime.files === undefined
     ? Effect.die(`the ${runtime.traits.runtime} runtime keeps no files`)
     : Effect.succeed(runtime.files);
+
+/**
+ * A raw TCP connection to the HTTP server at `url`, for a test that sends what no HTTP client
+ * would, such as part of a request, and keeps all it reads.
+ */
+export const connection = (url: string) =>
+  Effect.promise(async () => {
+    const socket = connect(Number(new URL(url).port), "127.0.0.1");
+    const chunks: Buffer[] = [];
+
+    socket.on("data", (chunk: Buffer) => {
+      chunks.push(chunk);
+    });
+    socket.on("error", () => {
+      socket.destroy();
+    });
+
+    await once(socket, "connect");
+
+    return {
+      socket,
+      read: () => Buffer.concat(chunks).toString(),
+      closedWithin: (wait: Duration.Duration) =>
+        Effect.sync(() => socket.closed).pipe(
+          Effect.repeat({
+            until: (closed) => closed,
+            schedule: Schedule.spaced(Duration.millis(10)),
+          }),
+          Effect.timeoutOption(wait),
+          Effect.map(Option.isSome)
+        ),
+    };
+  });
+
+/** The status line of `read` when it is one whole answer with no body, and what it is when not. */
+export const emptyAnswer = (read: string) => {
+  const end = read.indexOf("\r\n\r\n");
+  const head = read.slice(0, end).toLowerCase();
+  const body = read.slice(end + 4);
+
+  const whole =
+    end !== -1 &&
+    ((body === "" && head.includes("\r\ncontent-length: 0")) ||
+      (body === "0\r\n\r\n" &&
+        head.includes("\r\ntransfer-encoding: chunked")));
+
+  return whole ? read.slice(0, read.indexOf("\r\n")) : `not whole: ${read}`;
+};
