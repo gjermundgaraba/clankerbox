@@ -3389,7 +3389,7 @@ const commandOfWrappedPids = (seed: number): readonly Listed[] => {
 
   const inOrder = [...pids];
 
-  return inOrder.map((pid, at): Listed => {
+  const tree = inOrder.map((pid, at): Listed => {
     const root = at === 0 || pick(8) === 0;
 
     return {
@@ -3399,6 +3399,11 @@ const commandOfWrappedPids = (seed: number): readonly Listed[] => {
       root,
     };
   });
+
+  return tree
+    .map((each) => ({ each, at: pick(1_000_000) }))
+    .toSorted((a, b) => a.at - b.at)
+    .map(({ each }) => each);
 };
 
 const listingOf = (word: string, tree: readonly Listed[]) =>
@@ -3418,7 +3423,7 @@ describe.each(guestAwks.map((argv) => ({ name: argv.join(" "), argv })))(
   "an end's listing, by $name",
   ({ argv }) => {
     layer(NodeServices.layer)((it) => {
-      it("stops a process only once each ancestor of it that it lists is stopped, and lists each after its parent, for KILL, however the guest numbers them", () => {
+      it("stops a process only once each ancestor of it that it lists is stopped, and lists each after its parent, for KILL, however the guest numbers and lists them", () => {
         const word = `${markName}=${unsharedMark()}`;
 
         for (const seed of Array.from({ length: 25 }, (_, i) => i + 1)) {
