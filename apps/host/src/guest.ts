@@ -183,6 +183,8 @@ export const guestCommand = (
 
 const killGraceSeconds = 5;
 
+const graceGrowthKeepingGrace = 32;
+
 const endMargin = Duration.seconds(5);
 
 /**
@@ -263,7 +265,9 @@ END {
 /**
  * Ends in the guest each process whose own arguments or environment hold the mark read from stdin,
  * the exec's or not, and what descends from one. It reads the mark and its deadline in seconds,
- * then TERMs what it lists, and once at least the grace has passed, or nothing it TERMed runs, STOPs
+ * then TERMs what it lists, and once at least the grace has passed, or nothing it TERMed runs, or a
+ * listing it makes every 0.4 s of the grace finds more than 32 processes beyond those it TERMed, as
+ * a command that keeps growing after TERM isn't winding down and would fill a small guest, STOPs
  * what it lists until a listing finds none it hasn't stopped, and KILLs them all, again until a
  * listing finds none. It signals each listing's processes ancestors first, and STOPs a process only
  * once a listing finds stopped each ancestor of it that it lists, so no parent that still runs sees
@@ -293,10 +297,11 @@ export const endScript = [
   `find "$records" -type f -mmin +${recordMinutes} -exec rm -f {} + 2>/dev/null || true`,
   `program='${membersProgram.replaceAll("'", String.raw`'\''`)}'`,
   "held=",
+  "found=",
   "all=",
   "count=0",
   "release() {",
-  `  [ -z "$all" ] || { kill -s KILL $all; kill -s CONT $all; } 2>/dev/null`,
+  `  [ -z "$found" ] || { kill -s KILL $found; kill -s CONT $found; } 2>/dev/null`,
   `  echo "clankerbox: $1" >&2`,
   "  exit 1",
   "}",
@@ -320,7 +325,7 @@ export const endScript = [
   "  count=${first% *} waiting=${first#* }",
   `  case $count in '' | *[!0-9]*) release "couldn't list the guest's processes, with /proc or ps, and awk" ;; esac`,
   `  fresh=$(printf '%s\\n' "$listed" | awk 'NR == 2')`,
-  `  all=$(printf '%s\\n' "$listed" | awk 'NR == 3')`,
+  `  found=$(printf '%s\\n' "$listed" | awk 'NR == 3')`,
   `  held=$(printf '%s\\n' "$listed" | awk 'NR > 3')`,
   "}",
   "alive() {",
@@ -335,19 +340,29 @@ export const endScript = [
   `  rm -f "$records/$mark"`,
   "  exit 0",
   "}",
+  "termed() {",
+  "  round T",
+  `  [ "$count" -gt 0 ] || ended`,
+  `  [ -z "$fresh" ] || kill -s TERM $fresh 2>/dev/null`,
+  "  all=$found termed=$count",
+  "}",
   "round T",
   `[ "$count" -gt 0 ] || exit 0`,
   `[ -z "$fresh" ] || kill -s TERM $fresh 2>/dev/null`,
+  "all=$found termed=$count",
   `graced=$(($(date +%s) + ${killGraceSeconds}))`,
   `[ "$graced" -lt "$ends" ] || graced=$ends`,
-  "if sleep 0.2 2>/dev/null; then tick=0.2; else tick=1; fi",
+  "if sleep 0.2 2>/dev/null; then tick=0.2 every=2; else tick=1 every=1; fi",
+  "ticks=0",
   `while [ "$(date +%s)" -le "$graced" ]; do`,
   "  live=",
   `  for pid in $all; do alive "$pid" && live=1 && break; done`,
+  "  ticks=$((ticks + 1))",
   `  if [ -z "$live" ]; then`,
-  "    round T",
-  `    [ "$count" -gt 0 ] || ended`,
-  `    [ -z "$fresh" ] || kill -s TERM $fresh 2>/dev/null`,
+  "    termed",
+  "  elif [ $((ticks % every)) -eq 0 ]; then",
+  "    round L",
+  `    [ "$count" -le $((termed + ${graceGrowthKeepingGrace})) ] || break`,
   "  fi",
   `  sleep "$tick"`,
   "done",
@@ -359,7 +374,7 @@ export const endScript = [
   `  elif [ "$waiting" -gt 0 ]; then`,
   `    sleep "$tick"`,
   "  else",
-  "    kill -s KILL $all 2>/dev/null",
+  "    kill -s KILL $found 2>/dev/null",
   `    sleep "$tick"`,
   "  fi",
   "done",

@@ -364,6 +364,8 @@ const endSeconds = 10;
 
 const confirmedUpTo = 2000;
 
+const graceGrowth = 32;
+
 const answeredWithin = Duration.seconds(15);
 
 const endsTimeout = (trees: number, ends: number) =>
@@ -2827,6 +2829,65 @@ const shellCases = (shell: readonly string[]) => {
 
           expect(ended.code, ended.stderr).toBe(0);
           expect(holdingAny(needles)).toStrictEqual([]);
+        }),
+      endsTimeout(1, 1)
+    );
+
+    it.effect(
+      `an end stops a command that grows by more than ${graceGrowth} processes after its TERM within a second of it, as it isn't winding down, not at its grace's end`,
+      () =>
+        Effect.gen(function* () {
+          const root = yield* scratch;
+          const mark = unsharedMark();
+          const lasts = `30.${randomBytes(3).readUIntBE(0, 3)}`;
+          const needles = [`${markName}=${mark}`, `sleep\0${lasts}\0`];
+
+          yield* reaped(root, needles);
+          yield* marked(
+            root,
+            `trap '' TERM; while [ ! -e "$CLANKERBOX_ROOT/enough" ]; do sleep ${lasts} & sleep 0.01; done`,
+            3,
+            mark
+          );
+
+          const [took, ended] = yield* Effect.timed(
+            endUnder(shell, root, mark)
+          );
+
+          expect(ended.code, ended.stderr).toBe(0);
+          expect(holdingAny(needles)).toStrictEqual([]);
+          expect(Duration.toSeconds(took)).toBeLessThan(3);
+        }),
+      endsTimeout(1, 1)
+    );
+
+    it.effect(
+      `an end gives its whole grace to a command whose TERM handler runs ${graceGrowth / 2} children at once, then a few more, before it exits`,
+      () =>
+        Effect.gen(function* () {
+          const root = yield* scratch;
+          const mark = unsharedMark();
+
+          const children = Array.from(
+            { length: graceGrowth / 2 },
+            () => "sleep 1.5 &"
+          ).join(" ");
+
+          const tree = yield* marked(
+            root,
+            `trap '${children} wait; for i in 1 2 3; do sleep 0.5; done; : >"$CLANKERBOX_ROOT/cleaned"; exit 0' TERM; while :; do sleep 0.1; done`,
+            2,
+            mark
+          );
+
+          const [took, ended] = yield* Effect.timed(
+            endUnder(shell, root, mark)
+          );
+
+          expect(ended.code, ended.stderr).toBe(0);
+          expect(existsSync(path.join(root, "cleaned"))).toBe(true);
+          expect(yield* runningOf(tree)).toStrictEqual([]);
+          expect(Duration.toSeconds(took)).toBeGreaterThanOrEqual(3);
         }),
       endsTimeout(1, 1)
     );
