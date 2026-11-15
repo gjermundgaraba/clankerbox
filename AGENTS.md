@@ -366,8 +366,9 @@ the run.
   command, so a process holding the mark in its arguments stands above the
   command for its whole life. A stop, pause or remove step first ends its
   machine's execs in flight so, before its hook and its runtime call:
-  `Operations` admits an exec only while no step runs on its machine, under the
-  semaphore that accepts steps, and the step's cut answers it `WrongState`.
+  `Operations` admits an exec only while no step runs in its machine's scope,
+  under the semaphore that accepts steps, so a capture of the machine and a
+  fork from it, scoped to the checkpoint and the new machine, run beside one, and the step's cut answers it `WrongState`.
   README's `exec` bullet states the rest. Smolvm's agent
   ends a cut command too; a Tart guest, boat and smol cloud leave it running,
   measured on each, and the fake runtime's `cut` models each.

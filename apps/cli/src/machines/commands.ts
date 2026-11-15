@@ -337,7 +337,7 @@ export const exec = Command.make(
     limit: Flag.String("timeout").pipe(
       Flag.withMetavar("DURATION"),
       Flag.withDescription(
-        `End the command after this long, such as 90s or 30m, counted from when its host begins it, after a step under way on the machine, and exit 124 once it has ended, within ${Duration.format(endTimeout)} of it, saying on stderr, or with --json in mayStillRun, when some of it may still run; unbounded by default.`
+        `End the command after this long, such as 90s or 30m, counted from when its host begins it, after a step under way on the machine, and exit 124 once its host has ended it, which the host waits for at most ${Duration.format(endTimeout)} past the limit, saying on stderr, or with --json in mayStillRun, when some of it may still run; unbounded by default.`
       ),
       Flag.optional
     ),
