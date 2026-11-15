@@ -646,9 +646,15 @@ describe.runIf(live)("the smol cloud API, as the adapter relies on it", () => {
           );
 
           expectStatus(
-            yield* call("DELETE", `/v1/checkpoints/${paused}`),
+            yield* call("DELETE", `/v1/checkpoints/${paused}`).pipe(
+              Effect.repeat({
+                schedule: Schedule.spaced(Duration.seconds(1)),
+                until: (answer) => answer.status !== 409,
+                times: 2,
+              })
+            ),
             204,
-            "a delete of a pause's own checkpoint refused 409, sent again once the checkpoint rests"
+            "a delete of a pause's own checkpoint refused 409, sent again once the checkpoint rests, up to three times a second apart, as the adapter does"
           );
         } else {
           expectStatus(

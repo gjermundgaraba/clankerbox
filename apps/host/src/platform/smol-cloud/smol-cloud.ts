@@ -646,13 +646,27 @@ export const make = (
         poll
       );
 
-    const checkpointDeleted = (checkpoint: Handle) =>
+    const checkpointDeleted = (
+      checkpoint: Handle,
+      refusedAtRest = 0
+    ): Effect.Effect<void, ApiError> =>
       api.deleteCheckpoint(checkpoint).pipe(
-        Effect.catchIf(isConflict, () =>
-          Effect.andThen(
-            checkpointAtRest(checkpoint),
-            api.deleteCheckpoint(checkpoint)
-          )
+        Effect.catchIf(isConflict, (refusal) =>
+          Effect.flatMap(api.checkpoint(checkpoint), ({ status }) => {
+            if (!checkpointEnds.has(status)) {
+              return Effect.andThen(
+                checkpointAtRest(checkpoint),
+                checkpointDeleted(checkpoint, refusedAtRest)
+              );
+            }
+
+            return refusedAtRest + 1 >= standingAfter
+              ? Effect.fail(refusal)
+              : Effect.andThen(
+                  waited(refusal),
+                  checkpointDeleted(checkpoint, refusedAtRest + 1)
+                );
+          })
         ),
         Effect.catchIf(isGone, () => Effect.void)
       );
