@@ -69,6 +69,11 @@ export interface FakeFaults extends Faults {
    */
   readonly holdCaptures: Effect.Effect<Effect.Effect<void>>;
   /**
+   * While on, has the first delete of each checkpoint that rests refused 409 as its capture's still
+   * is, as smol cloud's refusal can lag behind its checkpoint reading `available`.
+   */
+  readonly lagCaptures: (on: boolean) => Effect.Effect<void>;
+  /**
    * While on, holds each exec's response head until its command's first output, as a provider whose
    * attach stalls would, so a silent command's exec never starts; off, the head comes at once, as
    * smol cloud's does.
@@ -254,6 +259,8 @@ export const fakeSmolCloud = (
 
     let startsHeld: Promise<void> | undefined;
     let capturesHeld: FakeCheckpoint[] | undefined;
+    let capturesLag = false;
+    const laggedOnce = new Set<string>();
     let attachStalled = false;
     const lateMakes = lateLandings();
     let quotaOn = false;
@@ -573,10 +580,20 @@ export const fakeSmolCloud = (
       return answer(204);
     };
 
+    const lagsBehind = (checkpoint: FakeCheckpoint) => {
+      if (!capturesLag || laggedOnce.has(checkpoint.id)) {
+        return false;
+      }
+
+      laggedOnce.add(checkpoint.id);
+
+      return true;
+    };
+
     const deleteCheckpoint = async (
       checkpoint: FakeCheckpoint
     ): Promise<Answer> => {
-      if (checkpoint.status === "creating") {
+      if (checkpoint.status === "creating" || lagsBehind(checkpoint)) {
         return problem(
           409,
           "conflict",
@@ -1029,6 +1046,10 @@ export const fakeSmolCloud = (
       stallAttach: (on) =>
         Effect.sync(() => {
           attachStalled = on;
+        }),
+      lagCaptures: (on) =>
+        Effect.sync(() => {
+          capturesLag = on;
         }),
       holdCaptures: Effect.sync(() => {
         const held: FakeCheckpoint[] = [];

@@ -614,6 +614,50 @@ describe("the smol cloud runtime on its host", () => {
     }
   );
 
+  it.live(
+    "a remove whose pause's checkpoint smol cloud refuses as still captured once more after it rests deletes it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { runtime, fake } = yield* onHost();
+          const dev = yield* made(runtime, "dev");
+          const release = yield* fake.faults.holdCaptures;
+
+          yield* fake.faults.lagCaptures(true);
+          yield* runtime.pause(dev);
+
+          const own =
+            [...fake.checkpoints.values()].find(
+              ({ machineId }) => machineId === dev.handle
+            )?.id ?? "";
+
+          const removed = yield* Effect.forkChild(
+            Effect.exit(runtime.delete(dev, new Set()))
+          );
+
+          yield* Effect.repeat(
+            Effect.sync(() => fake.calls),
+            {
+              until: (calls) =>
+                calls.includes(`DELETE /v1/checkpoints/${own} 409`),
+              schedule: Schedule.spaced("10 millis"),
+            }
+          );
+          yield* release;
+
+          const ended = yield* Fiber.join(removed);
+
+          expect(Exit.isSuccess(ended), String(ended)).toBe(true);
+          expect(fake.checkpoints.has(own)).toBe(false);
+          expect(
+            fake.calls.filter(
+              (call) => call === `DELETE /v1/checkpoints/${own} 409`
+            )
+          ).toHaveLength(2);
+        })
+      )
+  );
+
   it.live("stages stdin past a MiB on the guest's tmpfs and removes it", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -2829,7 +2873,7 @@ const snap1 = {
 
 describe("a smol cloud checkpoint delete refused 409", () => {
   it.effect(
-    "is Conflict when sent again once the checkpoint rests, whether or not the refusal says it may be retried",
+    "is Conflict once refused three times while the checkpoint rests, whether or not the refusal says it may be retried",
     () =>
       Effect.gen(function* () {
         for (const retryable of [false, true]) {
@@ -2856,7 +2900,7 @@ describe("a smol cloud checkpoint delete refused 409", () => {
           expect(
             asks(asked, "DELETE /v1/checkpoints/ckpt-1"),
             `retryable ${retryable}`
-          ).toBe(2);
+          ).toBe(3);
         }
       })
   );
