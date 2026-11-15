@@ -1,8 +1,5 @@
 #!/usr/bin/env node
-import { createServer } from "node:http";
-
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { version } from "@gjermundgaraba/clankerbox-sdk";
@@ -10,7 +7,7 @@ import { Effect, Layer } from "effect";
 import { Command, Flag } from "effect/cli";
 
 import { loadConfig } from "./composition/config.ts";
-import { hostLayer, listening } from "./composition/host.ts";
+import { hostLayer, hostServer } from "./composition/host.ts";
 import { runtimeLayer } from "./composition/runtimes.ts";
 import * as NodeBox from "./platform/box.ts";
 
@@ -22,7 +19,7 @@ const run = (file: string) =>
       hostLayer(
         config,
         runtimeLayer(config.runtime, config),
-        NodeHttpServer.layer(createServer, listening(config))
+        hostServer(config)
       )
     );
   });

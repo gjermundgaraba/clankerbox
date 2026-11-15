@@ -1,10 +1,8 @@
 import { once } from "node:events";
-import { createServer } from "node:http";
 import { connect, createServer as createTcpServer } from "node:net";
 import type { Server } from "node:net";
 import path from "node:path";
 
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
@@ -22,7 +20,7 @@ import { HttpClient, HttpServer } from "effect/http";
 import { expect } from "vite-plus/test";
 
 import { BuildStore } from "../src/builds.ts";
-import { hostLayer, listening } from "../src/composition/host.ts";
+import { hostLayer, hostServer } from "../src/composition/host.ts";
 import type { PortRange } from "../src/machine-ports.ts";
 import { Operations } from "../src/operations.ts";
 import type { Interface as OperationsInterface } from "../src/operations.ts";
@@ -66,10 +64,7 @@ export const hostConfig = (
 });
 
 export const loopbackServer = (port = 0) =>
-  NodeHttpServer.layer(
-    createServer,
-    listening({ listen: { address: "127.0.0.1", port } })
-  );
+  hostServer({ listen: { address: "127.0.0.1", port } });
 
 export interface HostOptions {
   readonly id?: string;

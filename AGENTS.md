@@ -194,7 +194,9 @@ accounts. A domain file never imports `platform/` or `composition/`.
 `runtimes.ts` is the registry of runtimes, one entry each under the name a host
 config's `runtime` gives it, with its settings and its Layer, `routes.ts` serves the host contract, and `host.ts` builds the
 host over a runtime Layer and a server Layer it is given, with the config's
-tailnet and build store, if any.
+tailnet and build store, if any. Its `hostServer` is the Node server a host
+listens on, the entry's and the tests' alike, and answers 503 at once to a
+request no route takes, as one that comes while the host stops.
 
 **Host contract** (`packages/host-contract/src`). `api.ts`: `HostHttp`, the
 `Step`s, `Operation`, `Report`, `HostInfo`. `traits.ts`, its `./traits` export:

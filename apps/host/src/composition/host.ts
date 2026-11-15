@@ -1,4 +1,7 @@
+import { createServer } from "node:http";
+
 import { journal } from "@clankerbox/host-contract/journal";
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Layer } from "effect";
@@ -33,17 +36,38 @@ export type ServerLayer = Layer.Layer<
 >;
 
 /**
- * How a host's Node server listens: on its config's address, and stopping at once, cutting the
- * requests still open, as its process's end would. An exec runs only as long as its request, and a
- * control plane's wait on a step asks the host again once it is back, so neither is owed the wait
- * Node gives them by default.
+ * A host's Node server, on its config's address. It stops at once, cutting the requests still
+ * open, as its process's end would. An exec runs only as long as its request, and a control plane's
+ * wait on a step asks the host again once it is back, so neither is owed the wait Node gives them
+ * by default.
+ *
+ * The stop takes the routes off first, and the server listens on until the requests it cut have
+ * ended, which for an exec is once the end of its command has. Node holds a request that comes
+ * meanwhile unanswered, and the stop would then wait on its connection for good. So a request that
+ * finds no route answers 503 with no body, as each request the stop cuts does, and its connection
+ * closes.
  */
-export const listening = ({ listen }: Pick<HostSettings, "listen">) =>
-  ({
-    host: listen.address,
-    port: listen.port,
-    disablePreemptiveShutdown: true,
-  }) as const;
+export const hostServer = ({ listen }: Pick<HostSettings, "listen">) =>
+  NodeHttpServer.layer(
+    () => {
+      const server = createServer();
+
+      server.on("request", (_request, response) => {
+        const unrouted = server.listenerCount("request") === 1;
+
+        if (unrouted) {
+          response.writeHead(503, { connection: "close" }).end();
+        }
+      });
+
+      return server;
+    },
+    {
+      host: listen.address,
+      port: listen.port,
+      disablePreemptiveShutdown: true,
+    }
+  );
 
 export interface HostLayerConfig extends HostSettings {
   readonly tailnet?: Tailscale.TailnetSettings | undefined;

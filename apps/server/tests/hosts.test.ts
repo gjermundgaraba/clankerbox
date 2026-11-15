@@ -427,7 +427,7 @@ layer(NodeServices.layer, { excludeTestServices: true })(
             _tag: "Unavailable",
             readOnly: false,
             message:
-              "host stopping didn't answer as the host contract says: it replied HTTP 503 with no body, as a host's server does to each request it still holds when the host stops",
+              "host stopping didn't answer as the host contract says: it replied HTTP 503 with no body, as a host's server does to each request while the host stops",
           });
         })
     );

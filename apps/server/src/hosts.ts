@@ -146,7 +146,7 @@ const replied = (
   }
 
   if (status === 503 && reason.response.headers["content-type"] === undefined) {
-    return "it replied HTTP 503 with no body, as a host's server does to each request it still holds when the host stops";
+    return "it replied HTTP 503 with no body, as a host's server does to each request while the host stops";
   }
 
   return reason._tag === "DecodeError" &&
