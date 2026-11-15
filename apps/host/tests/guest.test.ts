@@ -2998,6 +2998,41 @@ const shellCases = (shell: readonly string[]) => {
     );
 
     it.effect(
+      "the launcher outlives a TERM, HUP or INT of its own and exits as its command then does, which keeps each signal's default",
+      () =>
+        Effect.gen(function* () {
+          const codes = yield* Effect.forEach(
+            ["TERM", "HUP", "INT"] as const,
+            (signal) =>
+              Effect.all([
+                Effect.map(
+                  launched(shell, {
+                    argv: [
+                      "sh",
+                      "-c",
+                      `kill -s ${signal} $PPID; sleep 0.5; exit 7`,
+                    ],
+                  }),
+                  ({ code }) => code
+                ),
+                Effect.map(
+                  launched(shell, {
+                    argv: ["sh", "-c", `kill -s ${signal} $$; sleep 0.5`],
+                  }),
+                  ({ code }) => code
+                ),
+              ])
+          );
+
+          expect(codes).toStrictEqual([
+            [7, 143],
+            [7, 129],
+            [7, 130],
+          ]);
+        })
+    );
+
+    it.effect(
       "an end ends a command that clears its environment, also one that execs into it, with nothing above the launcher to carry the mark",
       () =>
         Effect.gen(function* () {

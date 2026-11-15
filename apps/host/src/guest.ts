@@ -146,6 +146,7 @@ const launcher = [
   `  *=*) printf '%s: not run, as env takes a word holding = for a variable\\n' "$first" >&2; exit 127 ;;`,
   `  -) printf '%s: not run, as env takes a lone - for -i\\n' "$first" >&2; exit 127 ;;`,
   "esac",
+  "trap : HUP INT TERM",
   "exec 3>&2 2>/dev/null",
   `(exec env -- "$@" 2>&3 3>&-) || exit`,
 ].join("\n");
@@ -160,7 +161,9 @@ const launcher = [
  * waits for `env` rather than becoming it, so a process that holds the mark in its arguments stands
  * above the command for its whole life, also one that clears its environment where nothing above
  * the launcher carries the mark, and exits as the command did, with 128 and the signal's number for
- * one a signal ended.
+ * one a signal ended. It outlives a TERM, HUP or INT of its own, as a runtime answers an exec once
+ * the launcher exits, so the command, whose subshell and `exec` set each trapped signal back to its
+ * default, would run on unended: https://pubs.opengroup.org/onlinepubs/9799919799/utilities/V3_chap02.html#tag_19_29
  */
 export const guestCommand = (
   { argv, env, user, stdin }: Invocation,
