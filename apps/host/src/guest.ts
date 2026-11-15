@@ -713,7 +713,7 @@ export const runCommand = (
 
       return Effect.fail(
         new WrongState({
-          message: `machine ${name} is ${leavingPhase[leaving]}, and its ${leaving} ended this exec's command first${still}`,
+          message: `machine ${name}'s ${leaving} ended this exec's command first${still}`,
           machine: name,
           state: leavingPhase[leaving],
         })

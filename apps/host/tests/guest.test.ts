@@ -1292,7 +1292,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(error).toStrictEqual(
           new WrongState({
             message:
-              "machine dev is pausing, and its pause ended this exec's command first, though it may still run in the guest: the end exited 125 and printed nothing",
+              "machine dev's pause ended this exec's command first, though it may still run in the guest: the end exited 125 and printed nothing",
             machine: "dev",
             state: "pausing",
           })

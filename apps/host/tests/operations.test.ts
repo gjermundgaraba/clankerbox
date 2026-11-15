@@ -1142,7 +1142,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     const verb = leaving._tag === "remove" ? "delete" : leaving._tag;
 
     it.effect(
-      `a ${verb} with an exec in flight first ends its command, as a cut does, and the exec answers that the machine is ${phase}`,
+      `a ${verb} with an exec in flight first ends its command, as a cut does, and the exec answers WrongState in the phase ${phase}, saying the ${verb} ended it`,
       () =>
         Effect.gen(function* () {
           const host = yield* runner();
@@ -1176,7 +1176,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           expect(report.status).toBe("done");
           expect(error).toStrictEqual(
             new WrongState({
-              message: `machine dev is ${phase}, and its ${verb} ended this exec's command first`,
+              message: `machine dev's ${verb} ended this exec's command first`,
               machine: "dev",
               state: phase,
             })
