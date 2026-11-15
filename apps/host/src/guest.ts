@@ -211,11 +211,14 @@ const recordMinutes = 60;
 // kills can't add a process it doesn't list. sudo, on a pty, stops its parent's process group once
 // it sees its command stop, which holds smolvm's agent and the end on a restored machine:
 // https://github.com/sudo-project/sudo/blob/v1.9.17p2/src/exec_pty.c#L276-L287
+// A process acts on a pending STOP at its next return from the kernel, so one sent STOP before its
+// child sees no system call of its own return, and with it nothing of that child's stop:
+// https://man7.org/linux/man-pages/man7/signal.7.html
 export const membersProgram = String.raw`
 function add(pid, ppid, start, state) {
   rows++
   if (state ~ /^[ZX]/ || pid == 1 || pid == self) return
-  n++; P[n] = pid; PP[pid] = ppid; ST[pid] = start; STATE[pid] = state
+  n++; P[n] = pid; PP[pid] = ppid; ST[pid] = start
 }
 function stated() {
   if (spid != "" && match(stat, /\) [^)]*$/)) {
@@ -256,12 +259,10 @@ END {
   for (q = 1; q <= o; q++) {
     pid = O[q]
     sent = ((pid in H) && H[pid] == ST[pid]) ? F[pid] : "-"
-    if (!index(sent, signal)) {
-      if (signal != "S" || !(PP[pid] in K) || STATE[PP[pid]] ~ /^[Tt]/) { fresh = fresh " " pid; sent = sent signal } else waiting++
-    }
+    if (!index(sent, signal)) { fresh = fresh " " pid; sent = sent signal }
     all = all " " pid; R[q] = pid " " ST[pid] " " sent
   }
-  printf "%d %d\n%s\n%s\n", count, waiting, fresh, all
+  printf "%d\n%s\n%s\n", count, fresh, all
   for (q = 1; q <= o; q++) print R[q]
 }
 `;
@@ -274,10 +275,9 @@ END {
  * fraction of one, finds more than 32 processes beyond those it TERMed, as a command that keeps
  * growing after TERM isn't winding down and would fill a small guest, STOPs
  * what it lists until a listing finds none it hasn't stopped, and KILLs them all, again until a
- * listing finds none. It signals each listing's processes ancestors first, and STOPs a process only
- * once a listing finds stopped each ancestor of it that it lists, so no parent that still runs sees
- * its child stop, as sudo, which then stops its own parent's group, would; a process whose parent it
- * doesn't list it STOPs at once. Each listing is two `grep`s over `/proc`, given its paths by `xargs`, as zsh
+ * listing finds none. It signals each listing's processes in one `kill`, each after its parent, so
+ * no parent sees its child stop, as sudo, which then stops its own parent's group, would, and a tree
+ * costs the same listings however deep it is. Each listing is two `grep`s over `/proc`, given its paths by `xargs`, as zsh
  * globs a path below each process slowly and a guest's processes may name more paths than a command
  * line holds, or one `ps`, and one `awk` pass, and `awk` picks out each of its lines again, where
  * zsh's patterns take time that grows with the square of the listing, so its cost grows with the
@@ -326,8 +326,7 @@ export const endScript = [
   "      fi",
   `    } | awk -v signal="$1" -v self="$$" -v proc="$proc" "$program"`,
   "  )",
-  `  first=$(printf '%s\\n' "$listed" | awk 'NR == 1')`,
-  "  count=${first% *} waiting=${first#* }",
+  `  count=$(printf '%s\\n' "$listed" | awk 'NR == 1')`,
   `  case $count in '' | *[!0-9]*) release "couldn't list the guest's processes, with /proc or ps, and awk" ;; esac`,
   `  fresh=$(printf '%s\\n' "$listed" | awk 'NR == 2')`,
   `  found=$(printf '%s\\n' "$listed" | awk 'NR == 3')`,
@@ -376,8 +375,6 @@ export const endScript = [
   `  [ "$count" -gt 0 ] || ended`,
   `  if [ -n "$fresh" ]; then`,
   "    kill -s STOP $fresh 2>/dev/null",
-  `  elif [ "$waiting" -gt 0 ]; then`,
-  `    sleep "$tick"`,
   "  else",
   "    kill -s KILL $found 2>/dev/null",
   `    sleep "$tick"`,

@@ -2696,6 +2696,8 @@ const sudoLikeWatcher = [
 
 const manyLinesSeconds = 5;
 
+const chainDepth = 400;
+
 const shellCases = (shell: readonly string[]) => {
   layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     it.effect(
@@ -3346,6 +3348,40 @@ const shellCases = (shell: readonly string[]) => {
         }),
       endsTimeout(1, 1)
     );
+
+    it.effect(
+      `an end confirms within its ${endSeconds} s deadline the end of a chain of ${chainDepth} processes that ignore TERM, each the parent of the next, on one CPU`,
+      () =>
+        Effect.gen(function* () {
+          const root = yield* scratch;
+          const mark = unsharedMark();
+          const cpu = oneCpu();
+          const chain = path.join(root, "chain");
+
+          yield* write(
+            chain,
+            `trap '' TERM; if [ "$1" -gt 0 ]; then sh "$0" $(($1 - 1)); exit; fi; sleep 300`
+          );
+
+          const tree = yield* marked(
+            root,
+            `taskset -cp ${cpu} $$ >/dev/null; sh ${chain} ${chainDepth}`,
+            chainDepth + 2,
+            mark,
+            Duration.seconds(60)
+          );
+
+          const ended = yield* endUnder(
+            ["taskset", "-c", cpu, ...shell],
+            root,
+            mark
+          );
+
+          expect(ended.code, ended.stderr).toBe(0);
+          expect(yield* runningOf(tree)).toStrictEqual([]);
+        }),
+      120_000
+    );
   });
 };
 
@@ -3423,7 +3459,7 @@ describe.each(guestAwks.map((argv) => ({ name: argv.join(" "), argv })))(
   "an end's listing, by $name",
   ({ argv }) => {
     layer(NodeServices.layer)((it) => {
-      it("stops a process only once each ancestor of it that it lists is stopped, and lists each after its parent, for KILL, however the guest numbers and lists them", () => {
+      it("STOPs, and then KILLs, each process it lists, each after its listed parent, however the guest numbers and lists them", () => {
         const word = `${markName}=${unsharedMark()}`;
 
         for (const seed of Array.from({ length: 25 }, (_, i) => i + 1)) {
@@ -3445,41 +3481,27 @@ describe.each(guestAwks.map((argv) => ({ name: argv.join(" "), argv })))(
             { input: listingOf(word, tree), encoding: "utf-8" }
           );
 
-          const [, fresh = "", all = ""] = stdout.split("\n");
-          const order = all.trim().split(" ").map(Number);
-          const stopping = fresh.trim().split(" ").filter(Boolean).map(Number);
+          const [count = "", toStop = "", toKill = ""] = stdout.split("\n");
 
-          const listedParent = (pid: number) =>
-            byPid.get(byPid.get(pid)?.ppid ?? 0);
+          expect(count, `seed ${seed}`).toBe(String(tree.length));
 
-          expect(order.toSorted(ascending)).toStrictEqual(
-            tree.map(({ pid }) => pid).toSorted(ascending)
-          );
+          for (const line of [toStop, toKill]) {
+            const order = line.trim().split(" ").map(Number);
 
-          for (const pid of order) {
-            const parent = listedParent(pid);
+            expect(order.toSorted(ascending), `seed ${seed}`).toStrictEqual(
+              tree.map(({ pid }) => pid).toSorted(ascending)
+            );
 
-            expect(
-              parent === undefined ||
-                order.indexOf(parent.pid) < order.indexOf(pid),
-              `seed ${seed}: ${pid} is listed before its parent`
-            ).toBe(true);
+            for (const pid of order) {
+              const parent = byPid.get(byPid.get(pid)?.ppid ?? 0);
+
+              expect(
+                parent === undefined ||
+                  order.indexOf(parent.pid) < order.indexOf(pid),
+                `seed ${seed}: ${pid} is listed before its parent`
+              ).toBe(true);
+            }
           }
-
-          for (const pid of stopping) {
-            expect(
-              listedParent(pid)?.state ?? "T",
-              `seed ${seed}: ${pid} is stopped while its parent runs`
-            ).toBe("T");
-          }
-
-          expect(stopping.toSorted(ascending), `seed ${seed}`).toStrictEqual(
-            tree
-              .flatMap(({ pid }) =>
-                (listedParent(pid)?.state ?? "T") === "T" ? [pid] : []
-              )
-              .toSorted(ascending)
-          );
         }
       });
     });
