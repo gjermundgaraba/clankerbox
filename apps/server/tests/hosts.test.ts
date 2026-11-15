@@ -183,6 +183,33 @@ const pageHost = (status: number) =>
     })
   );
 
+const stoppingHost = Effect.acquireRelease(
+  Effect.callback<Server>((resume) => {
+    const server = createServer((_incoming, response) => {
+      response.writeHead(503);
+      response.end();
+    });
+
+    server.listen({ host: "127.0.0.1", port: 0 }, () => {
+      resume(Effect.succeed(server));
+    });
+  }),
+  (server) =>
+    Effect.callback<undefined>((resume) => {
+      server.close(() => {
+        resume(Effect.undefined);
+      });
+    })
+).pipe(
+  Effect.map((server) => {
+    const { port } = Schema.decodeUnknownSync(
+      Schema.Struct({ port: Schema.Finite })
+    )(server.address(), { onExcessProperty: "ignore" });
+
+    return `http://127.0.0.1:${port}`;
+  })
+);
+
 const declaredBy = {
   readHost: new Set([400]),
   execMachine: new Set([400, 500]),
@@ -366,6 +393,34 @@ layer(NodeServices.layer, { excludeTestServices: true })(
               readOnly: false,
             });
           }
+        })
+    );
+
+    it.effect(
+      "that answers 503 with no body and no content type, as a host's server does to the requests it holds when the host stops, is named as stopping",
+      () =>
+        Effect.gen(function* () {
+          const url = yield* stoppingHost;
+
+          const served = yield* running({
+            members: [{ id: "stopping", url, draining: false }],
+          });
+
+          const client = yield* clientOf(served.url);
+
+          yield* client.create("dev", request("dev", { host: "smolvm" }));
+          yield* patched(served.store, "dev", { host: "stopping" });
+
+          const exec = yield* Effect.flip(
+            client.execMachine({ id: "dev", argv: ["true"] })
+          );
+
+          expect(exec).toMatchObject({
+            _tag: "Unavailable",
+            readOnly: false,
+            message:
+              "host stopping didn't answer as the host contract says: it replied HTTP 503 with no body, as a host's server does to each request it still holds when the host stops",
+          });
         })
     );
 
