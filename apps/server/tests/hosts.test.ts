@@ -405,7 +405,7 @@ layer(NodeServices.layer, { excludeTestServices: true })(
     );
 
     it.effect(
-      "that answers 503 with no body and no content type, as a host's server does to the requests it holds when the host stops, is named as stopping",
+      "that answers 503 with no body and no content type, as a host's server does to each request while the host stops, is named as stopping",
       () =>
         Effect.gen(function* () {
           const url = yield* stoppingHost;
@@ -427,7 +427,7 @@ layer(NodeServices.layer, { excludeTestServices: true })(
             _tag: "Unavailable",
             readOnly: false,
             message:
-              "host stopping didn't answer as the host contract says: it replied HTTP 503 with no body, as a host's server does to each request while the host stops",
+              "host stopping is stopping: it replied HTTP 503 with no body, as a host's server does to each request while the host stops",
           });
         })
     );
