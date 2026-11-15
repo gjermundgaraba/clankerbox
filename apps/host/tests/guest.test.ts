@@ -538,6 +538,39 @@ const reaped = (root: string, needles: readonly string[]) =>
     })
   );
 
+const launchedApart = (
+  shell: readonly string[],
+  root: string,
+  invocation: Invocation,
+  mark: string,
+  needle: string
+) =>
+  Effect.gen(function* () {
+    const command = guestCommand(invocation, mark);
+
+    yield* reaped(root, [`${markName}=${mark}`, needle]);
+
+    const child = yield* Effect.sync(() =>
+      spawn(shell[0] ?? "", [...shell.slice(1), ...command.argv.slice(1)], {
+        detached: true,
+        stdio: ["pipe", "ignore", "ignore"],
+        env: { ...process.env, CLANKERBOX_ROOT: root },
+      })
+    );
+
+    yield* Effect.sync(() => {
+      child.stdin.end(command.stdin);
+    });
+
+    return yield* Effect.sync(() => holdingAny([needle])).pipe(
+      Effect.repeat({
+        until: (found) => found.length > 0,
+        schedule: Schedule.spaced(Duration.millis(50)),
+      }),
+      Effect.timeout(treeTimeout)
+    );
+  });
+
 const endUnder = (
   shell: readonly string[],
   root: string,
@@ -2818,6 +2851,76 @@ const shellCases = (shell: readonly string[]) => {
           expect(yield* runningOf(tree)).toStrictEqual([]);
         }),
       endsTimeout(1, 1)
+    );
+
+    it.effect(
+      "the launcher exits as its command does, 0, 1, 126 and 127, and with 128 and the signal's number, saying nothing of its own, for one a signal ended",
+      () =>
+        Effect.gen(function* () {
+          const root = yield* scratch;
+          const unrunnable = path.join(root, "unrunnable");
+
+          yield* write(unrunnable, "#!/bin/sh\necho ran\n");
+
+          const codes = yield* Effect.forEach(
+            [
+              ["true"],
+              ["false"],
+              [unrunnable],
+              ["no-such-command-of-clankerbox"],
+              ["sh", "-c", "kill -s KILL $$"],
+              ["sh", "-c", "kill -s TERM $$"],
+            ] as const,
+            (argv) =>
+              Effect.map(launched(shell, { argv }), ({ code, stderr }) =>
+                code > 128 ? { code, stderr } : { code }
+              )
+          );
+
+          expect(codes).toStrictEqual([
+            { code: 0 },
+            { code: 1 },
+            { code: 126 },
+            { code: 127 },
+            { code: 137, stderr: "" },
+            { code: 143, stderr: "" },
+          ]);
+        })
+    );
+
+    it.effect(
+      "an end ends a command that clears its environment, also one that execs into it, with nothing above the launcher to carry the mark",
+      () =>
+        Effect.gen(function* () {
+          const root = yield* scratch;
+
+          const results = yield* Effect.forEach(
+            [
+              (lasts: string) => ["env", "-i", "sleep", lasts] as const,
+              (lasts: string) =>
+                ["sh", "-c", `echo begun; exec env -i sleep ${lasts}`] as const,
+            ],
+            (argvOf) =>
+              Effect.gen(function* () {
+                const mark = unsharedMark();
+                const lasts = `30.${randomBytes(3).readUIntBE(0, 3)}`;
+                const needle = `sleep\0${lasts}\0`;
+                const argv = argvOf(lasts);
+
+                yield* launchedApart(shell, root, { argv }, mark, needle);
+
+                const ended = yield* endUnder(shell, root, mark);
+
+                return { code: ended.code, left: holdingAny([needle]).length };
+              })
+          );
+
+          expect(results).toStrictEqual([
+            { code: 0, left: 0 },
+            { code: 0, left: 0 },
+          ]);
+        }),
+      endsTimeout(2, 2)
     );
 
     it.effect(

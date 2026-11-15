@@ -88,6 +88,11 @@ const endedRecords = "${CLANKERBOX_ROOT-}/var/run/clankerbox-ended";
 // uutils' take a lone `-` after `--` for `-i`:
 // https://pubs.opengroup.org/onlinepubs/9799919799/utilities/env.html
 // https://github.com/coreutils/coreutils/blob/v9.5/src/env.c#L833
+// bash, as zsh and busybox ash do, runs the last command of a `-c` script in its own process,
+// unless another command follows it, and dash and busybox ash print a line on their stderr when a
+// command they wait for ends by a signal, but for INT and PIPE:
+// https://git.savannah.gnu.org/cgit/bash.git/tree/builtins/evalstring.c?h=bash-5.2#n130
+// https://git.kernel.org/pub/scm/utils/dash/dash.git/tree/src/jobs.c?h=v0.5.12#n427
 // A shell copies a string whole at each append and `"$@"` whole at each `set`, and bash 3.2 slows
 // with each variable it holds, so values wait in at most 1000 variables, named in strings of 100,
 // and a value's lines are joined 1000 at a time by `"$*"`, then its pieces at once.
@@ -140,7 +145,8 @@ const launcher = [
   `  *=*) printf '%s: not run, as env takes a word holding = for a variable\\n' "$first" >&2; exit 127 ;;`,
   `  -) printf '%s: not run, as env takes a lone - for -i\\n' "$first" >&2; exit 127 ;;`,
   "esac",
-  `exec env -- "$@"`,
+  "exec 3>&2 2>/dev/null",
+  `(exec env -- "$@" 2>&3 3>&-) || exit`,
 ].join("\n");
 
 /**
@@ -149,7 +155,11 @@ const launcher = [
  * is its count of lines, then its lines; the launcher hands them to `env`, which sets the env and
  * runs the command, whatever the guest's `/bin/sh` makes of its own special names. Its one word of
  * its own, `CLANKERBOX_EXEC=<mark>`, is in the launcher's arguments from its start and in the
- * environment of the command and of every process it starts, so an end can find them.
+ * environment of the command and of every process it starts, so an end can find them. The launcher
+ * waits for `env` rather than becoming it, so a process that holds the mark in its arguments stands
+ * above the command for its whole life, also one that clears its environment where nothing above
+ * the launcher carries the mark, and exits as the command did, with 128 and the signal's number for
+ * one a signal ended.
  */
 export const guestCommand = (
   { argv, env, user, stdin }: Invocation,
