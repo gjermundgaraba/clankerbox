@@ -184,6 +184,9 @@ const built = (options?: Parameters<typeof served>[0]) =>
       ...request("unused", { cpu: 2, ramMib: 2048, diskGib: 20 }),
       setup: countsRuns(plane.dir),
     });
+    yield* eventually(plane.store.machines, (rows) =>
+      rows.every(({ ephemeral }) => !ephemeral)
+    );
     plane.fake.calls.length = 0;
 
     return plane;
