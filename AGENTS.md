@@ -108,7 +108,9 @@ serves the client contract, and `server.ts`, the package's entry, builds the
 server over a server Layer it is given, through the host contract's `journal`.
 Its `controlPlaneServer` is the Node server the control plane listens on, the
 entry's and the tests' alike, and answers 503 at once to a request no route
-takes, as one that completes while the control plane stops. A domain file never
+takes, as one that completes while the control plane stops. It closes every
+connection it still holds as it closes, which the stop does once each request
+it cut has answered. A domain file never
 imports `platform/` or `composition/`.
 
 **Host** (`apps/host/src`). Domain files sit flat in `src/`:
@@ -199,7 +201,9 @@ config's `runtime` gives it, with its settings and its Layer, `routes.ts` serves
 host over a runtime Layer and a server Layer it is given, with the config's
 tailnet and build store, if any. Its `hostServer` is the Node server a host
 listens on, the entry's and the tests' alike, and answers 503 at once to a
-request no route takes, as one that comes while the host stops.
+request no route takes, as one that comes while the host stops. It closes every
+connection it still holds as it closes, which the stop does once each request it
+cut has answered.
 
 **Host contract** (`packages/host-contract/src`). `api.ts`: `HostHttp`, the
 `Step`s, `Operation`, `Report`, `HostInfo`. `traits.ts`, its `./traits` export:

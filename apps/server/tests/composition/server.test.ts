@@ -1,7 +1,4 @@
-import { once } from "node:events";
-import { connect } from "node:net";
 import path from "node:path";
-import { setTimeout } from "node:timers/promises";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
@@ -220,64 +217,30 @@ layer(NodeServices.layer, { excludeTestServices: true })(
     );
 
     it.effect(
-      "a request whose last bytes arrive after the control plane's stop began answers 503 at once, with no body, closes its connection, reaches no host, and the stop ends",
+      "a request whose last bytes arrive after the control plane's stop began meets its connection closed, unanswered, reaches no host, and the stop ends",
       () =>
         Effect.gen(function* () {
           const served = yield* running();
-          const port = Number(new URL(served.url).port);
 
-          const split = (action: string, input: unknown) =>
-            Effect.promise(async () => {
-              const socket = connect(port, "127.0.0.1");
-              const sent = JSON.stringify(input);
-              const chunks: Buffer[] = [];
+          const late = yield* Effect.forEach(
+            [
+              ["getMachine", { id: "late" }],
+              ["createMachine", request("late")],
+            ] as const,
+            ([action, input]) =>
+              Effect.map(connection(served.url), (opened) => {
+                const sent = JSON.stringify(input);
 
-              socket.on("data", (chunk: Buffer) => {
-                chunks.push(chunk);
-              });
-              await once(socket, "connect");
-              socket.write(`POST /api/${action} HTTP/1.1\r\nhost: plane\r\n`);
+                opened.socket.write(
+                  `POST /api/${action} HTTP/1.1\r\nhost: plane\r\n`
+                );
 
-              return {
-                rest: Effect.promise(async () => {
-                  socket.write(
-                    `content-type: application/json\r\n${versionHeader}: ${version}\r\ncontent-length: ${Buffer.byteLength(sent)}\r\n\r\n${sent}`
-                  );
-
-                  const closed = await Promise.race([
-                    once(socket, "close").then(() => true),
-                    setTimeout(3000, false),
-                  ]);
-
-                  socket.destroy();
-
-                  const [head = "", body = ""] = Buffer.concat(chunks)
-                    .toString()
-                    .split("\r\n\r\n");
-
-                  const [status, ...fields] = head.split("\r\n");
-
-                  const headers = new Set(
-                    fields.map((field) => field.toLowerCase())
-                  );
-
-                  return {
-                    action,
-                    status: head === "" ? "no answer" : status,
-                    closesItsConnection:
-                      closed && headers.has("connection: close"),
-                    body: headers.has("transfer-encoding: chunked")
-                      ? body.replace(/^0$/u, "")
-                      : body,
-                  };
-                }),
-              };
-            });
-
-          const late = yield* Effect.all([
-            split("getMachine", { id: "late" }),
-            split("createMachine", request("late")),
-          ]);
+                return {
+                  ...opened,
+                  rest: `content-type: application/json\r\n${versionHeader}: ${version}\r\ncontent-length: ${Buffer.byteLength(sent)}\r\n\r\n${sent}`,
+                };
+              })
+          );
 
           yield* Effect.sleep(Duration.millis(300));
 
@@ -285,23 +248,26 @@ layer(NodeServices.layer, { excludeTestServices: true })(
 
           yield* Effect.sleep(Duration.millis(300));
 
-          const answers = yield* Effect.all(
-            late.map(({ rest }) => rest),
-            { concurrency: "unbounded" }
+          for (const { socket, rest } of late) {
+            socket.write(rest);
+          }
+
+          const closed = yield* Effect.forEach(late, ({ closedWithin }) =>
+            closedWithin(Duration.seconds(1))
           );
 
           const [took] = yield* Fiber.join(stopping).pipe(
             Effect.timeout(Duration.seconds(30))
           );
 
-          expect(answers).toStrictEqual(
-            answers.map(({ action }) => ({
-              action,
-              status: "HTTP/1.1 503 Service Unavailable",
-              closesItsConnection: true,
-              body: "",
-            }))
-          );
+          for (const { socket } of late) {
+            socket.destroy();
+          }
+
+          expect({
+            answers: late.map((opened) => opened.read()),
+            closed,
+          }).toStrictEqual({ answers: ["", ""], closed: [true, true] });
           expect(
             firstHost(served).fake.calls.filter((call) =>
               call.endsWith(" late")

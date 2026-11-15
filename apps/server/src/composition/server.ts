@@ -1,4 +1,4 @@
-import { createServer } from "node:http";
+import { Server } from "node:http";
 
 import { journal } from "@clankerbox/host-contract/journal";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
@@ -32,24 +32,35 @@ export type ServerLayer = Layer.Layer<
   HttpServerError.ServeError
 >;
 
+class ClosingEveryConnection extends Server {
+  override close(callback?: (error?: Error) => void) {
+    super.close(callback);
+    this.closeAllConnections();
+
+    return this;
+  }
+}
+
 /**
  * The control plane's Node server, on its config's address. It stops at once, cutting the requests
  * still open. A write is one SQLite transaction, which a stop never splits, and a request it cuts
  * is one a crash would cut: the client reads to see what a mutation did, and a wait reads on
  * through the outage.
  *
- * The stop takes the routes off, cuts what they still run, and then closes the server, which waits
- * on each connection a request has begun to arrive on. Node holds a request that completes once the
- * routes are off unanswered, and the stop would then wait on its connection for good. So a request
- * that finds no route answers 503 with no body, as each request the stop cuts does, and its
- * connection closes.
+ * Without the preemptive shutdown, the stop takes the routes off, cuts the requests they run, waits
+ * for each to answer 503, and only then closes the server. A connection still open then is owed
+ * nothing, so the server closes every one, where Node's own close closes the idle ones and waits on
+ * the rest, on one whose request never completes for good.
+ *
+ * A request that completes once the routes are off finds no route, and answers 503 with no body,
+ * as each request the stop cuts does, and its connection closes.
  */
 export const controlPlaneServer = ({
   listen,
 }: Pick<ServerSettings, "listen">) =>
   NodeHttpServer.layer(
     () => {
-      const server = createServer();
+      const server = new ClosingEveryConnection();
 
       server.on("request", (_request, response) => {
         const unrouted = server.listenerCount("request") === 1;
