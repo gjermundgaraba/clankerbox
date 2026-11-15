@@ -270,8 +270,9 @@ END {
  * Ends in the guest each process whose own arguments or environment hold the mark read from stdin,
  * the exec's or not, and what descends from one. It reads the mark and its deadline in seconds,
  * then TERMs what it lists, and once at least the grace has passed, or nothing it TERMed runs, or a
- * listing it makes every 0.4 s of the grace finds more than 32 processes beyond those it TERMed, as
- * a command that keeps growing after TERM isn't winding down and would fill a small guest, STOPs
+ * listing it makes every 0.4 s of the grace, every second where the guest's `sleep` takes no
+ * fraction of one, finds more than 32 processes beyond those it TERMed, as a command that keeps
+ * growing after TERM isn't winding down and would fill a small guest, STOPs
  * what it lists until a listing finds none it hasn't stopped, and KILLs them all, again until a
  * listing finds none. It signals each listing's processes ancestors first, and STOPs a process only
  * once a listing finds stopped each ancestor of it that it lists, so no parent that still runs sees

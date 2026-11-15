@@ -5,7 +5,11 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { Internal, outputLimit } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  Internal,
+  outputLimit,
+  WrongState,
+} from "@gjermundgaraba/clankerbox-sdk";
 import {
   chmod,
   mkdir,
@@ -1256,6 +1260,52 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       );
     },
     60_000
+  );
+
+  it.effect(
+    "an exec whose machine a step leaves answers WrongState in that step's phase, saying its command may still run when its end isn't confirmed, and logs it as cut short by the step",
+    () => {
+      const logged: unknown[] = [];
+
+      return Effect.gen(function* () {
+        const { runtime, machine } = yield* madeOn("tart");
+
+        const unconfirmed = Runtime.of({
+          ...runtime,
+          exec: (target, command) =>
+            (command.stdin ?? "").includes("clankerbox-end")
+              ? Effect.succeed({
+                  output: Stream.empty,
+                  exitCode: Effect.succeed(125),
+                })
+              : runtime.exec(target, command),
+        });
+
+        const error = yield* Effect.flip(
+          runCommand(
+            unconfirmed,
+            { machine, argv: ["sh", "-c", "sleep 30"] },
+            Effect.succeed("pause")
+          )
+        );
+
+        expect(error).toStrictEqual(
+          new WrongState({
+            message:
+              "machine dev is pausing, and its pause ended this exec's command first, though it may still run in the guest: the end exited 125 and printed nothing",
+            machine: "dev",
+            state: "pausing",
+          })
+        );
+        expect(logged.flat()).toStrictEqual([
+          "couldn't end in dev the command of an exec that its machine's pause cut short, which may still run there: the end exited 125 and printed nothing",
+        ]);
+      }).pipe(
+        Effect.provide(
+          Logger.layer([Logger.make(({ message }) => logged.push(message))])
+        )
+      );
+    }
   );
 
   it.effect(
