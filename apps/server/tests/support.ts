@@ -3,7 +3,6 @@ import type { Server } from "node:http";
 import path from "node:path";
 
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   startHost,
@@ -38,7 +37,7 @@ import { HttpServer } from "effect/http";
 
 import { applied } from "../src/chart.ts";
 import * as Checkpoints from "../src/checkpoints.ts";
-import { serverLayer, stopsAtOnce } from "../src/composition/server.ts";
+import { controlPlaneServer, serverLayer } from "../src/composition/server.ts";
 import * as Hosts from "../src/hosts.ts";
 import type { Member } from "../src/hosts.ts";
 import {
@@ -178,11 +177,7 @@ const started = (
     const context = yield* Layer.buildWithScope(
       serverLayer(
         settings,
-        NodeHttpServer.layer(createServer, {
-          host: "127.0.0.1",
-          port,
-          ...stopsAtOnce,
-        })
+        controlPlaneServer({ listen: { address: "127.0.0.1", port } })
       ).pipe(
         Layer.provideMerge(Logger.layer(logger === undefined ? [] : [logger])),
         Layer.provide(NodeHttpClient.layerNodeHttp),

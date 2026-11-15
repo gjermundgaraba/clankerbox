@@ -1,4 +1,7 @@
+import { createServer } from "node:http";
+
 import { journal } from "@clankerbox/host-contract/journal";
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Layer } from "effect";
 import type { FileSystem, Path } from "effect";
@@ -30,11 +33,40 @@ export type ServerLayer = Layer.Layer<
 >;
 
 /**
- * How the control plane's Node server stops: at once, cutting the requests still open. A write is
- * one SQLite transaction, which a stop never splits, and a request it cuts is one a crash would
- * cut: the client reads to see what a mutation did, and a wait reads on through the outage.
+ * The control plane's Node server, on its config's address. It stops at once, cutting the requests
+ * still open. A write is one SQLite transaction, which a stop never splits, and a request it cuts
+ * is one a crash would cut: the client reads to see what a mutation did, and a wait reads on
+ * through the outage.
+ *
+ * The stop takes the routes off, cuts what they still run, and then closes the server, which waits
+ * on each connection a request has begun to arrive on. Node holds a request that completes once the
+ * routes are off unanswered, and the stop would then wait on its connection for good. So a request
+ * that finds no route answers 503 with no body, as each request the stop cuts does, and its
+ * connection closes.
  */
-export const stopsAtOnce = { disablePreemptiveShutdown: true } as const;
+export const controlPlaneServer = ({
+  listen,
+}: Pick<ServerSettings, "listen">) =>
+  NodeHttpServer.layer(
+    () => {
+      const server = createServer();
+
+      server.on("request", (_request, response) => {
+        const unrouted = server.listenerCount("request") === 1;
+
+        if (unrouted) {
+          response.writeHead(503, { connection: "close" }).end();
+        }
+      });
+
+      return server;
+    },
+    {
+      host: listen.address,
+      port: listen.port,
+      disablePreemptiveShutdown: true,
+    }
+  );
 
 export const serverLayer = (
   config: ServerSettings,

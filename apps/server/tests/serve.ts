@@ -1,9 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { createServer } from "node:http";
 import path from "node:path";
 
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { hostKeySetup } from "@gjermundgaraba/clankerbox-host/testing";
@@ -13,7 +11,7 @@ import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import { Console, Duration, Effect, FileSystem, Layer, Logger } from "effect";
 import { HttpServer } from "effect/http";
 
-import { serverLayer, stopsAtOnce } from "../src/composition/server.ts";
+import { controlPlaneServer, serverLayer } from "../src/composition/server.ts";
 import {
   defaultFailedRowsLast,
   defaultHookTimeoutSeconds,
@@ -138,16 +136,7 @@ const serve = Effect.gen(function* () {
         );
       })
     ).pipe(
-      Layer.provideMerge(
-        serverLayer(
-          settings,
-          NodeHttpServer.layer(createServer, {
-            host: settings.listen.address,
-            port: settings.listen.port,
-            ...stopsAtOnce,
-          })
-        )
-      ),
+      Layer.provideMerge(serverLayer(settings, controlPlaneServer(settings))),
       Layer.provide(NodeHttpClient.layerNodeHttp),
       Layer.provide(Logger.layer([Logger.consolePretty({ colors: false })]))
     )

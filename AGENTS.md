@@ -105,8 +105,11 @@ the whole CLI span domains on purpose.
 `platform/sqlite.ts` is the `Store`, and loads each chart's `leaves` at runtime to
 validate `state`. `composition/`: `config.ts` reads the config file, `routes.ts`
 serves the client contract, and `server.ts`, the package's entry, builds the
-server over a server Layer it is given, through the host contract's `journal`. A
-domain file never imports `platform/` or `composition/`.
+server over a server Layer it is given, through the host contract's `journal`.
+Its `controlPlaneServer` is the Node server the control plane listens on, the
+entry's and the tests' alike, and answers 503 at once to a request no route
+takes, as one that completes while the control plane stops. A domain file never
+imports `platform/` or `composition/`.
 
 **Host** (`apps/host/src`). Domain files sit flat in `src/`:
 
