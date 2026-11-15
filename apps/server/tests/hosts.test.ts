@@ -1,10 +1,14 @@
 import { createServer } from "node:http";
-import type { Server } from "node:http";
+import type { Server, ServerResponse } from "node:http";
 
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { readTimeout, version } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  endTimeout,
+  readTimeout,
+  version,
+} from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Exit, Layer, Logger, Result, Schema } from "effect";
 import { HttpClient } from "effect/http";
 import { expect } from "vite-plus/test";
@@ -22,7 +26,7 @@ import {
   stubInfo as info,
 } from "./support.ts";
 
-const execPagedHost = (id: string, status: number) =>
+const execHost = (id: string, exec: (response: ServerResponse) => void) =>
   Effect.acquireRelease(
     Effect.callback<Server>((resume) => {
       const answers = new Map<string, unknown>([
@@ -31,16 +35,14 @@ const execPagedHost = (id: string, status: number) =>
       ]);
 
       const server = createServer((incoming, response) => {
-        const paged = incoming.url === "/host/execMachine";
+        if (incoming.url === "/host/execMachine") {
+          exec(response);
 
-        response.writeHead(paged ? status : 200, {
-          "content-type": paged ? "text/html" : "application/json",
-        });
-        response.end(
-          paged
-            ? `<html>${status}</html>`
-            : JSON.stringify(answers.get(incoming.url ?? "") ?? [])
-        );
+          return;
+        }
+
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify(answers.get(incoming.url ?? "") ?? []));
       });
 
       server.listen({ host: "127.0.0.1", port: 0 }, () => {
@@ -62,6 +64,12 @@ const execPagedHost = (id: string, status: number) =>
       return `http://127.0.0.1:${port}`;
     })
   );
+
+const execPagedHost = (id: string, status: number) =>
+  execHost(id, (response) => {
+    response.writeHead(status, { "content-type": "text/html" });
+    response.end(`<html>${status}</html>`);
+  });
 
 layer(NodeServices.layer, { excludeTestServices: true })(
   "a host's log",
@@ -422,6 +430,50 @@ layer(NodeServices.layer, { excludeTestServices: true })(
               "host stopping didn't answer as the host contract says: it replied HTTP 503 with no body, as a host's server does to each request it still holds when the host stops",
           });
         })
+    );
+
+    it.effect(
+      "is waited on for a timed exec past the exec's timeout and its readTimeout, as its end may take endTimeout more",
+      () =>
+        Effect.gen(function* () {
+          const timeoutSeconds = 1;
+
+          const answersAfter = Duration.sum(
+            Duration.sum(Duration.seconds(timeoutSeconds), readTimeout),
+            Duration.divideUnsafe(endTimeout, 5)
+          );
+
+          const url = yield* execHost("ending", (response) => {
+            setTimeout(() => {
+              response.writeHead(200, { "content-type": "application/json" });
+              response.end(
+                JSON.stringify({ exitCode: 124, output: "", truncated: false })
+              );
+            }, Duration.toMillis(answersAfter));
+          });
+
+          const served = yield* running({
+            members: [{ id: "ending", url, draining: false }],
+          });
+
+          const client = yield* clientOf(served.url);
+
+          yield* client.create("dev", request("dev", { host: "smolvm" }));
+          yield* patched(served.store, "dev", { host: "ending" });
+
+          const executed = yield* client.execMachine({
+            id: "dev",
+            argv: ["true"],
+            timeoutSeconds,
+          });
+
+          expect(executed).toStrictEqual({
+            exitCode: 124,
+            output: "",
+            truncated: false,
+          });
+        }),
+      30_000
     );
 
     it.effect(
