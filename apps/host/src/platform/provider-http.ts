@@ -90,6 +90,9 @@ export class Unreadable extends Schema.TaggedError<
   message: Schema.String,
 }) {}
 
+/** How a call to a provider's API fails, with the provider's own `Refused`. */
+export type ProviderError<Refused> = Refused | Unanswered | Busy | Unreadable;
+
 const lost =
   (call: string) =>
   (error: { readonly message: string }): Unanswered =>
@@ -108,11 +111,7 @@ const within =
       )
     );
 
-/**
- * A 5xx whose body is no answer of the provider's is a gateway's, whatever that body holds, which
- * leaves the outcome unknown. Each adapter says what its provider's own answer looks like.
- */
-export const fromGateway = (
+const fromGateway = (
   call: string,
   status: number,
   answered: boolean
@@ -149,7 +148,7 @@ export const retryAfter = (
 /** The provider took nothing and asks to be waited out, unless its answer says there is no room. */
 export const tooManyRequests = 429;
 
-export const askedToWait = (
+const askedToWait = (
   call: string,
   response: HttpClientResponse.HttpClientResponse,
   why: string
@@ -181,21 +180,14 @@ export const apiKey = (
     );
   });
 
-/**
- * Sends `request` to the API at `url` with the account's `key`, asking JSON, and answers what
- * `read` makes of the response, within the bound of what it `asked`; no answer, or one that
- * couldn't be received, is a lost answer.
- */
-export const exchanged = <A>(
+const exchanged = <A, E>(
   http: HttpClient.HttpClient,
   url: string,
   key: Redacted.Redacted,
   request: HttpClientRequest.HttpClientRequest,
   asked: Asked,
-  read: (
-    response: HttpClientResponse.HttpClientResponse
-  ) => Effect.Effect<A, Unanswered>
-): Effect.Effect<A, Unanswered> => {
+  read: (response: HttpClientResponse.HttpClientResponse) => Effect.Effect<A, E>
+): Effect.Effect<A, E | Unanswered> => {
   const call = `${request.method} ${request.url}`;
 
   return http
@@ -257,6 +249,70 @@ export const askedAgain =
           )
       )
     );
+
+/** What an adapter reads of its provider's answer of HTTP 400 or more. */
+export interface Refusal<Refused> {
+  /** Whether the body is the provider's own answer, which a gateway's 5xx isn't. */
+  readonly own: boolean;
+  /** Why the provider asks to be waited out, if it does. */
+  readonly waits: string | undefined;
+  readonly refused: Refused;
+}
+
+/**
+ * The calls to a provider's API at `url` with the account's `key`. A call sends its request asking
+ * JSON, within the bound of what it `asked`, and answers what `answered` reads of a response under
+ * 400; no answer, or one that couldn't be received, is a lost answer. Of any other response,
+ * `refusal` reads the provider's own answer: a 5xx whose body is none is a gateway's, whatever that
+ * body holds, and a lost answer; else one that asks to be waited out fails `Busy`; else the call
+ * fails with the provider's refusal. It is sent again as `askedAgain` says.
+ */
+export const sender =
+  <Refused>(
+    http: HttpClient.HttpClient,
+    url: string,
+    key: Redacted.Redacted,
+    refusal: (
+      response: HttpClientResponse.HttpClientResponse,
+      asked: Asked,
+      call: string
+    ) => Effect.Effect<Refusal<Refused>>
+  ) =>
+  <A>(
+    request: HttpClientRequest.HttpClientRequest,
+    asked: Asked,
+    repeats: Repeats,
+    answered: (
+      response: HttpClientResponse.HttpClientResponse
+    ) => Effect.Effect<A, Unanswered>
+  ): Effect.Effect<A, Refused | Unanswered | Busy> => {
+    const call = `${request.method} ${request.url}`;
+
+    const refused = (
+      response: HttpClientResponse.HttpClientResponse,
+      read: Refusal<Refused>
+    ): Effect.Effect<never, Refused | Unanswered | Busy> => {
+      const gateway = fromGateway(call, response.status, read.own);
+
+      if (gateway !== undefined) {
+        return Effect.fail(gateway);
+      }
+
+      return read.waits === undefined
+        ? Effect.fail(read.refused)
+        : askedToWait(call, response, read.waits);
+    };
+
+    return askedAgain(repeats)(
+      exchanged(http, url, key, request, asked, (response) =>
+        response.status < 400
+          ? answered(response)
+          : Effect.flatMap(refusal(response, asked, call), (read) =>
+              refused(response, read)
+            )
+      )
+    );
+  };
 
 export const triesAfterLoss = 3;
 

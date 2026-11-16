@@ -1,17 +1,15 @@
-import { Effect, Option, Result, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import type { Redacted } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
+import type { HttpClientResponse } from "effect/http";
 
 import {
-  askedAgain,
-  askedToWait,
-  exchanged,
-  fromGateway,
   recordReader,
+  sender,
   tooManyRequests,
   Unanswered,
 } from "../provider-http.ts";
-import type { Busy, Repeats, Unreadable } from "../provider-http.ts";
+import type { ProviderError, Refusal, Repeats } from "../provider-http.ts";
 
 export const BoatType = Schema.Literals([
   "small",
@@ -121,7 +119,7 @@ export class Refused extends Schema.TaggedError<
   message: Schema.String,
 }) {}
 
-export type ApiError = Refused | Unanswered | Busy | Unreadable;
+export type ApiError = ProviderError<Refused>;
 
 /**
  * The codes that mean the account takes no such request now, which moves a create to the next
@@ -172,6 +170,26 @@ const refusalOf = (status: number, body: unknown) => {
   });
 };
 
+const refusal = (
+  response: HttpClientResponse.HttpClientResponse
+): Effect.Effect<Refusal<Refused>> =>
+  Effect.map(
+    Effect.orElseSucceed(response.json, () => undefined),
+    (body) => {
+      const refused = refusalOf(response.status, body);
+
+      return {
+        own: refused.code !== `http_${response.status}`,
+        waits:
+          asksToWait.has(refused.code) ||
+          (response.status === tooManyRequests && !noRoom.has(refused.code))
+            ? refused.code
+            : undefined,
+        refused,
+      };
+    }
+  );
+
 const keyed = (path: string, body: Body, idempotencyKey: string) =>
   HttpClientRequest.post(path).pipe(
     HttpClientRequest.setHeader("Idempotency-Key", idempotencyKey),
@@ -200,76 +218,29 @@ export const make = (url: string, key: Redacted.Redacted) =>
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient;
 
-    const exchange = (request: HttpClientRequest.HttpClientRequest) =>
-      exchanged(
-        http,
-        url,
-        key,
-        request,
-        request.method === "GET" ? "read" : "change",
-        (response) =>
-          Effect.map(Effect.result(response.json), (body) => ({
-            response,
-            body,
-          }))
-      );
-
-    const once = <A>(
-      request: HttpClientRequest.HttpClientRequest,
-      decode: Schema.Decoder<A>
-    ): Effect.Effect<Answer<A>, ApiError> =>
-      Effect.gen(function* () {
-        const what = `${request.method} ${request.url}`;
-        const { response, body } = yield* exchange(request);
-
-        if (response.status >= 400) {
-          const refused = refusalOf(
-            response.status,
-            Result.getOrUndefined(body)
-          );
-
-          const gateway = fromGateway(
-            what,
-            response.status,
-            refused.code !== `http_${response.status}`
-          );
-
-          if (gateway !== undefined) {
-            return yield* gateway;
-          }
-
-          if (
-            asksToWait.has(refused.code) ||
-            (response.status === tooManyRequests && !noRoom.has(refused.code))
-          ) {
-            return yield* askedToWait(what, response, refused.code);
-          }
-
-          return yield* refused;
-        }
-
-        if (Result.isFailure(body)) {
-          return yield* new Unanswered({
-            message: `${what}: an answer it couldn't read: ${body.failure.message}`,
-          });
-        }
-
-        return yield* Schema.decodeEffect(decode)(body.success).pipe(
-          Effect.map((decoded) => ({ status: response.status, body: decoded })),
-          Effect.mapError(
-            (error) =>
-              new Unanswered({
-                message: `${what}: an answer it couldn't read: ${error.message}`,
-              })
-          )
-        );
-      });
+    const sent = sender(http, url, key, refusal);
 
     const call = <A>(
       request: HttpClientRequest.HttpClientRequest,
       decode: Schema.Decoder<A>,
       repeats: Repeats = "idempotent"
-    ) => askedAgain(repeats)(once(request, decode));
+    ): Effect.Effect<Answer<A>, ApiError> =>
+      sent(
+        request,
+        request.method === "GET" ? "read" : "change",
+        repeats,
+        (response) =>
+          response.json.pipe(
+            Effect.flatMap(Schema.decodeEffect(decode)),
+            Effect.map((body) => ({ status: response.status, body })),
+            Effect.mapError(
+              (error) =>
+                new Unanswered({
+                  message: `${request.method} ${request.url}: an answer it couldn't read: ${error.message}`,
+                })
+            )
+          )
+      );
 
     const done = <A>(
       request: HttpClientRequest.HttpClientRequest,
