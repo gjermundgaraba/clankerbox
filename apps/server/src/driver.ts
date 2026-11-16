@@ -13,14 +13,13 @@ import type { Scope } from "effect";
 import type { Activity } from "./chart.ts";
 import type { Unreachable } from "./hosts.ts";
 import type { Polled } from "./operations.ts";
+import { readUntil } from "./store.ts";
 import type {
   Advanced,
   Interface as Store,
   Lease,
   Operation,
 } from "./store.ts";
-
-const busyWait = Duration.millis(100);
 
 const unreachableWait = Duration.seconds(1);
 
@@ -34,7 +33,7 @@ type Turned = "again" | "rest" | "over";
 export interface Resource<R extends { readonly state: string }> {
   readonly kind: Lease["resource"];
   readonly find: (name: string) => Effect.Effect<Option.Option<R>, Internal>;
-  readonly operationOn: Store["operationOn"];
+  readonly store: Pick<Store, "operationOn" | "watch">;
   readonly activityOf: (state: R["state"]) => Activity;
   /** Reads what the chart's `read` needs, and writes it. */
   readonly looking: (
@@ -53,12 +52,14 @@ const ended = <R extends { readonly state: string }>(
   resource: Resource<R>,
   by: Operation
 ) =>
-  resource.operationOn(by.resource, by.name).pipe(
-    Effect.repeat({
-      until: (op) => !Option.exists(op, ({ id }) => id === by.id),
-      schedule: Schedule.spaced(busyWait),
-    }),
-    Effect.asVoid
+  Effect.asVoid(
+    readUntil(
+      resource.store,
+      by.resource,
+      by.name,
+      resource.store.operationOn(by.resource, by.name),
+      (op) => !Option.exists(op, ({ id }) => id === by.id)
+    )
   );
 
 const looked = <R extends { readonly state: string }>(
@@ -129,7 +130,7 @@ const followed = <R extends { readonly state: string }>(
 ) =>
   Effect.gen(function* () {
     const op = yield* Effect.fromOption(
-      yield* resource.operationOn(resource.kind, name),
+      yield* resource.store.operationOn(resource.kind, name),
       () =>
         new Internal({
           message: `${resource.kind} ${name} is at ${found.state} with no operation`,

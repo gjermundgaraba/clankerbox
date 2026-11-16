@@ -13,15 +13,8 @@ import {
   Sizing,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Conflict, Internal, Phase } from "@gjermundgaraba/clankerbox-sdk";
-import { Context, Schema, SchemaGetter } from "effect";
-import type {
-  Array as Arr,
-  DateTime,
-  Effect,
-  Option,
-  Result,
-  Scope,
-} from "effect";
+import { Context, Effect, Schema, SchemaGetter } from "effect";
+import type { Array as Arr, DateTime, Option, Result, Scope } from "effect";
 
 import type { Decision } from "./chart.ts";
 import type { CheckpointRow } from "./checkpoint-chart.ts";
@@ -246,15 +239,15 @@ export type Advanced<R> =
   | { readonly at: "absent" }
   | { readonly at: "busy"; readonly by: Operation };
 
-export interface Watched {
-  readonly now: Option.Option<MachineRow>;
-  readonly next: Effect.Effect<Option.Option<MachineRow>, Internal>;
-}
-
 export interface Interface {
-  readonly watchMachine: (
+  /**
+   * The next write of a resource's row, from now on: an insert, a move of its leaf or facts, or
+   * the begin or end of its operation.
+   */
+  readonly watch: (
+    resource: Lease["resource"],
     name: string
-  ) => Effect.Effect<Watched, Internal, Scope.Scope>;
+  ) => Effect.Effect<Effect.Effect<void>, never, Scope.Scope>;
   readonly machines: Effect.Effect<readonly MachineRow[], Internal>;
   readonly findMachine: (
     name: string
@@ -336,3 +329,24 @@ export interface Interface {
 export class Store extends Context.Service<Store, Interface>()(
   "@clankerbox/server/Store"
 ) {}
+
+/** Reads `read` until what it answers is `done`, again after each write of `resource`'s row `name`. */
+export const readUntil = <A, E>(
+  store: Pick<Interface, "watch">,
+  resource: Lease["resource"],
+  name: string,
+  read: Effect.Effect<A, E>,
+  done: (found: A) => boolean
+): Effect.Effect<A, E> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const written = yield* store.watch(resource, name);
+
+      const until = (found: A): Effect.Effect<A, E> =>
+        done(found)
+          ? Effect.succeed(found)
+          : Effect.flatMap(Effect.andThen(written, read), until);
+
+      return yield* Effect.flatMap(read, until);
+    })
+  );

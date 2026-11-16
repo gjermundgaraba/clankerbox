@@ -694,6 +694,11 @@ export const open = (
     const told = (resource: Lease["resource"], name: string) =>
       Effect.asVoid(PubSub.publish(written, { resource, name }));
 
+    interface Wrote<R> {
+      readonly answer: Advanced<R>;
+      readonly wrote: boolean;
+    }
+
     const advanced = <R>(
       resource: Lease["resource"],
       table: Table<R>,
@@ -701,11 +706,11 @@ export const open = (
       decide: (row: R, op: Operation | undefined) => Decision<R>
     ) =>
       Effect.flatMap(DateTime.now, (now) =>
-        transaction(db, `advance ${resource} ${name}`, (): Advanced<R> => {
+        transaction(db, `advance ${resource} ${name}`, (): Wrote<R> => {
           const raw = table.select.get(name);
 
           if (raw === undefined) {
-            return { at: "absent" };
+            return { answer: { at: "absent" }, wrote: false };
           }
 
           const row = table.decoded(raw);
@@ -717,7 +722,7 @@ export const open = (
             const by = holderOf(begin.leases);
 
             if (by !== undefined) {
-              return { at: "busy", by };
+              return { answer: { at: "busy", by }, wrote: false };
             }
 
             begun(begin);
@@ -751,14 +756,16 @@ export const open = (
             );
           }
 
-          return { at: "written", next, moved: next !== row };
+          const moved = next !== row;
+
+          return {
+            answer: { at: "written", next, moved },
+            wrote: moved || begin !== undefined || (finish && op !== undefined),
+          };
         })
       ).pipe(
-        Effect.tap((answer) =>
-          answer.at === "written" && answer.moved
-            ? told(resource, name)
-            : Effect.void
-        ),
+        Effect.tap(({ wrote }) => (wrote ? told(resource, name) : Effect.void)),
+        Effect.map(({ answer }) => answer),
         Effect.uninterruptible
       );
 
@@ -789,19 +796,16 @@ export const open = (
     );
 
     const store: Interface = {
-      watchMachine: Effect.fn("Store.watchMachine")(function* (name) {
-        const writes = yield* PubSub.subscribe(written);
-
-        const next = PubSub.take(writes).pipe(
-          Effect.repeat({
-            until: (write) =>
-              write.resource === "machine" && write.name === name,
-          }),
-          Effect.andThen(findMachine(name))
-        );
-
-        return { now: yield* findMachine(name), next };
-      }),
+      watch: (resource, name) =>
+        Effect.map(PubSub.subscribe(written), (writes) =>
+          PubSub.take(writes).pipe(
+            Effect.repeat({
+              until: (write) =>
+                write.resource === resource && write.name === name,
+            }),
+            Effect.asVoid
+          )
+        ),
       machines: sql("list machines", () =>
         selectMachines.all().map((raw) => rowOf(raw))
       ).pipe(Effect.withSpan("Store.machines")),
@@ -868,7 +872,10 @@ export const open = (
         inserting("checkpoint", record.name, () => {
           deleteFailedCheckpoint.run(record.name);
           insertCheckpoint.run(checkpointColumns(record));
-        })
+        }).pipe(
+          Effect.andThen(told("checkpoint", record.name)),
+          Effect.uninterruptible
+        )
       ),
       templates: sql("list templates", () =>
         selectTemplates.all().map((raw) => templateOf(raw))

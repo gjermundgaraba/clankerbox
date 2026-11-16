@@ -23,17 +23,8 @@ import type {
   Conflict,
   Internal,
 } from "@gjermundgaraba/clankerbox-sdk";
-import {
-  Cause,
-  Context,
-  DateTime,
-  Duration,
-  Effect,
-  Layer,
-  Option,
-  Schedule,
-} from "effect";
-import type { Scope } from "effect";
+import { Cause, Context, DateTime, Effect, Layer, Option } from "effect";
+import type { Scope, Duration } from "effect";
 
 import { applied } from "./chart.ts";
 import { activityOf, checkpointChart, phaseOf } from "./checkpoint-chart.ts";
@@ -48,10 +39,8 @@ import { stateOf } from "./machine-view.ts";
 import { madeMachine, Machines } from "./machines.ts";
 import { collect, cutShort, poll, unreported } from "./operations.ts";
 import { checkpointStep } from "./steps.ts";
-import { notFound, Store } from "./store.ts";
+import { notFound, readUntil, Store } from "./store.ts";
 import type { Operation } from "./store.ts";
-
-const beginPoll = Duration.millis(100);
 
 export interface Interface {
   readonly list: (
@@ -196,7 +185,7 @@ export const make = (settings: {
     const drive = yield* driver(settings.recheck, {
       kind: "checkpoint",
       find: store.findCheckpoint,
-      operationOn: store.operationOn,
+      store,
       activityOf,
       looking: (record) =>
         Effect.gen(function* () {
@@ -222,14 +211,12 @@ export const make = (settings: {
     const driveOnRest = (name: string, machine: string) => {
       const rests = (found: Option.Option<MachineRow>) => !awaits(name, found);
 
-      return Effect.scoped(
-        Effect.gen(function* () {
-          const { now, next } = yield* store.watchMachine(machine);
-
-          if (!rests(now)) {
-            yield* Effect.repeat(next, { until: rests });
-          }
-        })
+      return readUntil(
+        store,
+        "machine",
+        machine,
+        store.findMachine(machine),
+        rests
       ).pipe(
         Effect.andThen(drive(name)),
         Effect.catch(({ message }) =>
@@ -342,23 +329,21 @@ export const make = (settings: {
     const rested = (name: string) => untilRest(settings.recheck, rests(name));
 
     const begun = (name: string) =>
-      Effect.gen(function* () {
-        const record = yield* store.findCheckpoint(name);
+      readUntil(
+        store,
+        "checkpoint",
+        name,
+        Effect.gen(function* () {
+          const record = yield* store.findCheckpoint(name);
 
-        return (
-          Option.isNone(record) ||
-          record.value.state !== "capturing.due" ||
-          Option.isSome(yield* store.operationOn("checkpoint", name))
-        );
-      }).pipe(
-        Effect.repeat({
-          until: (has) => has,
-          schedule: Schedule.spaced(beginPoll).pipe(
-            Schedule.upTo({ duration: readTimeout })
-          ),
+          return (
+            Option.isNone(record) ||
+            record.value.state !== "capturing.due" ||
+            Option.isSome(yield* store.operationOn("checkpoint", name))
+          );
         }),
-        Effect.asVoid
-      );
+        (has) => has
+      ).pipe(Effect.timeoutOption(readTimeout), Effect.asVoid);
 
     const asked = (request: CaptureRequest) =>
       Effect.gen(function* () {

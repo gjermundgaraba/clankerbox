@@ -40,7 +40,6 @@ import {
   Layer,
   Option,
   Result,
-  Schedule,
 } from "effect";
 import type { Array as Arr, Scope } from "effect";
 
@@ -84,7 +83,7 @@ import { collect, cutShort, poll, unreported } from "./operations.ts";
 import { builtUnder, holding, placing } from "./placement.ts";
 import type { BuiltUnder, Candidate } from "./placement.ts";
 import { machineStep, refOf } from "./steps.ts";
-import { madeOn, notFound, Store } from "./store.ts";
+import { madeOn, notFound, readUntil, Store } from "./store.ts";
 import type {
   Interface as StoreInterface,
   Operation,
@@ -99,8 +98,6 @@ export interface Settings {
   readonly authorizedKeys: string;
   readonly hookTimeoutSeconds: number;
 }
-
-const stepPoll = Duration.millis(100);
 
 export interface Interface {
   readonly list: (
@@ -597,7 +594,7 @@ export const make = (
     const drive = yield* driver(settings.recheck, {
       kind: "machine",
       find: store.findMachine,
-      operationOn: store.operationOn,
+      store,
       activityOf,
       looking,
       polling: (found, op) =>
@@ -836,13 +833,14 @@ export const make = (
       });
 
     const stepless = (name: string) =>
-      row(name).pipe(
-        Effect.repeat({
-          until: (found) => activityOf(found.state) !== "follow",
-          schedule: Schedule.spaced(stepPoll).pipe(
-            Schedule.upTo({ duration: readTimeout })
-          ),
-        })
+      readUntil(
+        store,
+        "machine",
+        name,
+        row(name),
+        (found) => activityOf(found.state) !== "follow"
+      ).pipe(
+        Effect.timeoutOrElse({ duration: readTimeout, orElse: () => row(name) })
       );
 
     const exec = ({ id, ...command }: ExecRequest) =>
@@ -957,25 +955,23 @@ export const make = (
     const held = (id: string, bound: Duration.Duration) =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { now, next } = yield* store.watchMachine(id);
+          const first = yield* row(id);
 
-          const first = yield* Effect.fromOption(now, () =>
-            notFound("machine", id)
+          yield* Effect.timeoutOption(
+            readUntil(
+              store,
+              "machine",
+              id,
+              store.findMachine(id),
+              Option.match({
+                onNone: () => true,
+                onSome: (found: MachineRow) =>
+                  found.instance !== first.instance ||
+                  isResting(phaseOf(found.state)),
+              })
+            ),
+            bound
           );
-
-          const answers = Option.match({
-            onNone: () => true,
-            onSome: (found: MachineRow) =>
-              found.instance !== first.instance ||
-              isResting(phaseOf(found.state)),
-          });
-
-          if (!answers(now)) {
-            yield* Effect.timeoutOption(
-              Effect.repeat(next, { until: answers }),
-              bound
-            );
-          }
         })
       );
 

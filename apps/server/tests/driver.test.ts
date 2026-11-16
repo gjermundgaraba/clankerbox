@@ -1,6 +1,14 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Deferred, Duration, Effect, Logger, Option, References } from "effect";
+import {
+  Deferred,
+  Duration,
+  Effect,
+  Logger,
+  Option,
+  PubSub,
+  References,
+} from "effect";
 import { TestClock } from "effect/testing";
 
 import { driver } from "../src/driver.ts";
@@ -54,7 +62,7 @@ interface Hooks {
   looking?: Resource<Row>["looking"];
   polling?: Resource<Row>["polling"];
   following?: Resource<Row>["following"];
-  operationOn?: Resource<Row>["operationOn"];
+  operationOn?: Resource<Row>["store"]["operationOn"];
   noOperation?: boolean;
 }
 
@@ -69,6 +77,7 @@ const harness = (start: Row | undefined) =>
 
     const held = { row: start };
     const hooks: Hooks = {};
+    const writes = yield* PubSub.unbounded<"written">();
 
     const drive = yield* driver<Row>(recheck, {
       kind: "machine",
@@ -81,13 +90,19 @@ const harness = (start: Row | undefined) =>
 
           return Option.fromUndefinedOr(seen);
         }),
-      operationOn: (resource, name) =>
-        hooks.operationOn?.(resource, name) ??
-        Effect.succeed(
-          hooks.noOperation === true
-            ? Option.none()
-            : Option.some(flight("stop"))
-        ),
+      store: {
+        operationOn: (resource, name) =>
+          hooks.operationOn?.(resource, name) ??
+          Effect.succeed(
+            hooks.noOperation === true
+              ? Option.none()
+              : Option.some(flight("stop"))
+          ),
+        watch: () =>
+          Effect.map(PubSub.subscribe(writes), (subscription) =>
+            Effect.asVoid(PubSub.take(subscription))
+          ),
+      },
       activityOf: (state) => activities[state],
       looking: (row) =>
         Effect.suspend(() => {
@@ -109,7 +124,13 @@ const harness = (start: Row | undefined) =>
         }),
     });
 
-    return { counts, held, hooks, drive };
+    return {
+      counts,
+      held,
+      hooks,
+      drive,
+      wrote: Effect.asVoid(PubSub.publish(writes, "written")),
+    };
   });
 
 const once = (effect: Effect.Effect<void>) => {
@@ -371,10 +392,12 @@ describe("a loop", () => {
   );
 
   it.effect(
-    "a look a lease refuses looks again soon after the operation holding it ends, and not before",
+    "a look a lease refuses looks again once the write that ends the operation holding it lands, and not before",
     () =>
       Effect.gen(function* () {
-        const { counts, hooks, drive } = yield* harness({ state: "reading" });
+        const { counts, hooks, drive, wrote } = yield* harness({
+          state: "reading",
+        });
 
         const capture = flight("capture", {
           id: "capture",
@@ -402,8 +425,13 @@ describe("a loop", () => {
 
         expect(counts.looks).toBe(1);
 
+        yield* wrote;
+        yield* settled;
+
+        expect(counts.looks).toBe(1);
+
         holding.now = false;
-        yield* TestClock.adjust(Duration.millis(100));
+        yield* wrote;
         yield* settled;
 
         expect(counts.looks).toBe(2);
