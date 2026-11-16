@@ -12,7 +12,8 @@ import { Desired, HostError } from "./errors.ts";
 import { CheckpointName, HostId, Name, RuntimeName } from "./ids.ts";
 import { Size, Sizes } from "./sizes.ts";
 
-const CheckpointKind = Schema.Literals(["ram", "disk"]);
+/** What a checkpoint holds: a running machine's memory and disk, or its disk alone. */
+export const CheckpointKind = Schema.Literals(["ram", "disk"]);
 
 /**
  * The user a machine with an SSH login is logged in as: the user a host's preparation creates, or a

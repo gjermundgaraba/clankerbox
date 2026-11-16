@@ -1,6 +1,7 @@
 import { HostHttp } from "@clankerbox/host-contract";
 import type { HostInfo } from "@clankerbox/host-contract";
 import {
+  Client,
   HostError,
   readTimeout,
   release,
@@ -279,11 +280,7 @@ export const make = (
             : bounded(
                 host,
                 run(api).pipe(
-                  Effect.catchDefect((defect) =>
-                    HttpClientError.isHttpClientError(defect)
-                      ? Effect.fail(defect)
-                      : Effect.die(defect)
-                  ),
+                  Client.failHttpDefects,
                   Effect.catchIf(
                     (
                       error: E | HttpClientError.HttpClientError

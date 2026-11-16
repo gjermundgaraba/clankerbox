@@ -9,6 +9,7 @@ import {
   sshTarget,
   Superseded,
   Unavailable,
+  loginUser,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   ClankerboxError,
@@ -50,7 +51,7 @@ import type { Tunnel } from "./tunnel.ts";
 
 export const name = "clankerbox";
 
-export const defaultCwd = "/home/admin";
+export const defaultCwd = `/home/${loginUser}`;
 
 const healthWait = Duration.seconds(3);
 

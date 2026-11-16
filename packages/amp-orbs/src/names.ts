@@ -1,11 +1,9 @@
 import { createHash } from "node:crypto";
 
-import { Name } from "@gjermundgaraba/clankerbox-sdk";
+import { maxNameLength, Name } from "@gjermundgaraba/clankerbox-sdk";
 import { Schema } from "effect";
 
 const isName = (id: string): boolean => Schema.is(Name)(id);
-
-const maxLength = 62;
 
 const digestLength = 8;
 
@@ -30,7 +28,7 @@ export const nameFor = (id: string): string => {
     .replace(/-+$/u, "");
 
   const head = (/^[A-Za-z]/u.test(plain) ? plain : `amp-${plain}`)
-    .slice(0, maxLength - digestLength - 1)
+    .slice(0, maxNameLength - digestLength - 1)
     .replace(/-+$/u, "");
 
   return `${head}-${digest}`;

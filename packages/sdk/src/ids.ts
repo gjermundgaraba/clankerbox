@@ -5,7 +5,7 @@ const hostIdPattern = /^[a-z][a-z0-9-]{0,31}$/u;
 const hostIdRule =
   "a host ID is 1 to 32 lowercase letters, digits and '-', starting with a letter";
 
-const maxNameLength = 62;
+export const maxNameLength = 62;
 
 const namePattern = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*$/u;
 

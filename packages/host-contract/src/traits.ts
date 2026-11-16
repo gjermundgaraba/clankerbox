@@ -1,4 +1,5 @@
 import {
+  CheckpointKind,
   formatCpu,
   formatGib,
   formatMib,
@@ -47,7 +48,7 @@ type Bounds = typeof Bounds.Type;
 export const RuntimeTraits = Schema.Struct({
   runtime: RuntimeName,
   images: Schema.Literals(["named", "references"]),
-  checkpoint: Schema.Literals(["ram", "disk"]),
+  checkpoint: CheckpointKind,
   captureFrom: Schema.Literals(["running", "stopped"]),
   pause: Schema.Literals(["saves", "stops"]),
   stop: Schema.Literals(["resumes", "discards"]),
