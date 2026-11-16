@@ -44,9 +44,9 @@ import type {
   Origin,
   Target,
 } from "../../runtime.ts";
-import { KeyedApiUrl } from "../../settings.ts";
 import type { HostSettings } from "../../settings.ts";
 import {
+  KeyedApiUrl,
   apiKey,
   bounded,
   sentUntilHeld,

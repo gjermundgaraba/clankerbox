@@ -31,13 +31,8 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 import { TestClock } from "effect/testing";
 import { expect } from "vite-plus/test";
 
-import {
-  identify,
-  prepare,
-  prepareBase,
-  runCommand,
-  runSetup,
-} from "../../src/guest.ts";
+import { runCommand } from "../../src/exec.ts";
+import { identify, prepare, prepareBase, runSetup } from "../../src/guest.ts";
 import * as BoatApi from "../../src/platform/boat/api.ts";
 import {
   BoatSettings,

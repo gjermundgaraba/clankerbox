@@ -6,7 +6,7 @@ import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import { Effect, Exit, FileSystem, Scope } from "effect";
 
-import type { PortRange } from "../src/machine-ports.ts";
+import type { PortRange } from "../src/settings.ts";
 import type { FakeBoat } from "./fake-boat.ts";
 import type { FakeSmolCloud } from "./fake-smol-cloud.ts";
 import { rentedRange, suitePorts } from "./port-slot.ts";

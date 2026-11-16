@@ -2,7 +2,7 @@ import { Effect, FileSystem, Layer, Option } from "effect";
 
 import { Box } from "../box.ts";
 import type { Facts } from "../box.ts";
-import type { PortRange, ReservedPorts } from "../machine-ports.ts";
+import type { PortRange, ReservedPorts } from "../settings.ts";
 import { processEnded } from "./process.ts";
 
 // https://docs.kernel.org/networking/ip-sysctl.html#ip-variables

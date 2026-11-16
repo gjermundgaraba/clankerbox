@@ -34,7 +34,7 @@ import { expect } from "vite-plus/test";
 
 import type { Facts } from "../../../src/box.ts";
 import { fetch, publish } from "../../../src/builds.ts";
-import { runCommand } from "../../../src/guest.ts";
+import { runCommand } from "../../../src/exec.ts";
 import { PortProbe } from "../../../src/machine-ports.ts";
 import type { Probe } from "../../../src/machine-ports.ts";
 import * as Operations from "../../../src/operations.ts";

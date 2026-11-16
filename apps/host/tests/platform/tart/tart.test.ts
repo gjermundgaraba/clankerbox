@@ -37,7 +37,7 @@ import { TestClock } from "effect/testing";
 import { expect } from "vite-plus/test";
 
 import { Box } from "../../../src/box.ts";
-import { runCommand } from "../../../src/guest.ts";
+import { runCommand } from "../../../src/exec.ts";
 import { PortProbe } from "../../../src/machine-ports.ts";
 import * as Operations from "../../../src/operations.ts";
 import { defaultEphemeralPorts } from "../../../src/platform/box.ts";

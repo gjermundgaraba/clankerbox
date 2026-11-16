@@ -2,7 +2,7 @@ import { once } from "node:events";
 import { createServer } from "node:net";
 import type { Server } from "node:net";
 
-import type { PortRange } from "../src/machine-ports.ts";
+import type { PortRange } from "../src/settings.ts";
 
 /** The variable the global setup sets to the first port of the slot it claims for the run. */
 export const testPortsVariable = "CLANKERBOX_TEST_PORTS";

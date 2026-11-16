@@ -16,6 +16,21 @@ import type { HttpClient, HttpClientResponse } from "effect/http";
 import { CannotStart, timeoutFail } from "../runtime.ts";
 import { describe } from "./process.ts";
 
+const loopback = /^(?:localhost|\[::1\]|127(?:\.\d{1,3}){3})$/u;
+
+/** A provider's API URL, which its key rides on with every request: `https`, or `http` only to a loopback address. */
+export const KeyedApiUrl = Schema.String.check(
+  Schema.makeFilter((text: string) => {
+    const url = URL.parse(text);
+
+    return (
+      url?.protocol === "https:" ||
+      (url?.protocol === "http:" && loopback.test(url.hostname)) ||
+      "an https URL, or an http one to a loopback address, as the key rides on every request"
+    );
+  })
+);
+
 /**
  * What a request asks of a provider's API, which bounds how long it may take to answer: a `read`, a
  * `change` it answers once it has taken it, or one it answers only once the machine has `settle`d,

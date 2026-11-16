@@ -36,7 +36,11 @@ export default config({
   testBlocks: ["it", "it.effect", "it.live", "it.prop", "it.effect.prop"],
   overrides: [
     {
-      files: ["apps/host/src/guest.ts", "apps/host/tests/fake-runtime.ts"],
+      files: [
+        "apps/host/src/exec.ts",
+        "apps/host/src/guest.ts",
+        "apps/host/tests/fake-runtime.ts",
+      ],
       rules: { "no-template-curly-in-string": "off" },
     },
     {

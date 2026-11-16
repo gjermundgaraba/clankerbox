@@ -120,10 +120,12 @@ imports `platform/` or `composition/`.
   and its sweep, which deletes each machine the runtime's `owned` facet lists
   whose instance the control plane retired and no step it holds names, and
   answers what it left. Both only read the steps the host holds.
-- `guest.ts`: setup, preparation, and the hook a stop, pause or delete
-  runs first, all run in the guest, and the end of a command cut short.
+- `exec.ts`: how a command runs in a guest: the launcher and its mark, its
+  output, and the end of a command cut short.
+- `guest.ts`: setup, preparation, the tailnet, and the hook a stop, pause or
+  delete runs first, each a script `exec.ts` runs in the guest.
 - `usage.ts`: the machines in use, and the RAM a runtime holds beside them, for the RAM budget and capacity.
-- `settings.ts`: what a host runs on.
+- `settings.ts`: what a host runs on, and the port ranges it keeps.
 - `builds.ts`: `publish`, `fetch` and `unpublish` of a checkpoint through the
   `BuildStore` port, objects by key and a manifest per build, written last.
 - `reach.ts`: the `Reaches` service. It claims a make's port, answers the

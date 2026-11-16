@@ -6,7 +6,7 @@ import { Effect, Fiber, Schedule, Stream } from "effect";
 import type { Scope } from "effect";
 import { expect } from "vite-plus/test";
 
-import { runCommand } from "../src/guest.ts";
+import { runCommand } from "../src/exec.ts";
 import type {
   Execution,
   Identity,

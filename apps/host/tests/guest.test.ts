@@ -42,22 +42,25 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { describe, expect } from "vite-plus/test";
 
 import {
+  endScript,
+  guestCommand,
+  markName,
+  membersProgram,
+  runCommand,
+} from "../src/exec.ts";
+import type { Invocation } from "../src/exec.ts";
+import {
   addMissingKeys,
   beforeJoinScript,
   checkTailnet,
-  endScript,
-  guestCommand,
   hostKeyIn,
   identify,
   identityScript,
-  markName,
-  membersProgram,
   leave,
   prepare as prepareGuest,
   prepareBase,
   rememberDns,
   startScript,
-  runCommand,
   runSetup,
   scrubNode,
   scrubScript,
@@ -66,7 +69,6 @@ import {
   unkey,
   unkeyScript,
 } from "../src/guest.ts";
-import type { Invocation } from "../src/guest.ts";
 import { lastLines, Runtime } from "../src/runtime.ts";
 import type { Execution } from "../src/runtime.ts";
 import {

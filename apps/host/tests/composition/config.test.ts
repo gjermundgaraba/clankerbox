@@ -10,7 +10,7 @@ import { expect } from "vite-plus/test";
 
 import { Box } from "../../src/box.ts";
 import { loadConfig } from "../../src/composition/config.ts";
-import type { ReservedPorts } from "../../src/machine-ports.ts";
+import type { ReservedPorts } from "../../src/settings.ts";
 
 const image = "registry.example/ubuntu@sha256:00";
 const macImage = "registry.example/macos@sha256:00";

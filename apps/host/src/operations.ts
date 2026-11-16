@@ -45,6 +45,8 @@ import type { Scope } from "effect";
 import { Hex } from "effect/encoding";
 
 import { BuildStore, fetch, publish, unpublish } from "./builds.ts";
+import { runCommand } from "./exec.ts";
+import type { Leaving } from "./exec.ts";
 import {
   checkTailnet,
   identify,
@@ -53,11 +55,10 @@ import {
   prepareBase,
   prepare,
   rememberDns,
-  runCommand,
   runSetup,
   scrubNode,
 } from "./guest.ts";
-import type { Leaving, TailnetReport } from "./guest.ts";
+import type { TailnetReport } from "./guest.ts";
 import { Reaches } from "./reach.ts";
 import * as Recheck from "./recheck.ts";
 import {

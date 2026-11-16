@@ -23,7 +23,6 @@ import { expect } from "vite-plus/test";
 
 import { BuildStore } from "../src/builds.ts";
 import { hostLayer, hostServer } from "../src/composition/host.ts";
-import type { PortRange } from "../src/machine-ports.ts";
 import { Operations } from "../src/operations.ts";
 import type { Interface as OperationsInterface } from "../src/operations.ts";
 import type { BuildsSettings } from "../src/platform/s3.ts";
@@ -33,7 +32,7 @@ import type {
   Runtime,
   Interface as RuntimeInterface,
 } from "../src/runtime.ts";
-import type { HostSettings } from "../src/settings.ts";
+import type { PortRange, HostSettings } from "../src/settings.ts";
 import type { Tailnet } from "../src/tailnet.ts";
 import { fakeRuntime } from "./fake-runtime.ts";
 import type {

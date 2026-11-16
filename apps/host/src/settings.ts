@@ -1,6 +1,14 @@
-import { Schema } from "effect";
+export interface PortRange {
+  readonly first: number;
+  readonly last: number;
+}
 
-import type { PortRange } from "./machine-ports.ts";
+/** A range some program on the host takes ports from, which machines' ports must stay out of. */
+export interface ReservedPorts extends PortRange {
+  readonly owner: string;
+}
+
+export const defaultMachinePorts: PortRange = { first: 10_000, last: 19_999 };
 
 export interface HostSettings {
   readonly id: string;
@@ -9,18 +17,3 @@ export interface HostSettings {
   readonly bases: ReadonlyMap<string, string>;
   readonly machinePorts: PortRange;
 }
-
-const loopback = /^(?:localhost|\[::1\]|127(?:\.\d{1,3}){3})$/u;
-
-/** A provider's API URL, which its key rides on with every request: `https`, or `http` only to a loopback address. */
-export const KeyedApiUrl = Schema.String.check(
-  Schema.makeFilter((text: string) => {
-    const url = URL.parse(text);
-
-    return (
-      url?.protocol === "https:" ||
-      (url?.protocol === "http:" && loopback.test(url.hostname)) ||
-      "an https URL, or an http one to a loopback address, as the key rides on every request"
-    );
-  })
-);
