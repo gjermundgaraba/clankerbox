@@ -114,7 +114,8 @@ const amount = (size: SizeName, value: number): string => {
   }
 };
 
-const listed = (bounds: Bounds): string => {
+/** Sizes, or bounds on them, as a refusal names them: `1 vCPU, 1G of RAM and 10G of disk`. */
+export const formatSizes = (bounds: Bounds): string => {
   const each = sizeNames.flatMap((size) => {
     const bound = bounds[size];
 
@@ -147,14 +148,14 @@ export const givenSizes = (traits: RuntimeTraits): string => {
   if (traits.sizes._tag === "classes") {
     return `only its size classes ${traits.sizes.classes
       .map(
-        ({ name, cpu, ramMib, diskGib }) =>
-          `${name} (${formatCpu(cpu)}, ${formatMib(ramMib)} of RAM, ${formatGib(diskGib)} of disk)`
+        (given) =>
+          `${given.name} (${sizeNames.map((size) => amount(size, given[size])).join(", ")})`
       )
       .join(", ")}`;
   }
 
-  const least = listed(traits.limits.least);
-  const most = listed(traits.limits.most);
+  const least = formatSizes(traits.limits.least);
+  const most = formatSizes(traits.limits.most);
 
   return [
     "any sizes",
@@ -162,8 +163,6 @@ export const givenSizes = (traits: RuntimeTraits): string => {
     ...(most === "" ? [] : [`up to ${most}`]),
   ].join(" ");
 };
-
-export const formatSizes = (sizes: Sizes): string => listed(sizes);
 
 const resizedStates = ({ resize }: RuntimeTraits): string => {
   const taking = (["stopped", "running"] as const).filter(

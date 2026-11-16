@@ -12,6 +12,8 @@ import {
   PublicKeys,
   Reading,
   Setup,
+  Size,
+  Sizes,
   Sizing,
   SshEndpoint,
   TailnetStatus,
@@ -22,10 +24,6 @@ import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Schema } from "effect";
 
 import { RuntimeTraits } from "./traits.ts";
-
-const Size = Schema.Int.check(Schema.isGreaterThan(0));
-
-const sizes = { cpu: Size, ramMib: Size, diskGib: Size };
 
 /** A runtime's own ID for a machine or a checkpoint, which the control plane keeps and sends back. */
 export const Handle = Schema.String.check(Schema.isMinLength(1)).pipe(
@@ -53,13 +51,13 @@ export type Ref = typeof Ref.Type;
 /** A machine as a step names it: `port`, once its make gave it one, is the host's port its sshd is reached at. */
 export const MachineRef = Schema.Struct({
   ...identity,
-  ...sizes,
+  ...Sizes.fields,
   port: Schema.optionalKey(Port),
 });
 
 export type MachineRef = typeof MachineRef.Type;
 
-export const CheckpointRef = Schema.Struct({ ...identity, ...sizes });
+export const CheckpointRef = Schema.Struct({ ...identity, ...Sizes.fields });
 
 export type CheckpointRef = typeof CheckpointRef.Type;
 
@@ -198,7 +196,7 @@ export const Outcome = Schema.Struct({
   handle: Schema.optionalKey(Handle),
   endpoint: Schema.optionalKey(SshEndpoint),
   hostKey: Schema.optionalKey(Schema.String),
-  sizes: Schema.optionalKey(Schema.Struct(sizes)),
+  sizes: Schema.optionalKey(Sizes),
   tailnet: Schema.optionalKey(TailnetStatus),
   /** A copy's make that gave it its own identity and prepared it, so it needs no start. */
   prepared: Schema.optionalKey(Schema.Literal(true)),

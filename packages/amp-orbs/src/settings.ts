@@ -1,16 +1,5 @@
-import { describeIssues, Invalid } from "@gjermundgaraba/clankerbox-sdk";
+import { describeIssues, Invalid, Sizes } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, FileSystem, Schema } from "effect";
-
-const Size = Schema.Int.check(Schema.isGreaterThan(0));
-
-/** The sizes an orb type gets. */
-export const Sizes = Schema.Struct({
-  cpu: Size,
-  ramMib: Size,
-  diskGib: Size,
-});
-
-export type Sizes = typeof Sizes.Type;
 
 /** The orb type a thread gets when it picks none, and whose sizes an unknown type gets too. */
 export const defaultType = "default";

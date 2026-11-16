@@ -5,6 +5,7 @@ import {
   Invalid,
   Name,
   readSetup,
+  Size,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, FileSystem, Path, Predicate, Schema } from "effect";
 import { Yaml } from "effect/encoding";
@@ -13,7 +14,7 @@ import { parseGib, parseMib, parseSeconds } from "./units.ts";
 
 const TemplateFile = Schema.Struct({
   base: Schema.String,
-  cpu: Schema.Int.check(Schema.isGreaterThan(0)),
+  cpu: Size,
   ram: Schema.String,
   disk: Schema.String,
   setupTimeout: Schema.optionalKey(Schema.String),

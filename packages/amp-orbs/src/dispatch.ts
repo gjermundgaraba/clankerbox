@@ -1,10 +1,10 @@
 import { Invalid } from "@gjermundgaraba/clankerbox-sdk";
-import type { Client, Labels } from "@gjermundgaraba/clankerbox-sdk";
+import type { Client, Labels, Sizes } from "@gjermundgaraba/clankerbox-sdk";
 import { Console, DateTime, Effect, Option, Schema } from "effect";
 
 import type { Job } from "./job.ts";
 import { nameFor } from "./names.ts";
-import type { Loaded, Sizes } from "./settings.ts";
+import type { Loaded } from "./settings.ts";
 
 /** The label carrying the orb's ID, as Amp gave it, on its machine and its snapshots. */
 export const orbLabel = "amp-orb";

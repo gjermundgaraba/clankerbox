@@ -10,7 +10,7 @@ import {
 
 import { Desired, HostError } from "./errors.ts";
 import { CheckpointName, HostId, Name, RuntimeName } from "./ids.ts";
-import { Size } from "./sizes.ts";
+import { Size, Sizes } from "./sizes.ts";
 
 const CheckpointKind = Schema.Literals(["ram", "disk"]);
 
@@ -205,9 +205,7 @@ export const Machine = Schema.Struct({
   base: Schema.String,
   template: Schema.optionalKey(BuildId),
   ...labelled,
-  cpu: Size,
-  ramMib: Size,
-  diskGib: Size,
+  ...Sizes.fields,
   state: Schema.Literals([
     "running",
     "stopped",
@@ -263,9 +261,7 @@ export const Checkpoint = Schema.Struct({
   base: Schema.String,
   ...labelled,
   ...expiring,
-  cpu: Size,
-  ramMib: Size,
-  diskGib: Size,
+  ...Sizes.fields,
 }).annotate({ identifier: "Checkpoint" });
 
 export type Checkpoint = typeof Checkpoint.Type;
@@ -306,9 +302,7 @@ export const Build = Schema.Struct({
   pin: Schema.optionalKey(Schema.String),
   image: Schema.String,
   base: Schema.String,
-  cpu: Size,
-  ramMib: Size,
-  diskGib: Size,
+  ...Sizes.fields,
   setupTimeoutSeconds: Schema.optionalKey(Size),
   copies: Schema.Array(BuildCopy),
 }).annotate({ identifier: "Build" });
@@ -478,9 +472,7 @@ const fromTemplate = { template: TemplateRef, ...Sizing.fields, ...placed };
 
 const fromBase = {
   base: Schema.String,
-  cpu: Size,
-  ramMib: Size,
-  diskGib: Size,
+  ...Sizes.fields,
   ...placed,
 };
 
