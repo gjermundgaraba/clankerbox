@@ -214,8 +214,9 @@ const recordMinutes = 60;
 // kills can't add a process it doesn't list. sudo, on a pty, stops its parent's process group once
 // it sees its command stop, which holds smolvm's agent and the end on a restored machine:
 // https://github.com/sudo-project/sudo/blob/v1.9.17p2/src/exec_pty.c#L276-L287
-// A process acts on a pending STOP at its next return from the kernel, so one sent STOP before its
-// child sees no system call of its own return, and with it nothing of that child's stop:
+// A process of one thread, as sudo is, acts on a pending STOP at its next return from the kernel,
+// so one sent STOP before its child sees no system call of its own return, and with it nothing of
+// that child's stop; another thread of a process of several can still see it:
 // https://man7.org/linux/man-pages/man7/signal.7.html
 export const membersProgram = String.raw`
 function add(pid, ppid, start, state) {
@@ -279,7 +280,7 @@ END {
  * growing after TERM isn't winding down and would fill a small guest, STOPs
  * what it lists until a listing finds none it hasn't stopped, and KILLs them all, again until a
  * listing finds none. It signals each listing's processes in one `kill`, each after its parent, so
- * no parent sees its child stop, as sudo, which then stops its own parent's group, would, and a tree
+ * no parent of one thread sees its child stop, as sudo, which then stops its own parent's group, would, and a tree
  * costs the same listings however deep it is. Each listing is two `grep`s over `/proc`, given its paths by `xargs`, as zsh
  * globs a path below each process slowly and a guest's processes may name more paths than a command
  * line holds, or one `ps`, and one `awk` pass, and `awk` picks out each of its lines again, where

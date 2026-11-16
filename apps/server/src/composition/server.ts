@@ -51,8 +51,8 @@ class ClosingEveryConnection extends Server {
  * for each to answer 503, and only then closes the server. A connection still open then is owed
  * nothing, so the server closes every one, where Node's own close closes the idle ones and waits on
  * the rest, on one whose request never completes for good. A request that comes once the routes
- * are off meets its connection closed a few milliseconds later, unanswered, which its client reads
- * as it reads a 503.
+ * are off meets its connection closed, unanswered, once the requests the stop cut have ended, a
+ * few milliseconds later as each ends at once, which its client reads as it reads a 503.
  */
 export const controlPlaneServer = ({
   listen,
