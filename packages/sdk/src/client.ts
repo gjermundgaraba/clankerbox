@@ -19,6 +19,7 @@ import {
   endTimeout,
   Http,
   longestHold,
+  readTimeout,
   replyTimeout,
 } from "./api.ts";
 import type { Declared } from "./api.ts";
@@ -183,8 +184,9 @@ export interface Interface extends Calls {
     options: EnsureOptions
   ) => Effect.Effect<Machine, EnsureError>;
   /**
-   * `execMachine`, waiting `timeoutSeconds`, `endTimeout` and the reply timeout for the answer, or
-   * for as long as the command runs when there is none.
+   * `execMachine`, waiting `timeoutSeconds`, `endTimeout`, `readTimeout` for a step under way on the
+   * machine and the reply timeout for the answer, or for as long as the command runs when there is
+   * none.
    */
   readonly execMachine: (
     input: Input<"execMachine">
@@ -884,7 +886,7 @@ export const make = (
           ? Duration.infinity
           : Duration.sum(
               Duration.sum(Duration.seconds(input.timeoutSeconds), endTimeout),
-              reply
+              Duration.sum(readTimeout, reply)
             )
       );
 

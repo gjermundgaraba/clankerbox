@@ -46,8 +46,10 @@ export const replyTimeout = Duration.seconds(15);
 
 /**
  * How long a host takes, at most, past an exec's timeout, to end its command in the guest and
- * answer. The control plane waits the timeout, this and `readTimeout` for a timed exec, and a client
- * the timeout, this and `replyTimeout`, so each waits past the one it calls.
+ * answer. The control plane waits up to `readTimeout` for a step under way on the machine, then the
+ * timeout, this and `readTimeout` for its host's answer, and a client the timeout, this,
+ * `readTimeout` for that step and `replyTimeout`, so each waits past the one it calls, but for an
+ * exec its host holds behind a step, whose wait there none of them counts.
  */
 export const endTimeout = Duration.seconds(15);
 
