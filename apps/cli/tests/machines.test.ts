@@ -55,7 +55,8 @@ const execOn = (
     output: "hi\n",
     truncated: false,
   }),
-  env: Record<string, string> = {}
+  env: Record<string, string> = {},
+  stdin: readonly Uint8Array[] = [new TextEncoder().encode("the input")]
 ) =>
   Effect.gen(function* () {
     const dir = yield* scratch;
@@ -68,7 +69,7 @@ const execOn = (
     });
 
     const stdio = Stdio.layerTest({
-      stdin: Stream.make(new TextEncoder().encode("the input")),
+      stdin: Stream.fromIterable(stdin),
       stdout: () =>
         Sink.forEachArray((chunks) =>
           Effect.sync(() => {
@@ -724,6 +725,62 @@ describe("machines", () => {
           });
           expect(printed).toBe("");
           expect(execs).toStrictEqual([{ id: "dev", argv: ["true"] }]);
+        })
+    );
+
+    it.effect(
+      "exec --stdin sends text whole, also a character split across two reads",
+      () =>
+        Effect.gen(function* () {
+          const bytes = new TextEncoder().encode("å\n€");
+
+          const { execs } = yield* execOn(
+            ["--stdin", "dev", "--", "cat"],
+            undefined,
+            {},
+            [bytes.slice(0, 1), bytes.slice(1, 4), bytes.slice(4)]
+          );
+
+          expect(execs).toStrictEqual([
+            { id: "dev", argv: ["cat"], stdin: "å\n€" },
+          ]);
+        })
+    );
+
+    it.effect("exec --stdin sends a leading byte-order mark as text", () =>
+      Effect.gen(function* () {
+        const { execs } = yield* execOn(
+          ["--stdin", "dev", "--", "cat"],
+          undefined,
+          {},
+          [Uint8Array.of(0xef, 0xbb, 0xbf, 0x78)]
+        );
+
+        expect(execs).toStrictEqual([
+          {
+            id: "dev",
+            argv: ["cat"],
+            stdin: `${String.fromCodePoint(0xfe_ff)}x`,
+          },
+        ]);
+      })
+    );
+
+    it.effect(
+      "exec --stdin refuses bytes that aren't UTF-8, and sends nothing",
+      () =>
+        Effect.gen(function* () {
+          const { code, stderr, execs } = yield* execOn(
+            ["--stdin", "dev", "--", "cat"],
+            undefined,
+            {},
+            [Uint8Array.of(0x68, 0x69, 0xff, 0xfe)]
+          );
+
+          expect(code).toBe(1);
+          expect(stderr).toContain("Invalid");
+          expect(stderr).toContain("stdin isn't UTF-8 text");
+          expect(execs).toStrictEqual([]);
         })
     );
 

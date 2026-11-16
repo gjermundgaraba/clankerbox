@@ -1,10 +1,14 @@
 import { createServer } from "node:http";
-import type { Server } from "node:http";
+import type { Server, ServerResponse } from "node:http";
 
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { readTimeout, version } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  endTimeout,
+  readTimeout,
+  version,
+} from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Exit, Layer, Logger, Result, Schema } from "effect";
 import { HttpClient } from "effect/http";
 import { expect } from "vite-plus/test";
@@ -21,6 +25,51 @@ import {
   stubHost,
   stubInfo as info,
 } from "./support.ts";
+
+const execHost = (id: string, exec: (response: ServerResponse) => void) =>
+  Effect.acquireRelease(
+    Effect.callback<Server>((resume) => {
+      const answers = new Map<string, unknown>([
+        ["/host/readHost", { ...info, id }],
+        ["/host/adoptMachines", { adopted: [], unresolved: [] }],
+      ]);
+
+      const server = createServer((incoming, response) => {
+        if (incoming.url === "/host/execMachine") {
+          exec(response);
+
+          return;
+        }
+
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify(answers.get(incoming.url ?? "") ?? []));
+      });
+
+      server.listen({ host: "127.0.0.1", port: 0 }, () => {
+        resume(Effect.succeed(server));
+      });
+    }),
+    (server) =>
+      Effect.callback<undefined>((resume) => {
+        server.close(() => {
+          resume(Effect.undefined);
+        });
+      })
+  ).pipe(
+    Effect.map((server) => {
+      const { port } = Schema.decodeUnknownSync(
+        Schema.Struct({ port: Schema.Finite })
+      )(server.address(), { onExcessProperty: "ignore" });
+
+      return `http://127.0.0.1:${port}`;
+    })
+  );
+
+const execPagedHost = (id: string, status: number) =>
+  execHost(id, (response) => {
+    response.writeHead(status, { "content-type": "text/html" });
+    response.end(`<html>${status}</html>`);
+  });
 
 layer(NodeServices.layer, { excludeTestServices: true })(
   "a host's log",
@@ -62,8 +111,52 @@ layer(NodeServices.layer, { excludeTestServices: true })(
           expect(
             lines.filter((line) => line.startsWith("host "))
           ).toStrictEqual([
-            expect.stringContaining("host smolvm: "),
+            expect.stringMatching(
+              /^host smolvm didn't answer: the connection to it failed \(Transport error .+\)$/u
+            ),
             "host smolvm answers again",
+          ]);
+        })
+    );
+
+    it.effect(
+      "a call that a host answers as its contract doesn't is logged at warn with what its HTTP client said, once until the host answers again",
+      () =>
+        Effect.gen(function* () {
+          const lines: string[] = [];
+          const url = yield* execPagedHost("flaky", 503);
+
+          const served = yield* running({
+            members: [{ id: "flaky", url, draining: false }],
+            logger: Logger.make(({ logLevel, message }) => {
+              lines.push(`${logLevel} ${String(message)}`);
+            }),
+          });
+
+          const client = yield* clientOf(served.url);
+
+          yield* client.create("dev", request("dev", { host: "smolvm" }));
+          yield* patched(served.store, "dev", { host: "flaky" });
+
+          for (const _ of [1, 2]) {
+            yield* Effect.flip(
+              client.execMachine({ id: "dev", argv: ["true"] })
+            );
+          }
+
+          yield* client.capacity;
+          yield* Effect.flip(client.execMachine({ id: "dev", argv: ["true"] }));
+
+          expect(
+            lines.filter((line) => /^\w+ host flaky /u.test(line))
+          ).toStrictEqual([
+            expect.stringMatching(
+              /^Warn host flaky didn't answer as the host contract says: .+ \(.*503 POST http:\/\/127\.0\.0\.1:\d+\/host\/execMachine\)\)$/u
+            ),
+            "Info host flaky answers again",
+            expect.stringMatching(
+              /^Warn host flaky didn't answer .+\/host\/execMachine\)\)$/u
+            ),
           ]);
         })
     );
@@ -97,6 +190,38 @@ const pageHost = (status: number) =>
       return `http://127.0.0.1:${port}`;
     })
   );
+
+const stoppingHost = Effect.acquireRelease(
+  Effect.callback<Server>((resume) => {
+    const server = createServer((_incoming, response) => {
+      response.writeHead(503);
+      response.end();
+    });
+
+    server.listen({ host: "127.0.0.1", port: 0 }, () => {
+      resume(Effect.succeed(server));
+    });
+  }),
+  (server) =>
+    Effect.callback<undefined>((resume) => {
+      server.close(() => {
+        resume(Effect.undefined);
+      });
+    })
+).pipe(
+  Effect.map((server) => {
+    const { port } = Schema.decodeUnknownSync(
+      Schema.Struct({ port: Schema.Finite })
+    )(server.address(), { onExcessProperty: "ignore" });
+
+    return `http://127.0.0.1:${port}`;
+  })
+);
+
+const declaredBy = {
+  readHost: new Set([400]),
+  execMachine: new Set([400, 500]),
+};
 
 const silentHost = Effect.acquireRelease(
   Effect.callback<Server>((resume) => {
@@ -232,10 +357,10 @@ layer(NodeServices.layer, { excludeTestServices: true })(
     );
 
     it.effect(
-      "that answers with a page, as a proxy in front of it may, is named unreachable in capacity, with the status it answered",
+      "that answers with a page, as a proxy in front of it or a host stopping may, is named unreachable by its ID and what it answered, a status the call doesn't declare or a body it can't read, never its URL, and an exec there may have run",
       () =>
         Effect.gen(function* () {
-          for (const status of [400, 404, 500] as const) {
+          for (const status of [400, 404, 500, 503] as const) {
             const url = yield* pageHost(status);
 
             const served = yield* running({
@@ -245,14 +370,137 @@ layer(NodeServices.layer, { excludeTestServices: true })(
             const client = yield* clientOf(served.url);
             const report = yield* client.capacity;
 
+            yield* client.create("dev", request("dev", { host: "smolvm" }));
+            yield* patched(served.store, "dev", { host: "paged" });
+
+            const exec = yield* Effect.flip(
+              client.execMachine({ id: "dev", argv: ["true"] })
+            );
+
             expect(
               report.unreported.map(({ host, state }) => [host, state]),
               `${status}`
             ).toStrictEqual([["paged", "unreachable"]]);
-            expect(report.unreported[0]?.problem, `${status}`).toContain(
-              `${status} POST ${url}/host/readHost`
-            );
+
+            const replied = (declared: ReadonlySet<number>) =>
+              `host paged didn't answer as the host contract says: ${
+                declared.has(status)
+                  ? `it replied HTTP ${status} with a body the control plane couldn't read`
+                  : `it replied HTTP ${status}, which the host contract doesn't declare`
+              }`;
+
+            expect(
+              [report.unreported[0]?.problem, exec.message],
+              `${status}`
+            ).toStrictEqual([
+              replied(declaredBy.readHost),
+              replied(declaredBy.execMachine),
+            ]);
+            expect(exec, `${status}`).toMatchObject({
+              _tag: "Unavailable",
+              readOnly: false,
+            });
           }
+        })
+    );
+
+    it.effect(
+      "that answers 503 with no body and no content type, as a host's server does to each request while the host stops, is named as stopping",
+      () =>
+        Effect.gen(function* () {
+          const url = yield* stoppingHost;
+
+          const served = yield* running({
+            members: [{ id: "stopping", url, draining: false }],
+          });
+
+          const client = yield* clientOf(served.url);
+
+          yield* client.create("dev", request("dev", { host: "smolvm" }));
+          yield* patched(served.store, "dev", { host: "stopping" });
+
+          const exec = yield* Effect.flip(
+            client.execMachine({ id: "dev", argv: ["true"] })
+          );
+
+          expect(exec).toMatchObject({
+            _tag: "Unavailable",
+            readOnly: false,
+            message:
+              "host stopping is stopping: it replied HTTP 503 with no body, as a host's server does to each request while the host stops",
+          });
+        })
+    );
+
+    it.effect(
+      "is waited on for a timed exec past the exec's timeout and its readTimeout, as its end may take endTimeout more",
+      () =>
+        Effect.gen(function* () {
+          const timeoutSeconds = 1;
+
+          const answersAfter = Duration.sum(
+            Duration.sum(Duration.seconds(timeoutSeconds), readTimeout),
+            Duration.divideUnsafe(endTimeout, 5)
+          );
+
+          const url = yield* execHost("ending", (response) => {
+            setTimeout(() => {
+              response.writeHead(200, { "content-type": "application/json" });
+              response.end(
+                JSON.stringify({ exitCode: 124, output: "", truncated: false })
+              );
+            }, Duration.toMillis(answersAfter));
+          });
+
+          const served = yield* running({
+            members: [{ id: "ending", url, draining: false }],
+          });
+
+          const client = yield* clientOf(served.url);
+
+          yield* client.create("dev", request("dev", { host: "smolvm" }));
+          yield* patched(served.store, "dev", { host: "ending" });
+
+          const executed = yield* client.execMachine({
+            id: "dev",
+            argv: ["true"],
+            timeoutSeconds,
+          });
+
+          expect(executed).toStrictEqual({
+            exitCode: 124,
+            output: "",
+            truncated: false,
+          });
+        }),
+      30_000
+    );
+
+    it.effect(
+      "that refuses the connection is named by its ID alone, in capacity and in an exec's answer",
+      () =>
+        Effect.gen(function* () {
+          const served = yield* running({
+            members: [
+              { id: "gone", url: "http://127.0.0.1:1", draining: false },
+            ],
+          });
+
+          const client = yield* clientOf(served.url);
+
+          yield* client.create("dev", request("dev", { host: "smolvm" }));
+          yield* patched(served.store, "dev", { host: "gone" });
+
+          const report = yield* client.capacity;
+
+          const exec = yield* Effect.flip(
+            client.execMachine({ id: "dev", argv: ["true"] })
+          );
+
+          expect([report.unreported[0]?.problem, exec.message]).toStrictEqual([
+            "host gone didn't answer: the connection to it failed",
+            "host gone didn't answer: the connection to it failed",
+          ]);
         })
     );
 

@@ -563,6 +563,101 @@ describe("the smol cloud runtime on its host", () => {
     }
   );
 
+  it.live(
+    "a start or remove that meets a pause's checkpoint smol cloud still captures waits for the capture to end, then deletes it",
+    () => {
+      const logged: string[] = [];
+
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const { runtime, fake } = yield* onHost();
+
+          for (const ending of ["start", "remove"] as const) {
+            const dev = yield* made(runtime, `dev-${ending}`);
+            const release = yield* fake.faults.holdCaptures;
+
+            yield* runtime.pause(dev);
+
+            const own =
+              [...fake.checkpoints.values()].find(
+                ({ machineId }) => machineId === dev.handle
+              )?.id ?? "";
+
+            const ended = yield* Effect.forkChild(
+              ending === "start"
+                ? runtime.start(dev, new Set())
+                : runtime.delete(dev, new Set())
+            );
+
+            yield* Effect.repeat(
+              Effect.sync(() => fake.calls),
+              {
+                until: (calls) =>
+                  calls.includes(`DELETE /v1/checkpoints/${own} 409`),
+                schedule: Schedule.spaced("10 millis"),
+              }
+            );
+
+            expect(ended.pollUnsafe(), `the ${ending} waits`).toBeUndefined();
+
+            yield* release;
+            yield* Fiber.join(ended);
+
+            expect(
+              fake.checkpoints.has(own),
+              `the ${ending} deletes the checkpoint`
+            ).toBe(false);
+            expect(logged.join("\n")).not.toContain(own);
+          }
+        })
+      ).pipe(Effect.provide(Logger.layer([capturing(logged)])));
+    }
+  );
+
+  it.live(
+    "a remove whose pause's checkpoint smol cloud refuses as still captured once more after it rests deletes it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { runtime, fake } = yield* onHost();
+          const dev = yield* made(runtime, "dev");
+          const release = yield* fake.faults.holdCaptures;
+
+          yield* fake.faults.lagCaptures(true);
+          yield* runtime.pause(dev);
+
+          const own =
+            [...fake.checkpoints.values()].find(
+              ({ machineId }) => machineId === dev.handle
+            )?.id ?? "";
+
+          const removed = yield* Effect.forkChild(
+            Effect.exit(runtime.delete(dev, new Set()))
+          );
+
+          yield* Effect.repeat(
+            Effect.sync(() => fake.calls),
+            {
+              until: (calls) =>
+                calls.includes(`DELETE /v1/checkpoints/${own} 409`),
+              schedule: Schedule.spaced("10 millis"),
+            }
+          );
+          yield* release;
+
+          const ended = yield* Fiber.join(removed);
+
+          expect(Exit.isSuccess(ended), String(ended)).toBe(true);
+          expect(fake.checkpoints.has(own)).toBe(false);
+          expect(
+            fake.calls.filter(
+              (call) => call === `DELETE /v1/checkpoints/${own} 409`
+            )
+          ).toHaveLength(2);
+        })
+      )
+  );
+
   it.live("stages stdin past a MiB on the guest's tmpfs and removes it", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -661,21 +756,26 @@ const onCloud = Effect.gen(function* () {
 
 describe("the smol cloud runtime over an account without a card", () => {
   it.live(
-    "moves a make past the account's per-machine sizes on as Capacity, and refuses such a resize as unsizable",
+    "states the account's per-machine sizes as its limits, refuses a make past them Unsizable before it sends the create, and such a resize as unsizable",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
           const { runtime } = yield* onCloud;
           const big = { ...machineOf("big"), cpu: 5 };
 
-          yield* runtime.sizable(big, sizes, big, false);
-
           const refused = yield* Effect.flip(
             runtime.make(big, { _tag: "image", image }, 10_022)
           );
 
-          expect(refused).toMatchObject({ _tag: "Capacity" });
-          expect(refused.message).toContain("up to 4 vCPU");
+          expect(runtime.traits.limits.most).toStrictEqual({
+            cpu: 4,
+            ramMib: 16_384,
+            diskGib: 200,
+          });
+          expect([refused._tag, refused.message]).toStrictEqual([
+            "Unsizable",
+            "make big: the account's plan now gives any sizes up to 4 vCPUs, 16G of RAM and 200G of disk, and big was asked 5 vCPUs, 1G of RAM and 10G of disk",
+          ]);
 
           const dev = yield* made(runtime, "dev");
 
@@ -763,6 +863,60 @@ describe("the smol cloud runtime over an account without a card", () => {
           ).toHaveLength(1);
         })
       )
+  );
+
+  it.live(
+    "an exec starts before its command prints, as smol cloud answers its head first, unless the fake stalls the attach",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { fake, runtime } = yield* onCloud;
+          const dev = yield* made(runtime, "dev");
+          const root = fake.machines.get(dev.handle)?.root ?? "";
+
+          for (const stalled of [false, true]) {
+            const go = path.join(root, `go-${stalled}`);
+
+            yield* fake.faults.stallAttach(stalled);
+
+            const starting = yield* Effect.forkChild(
+              runtime.exec(dev, {
+                argv: [
+                  "sh",
+                  "-c",
+                  'while [ ! -e "$1" ]; do sleep 0.05; done; echo went',
+                  "sh",
+                  go,
+                ],
+              })
+            );
+
+            const early = yield* Fiber.await(starting).pipe(
+              Effect.timeout("2 seconds"),
+              Effect.option
+            );
+
+            expect(
+              early._tag,
+              stalled
+                ? "a stalled attach holds the exec until the command prints"
+                : "the exec starts while the command is silent"
+            ).toBe(stalled ? "None" : "Some");
+
+            writeFileSync(go, "");
+
+            const { output, exitCode } = yield* Fiber.join(starting);
+
+            expect(
+              yield* Effect.all([
+                Stream.mkString(Stream.decodeText(output)),
+                exitCode,
+              ])
+            ).toStrictEqual(["went\n", 0]);
+          }
+        })
+      ),
+    20_000
   );
 
   it.live(
@@ -1097,7 +1251,7 @@ interface Failing {
   readonly account?: {
     answeredFirst?: number;
     times: number;
-    readonly answer: "gateway" | "refused";
+    readonly answer: "gateway" | "refused" | "unavailable";
   };
   readonly create?: string;
   readonly inUse?: { readonly machines: number; readonly started: number };
@@ -1108,9 +1262,19 @@ const scripted = (
   state: string,
   stalls?: string,
   failing?: Failing
-) =>
-  HttpClient.make((request, url) =>
-    `${request.method} ${url.pathname}` === stalls
+) => {
+  let planRead = false;
+
+  const stalled = (route: string) => {
+    const startup = route === "GET /v1/account" && !planRead;
+
+    planRead ||= route === "GET /v1/account";
+
+    return route === stalls && !startup;
+  };
+
+  return HttpClient.make((request, url) =>
+    stalled(`${request.method} ${url.pathname}`)
       ? Effect.never
       : Effect.sync(() => {
           const route = `${request.method} ${url.pathname}`;
@@ -1140,6 +1304,15 @@ const scripted = (
           ) {
             if (failing?.account !== undefined) {
               failing.account.times -= 1;
+            }
+
+            if (failing?.account?.answer === "unavailable") {
+              return reply(503, {
+                code: "unavailable",
+                detail: "the account store is restarting",
+                retryable: true,
+                status: 503,
+              });
             }
 
             return failing?.account?.answer === "gateway"
@@ -1220,6 +1393,7 @@ const scripted = (
           return reply(200, record);
         })
   );
+};
 
 const scriptedRuntime = (client: HttpClient.HttpClient) =>
   Effect.gen(function* () {
@@ -1246,6 +1420,52 @@ const scriptedMake = (busy: number, state = "starting") =>
     );
   });
 
+describe("a smol cloud host's start", () => {
+  it.effect(
+    "fails Internal when it can't read the account's plan, whose sizes are its limits",
+    () =>
+      Effect.gen(function* () {
+        const refused = yield* Effect.flip(
+          scriptedRuntime(
+            scripted({ busy: 0 }, "started", undefined, {
+              account: { times: 1, answer: "refused" },
+            })
+          )
+        );
+
+        expect([refused._tag, refused.message]).toStrictEqual([
+          "Internal",
+          expect.stringMatching(/^couldn't read the account's plan: /u),
+        ]);
+      })
+  );
+
+  it.effect(
+    "reads the plan again after a gateway's answer or a refusal smol cloud marks retryable, as every read is, and starts",
+    () =>
+      Effect.gen(function* () {
+        for (const answer of ["gateway", "unavailable"] as const) {
+          const starting = yield* Effect.forkChild(
+            scriptedRuntime(
+              scripted({ busy: 0 }, "started", undefined, {
+                account: { times: 2, answer },
+              })
+            )
+          );
+
+          yield* TestClock.adjust("1 minute");
+
+          const ended = starting.pollUnsafe();
+
+          expect(
+            ended !== undefined && Exit.isSuccess(ended),
+            `started past two ${answer} answers`
+          ).toBe(true);
+        }
+      })
+  );
+});
+
 describe("a smol cloud make's read of the account", () => {
   it.effect(
     "reads the account again after a gateway's 502, and makes the machine",
@@ -1253,7 +1473,7 @@ describe("a smol cloud make's read of the account", () => {
       Effect.gen(function* () {
         const runtime = yield* scriptedRuntime(
           scripted({ busy: 0 }, "started", undefined, {
-            account: { times: 1, answer: "gateway" },
+            account: { answeredFirst: 1, times: 1, answer: "gateway" },
           })
         );
 
@@ -1278,7 +1498,7 @@ describe("a smol cloud make's read of the account", () => {
       Effect.gen(function* () {
         const runtime = yield* scriptedRuntime(
           scripted({ busy: 0 }, "started", undefined, {
-            account: { times: 1, answer: "refused" },
+            account: { answeredFirst: 1, times: 1, answer: "refused" },
           })
         );
 
@@ -1341,6 +1561,23 @@ describe("a smol cloud create the provider refuses 422", () => {
   );
 
   it.effect(
+    "is Unsizable when the machine's sizes exceed what the account runs, though its plan gave them",
+    () =>
+      Effect.gen(function* () {
+        const refused = yield* refusedCreate(
+          "machine size exceeds what an account without a card can run, up to 4 vCPU, 16 GB memory and 200 GB disk per machine (requested 1 vCPU, 1 GB, 10 GB disk)"
+        );
+
+        expect([refused._tag, refused.message]).toStrictEqual([
+          "Unsizable",
+          expect.stringMatching(
+            /^make dev: smol cloud makes no machine of these sizes on this account: /u
+          ),
+        ]);
+      })
+  );
+
+  it.effect(
     "is Internal when the account is within its limits, or its limits can't be read",
     () =>
       Effect.gen(function* () {
@@ -1357,7 +1594,7 @@ describe("a smol cloud create the provider refuses 422", () => {
           "resources.cpus: expected integer",
           {
             inUse: { machines: 4, started: 4 },
-            account: { answeredFirst: 1, times: 5, answer: "refused" },
+            account: { answeredFirst: 2, times: 5, answer: "refused" },
           }
         );
 
@@ -1402,6 +1639,15 @@ const recordIn = (state: string | undefined) => ({
   resources: { cpus: 1, memoryMb: 1024 },
 });
 
+const smolAccount = {
+  plan: { allowAlwaysOn: false },
+  effectiveMaxMachines: 20,
+  effectiveMaxConcurrentMachines: 4,
+  effectiveMaxCpus: 4,
+  effectiveMaxMemoryMb: 16_384,
+  effectiveMaxDiskGb: 200,
+};
+
 const acting = (machine: { state: string | undefined; refusals: number }) =>
   HttpClient.make((request, url) =>
     Effect.sync(() => {
@@ -1438,7 +1684,9 @@ const acting = (machine: { state: string | undefined; refusals: number }) =>
           : reply(200, recordIn(machine.state));
       }
 
-      return reply(200, []);
+      return route === "GET /v1/account"
+        ? reply(200, smolAccount)
+        : reply(200, []);
     })
   );
 
@@ -1505,15 +1753,6 @@ describe("a smol cloud start", () => {
   );
 });
 
-const smolAccount = {
-  plan: { allowAlwaysOn: false },
-  effectiveMaxMachines: 20,
-  effectiveMaxConcurrentMachines: 4,
-  effectiveMaxCpus: 4,
-  effectiveMaxMemoryMb: 16_384,
-  effectiveMaxDiskGb: 200,
-};
-
 const answering = (answer: (route: string) => Response | undefined) => {
   const asked: string[] = [];
 
@@ -1573,6 +1812,36 @@ const failureOf = <A, E>(ended: Exit.Exit<A, E> | undefined) =>
 const Created = Schema.fromJsonString(
   Schema.Struct({ autoStopSeconds: Schema.Int })
 );
+
+describe("a smol cloud make whose read of the account goes unanswered", () => {
+  it.effect("fails, sending no create and listing nothing", () =>
+    Effect.gen(function* () {
+      let planRead = false;
+
+      const { asked, client } = answering((route) => {
+        if (route !== "GET /v1/account" || !planRead) {
+          planRead ||= route === "GET /v1/account";
+
+          return undefined;
+        }
+
+        return new Response("<html>bad gateway</html>", { status: 502 });
+      });
+
+      const runtime = yield* scriptedRuntime(client);
+
+      asked.length = 0;
+
+      const ended = yield* endedWithin(
+        runtime.make(machineOf("dev"), { _tag: "image", image }, 10_022),
+        "10 minutes"
+      );
+
+      expect(failureOf(ended)).toMatchObject({ _tag: "Internal" });
+      expect(new Set(asked)).toStrictEqual(new Set(["GET /v1/account"]));
+    })
+  );
+});
 
 describe("a smol cloud make on an account whose plan changes", () => {
   it.effect(
@@ -1780,7 +2049,7 @@ describe("a smol cloud read whose answer is lost", () => {
 
 describe("a smol cloud create whose every answer is lost", () => {
   it.effect(
-    "is sent five times in all, each looked for by its name a poll after, then fails",
+    "is sent three times in all, each looked for by its name a poll after, then fails",
     () =>
       Effect.gen(function* () {
         const { asked, client } = answering((route) => {
@@ -1815,7 +2084,7 @@ describe("a smol cloud create whose every answer is lost", () => {
           early,
           asks(asked, "POST /v1/machines"),
           asks(asked, "GET /v1/machines"),
-        ]).toStrictEqual([[1, 0], 5, 5]);
+        ]).toStrictEqual([[1, 0], 3, 3]);
       })
   );
 });
@@ -1994,7 +2263,7 @@ describe("a smol cloud step's deadline", () => {
     "ends a make whose retries ran and whose machine never starts in 10 minutes, failed Internal",
     () =>
       Effect.gen(function* () {
-        const making = yield* scriptedMake(3);
+        const making = yield* scriptedMake(2);
 
         yield* TestClock.adjust("10 minutes");
 
@@ -2468,6 +2737,20 @@ describe("a smol cloud 429's wait", () => {
     })
   );
 
+  it.effect(
+    "is a second where Retry-After names neither whole seconds nor an HTTP date",
+    () =>
+      Effect.gen(function* () {
+        const { counts } = yield* startsBy(throttled("2.5"), [
+          "900 millis",
+          "200 millis",
+          "1 minute",
+        ]);
+
+        expect(counts).toStrictEqual([1, 2, 2]);
+      })
+  );
+
   it.effect("is a second at least, whatever less Retry-After asks", () =>
     Effect.gen(function* () {
       const { counts } = yield* startsBy(throttled("0.001"), [
@@ -2579,26 +2862,35 @@ describe("a smol cloud start refused in a way it sends again", () => {
   );
 });
 
+const checkpointIn = (status: string) =>
+  Response.json({ id: "ckpt-1", machineId: "mach-1", status });
+
+const snap1 = {
+  name: "snap",
+  instance: machineOf("snap").instance,
+  handle: Handle.make("ckpt-1"),
+};
+
 describe("a smol cloud checkpoint delete refused 409", () => {
   it.effect(
-    "is Conflict at its one send, whether or not the refusal says it may be retried",
+    "is Conflict once refused three times while the checkpoint rests, whether or not the refusal says it may be retried",
     () =>
       Effect.gen(function* () {
         for (const retryable of [false, true]) {
-          const { asked, client } = answering((route) =>
-            route === "DELETE /v1/checkpoints/ckpt-1"
-              ? problem(409, "checkpoint has 1 live branch", retryable)
-              : undefined
-          );
+          const { asked, client } = answering((route) => {
+            if (route === "DELETE /v1/checkpoints/ckpt-1") {
+              return problem(409, "checkpoint has 1 live branch", retryable);
+            }
+
+            return route === "GET /v1/checkpoints/ckpt-1"
+              ? checkpointIn("available")
+              : undefined;
+          });
 
           const runtime = yield* scriptedRuntime(client);
 
           const ended = yield* endedWithin(
-            runtime.deleteCheckpoint({
-              name: "snap",
-              instance: machineOf("snap").instance,
-              handle: Handle.make("ckpt-1"),
-            }),
+            runtime.deleteCheckpoint(snap1),
             "1 minute"
           );
 
@@ -2608,8 +2900,55 @@ describe("a smol cloud checkpoint delete refused 409", () => {
           expect(
             asks(asked, "DELETE /v1/checkpoints/ckpt-1"),
             `retryable ${retryable}`
-          ).toBe(1);
+          ).toBe(3);
         }
+      })
+  );
+
+  it.effect(
+    "while smol cloud still captures it waits for the capture to end, and is sent again",
+    () =>
+      Effect.gen(function* () {
+        let deletes = 0;
+        let reads = 0;
+
+        const { asked, client } = answering((route) => {
+          if (route === "DELETE /v1/checkpoints/ckpt-1") {
+            deletes += 1;
+
+            return deletes === 1
+              ? problem(409, "checkpoint capture is still in progress")
+              : new Response(null, { status: 204 });
+          }
+
+          if (route === "GET /v1/checkpoints/ckpt-1") {
+            reads += 1;
+
+            return checkpointIn(reads < 4 ? "creating" : "available");
+          }
+
+          return undefined;
+        });
+
+        const runtime = yield* scriptedRuntime(client);
+
+        const running = yield* Effect.forkChild(
+          runtime.deleteCheckpoint(snap1)
+        );
+
+        yield* TestClock.adjust("1500 millis");
+        expect(
+          running.pollUnsafe(),
+          "it waits while the capture runs"
+        ).toBeUndefined();
+
+        yield* TestClock.adjust("1 minute");
+
+        const ended = running.pollUnsafe();
+
+        expect(ended !== undefined && Exit.isSuccess(ended)).toBe(true);
+        expect(asks(asked, "DELETE /v1/checkpoints/ckpt-1")).toBe(2);
+        expect(reads, "it read the checkpoint until it rested").toBe(4);
       })
   );
 });

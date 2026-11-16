@@ -1161,7 +1161,7 @@ describe("each boat goal from each state boat holds", () => {
               observe: "stopped",
               find: "found",
               capture: "WrongState error",
-              start: "Internal",
+              start: "done",
               stop: "done",
               pause: "done",
               delete: "done",

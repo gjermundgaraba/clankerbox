@@ -1,5 +1,5 @@
 import type { Handle } from "@clankerbox/host-contract";
-import { fitted, resizable } from "@clankerbox/host-contract/traits";
+import { fitted, resizeRefusal } from "@clankerbox/host-contract/traits";
 import { describe, it } from "@effect/vitest";
 import { Capacity, Missing, WrongState } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Fiber, Schedule, Stream } from "effect";
@@ -20,7 +20,7 @@ export type Dropped = "make" | "delete";
 
 export interface Faults {
   readonly drift: (instance: string) => Effect.Effect<void>;
-  /** Fails the next make as though its answer were lost; the effect it answers lands its machine. */
+  /** Fails the next make, whose machine lands all the same once the effect it answers runs. */
   readonly landLate: Effect.Effect<Effect.Effect<void>>;
   readonly quota: (on: boolean) => Effect.Effect<void>;
   readonly dropAnswer: (dropping: Dropped) => Effect.Effect<void>;
@@ -425,10 +425,10 @@ export const runtimeContract = (subject: Subject): void => {
                 ? undefined
                 : offered.find(
                     (sizes) =>
-                      sizes.diskGib >= from.diskGib &&
                       (sizes.cpu !== from.cpu ||
                         sizes.ramMib !== from.ramMib) &&
-                      resizable(traits, state, from, sizes) === "resizes"
+                      resizeRefusal(traits, "dev", state, from, sizes) ===
+                        undefined
                   );
 
             if (state === undefined || to === undefined) {
@@ -695,7 +695,10 @@ export const runtimeContract = (subject: Subject): void => {
     );
 
     it.live.skipIf(lacks("quota"))(
-      needing("quota", "refuses a make for want of room and makes nothing"),
+      needing(
+        "quota",
+        "refuses a make for want of room as Capacity, and the undo that follows leaves nothing"
+      ),
       () =>
         withFixture(({ runtime, faults }) =>
           Effect.gen(function* () {
@@ -706,6 +709,15 @@ export const runtimeContract = (subject: Subject): void => {
             const refused = yield* Effect.flip(made(runtime, "dev"));
 
             yield* quota(false);
+
+            const left = yield* runtime.find(sized("dev"));
+
+            if (left !== undefined) {
+              yield* runtime.delete(
+                { ...sized("dev"), handle: left },
+                new Set()
+              );
+            }
 
             expect(refused).toBeInstanceOf(Capacity);
             expect(yield* runtime.find(sized("dev"))).toBeUndefined();

@@ -2,14 +2,15 @@ import type { MachineState } from "@clankerbox/host-contract";
 import {
   copySizable,
   fitted,
+  formatSizes,
   givenSizes,
-  grownPast,
 } from "@clankerbox/host-contract/traits";
 import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
 import {
   formatCpu,
   formatGib,
   formatMib,
+  isResting,
   NotBuilt,
   templateRef,
   Unsizable,
@@ -51,7 +52,7 @@ const copyRefusal = (
   const shrunkDisk = `machine ${name}'s disk of ${formatGib(spec.diskGib)} is below its source's ${formatGib(from.diskGib)}, and a disk only grows`;
 
   if (!fitted(traits, spec)) {
-    return `machine ${name}'s host gives ${givenSizes(traits)}, and it was asked ${formatCpu(spec.cpu)}, ${formatMib(spec.ramMib)} of RAM and ${formatGib(spec.diskGib)} of disk`;
+    return `machine ${name}'s host gives ${givenSizes(traits)}, and it was asked ${formatSizes(spec)}`;
   }
 
   switch (traits.copies) {
@@ -60,15 +61,9 @@ const copyRefusal = (
     }
 
     case "grow": {
-      const past = grownPast(traits, from, spec);
-
-      if (spec.diskGib < from.diskGib) {
-        return shrunkDisk;
-      }
-
-      return past === undefined
-        ? `machine ${name}'s host copies a machine only at its source's sizes or larger, so its vCPUs and RAM only grow from ${held}`
-        : `machine ${name}'s host grows a copy live from ${held} once it runs, to at most ${past.limit}, and it was asked ${past.asked}`;
+      return spec.diskGib < from.diskGib
+        ? shrunkDisk
+        : `machine ${name}'s host copies a machine only at its source's sizes or larger, so its vCPUs and RAM only grow from ${held}`;
     }
 
     case "any": {
@@ -95,9 +90,22 @@ export const copied = (
 };
 
 /**
+ * The state a step meets in machine `found`, its VM read `seen`, where the server can refuse the
+ * step before a row is written: none where the VM's state isn't known or the machine is still
+ * moving, as the host then decides.
+ */
+export const restingAs = (
+  found: MachineRow,
+  seen: MachineState
+): "running" | "stopped" | "paused" | undefined =>
+  isResting(phaseOf(found.state)) &&
+  (seen === "running" || seen === "stopped" || seen === "paused")
+    ? seen
+    : undefined;
+
+/**
  * Why a fork or capture of a machine at rest, its VM read `seen`, is refused by a host whose
- * runtime copies a machine only in `captureFrom`, before a row is written; none where the VM's
- * state isn't known or the machine is still moving, as the host then decides.
+ * runtime copies a machine only in `captureFrom`, before a row is written.
  */
 export const uncopiable = (
   source: MachineRow,
@@ -105,10 +113,9 @@ export const uncopiable = (
   { captureFrom }: RuntimeTraits,
   action: "fork" | "capture"
 ): WrongState | undefined => {
-  const settled = phaseOf(source.state) === "settled";
-  const known = seen === "running" || seen === "stopped" || seen === "paused";
+  const resting = restingAs(source, seen);
 
-  return settled && known && seen !== captureFrom
+  return resting !== undefined && resting !== captureFrom
     ? new WrongState({
         message: `machine ${source.name} is ${seen}, and its host copies a machine only ${captureFrom}: ${captureFrom === "stopped" ? "stop" : "start"} it, then ${action} it`,
         machine: source.name,
@@ -135,7 +142,7 @@ export const cloned = (
     spec.diskGib < from.diskGib
     ? Effect.fail(
         new Unsizable({
-          message: `machine ${name} takes at least build ${build}'s ${formatCpu(from.cpu)}, ${formatMib(from.ramMib)} of RAM and ${formatGib(from.diskGib)} of disk`,
+          message: `machine ${name} takes at least build ${build}'s ${formatSizes(from)}`,
         })
       )
     : copied(name, from, sizing, traits);

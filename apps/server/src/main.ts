@@ -1,8 +1,5 @@
 #!/usr/bin/env node
-import { createServer } from "node:http";
-
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { version } from "@gjermundgaraba/clankerbox-sdk";
@@ -10,22 +7,13 @@ import { Effect, Layer } from "effect";
 import { Command, Flag } from "effect/cli";
 
 import { loadConfig } from "./composition/config.ts";
-import { serverLayer, stopsAtOnce } from "./composition/server.ts";
+import { controlPlaneServer, serverLayer } from "./composition/server.ts";
 
 const run = (file: string) =>
   Effect.gen(function* () {
     const config = yield* loadConfig(file);
 
-    return yield* Layer.launch(
-      serverLayer(
-        config,
-        NodeHttpServer.layer(createServer, {
-          host: config.listen.address,
-          port: config.listen.port,
-          ...stopsAtOnce,
-        })
-      )
-    );
+    return yield* Layer.launch(serverLayer(config, controlPlaneServer(config)));
   });
 
 const server = Command.make(

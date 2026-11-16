@@ -72,7 +72,8 @@ vpx .agents/skills/verify-machine-answers/scripts/breaks.ts      # every break b
 
 `check.sh` and `breaks.ts` run TLC through `scripts/tlc.sh`, which holds its
 flags. It needs Java 11 or later on `PATH` and `curl`, and downloads
-`tla2tools.jar` v1.8.0 to `~/.cache/clankerbox-tla/` and keeps it there. That
+`tla2tools.jar` v1.8.0 to `clankerbox-tla/` under `$XDG_CACHE_HOME`, or
+`~/.cache` when that is unset, and keeps it there. That
 tag is a rolling prerelease that TLA+'s CI rebuilds from master on every push,
 so a machine runs the build it first fetched; delete the jar to take the latest.
 Each `check.sh` run copies `model/` into a fresh directory under `$TMPDIR` and
@@ -150,7 +151,7 @@ A pass covers this scope, and only it:
   `apps/server/tests/fleet.test.ts` and the store's test in
   `apps/server/tests/platform/sqlite.test.ts`. No step the host holds ever
   names a VM the sweep may delete, so its "no step" guard decides nothing here:
-  that a held step spares a VM rests on `apps/host/tests/operations.test.ts`.
+  that a held step spares a VM rests on `apps/host/tests/recheck.test.ts`.
 - **A pause meets a VM that drifted stopped and fails**, as the fake runtime's
   pause does. A runtime whose pause stops leaves it stopped and reports done.
 - **The sequence fence is global.** The model's operation ID is its sequence,
@@ -190,8 +191,7 @@ A pass says nothing of these, which rest on tests or on nothing:
 
 ## Coverage and sync
 
-Last confirmed against the commit that adds this table. Each model part stands
-for this code:
+Each model part stands for this code:
 
 | Model                            | Code                                                                       |
 | -------------------------------- | -------------------------------------------------------------------------- |
@@ -205,7 +205,7 @@ for this code:
 | `Send`, `Cut`                    | `apps/server/src/operations.ts` `poll`                                     |
 | `Collect`                        | `machine-chart.ts` `reported`, `lost`; `machines.ts` `following`; `operations.ts` `poll`, `collect`; `store.advance` |
 | `Deliver`, `Repeat`, `Lose`      | `apps/host/src/operations.ts` `run`, its boot and sequence fence           |
-| `HostStep`, `HostFail`           | `apps/host/src/operations.ts` `perform`, and `picking`, `made` for a make, which may report it prepared |
+| `HostStep`, `HostFail`           | `apps/host/src/operations.ts` `perform`, and `claimed`, `made` for a make, which may report it prepared |
 | `HostCancel`                     | `apps/host/src/operations.ts` `cancel`, `ended`                            |
 | `HostRestart`                    | a new process: `Operations.boot`, empty `entries` and `scopes`             |
 | `Crash`, `Revive`                | a new process: the store stays, `creates` goes; `machines.ts` start-up     |
@@ -243,29 +243,29 @@ doesn't move it.
 and runs TLC, for each row here, and stops at an edit that finds nothing to
 change.
 
-| Break                                                        | In    | Violated           |
-| ------------------------------------------------------------ | ----- | ------------------ |
-| `ask` leaves the row at rest                                 | chart | `RestTrue`         |
-| A start's report rests the row settled without a new read    | chart | `RestTrue`         |
-| A read that fails writes a rest                              | chart | `RestTrue`         |
-| A prepared make's report rests the row settled without a read | chart | `RestTrue`         |
-| A failed make skips undoing and rests undone                 | chart | `NoOrphan`         |
-| Failing a step records no error                              | chart | `FailedSays`       |
-| A report enters a leaf with a step                           | chart | `OpIsState`        |
-| The host accepts any delivery: no sequence or boot fence     | model | `OnceOnly`         |
-| A client answers without waiting for rest                    | model | `AnswerTrue`       |
-| `Superseded` names what the client asked                     | model | `SupersededHonest` |
-| A make the host never got is never given up                  | model | deadlock           |
-| A host restart isn't noticed                                 | model | `AllAnswered`      |
-| `no-sweep`: the sweep never runs                             | model | `EventuallyNoOrphan` |
-| `sweep-unclaimed`: the sweep deletes what no row claims when it reads | model | `RestTrue` |
-| `drift-ignored`: the recheck of a settled row reads the row, not the VM | model | `RunsWhenWanted` |
-| `repeated-ask-rests`: a request for what a row already wants keeps its rest | chart | `AnswerTrue` |
-| `drift-fails`: a read of a stopped VM that should run rests the row `failed` | chart | `RunsWhenWanted` |
+| Break                                                                          | In    | Config               | Violated             |
+| ------------------------------------------------------------------------------ | ----- | -------------------- | -------------------- |
+| `ask-keeps-rest`: `ask` leaves the row at rest                                 | chart | `TwoClients.cfg`     | `RestTrue`           |
+| `start-rests`: a start's report rests the row settled without a new read       | chart | `TwoClients.cfg`     | `RestTrue`           |
+| `read-fails-rests`: a read that fails writes a rest                            | chart | `MachineAnswers.cfg` | `RestTrue`           |
+| `prepared-make-rests`: a prepared make's report rests the row settled without a read | chart | `TwoClients.cfg` | `RestTrue`         |
+| `skip-undo`: a failed make skips undoing and rests undone                      | chart | `MachineAnswers.cfg` | `NoOrphan`           |
+| `silent-failure`: failing a step records no error                              | chart | `MachineAnswers.cfg` | `FailedSays`         |
+| `report-enters-step`: a report enters a leaf with a step                       | chart | `TwoClients.cfg`     | `OpIsState`          |
+| `no-fence`: the host accepts any delivery, with no sequence or boot fence      | model | `TwoClients.cfg`     | `OnceOnly`           |
+| `answers-unrested`: a client answers without waiting for rest                  | model | `TwoClients.cfg`     | `AnswerTrue`         |
+| `superseded-names-own`: `Superseded` names what the client asked               | model | `TwoClients.cfg`     | `SupersededHonest`   |
+| `make-never-given-up`: a make the host never got is never given up             | model | `MachineAnswers.cfg` | deadlock             |
+| `restart-unnoticed`: a host restart isn't noticed                              | model | `MachineAnswers.cfg` | `AllAnswered`        |
+| `no-sweep`: the sweep never runs                                               | model | `Drifting.cfg`       | `EventuallyNoOrphan` |
+| `sweep-unclaimed`: the sweep deletes what no row claims when it reads          | model | `TwoClients.cfg`     | `RestTrue`           |
+| `drift-ignored`: the recheck of a settled row reads the row, not the VM        | model | `Drifting.cfg`       | `RunsWhenWanted`     |
+| `repeated-ask-rests`: a request for what a row already wants keeps its rest    | chart | `Drifting.cfg`       | `AnswerTrue`         |
+| `drift-fails`: a read of a stopped VM that should run rests the row `failed`   | chart | `Drifting.cfg`       | `RunsWhenWanted`     |
 
-The two rows before the last two break `Collect`, which stands for `poll`,
-outside the chart. An edge taken off the chart isn't a deadlock: `Collect`
-clears the operation and `OpIsState` fails. The last two run on `Drifting.cfg`.
+`make-never-given-up` and `restart-unnoticed` break `Collect`, which stands for
+`poll`, outside the chart. An edge taken off the chart isn't a deadlock: `Collect`
+clears the operation and `OpIsState` fails.
 A break of the chart's `read` that rests a stopped machine settled fails
 `RestTrue` before any liveness, so `drift-ignored` keeps the recheck turning
 and has it never see the VM.

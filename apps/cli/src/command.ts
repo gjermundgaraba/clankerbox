@@ -238,16 +238,40 @@ export const pairsText = (
         .map(([key, value]) => `${key}=${value}`)
         .join(" ");
 
+/**
+ * This command's stdin as text, which is what an exec carries: bytes that aren't UTF-8 are refused,
+ * where decoding them would put U+FFFD in their place.
+ */
 export const readStdin: Effect.Effect<string, Invalid, Stdio.Stdio> =
   Effect.gen(function* () {
     const stdio = yield* Stdio.Stdio;
 
-    return yield* Stream.mkString(Stream.decodeText(stdio.stdin)).pipe(
+    const chunks = yield* Stream.runCollect(stdio.stdin).pipe(
       Effect.mapError(
         (error) =>
           new Invalid({ message: `couldn't read stdin: ${error.message}` })
       )
     );
+
+    return yield* Effect.try({
+      try: () => {
+        const decoder = new TextDecoder("utf-8", {
+          fatal: true,
+          ignoreBOM: true,
+        });
+
+        return (
+          chunks
+            .map((chunk) => decoder.decode(chunk, { stream: true }))
+            .join("") + decoder.decode()
+        );
+      },
+      catch: () =>
+        new Invalid({
+          message:
+            "stdin isn't UTF-8 text, which is all an exec's stdin carries: encode it, with base64 say, and decode it in the command",
+        }),
+    });
   });
 
 type Services =

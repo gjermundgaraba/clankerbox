@@ -1,10 +1,7 @@
-import { givenSizes } from "@clankerbox/host-contract/traits";
+import { formatSizes, givenSizes } from "@clankerbox/host-contract/traits";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import {
   Capacity,
-  formatCpu,
-  formatGib,
-  formatMib,
   Internal,
   Missing,
   Unsizable,
@@ -96,8 +93,8 @@ const running = new Set(["ready", "idle", "running"]);
  * `cancelled`, `error` and `expired` as https://docs.boat.dev/openapi/boat-v1.yaml's
  * `Sandbox.state` and `dataExpiredAt`, and https://docs.boat.dev/llms-full.txt's "A sandbox is in
  * error", define them: a create or fork that got no machine, read once before a 404; a machine
- * boat lost or failed to start, unbilled, which a resume recovers; and a sandbox whose data boat
- * deleted 14 days into a stop, which no resume or fork can bring back.
+ * boat lost or failed to start, unbilled, which the docs say a resume recovers; and a sandbox whose
+ * data boat deleted 14 days into a stop, which no resume or fork can bring back.
  */
 type Held =
   | "running"
@@ -410,7 +407,7 @@ export const make = (
       return type === undefined
         ? Effect.fail(
             new Unsizable({
-              message: `boat gives ${givenSizes(traits)}, and ${name} was asked ${formatCpu(sizes.cpu)}, ${formatMib(sizes.ramMib)} of RAM and ${formatGib(sizes.diskGib)} of disk`,
+              message: `boat gives ${givenSizes(traits)}, and ${name} was asked ${formatSizes(sizes)}`,
             })
           )
         : Effect.succeed(type);
@@ -444,7 +441,7 @@ export const make = (
             case "error": {
               return Effect.fail(
                 new WrongState({
-                  message: `boat holds ${source.name} in error, which it copies from no snapshot: start it to recover it, or delete it`,
+                  message: `boat holds ${source.name} in error, which it copies from no snapshot: a start may recover it, or delete it`,
                   machine: source.name,
                   state: "error",
                 })
@@ -522,19 +519,14 @@ export const make = (
 
     const landed = (
       machine: Identity,
-      sent: Effect.Effect<Sandbox, ApiError>,
-      tries: number
+      sent: Effect.Effect<Sandbox, ApiError>
     ): Effect.Effect<Sandbox, ApiError> =>
-      sent.pipe(
-        Effect.catchTag("Unanswered", (lost) =>
-          listed(machine).pipe(
-            Effect.filterOrElse(
-              (found): found is Sandbox => found !== undefined,
-              () =>
-                tries > 1 ? landed(machine, sent, tries - 1) : Effect.fail(lost)
-            )
-          )
-        ),
+      sentUntilHeld({
+        send: sent,
+        rested: listed(machine),
+        holds: (found): found is Sandbox => found !== undefined,
+        unheld: (_, last) => last,
+      }).pipe(
         Effect.catchIf(
           (error): error is Api.Refused =>
             error._tag === "Refused" &&
@@ -582,7 +574,7 @@ export const make = (
 
             case "error": {
               return yield* new Internal({
-                message: `boat holds ${machine.name} in error, which it resizes from no snapshot: start it to recover it, or delete it`,
+                message: `boat holds ${machine.name} in error, which it resizes from no snapshot: a start may recover it, or delete it`,
               });
             }
 
@@ -736,7 +728,7 @@ export const make = (
                   key
                 );
 
-          const sandbox = yield* landed(machine, sent, triesAfterLoss).pipe(
+          const sandbox = yield* landed(machine, sent).pipe(
             Effect.mapError(failure(`make ${machine.name}`))
           );
 
@@ -837,14 +829,8 @@ export const make = (
 
           return Handle.make(name);
         }).pipe(bounded("boat", `capture ${machine.name}`)),
-      resize: (machine, to, live) =>
+      resize: (machine, to) =>
         Effect.gen(function* () {
-          if (live) {
-            return yield* new Internal({
-              message: `boat changes ${machine.name}'s machine type only while it is stopped`,
-            });
-          }
-
           const type = yield* typeFor(
             {
               cpu: to.cpu ?? machine.cpu,

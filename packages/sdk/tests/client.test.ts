@@ -432,7 +432,7 @@ describe("client", () => {
     );
 
     it.effect(
-      "an exec with no timeout waits past the reply timeout, and one with a timeout gives up after it and the reply's",
+      "an exec with no timeout waits past the reply timeout, and one with a timeout gives up after it, the 15 s its host takes to end it, the control plane's wait for a step, and the reply's",
       () =>
         Effect.gen(function* () {
           const silent = new Silent();
@@ -455,7 +455,10 @@ describe("client", () => {
 
               yield* Effect.yieldNow;
               yield* TestClock.adjust(
-                Duration.sum(replyTimeout, Duration.seconds(9))
+                Duration.sum(
+                  Duration.sum(replyTimeout, readTimeout),
+                  Duration.seconds(10 + 15 - 1)
+                )
               );
 
               const polled = [unbounded.pollUnsafe(), bounded.pollUnsafe()];
@@ -580,6 +583,33 @@ describe("client", () => {
             "machine.create",
             "machine.delete",
           ]);
+          expect(creates).toBe(2);
+        })
+    );
+
+    it.effect(
+      "an ensure whose create may have run names the machine in the failure of its second look",
+      () =>
+        Effect.gen(function* () {
+          let creates = 0;
+
+          const stub = server({
+            create: ({ id }) => {
+              creates += 1;
+
+              return Effect.fail(
+                creates === 1
+                  ? new Unavailable({ message: "lost", readOnly: false })
+                  : new Conflict({ message: `machine ${id} exists`, id })
+              );
+            },
+          });
+
+          const error = yield* withClient(stub, (client) =>
+            Effect.flip(client.ensure("dev", { spec }))
+          );
+
+          expect(error).toMatchObject({ _tag: "Conflict", made: "dev" });
           expect(creates).toBe(2);
         })
     );

@@ -28,6 +28,7 @@ export interface Member {
 interface Failed {
   readonly host: string;
   readonly message: string;
+  readonly logOnly?: string;
 }
 
 /** A host gave no usable answer, so nothing can tell what became of a mutation it was sent. */
@@ -76,16 +77,16 @@ export interface Interface {
    * One call to a host, bounded by `readTimeout` unless `within` says otherwise, as a command runs
    * as long as its request does. It fails with an error its action declares, as the host answered
    * it, and with `Unreachable` for every way it got no answer: `Unsent` for one that never left.
+   * A call or a read that gets no answer logs at warn, with what the HTTP client said, the first
+   * time since the host last answered one, and at debug after; the next answer logs that the host
+   * answers again.
    */
   readonly call: <A, E>(
     host: string,
     run: (api: HostApi) => Effect.Effect<A, E>,
     within?: Duration.Duration
   ) => Effect.Effect<A, Extract<E, HostError> | Unreachable>;
-  /**
-   * Reads the host, and checks it calls itself what the config says. Every look at a host comes
-   * through here, so this logs when it stops answering and when it answers again, and no one else.
-   */
+  /** Reads the host, and checks it calls itself what the config says. */
   readonly read: (host: string) => Effect.Effect<Fresh, Unreachable>;
   /** What the host last said, read or not since, unless a read since found it incompatible. */
   readonly known: (host: string) => HostInfo | undefined;
@@ -130,6 +131,80 @@ export const answering = (
 const describe = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
+const httpApiClientUndeclaredStatus = "undeclared status code";
+
+type Reply =
+  | HttpClientError.StatusCodeError
+  | HttpClientError.DecodeError
+  | HttpClientError.EmptyBodyError;
+
+const unexpected = (reason: Reply) => {
+  const { status } = reason.response;
+
+  if (reason._tag === "EmptyBodyError") {
+    return `it replied HTTP ${status} with no body`;
+  }
+
+  return reason._tag === "DecodeError" &&
+    reason.description === httpApiClientUndeclaredStatus
+    ? `it replied HTTP ${status}, which the host contract doesn't declare`
+    : `it replied HTTP ${status} with a body the control plane couldn't read`;
+};
+
+const replied = (host: string, reason: Reply) =>
+  reason.response.status === 503 &&
+  reason.response.headers["content-type"] === undefined
+    ? `host ${host} is stopping: it replied HTTP 503 with no body, as a host's server does to each request while the host stops`
+    : `host ${host} didn't answer as the host contract says: ${unexpected(reason)}`;
+
+const unusable = (host: string, error: unknown): Unreachable => {
+  if (Schema.isSchemaError(error)) {
+    return new Incompatible({
+      host,
+      message: `host ${host} answers in another contract than this control plane's: ${error.message.replaceAll(/\s*\n\s*/gu, " ")}`,
+    });
+  }
+
+  if (!HttpClientError.isHttpClientError(error)) {
+    return new Unanswered({
+      host,
+      message: `host ${host} didn't answer`,
+      logOnly: describe(error),
+    });
+  }
+
+  const logOnly = error.message;
+
+  switch (error.reason._tag) {
+    case "EncodeError":
+    case "InvalidUrlError": {
+      return new Unanswered({
+        host,
+        message: `host ${host} wasn't called: the control plane couldn't make the request`,
+        logOnly,
+      });
+    }
+
+    case "TransportError": {
+      return new Unanswered({
+        host,
+        message: `host ${host} didn't answer: the connection to it failed`,
+        logOnly,
+      });
+    }
+
+    case "StatusCodeError":
+    case "DecodeError":
+    case "EmptyBodyError": {
+      return new Unanswered({
+        host,
+        message: replied(host, error.reason),
+        logOnly,
+      });
+    }
+  }
+};
+
 const isHostError = Schema.is(HostError);
 
 const bounded = <A, E>(
@@ -171,15 +246,18 @@ export const make = (
           : Effect.void
       );
 
-    const unanswering = ({ host, message }: Unreachable) =>
+    const unanswering = ({ host, message, logOnly }: Unreachable) =>
       Effect.suspend(() => {
+        const line =
+          logOnly === undefined ? message : `${message} (${logOnly})`;
+
         if (unanswered.has(host)) {
-          return Effect.void;
+          return Effect.logDebug(line);
         }
 
         unanswered.add(host);
 
-        return Effect.logWarning(message);
+        return Effect.logWarning(line);
       });
 
     const reaching = <A, E>(
@@ -211,18 +289,7 @@ export const make = (
                       error: E | HttpClientError.HttpClientError
                     ): error is Extract<E, HostError> => isHostError(error),
                     Effect.fail,
-                    (error) =>
-                      Effect.fail(
-                        Schema.isSchemaError(error)
-                          ? new Incompatible({
-                              host,
-                              message: `host ${host} answers in another contract than this control plane's: ${error.message.replaceAll(/\s*\n\s*/gu, " ")}`,
-                            })
-                          : new Unanswered({
-                              host,
-                              message: `host ${host}: ${describe(error)}`,
-                            })
-                      )
+                    (error) => Effect.fail(unusable(host, error))
                   )
                 ),
                 within
@@ -235,7 +302,12 @@ export const make = (
         const refused = incompatibles.get(host);
 
         return refused === undefined
-          ? reaching(host, run, within)
+          ? reaching(host, run, within).pipe(
+              Effect.tap(() => answered(host)),
+              Effect.tapError((error) =>
+                isHostError(error) ? answered(host) : unanswering(error)
+              )
+            )
           : Effect.fail(new Unsent({ host, message: refused.message }));
       });
 

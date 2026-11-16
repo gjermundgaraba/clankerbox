@@ -32,6 +32,7 @@ import type { ChildProcessSpawner } from "effect/process";
 import { Box } from "../../box.ts";
 import type { Facts } from "../../box.ts";
 import { unkey } from "../../guest.ts";
+import { checkPort, PortProbe } from "../../machine-ports.ts";
 import {
   atLeast,
   CannotStart,
@@ -58,7 +59,7 @@ import type { HostSettings } from "../../settings.ts";
 import { allotted, checkRamBudget, inUse } from "../../usage.ts";
 import { cliIn, expect, failure, files, regularFiles } from "../process.ts";
 import { aloneOnBox, boxLock } from "./one-per-box.ts";
-import { traits as traitsOn } from "./traits.ts";
+import { traits } from "./traits.ts";
 
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
 
@@ -393,14 +394,17 @@ export const make = (
 ): Effect.Effect<
   Interface,
   HostError | CannotStart,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Scope.Scope
+  | ChildProcessSpawner.ChildProcessSpawner
+  | FileSystem.FileSystem
+  | PortProbe
+  | Scope.Scope
 > =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
+    const probe = yield* PortProbe;
     const layerScope = yield* Effect.scope;
     const binary = path.join(settings.prefix, "smolvm");
     const paths = pathsIn(settings.stateDir);
-    const traits = traitsOn(settings.arch);
     const { run, exec } = yield* cliIn(environment(settings));
 
     const smolvm = (args: readonly string[], what: string) =>
@@ -1305,8 +1309,11 @@ export const make = (
       reach: { _tag: "published", address: settings.publishAddress },
       admission: {
         admit: Effect.fn("Smolvm.admit")((activation) =>
-          Effect.flatMap(heldMib, (held) =>
-            checkRamBudget(settings.ramBudgetMib, activation, observe, held)
+          Effect.andThen(
+            checkPort(probe, settings.publishAddress, activation),
+            Effect.flatMap(heldMib, (held) =>
+              checkRamBudget(settings.ramBudgetMib, activation, observe, held)
+            )
           )
         ),
       },
@@ -1651,7 +1658,10 @@ export const layer = (
 ): Layer.Layer<
   Runtime,
   HostError | CannotStart,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Box
+  | ChildProcessSpawner.ChildProcessSpawner
+  | FileSystem.FileSystem
+  | Box
+  | PortProbe
 > =>
   Layer.effect(
     Runtime,

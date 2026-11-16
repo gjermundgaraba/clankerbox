@@ -22,7 +22,6 @@ const script = [
   `print "end\\n";`,
 ].join("\n");
 
-/** The reader's arguments for `paths`: it only asks who holds each file's lock, and takes none. */
 export const readerArguments = (
   paths: readonly string[]
 ): readonly string[] => ["-e", script, "--", ...paths];

@@ -44,6 +44,15 @@ export const readTimeout = Duration.seconds(10);
 /** How long a client waits on the control plane, past `readTimeout`, so a silent host gets named. */
 export const replyTimeout = Duration.seconds(15);
 
+/**
+ * How long a host takes, at most, past an exec's timeout, to end its command in the guest and
+ * answer. The control plane waits up to `readTimeout` for a step under way on the machine, then the
+ * timeout, this and `readTimeout` for its host's answer, and a client the timeout, this,
+ * `readTimeout` for that step and `replyTimeout`, so each waits past the one it calls, but for an
+ * exec its host holds behind a step, whose wait there none of them counts.
+ */
+export const endTimeout = Duration.seconds(15);
+
 /** The longest a read of a machine may be held for it to rest. */
 export const longestHold = Duration.seconds(5);
 
@@ -102,7 +111,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: [...creating, NotBuilt] as const,
       description:
-        "Create a machine on a host with room, and prepare it: from a template's current build, or the build it pins, cloned at the build's sizes or larger ones; or from a base, or an image reference where the host's runtime takes one. With `host`, only that host is tried, as if it were the only one, and NotOffered answers a host the control plane doesn't know. NotOffered answers a base no host offers, and Unsizable sizes that no host offering the base, or holding a current copy of the template's build, gives, each saying why it passed over each host. A create runs no setup: a template's build runs one. NotBuilt answers a template with no ready build, or none a host that could take its clone holds a current copy of, saying why it passed over each host, and to build the template again, on `host` when given, where a host lacks a copy or holds an outdated one. A create that fails deletes the VM, again at each recheck while that delete fails, and keeps the row, failed, to say why. A template's clone is prepared as part of its create, so one whose preparation fails goes the same way; a base's preparation that fails keeps the machine.",
+        "Create a machine on a host with room, and prepare it: from a template's current build, or the build it pins, cloned at the build's sizes, or at larger ones where its host's runtime gives a copy other sizes than its source's; or from a base, or an image reference where the host's runtime takes one. With `host`, only that host is tried, as if it were the only one, and NotOffered answers a host the control plane doesn't know. NotOffered answers a base no host offers, and Unsizable sizes that no host offering the base, or holding a current copy of the template's build, gives, each saying why it passed over each host. A create runs no setup: a template's build runs one. NotBuilt answers a template with no ready build, or none a host that could take its clone holds a current copy of, saying why it passed over each host, and to build the template again, on `host` when given, where a host lacks a copy or holds an outdated one. A create that fails deletes the VM, again at each recheck while that delete fails, and keeps the row, failed, to say why. A template's clone is prepared as part of its create, so one whose preparation fails goes the same way; a base's preparation that fails keeps the machine.",
       input: CreateRequest,
       success: Machine,
     }),
@@ -173,7 +182,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: [...making, PinMismatch] as const,
       description:
-        "Create a machine from a checkpoint, with its sizes or the ones given. A checkpoint is restored only under the runtime pin it was captured under, and one captured under another is refused with PinMismatch before anything is recorded. A restore's vCPUs and RAM follow its runtime, as a fork's do. A disk otherwise only grows. A restore that fails deletes the new VM and keeps its row, failed, to say why.",
+        "Create a machine from a checkpoint, with its sizes or the ones given. Only a ready checkpoint is restored: one whose capture still runs is NotMade, and one whose capture failed, or that is being deleted, NotFound, saying so and, of a failed one, why. A checkpoint is restored only under the runtime pin it was captured under, and one captured under another is refused with PinMismatch before anything is recorded. A restore's vCPUs and RAM follow its runtime, as a fork's do. A disk otherwise only grows. A restore that fails deletes the new VM and keeps its row, failed, to say why.",
       input: Schema.Struct({ ...RestoreRequest.fields, ...Sizing.fields }),
       success: Machine,
     }),
@@ -189,7 +198,7 @@ export const Http = ActionHttp.make(
         Internal,
       ] as const,
       description:
-        "Run a command in a running machine, as the user it names or root, with the environment given, and answer its exit code and output once it exits, whatever the code. It waits for a step under way on the machine before it begins, and a stop, pause or delete ends it. It runs as long as the request does: ending the request, or its timeout, ends the command and what it started in the guest, with TERM and then KILL 5 s later, and a timeout answers exit code 124 once they have ended. Nothing of it is stored or logged.",
+        "Run a command in a running machine, as the user it names or root, with the environment given, and answer its exit code and output once it exits, whatever the code. It waits for a step under way on the machine before it begins, though not for a capture of it or a fork from it, which run beside it, and its timeout counts from then. It runs as long as the request does: ending the request, or its timeout, ends the command and what it started in the guest, and a timeout answers exit code 124 with the output once the host's end has finished, which the host waits for at most endTimeout past it, with mayStillRun saying why when the host couldn't confirm they had ended, so they may still run. A stop, pause or delete of the machine first ends it so, and it answers WrongState in the phase stopping, pausing or deleting, its message saying when the command may still run. Nothing of it is stored or logged.",
       input: ExecRequest,
       success: Executed,
     }),

@@ -38,6 +38,9 @@ import {
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
+import { checkPort, PortProbe } from "../src/machine-ports.ts";
+import type { Probe } from "../src/machine-ports.ts";
+import * as BindProbe from "../src/platform/bind-probe.ts";
 import { traits as smolvm } from "../src/platform/smolvm/traits.ts";
 import { traits as tart } from "../src/platform/tart/traits.ts";
 import {
@@ -121,12 +124,12 @@ export const fixed: RuntimeTraits = {
       { name: "large", cpu: 4, ramMib: 8192, diskGib: 40 },
     ],
   },
-  limits: { least: {}, most: {}, live: {} },
+  limits: { least: {}, most: {} },
 };
 
 export const presets = {
   smolvm: {
-    traits: smolvm("x64"),
+    traits: smolvm,
     guest: "debian",
     pin: "fake 1",
     prepares: "with-setup",
@@ -173,6 +176,12 @@ export interface FakeOptions {
   readonly ramBudgetMib?: number | undefined;
   readonly pin?: string | undefined;
   readonly relayed?: boolean | undefined;
+  /**
+   * Whether a published machine's boot binds its port on loopback to find another program holding
+   * it, as a smolvm host's does; otherwise every port is free to it, so a run sharing a range with
+   * another never fails on the other's ports.
+   */
+  readonly probesPorts?: boolean | undefined;
   readonly onCall?: ((call: string) => void) | undefined;
 }
 
@@ -846,7 +855,7 @@ export const fakeRuntime = (options: FakeOptions) => {
   const endCommands = (machine: Target) =>
     Effect.forEach(
       commands.get(machine.name) ?? [],
-      (handle) => Effect.ignore(handle.kill()),
+      (handle) => Effect.ignore(handle.kill({ killSignal: "SIGKILL" })),
       {
         discard: true,
       }
@@ -871,6 +880,13 @@ export const fakeRuntime = (options: FakeOptions) => {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const layerScope = yield* Effect.scope;
       const bin = yield* Effect.sync(() => writeStubs(options.dir));
+
+      const probe: Probe =
+        options.probesPorts === true
+          ? yield* Effect.provide(PortProbe, BindProbe.layer)
+          : { free: () => Effect.succeed(true) };
+
+      const address = "127.0.0.1";
 
       stubs = bin;
 
@@ -925,14 +941,14 @@ export const fakeRuntime = (options: FakeOptions) => {
         reach: relayed
           ? {
               _tag: "relayed",
-              address: "127.0.0.1",
+              address,
               dial: (machine) => {
                 record(`relay ${machine.name}`);
 
                 return (input) => input;
               },
             }
-          : { _tag: "published", address: "127.0.0.1" },
+          : { _tag: "published", address },
         admission: preset.admits
           ? {
               admit: (activation: Activation) =>
@@ -941,14 +957,19 @@ export const fakeRuntime = (options: FakeOptions) => {
                   call(
                     "admit",
                     activation.machine,
-                    options.ramBudgetMib === undefined
-                      ? Effect.void
-                      : checkRamBudget(
-                          options.ramBudgetMib,
-                          activation,
-                          states,
-                          0
-                        )
+                    Effect.andThen(
+                      relayed
+                        ? Effect.void
+                        : checkPort(probe, address, activation),
+                      options.ramBudgetMib === undefined
+                        ? Effect.void
+                        : checkRamBudget(
+                            options.ramBudgetMib,
+                            activation,
+                            states,
+                            0
+                          )
+                    )
                   )
                 ),
             }

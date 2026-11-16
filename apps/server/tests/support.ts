@@ -3,7 +3,6 @@ import type { Server } from "node:http";
 import path from "node:path";
 
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   startHost,
@@ -38,7 +37,7 @@ import { HttpServer } from "effect/http";
 
 import { applied } from "../src/chart.ts";
 import * as Checkpoints from "../src/checkpoints.ts";
-import { serverLayer, stopsAtOnce } from "../src/composition/server.ts";
+import { controlPlaneServer, serverLayer } from "../src/composition/server.ts";
 import * as Hosts from "../src/hosts.ts";
 import type { Member } from "../src/hosts.ts";
 import {
@@ -178,11 +177,7 @@ const started = (
     const context = yield* Layer.buildWithScope(
       serverLayer(
         settings,
-        NodeHttpServer.layer(createServer, {
-          host: "127.0.0.1",
-          port,
-          ...stopsAtOnce,
-        })
+        controlPlaneServer({ listen: { address: "127.0.0.1", port } })
       ).pipe(
         Layer.provideMerge(Logger.layer(logger === undefined ? [] : [logger])),
         Layer.provide(NodeHttpClient.layerNodeHttp),
@@ -240,6 +235,45 @@ export const services = (
     return {
       checkpoints: Context.get(context, Checkpoints.Checkpoints),
       store: Context.get(context, Store),
+      crash: Scope.close(scope, Exit.void),
+    };
+  });
+
+/**
+ * `planned`'s templates with no HTTP in front, where `templates` reaches its hosts through `hosts`
+ * around the real one, and every other service the real one, so a test can fail what a build alone
+ * asks of a host.
+ */
+export const templatesOver = (
+  planned: Pick<Plane, "settings">,
+  hosts: (real: Hosts.Interface) => Hosts.Interface
+) =>
+  Effect.gen(function* () {
+    const scope = yield* Scope.make();
+    const { settings } = planned;
+
+    const context = yield* Layer.buildWithScope(
+      Templates.layer(settings).pipe(
+        Layer.provide(
+          Layer.effect(
+            Hosts.Hosts,
+            Effect.gen(function* () {
+              return hosts(yield* Hosts.Hosts);
+            })
+          )
+        ),
+        Layer.provideMerge(Checkpoints.layer(settings)),
+        Layer.provideMerge(Machines.layer(settings)),
+        Layer.provideMerge(Hosts.layer(settings.hosts)),
+        Layer.provideMerge(Sqlite.layer(settings)),
+        Layer.provide(NodeHttpClient.layerNodeHttp),
+        Layer.provide(NodeServices.layer)
+      ),
+      scope
+    );
+
+    return {
+      templates: Context.get(context, Templates.Templates),
       crash: Scope.close(scope, Exit.void),
     };
   });
@@ -385,7 +419,7 @@ export const stubInfo = {
     copies: "grow",
     resize: { running: "grow", stopped: "any" },
     sizes: { _tag: "free" },
-    limits: { least: {}, most: {}, live: {} },
+    limits: { least: {}, most: {} },
   },
   version,
   runtimeVersion: "fake",

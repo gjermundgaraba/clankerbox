@@ -159,12 +159,21 @@ const launched = async (name: Recipe, agentEnv?: string) => {
 
 type Traits = typeof boat;
 
-const gives = ({ sizes: given }: Traits, sizes: Sizes): boolean =>
-  given._tag === "free" ||
-  given.classes.some(
-    ({ cpu, ramMib, diskGib }) =>
-      cpu === sizes.cpu && ramMib === sizes.ramMib && diskGib === sizes.diskGib
-  );
+const sizeNames = ["cpu", "ramMib", "diskGib"] as const;
+
+const gives = ({ sizes: given, limits }: Traits, sizes: Sizes): boolean =>
+  sizeNames.every(
+    (name) =>
+      sizes[name] >= (limits.least[name] ?? 0) &&
+      sizes[name] <= (limits.most[name] ?? Number.POSITIVE_INFINITY)
+  ) &&
+  (given._tag === "free" ||
+    given.classes.some(
+      ({ cpu, ramMib, diskGib }) =>
+        cpu === sizes.cpu &&
+        ramMib === sizes.ramMib &&
+        diskGib === sizes.diskGib
+    ));
 
 const runtimesOf = new Map<string, readonly Traits[]>([
   ["agent.yaml", [presets.smolvm.traits, smolCloud]],
@@ -203,6 +212,16 @@ describe("recipes", { timeout: testLimit }, () => {
         `http://127.0.0.1:${agentPort}${healthPath}`
       );
     }
+  });
+
+  it("each recipe holds the same serve.sh, as each template's setup directory stands alone", async () => {
+    const served = await Promise.all(
+      recipes.map(async (name) => await readFile(recipeFile(name, "serve.sh")))
+    );
+
+    expect(new Set(served.map((bytes) => bytes.toString("base64"))).size).toBe(
+      1
+    );
   });
 
   it.each(recipes)(

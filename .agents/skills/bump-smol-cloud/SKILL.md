@@ -17,11 +17,13 @@ opportunities separately, and don't commit unless asked.
 ## The re-check
 
 `apps/host/tests/live/smol-cloud.test.ts` asserts each fact below. Run it from
-`apps/host`, in the one shell that loads the keys, and never with `set -x`:
+`apps/host`, in the one shell that loads the keys, and never with `set -x`.
+`vp run test:live` runs every live suite, boat's too when `BOAT_API_KEY` is
+set, so run this one alone:
 
 ```sh
 source <path to the .envrc holding SMOL_MACHINES_API_KEY and TAILSCALE_AUTHKEY>
-vp run test:live
+CLANKERBOX_LIVE=1 vp test tests/live/smol-cloud.test.ts
 ```
 
 It spends money: it makes at most 3 machines at once, those from an image with
@@ -60,28 +62,37 @@ before you keep it.
 
 ## Facts the adapter pins
 
-Each is an assertion of the live suite, in the case named.
+Each is an assertion of the live suite, in the case named, unless it says
+when it was measured on the operator's account.
 
 - A machine name is at most 63 characters (`64` answers 400), so a host ID is
   at most 26 (`cbx-` + ID + `-` + 32 hex). A second create of a name answers 409.
+  (`smol-cloud.ts`'s `created` reads a create whose answer was lost by its
+  name a second later and sends it again only when that finds none, three
+  sends in all, and on a 409 waits and reads the name instead.)
 - `autoStopSeconds: 0` with a published port answers 422 on a plan whose
   `GET /v1/account` says `plan.allowAlwaysOn` false; the adapter sends 86400
-  then, reading the account at each create and restore, so a plan that
-  changes takes effect at the next one. (`smol-cloud.ts`'s `autoStopSeconds`;
+  then, reading the account at each make, so a plan that changes takes
+  effect at the next one. (`smol-cloud.ts`'s `autoStopSeconds`;
   the test of a make on an account whose plan changes.)
 - `GET /v1/account` gives `effectiveMaxMachines`,
   `effectiveMaxConcurrentMachines`, and one machine's most,
   `effectiveMaxCpus`, `effectiveMaxMemoryMb` and `effectiveMaxDiskGb`;
   `GET /v1/capacity` gives `machines`, `startedMachines` and
   `startedMemoryMb`. The account has no limit on vCPUs in all: five 1-vCPU
-  machines ran at once on an account whose `effectiveMaxCpus` is 4.
+  machines ran at once on an account whose `effectiveMaxCpus` is 4. The host
+  reads one machine's most at its start, and fails to start if it can't, as
+  its traits' limits, so placement passes it over past them, and each make,
+  a fork's included, reads them again and refuses `Unsizable` sizes past a
+  plan changed since. (`smol-cloud.ts`'s `perMachine` and `planned`;
+  `traits.ts`; the tests of an unreadable plan and of a make past it.)
 - A create or resize past one machine's most answers 422 `unprocessable`,
   `machine size exceeds what an account without a card can run, …`, the one
-  text the adapter reads: a create answers `Capacity`, so it moves to a host
-  that may take it, and a resize `Unsizable`. A start, or an exec that starts
+  text the adapter reads: a create and a resize answer `Unsizable`. A start,
+  or an exec that starts
   a machine, past `effectiveMaxConcurrentMachines` answers 422
-  `unprocessable`, `concurrency limit reached: …` (measured in the first
-  round's probe). The adapter decides any 422 but the size one, to a create, a
+  `unprocessable`, `concurrency limit reached: …` (measured on the
+  operator's account on 2026-11-13). The adapter decides any 422 but the size one, to a create, a
   start or a capture, by reading `GET /v1/account` and `GET /v1/capacity`: `Capacity`
   when the account holds what its limits allow, running or kept, `Internal`
   otherwise or when that read fails, since the provider also answers 422 to
@@ -100,14 +111,16 @@ Each is an assertion of the live suite, in the case named.
   seconds for a read, a minute for a create, restore or delete, 5 minutes for
   what the provider answers once the machine settles.
 - Every refusal the provider answers is a problem with `code` and the
-  `status` it answered, as each probe recorded; a 5xx with any other body,
+  `status` it answered, as each refusal measured on the operator's account
+  on 2026-11-13 and 2026-11-14 was; a 5xx with any other body,
   such as a gateway's `{message}`, is a lost answer (`api.ts`'s `Problem` and
   `send`). A 429, never provoked, is waited as its `Retry-After` asks, in
   seconds or until an HTTP date, within `provider-http.ts`'s clamp of 1 to
   30 seconds, and sent again, six sends in all; each send has its own bound,
-  and the wait is outside it. Each step is `bounded` in
-  `provider-http.ts`, 10 minutes for all its requests and polls, and runs
-  whole: a later request waits for it. A read whose answer is lost, or that the
+  and the wait is outside it. Each provider call of a step, a make, start,
+  stop, pause, delete, resize or capture, is `bounded` in `provider-http.ts`,
+  10 minutes for all its requests and polls, and runs whole: a later request
+  cuts the step short only once it has ended. A read whose answer is lost, or that the
   provider refuses `retryable`, is asked again the same way; a change whose
   answer is lost is left to its caller, which reads the machine first.
   (`api.ts`'s `send`; the 429 tests and the test of a read whose answer is
@@ -121,7 +134,8 @@ Each is an assertion of the live suite, in the case named.
   the background, as a VM's stop ends all it runs; a caller that goes away
   leaves it running, as smol cloud does: an exec whose caller goes away, or
   whose host-side timeout fires, runs on in the guest, silent or writing a
-  line a second, 30 seconds after the cut, in fix round 2's exec-cut probe.
+  line a second, 30 seconds after the cut (measured on the operator's
+  account on 2026-11-14, with no end sent).
   Its API ends a running command only as a job (`POST .../jobs`, then
   `POST .../jobs/{id}/cancel`, SIGTERM). The exec body also takes a
   `timeoutSeconds` the docs don't describe, whose effect is unmeasured and
@@ -140,12 +154,14 @@ Each is an assertion of the live suite, in the case named.
   memory doesn't shrink (400).
 - A branch answers its source's `autoStopSeconds` and `ttlSeconds`, and the
   source's delete answers 409 `conflict`, `checkpoint has 1 live branch;
-  delete its branches before deleting it`, while the branch lives (measured
-  in fix round 1's probe-9b), whether the source runs or is stopped. The
+  delete its branches before deleting it`, while the branch lives, whether
+  the source runs or is stopped (measured on the operator's account on
+  2026-11-14). The
   source stops while its branch lives (200, in under a second), the branch
   runs on, and the account's started machines and RAM drop by the source's.
   A branch's record carries `parentMachineId`, its source's ID, in a read and
-  in the list (measured in fix round 2's probe). `GET /v1/pricing` bills a
+  in the list (measured on the operator's account on 2026-11-14).
+  `GET /v1/pricing` bills a
   machine by the hour, its base and vCPUs and RAM only while it runs, and
   100 µ$ a GB of disk an hour always. On a delete's 409, whatever its `retryable` says, the adapter lists the
   machines whose `parentMachineId` is the source, and when one is listed the
@@ -166,14 +182,15 @@ Each is an assertion of the live suite, in the case named.
   `sent` over `provider-http.ts`'s `sentUntilHeld`; the fake's `loseResize`,
   the resize tests and the test of an act whose every answer is lost.)
 - A machine reads `creating` through its start (`stopped`, `creating`,
-  `started`, measured in fix round 2's second probe), and a resize sent then
+  `started`, measured on the operator's account on 2026-11-14), and a
+  resize sent then
   answers 409 `resize needs a started, stopped or paused machine, and this
   one is creating; retry once it settles`. Every goal, a delete's too, waits
   while the machine reads `creating`, `pausing`, `starting` or `stopping`,
   and sends nothing until it rests; a 409 at one settled state three times in
   a row is a standing refusal, and so is a refusal smol cloud marks
   `retryable`, each waited as its `Retry-After` asks. A DELETE sent 40 ms into a stop was taken, 204.
-  (`smol-cloud.ts`'s `moveOf` and `settle`; the fake's `settleStarts`, which
+  (`smol-cloud.ts`'s `moveOf` and `settle`; the fake's `holdStarts`, which
   has a start read `creating` and refuses a resize then as smol cloud does,
   and the test of a resize lost while the machine starts; the scripted test
   of a refusal across changes of state.)

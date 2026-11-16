@@ -89,12 +89,9 @@ export const poll = (
         )
       );
   }).pipe(
-    Effect.catchTags({
-      Invalid: () => Effect.succeed<Polled>({ at: "unreachable" }),
-      Unanswered: () => Effect.succeed<Polled>({ at: "unreachable" }),
-      Incompatible: () => Effect.succeed<Polled>({ at: "unreachable" }),
-      Unsent: () => Effect.succeed<Polled>({ at: "unreachable" }),
-    })
+    Effect.catchTag(["Invalid", "Unanswered", "Incompatible", "Unsent"], () =>
+      Effect.succeed<Polled>({ at: "unreachable" })
+    )
   );
 
 /** Lets the host forget a report once it is stored. */

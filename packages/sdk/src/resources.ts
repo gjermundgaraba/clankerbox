@@ -291,8 +291,9 @@ export type BuildCopy = typeof BuildCopy.Type;
 /**
  * One build of a template: a machine made from `base` on `host` at the sizes given, its setup run
  * within `setupTimeoutSeconds`, captured under the runtime `pin`, and deleted. `image` is what the
- * base named on that host. A create clones a build only `ready`, at its sizes or larger ones, and a
- * ready build never changes. A failed one, also one a restart of the control plane ended, keeps
+ * base named on that host. A create clones a build only `ready`, at its sizes, or at larger ones
+ * where its host's runtime gives a copy other sizes than its source's, and a ready build never
+ * changes. A failed one, also one a restart of the control plane ended, keeps
  * its `error` until a later build ends. `copies` are where it is, by
  * host: a create clones it on a host whose copy is ready.
  */
@@ -321,7 +322,9 @@ export const keptBuilds = 2;
  * A setup the control plane builds, each time from the base and sizes its build asks, and that a
  * create clones with no setup run. Each build is sent its own setup, which is never kept. `current`
  * is the newest ready build, which a create clones unless it pins another. `state` is `building`
- * while a build runs, else `ready` once one is, else `failed`.
+ * while a build runs, else `ready` while the current build has a copy ready or being fetched, and
+ * `failed` while no build is ready or none of the current one's copies is, as when the hosts lost
+ * them, until a build ends ready.
  */
 export const Template = Schema.Struct({
   id: Name,
@@ -335,9 +338,10 @@ export type Template = typeof Template.Type;
 
 /** A template's `current` build and its `state`, as its builds, oldest first, tell them. */
 export const builtFrom = (
-  builds: ReadonlyArray<Pick<Build, "id" | "phase">>
+  builds: ReadonlyArray<Pick<Build, "id" | "phase" | "copies">>
 ): Pick<Template, "current" | "state"> => {
-  const current = builds.findLast(({ phase }) => phase === "ready")?.id;
+  const built = builds.findLast(({ phase }) => phase === "ready");
+  const current = built?.id;
 
   if (builds.some(({ phase }) => phase === "building")) {
     return current === undefined
@@ -345,9 +349,18 @@ export const builtFrom = (
       : { current, state: "building" };
   }
 
-  return current === undefined
-    ? { state: "failed" }
-    : { current, state: "ready" };
+  if (built === undefined) {
+    return { state: "failed" };
+  }
+
+  return {
+    current: built.id,
+    state: built.copies.some(
+      ({ phase }) => phase === "ready" || phase === "fetching"
+    )
+      ? "ready"
+      : "failed",
+  };
 };
 
 /**
@@ -586,10 +599,11 @@ const ArgumentText = Schema.String.check(
 
 /**
  * A command run in a running machine as `user`, root when it is left out, with `env` set for it,
- * `stdin` written whole, and ended with exit code 124 after `timeoutSeconds`. Nothing logs or
- * stores `env` or `stdin`: they can carry secrets. The command runs as long as the request does, and its end or its timeout ends what it started.
- * No argument, `user` or value of `env` holds a NUL byte, and each name in `env` is a variable's name;
- * the host answers `Invalid` to `CLANKERBOX_EXEC`, its mark of the command.
+ * `stdin`, which is text, written whole, and ended with exit code 124 after `timeoutSeconds`.
+ * Nothing logs or stores `env` or `stdin`: they can carry secrets. The command runs as long as the
+ * request does, and its end or its timeout ends what it started. No argument, `user` or value of
+ * `env` holds a NUL byte, and each name in `env` is a variable's name; the host answers `Invalid` to
+ * `CLANKERBOX_EXEC`, its mark of the command.
  */
 export const ExecRequest = Schema.Struct({
   id: Name,
@@ -621,12 +635,15 @@ export const timedOutExitCode = 124;
 /**
  * `output` is stdout and stderr together, as they arrived, cut to the last `outputLimit`
  * characters, and `truncated` when that dropped any. A runtime that fails to run the command answers
- * its own exit code, with its message in `output`.
+ * its own exit code, with its message in `output`. `mayStillRun` comes only with a timeout's 124,
+ * when the host couldn't confirm that the command and what it started had ended in the guest, and
+ * says why: some of it may still run there.
  */
 export const Executed = Schema.Struct({
   exitCode: Schema.Int,
   output: Schema.String,
   truncated: Schema.Boolean,
+  mayStillRun: Schema.optionalKey(Schema.String),
 }).annotate({ identifier: "Executed" });
 
 export type Executed = typeof Executed.Type;

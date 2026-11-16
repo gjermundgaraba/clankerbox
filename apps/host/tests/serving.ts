@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { appendFileSync, openSync } from "node:fs";
 import path from "node:path";
 
+import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -259,23 +260,26 @@ export interface Recorder {
   readonly request: (logged: LoggedRequest) => void;
 }
 
-/** A provider's fake API, as the process that serves it for a verify run holds it. */
-export interface FakeApi extends Omit<Faulted, "name" | "sweeps"> {
+/** A provider's fake API, and what a fault takes of it. */
+export interface FakeApi<F> extends Omit<Faulted, "name" | "sweeps"> {
+  readonly fake: F;
   readonly url: string;
   readonly key: string;
 }
 
 /**
- * A provider runtime for the verify skill: its fake API, served by a process of its own that
- * outlives the hosts `fault.sh` kills, and its real adapter, given that API and a key file.
+ * A rented runtime as the tests and the verify skill run it: its fake API, which the verify skill
+ * serves from a process of its own that outlives the hosts `fault.sh` kills, and its real adapter,
+ * given that API and a key file.
  */
-export interface Provider {
-  readonly name: string;
+export interface Provider<F = unknown> {
+  readonly name: "smol-cloud" | "boat";
   readonly image: string;
+  readonly traits: RuntimeTraits;
   readonly fake: (
     dir: string,
-    record: Recorder
-  ) => Effect.Effect<FakeApi, never, Scope.Scope>;
+    record: Recorder | undefined
+  ) => Effect.Effect<FakeApi<F>, never, Scope.Scope>;
   readonly layer: (
     api: {
       readonly url: string;

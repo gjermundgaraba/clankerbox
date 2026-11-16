@@ -9,7 +9,6 @@ import {
   offers,
   pauseCapture,
   pinRefusal,
-  resizable,
   resizeRefusal,
   RuntimeTraits,
 } from "../src/traits.ts";
@@ -43,7 +42,7 @@ const Given = Schema.Struct({
       ),
     }),
   ]),
-  limits: Schema.Struct({ least: Bound, most: Bound, live: Bound }),
+  limits: Schema.Struct({ least: Bound, most: Bound }),
 });
 
 type Given = typeof Given.Type;
@@ -65,13 +64,6 @@ const gives = ({ sizes: given, limits }: Given, sizes: Sized): boolean =>
         ramMib === sizes.ramMib &&
         diskGib === sizes.diskGib
     ));
-
-const growsPast = ({ limits: { live } }: Given, from: Sized, to: Sized) =>
-  names.some((name) => {
-    const bound = live[name];
-
-    return bound !== undefined && to[name] > from[name] && to[name] > bound;
-  });
 
 describe("offers", () => {
   it.effect.prop(
@@ -127,7 +119,7 @@ describe("fitted", () => {
             {
               ...traits,
               sizes: { _tag: "free" },
-              limits: { least: {}, most: {}, live: {} },
+              limits: { least: {}, most: {} },
             },
             sizes
           )
@@ -153,82 +145,12 @@ describe("fitted", () => {
   );
 });
 
-describe("resizable", () => {
-  it.effect.prop(
-    "a paused machine takes no resize",
-    { traits: RuntimeTraits, from: Sizes, to: Sizes },
-    ({ traits, from, to }) =>
-      Effect.sync(() => {
-        expect(resizable(traits, "paused", from, to)).toBe("refuses");
-      })
-  );
-
-  it.effect.prop(
-    "a state the runtime resizes `none` refuses any resize, and one it resizes `any` takes every one it gives, a running machine's up to its live limit",
-    {
-      traits: RuntimeTraits,
-      given: Given,
-      state: State,
-      from: Sizes,
-      to: Sizes,
-    },
-    ({ traits, given, state, from, to }) =>
-      Effect.sync(() => {
-        if (state === "paused") {
-          return;
-        }
-
-        const decided = resizable({ ...traits, ...given }, state, from, to);
-
-        const live =
-          state === "running" && growsPast(given, from, to)
-            ? "unlive"
-            : "resizes";
-
-        if (traits.resize[state] === "none") {
-          expect(decided).toBe("refuses");
-        }
-
-        if (traits.resize[state] === "any") {
-          expect(decided).toBe(gives(given, to) ? live : "unfitted");
-        }
-      })
-  );
-
-  it.effect.prop(
-    "a state the runtime only grows takes a resize it gives exactly when neither vCPUs nor RAM go down, a running machine's up to its live limit",
-    {
-      traits: RuntimeTraits,
-      given: Given,
-      state: State,
-      from: Sizes,
-      to: Sizes,
-    },
-    ({ traits, given, state, from, to }) =>
-      Effect.sync(() => {
-        if (state === "paused" || traits.resize[state] !== "grow") {
-          return;
-        }
-
-        const lower = to.cpu < from.cpu || to.ramMib < from.ramMib;
-
-        const live =
-          state === "running" && growsPast(given, from, to)
-            ? "unlive"
-            : "resizes";
-
-        const fits = gives(given, to) ? live : "unfitted";
-
-        expect(resizable({ ...traits, ...given }, state, from, to)).toBe(
-          lower ? "shrinks" : fits
-        );
-      })
-  );
-});
+const shrinks = (from: Sized, to: Sized) =>
+  to.cpu < from.cpu || to.ramMib < from.ramMib;
 
 describe("resizeRefusal", () => {
   it.effect.prop(
-    "a resize is refused unless its disk doesn't shrink and its runtime gives its sizes: in a known state as it takes them there, and a refusal names the machine",
+    "a resize is refused Unsizable where its disk shrinks, WrongState in a known state its runtime takes none in, and Unsizable where its runtime doesn't give its sizes, or takes only growth there and it shrinks",
     {
       traits: RuntimeTraits,
       given: Given,
@@ -238,18 +160,34 @@ describe("resizeRefusal", () => {
     },
     ({ traits, given, state, from, to }) =>
       Effect.sync(() => {
-        const sized = { ...traits, ...given };
-        const refusal = resizeRefusal(sized, "dev", state, from, to);
+        const refusal = resizeRefusal(
+          { ...traits, ...given },
+          "dev",
+          state,
+          from,
+          to
+        );
 
         const takes =
-          to.diskGib >= from.diskGib &&
-          (state === undefined
-            ? gives(given, to)
-            : resizable(sized, state, from, to) === "resizes");
+          state === undefined || state === "paused"
+            ? "none"
+            : traits.resize[state];
 
-        expect(refusal === undefined).toBe(takes);
+        const unfitted =
+          !gives(given, to) || (takes === "grow" && shrinks(from, to));
 
-        if (refusal?._tag === "Unsizable" && to.diskGib >= from.diskGib) {
+        const wrongState =
+          to.diskGib >= from.diskGib && state !== undefined && takes === "none";
+
+        const unsizable =
+          to.diskGib < from.diskGib || (!wrongState && unfitted);
+
+        expect([
+          refusal?._tag === "WrongState",
+          refusal?._tag === "Unsizable",
+        ]).toStrictEqual([wrongState, unsizable]);
+
+        if (refusal !== undefined) {
           expect(refusal.message).toContain("dev");
         }
       })
@@ -280,7 +218,7 @@ describe("copySizable", () => {
   );
 
   it.effect.prop(
-    "copies that grow take no lower vCPUs or RAM and grow live to the runtime's live limit, copies of any sizes take any vCPUs and RAM, and copies of the same sizes take only the source's, of the sizes the runtime gives",
+    "copies that grow take no lower vCPUs or RAM, copies of any sizes take any vCPUs and RAM, and copies of the same sizes take only the source's, of the sizes the runtime gives",
     { traits: RuntimeTraits, given: Given, from: Sizes, to: Sizes },
     ({ traits, given, from, to }) =>
       Effect.sync(() => {
@@ -298,9 +236,7 @@ describe("copySizable", () => {
           copies,
         });
 
-        expect(copySizable(sized("grow"), from, to)).toBe(
-          disk && grows && !growsPast(given, from, to)
-        );
+        expect(copySizable(sized("grow"), from, to)).toBe(disk && grows);
         expect(copySizable(sized("any"), from, to)).toBe(disk);
         expect(copySizable(sized("same"), from, to)).toBe(
           equal && gives(given, to)

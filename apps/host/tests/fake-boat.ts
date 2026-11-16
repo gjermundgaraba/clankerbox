@@ -112,7 +112,7 @@ type Offered = typeof Offered.Type;
 
 const isOffered = Schema.is(Offered);
 
-/** The traits of a boat host over this fake, which offers the types the probe's plan does. */
+/** The traits of a boat host over this fake, which offers the types measured on a boat plan: all but `xlarge`. */
 export const traits = boatTraits(Offered.literals);
 
 const isText = Schema.is(Schema.String);
@@ -838,6 +838,12 @@ export const fakeBoat = (
 
       if (sandbox.dataExpired) {
         return expired(sandbox);
+      }
+
+      if (sandbox.failed) {
+        sandbox.failed = false;
+        sandbox.running = false;
+        sandbox.stoppedAt = undefined;
       }
 
       if (sandbox.running) {

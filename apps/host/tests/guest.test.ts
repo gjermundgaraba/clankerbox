@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { constants } from "node:os";
 import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -8,7 +9,7 @@ import { layer } from "@effect/vitest";
 import {
   Internal,
   outputLimit,
-  readTimeout,
+  WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
   chmod,
@@ -32,6 +33,7 @@ import {
   Fiber,
   Layer,
   Logger,
+  Option,
   Redacted,
   Schedule,
   Stream,
@@ -44,13 +46,13 @@ import {
   beforeJoinScript,
   checkTailnet,
   endScript,
-  endTimeout,
   guestCommand,
   hostKeyIn,
   identify,
   lastLines,
   identityScript,
   markName,
+  membersProgram,
   leave,
   prepare as prepareGuest,
   prepareBase,
@@ -67,6 +69,7 @@ import {
 } from "../src/guest.ts";
 import type { Invocation } from "../src/guest.ts";
 import { Runtime } from "../src/runtime.ts";
+import type { Execution } from "../src/runtime.ts";
 import {
   fakeRuntime,
   furnish,
@@ -363,11 +366,19 @@ const unsharedMark = () => randomBytes(16).toString("hex");
 
 const treeTimeout = Duration.seconds(5);
 
+const endSeconds = 10;
+
+const confirmedUpTo = 2000;
+
+const graceGrowth = 32;
+
+const answeredWithin = Duration.seconds(15);
+
 const endsTimeout = (trees: number, ends: number) =>
   Duration.toMillis(
     Duration.sum(
       Duration.times(treeTimeout, trees),
-      Duration.times(endTimeout, ends)
+      Duration.times(answeredWithin, ends)
     )
   );
 
@@ -418,7 +429,13 @@ interface Marked {
   readonly start: string | undefined;
 }
 
-const marked = (root: string, script: string, count: number, mark: string) =>
+const marked = (
+  root: string,
+  script: string,
+  count: number,
+  mark: string,
+  within = treeTimeout
+) =>
   Effect.gen(function* () {
     const held = new Map<number, string | undefined>();
 
@@ -456,7 +473,7 @@ const marked = (root: string, script: string, count: number, mark: string) =>
         until: (found) => found.length >= count,
         schedule: Schedule.spaced(Duration.millis(50)),
       }),
-      Effect.timeout(treeTimeout)
+      Effect.timeout(within)
     );
 
     return tree.map((each): Marked => ({ pid: each, start: held.get(each) }));
@@ -465,14 +482,117 @@ const marked = (root: string, script: string, count: number, mark: string) =>
 const runningOf = (tree: readonly Marked[]) =>
   Effect.sync(() => tree.filter(({ pid, start }) => runs(pid, start)));
 
-const endUnder = (shell: readonly string[], root: string, mark: string) =>
+const goneWithin = (tree: readonly Marked[], within: Duration.Duration) =>
+  runningOf(tree).pipe(
+    Effect.repeat({
+      until: (left) => left.length === 0,
+      schedule: Schedule.spaced(Duration.millis(20)),
+    }),
+    Effect.timeoutOrElse({
+      duration: within,
+      orElse: () => runningOf(tree),
+    })
+  );
+
+const readable = (file: string) => {
+  try {
+    return readFileSync(file, "latin1");
+  } catch {
+    return "";
+  }
+};
+
+const killed = (pid: number) => {
+  try {
+    process.kill(pid, "SIGKILL");
+
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const holdingAny = (needles: readonly string[]) =>
+  readdirSync("/proc")
+    .filter((entry) => /^\d+$/u.test(entry))
+    .map(Number)
+    .filter((pid) => {
+      const state = statOf(pid)?.state;
+      const held = `${readable(`/proc/${pid}/cmdline`)}\0${readable(`/proc/${pid}/environ`)}`;
+
+      return (
+        state !== undefined &&
+        state !== "Z" &&
+        needles.some((needle) => held.includes(needle))
+      );
+    });
+
+const reaped = (root: string, needles: readonly string[]) =>
+  Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      writeFileSync(path.join(root, "enough"), "");
+
+      for (let pass = 0; pass < 10; pass += 1) {
+        const left = holdingAny(needles);
+
+        if (left.length === 0) {
+          return;
+        }
+
+        for (const pid of left) {
+          killed(pid);
+        }
+      }
+    })
+  );
+
+const launchedApart = (
+  shell: readonly string[],
+  root: string,
+  invocation: Invocation,
+  mark: string,
+  needle: string
+) =>
+  Effect.gen(function* () {
+    const command = guestCommand(invocation, mark);
+
+    yield* reaped(root, [`${markName}=${mark}`, needle]);
+
+    const child = yield* Effect.sync(() =>
+      spawn(shell[0] ?? "", [...shell.slice(1), ...command.argv.slice(1)], {
+        detached: true,
+        stdio: ["pipe", "ignore", "ignore"],
+        env: { ...process.env, CLANKERBOX_ROOT: root },
+      })
+    );
+
+    yield* Effect.sync(() => {
+      child.stdin.end(command.stdin);
+    });
+
+    return yield* Effect.sync(() => holdingAny([needle])).pipe(
+      Effect.repeat({
+        until: (found) => found.length > 0,
+        schedule: Schedule.spaced(Duration.millis(50)),
+      }),
+      Effect.timeout(treeTimeout)
+    );
+  });
+
+const endUnder = (
+  shell: readonly string[],
+  root: string,
+  mark: string,
+  seconds = endSeconds,
+  env: Readonly<Record<string, string>> = {}
+) =>
   outputOf(
     shell[0] ?? "",
     [...shell.slice(1), "-c", endScript, "clankerbox-end"],
     {
-      env: { CLANKERBOX_ROOT: root },
+      env: { ...env, CLANKERBOX_ROOT: root },
       extendEnv: true,
-      input: new TextEncoder().encode(`${mark}\n`),
+      input: new TextEncoder().encode(`${mark} ${seconds}\n`),
     }
   );
 
@@ -488,6 +608,43 @@ const launched = (
     shell[0] ?? "",
     [...shell.slice(1), ...command.argv.slice(1)],
     { env, input: new TextEncoder().encode(command.stdin ?? "") }
+  );
+};
+
+const launcherTraps = [
+  "HUP",
+  "INT",
+  "QUIT",
+  "USR1",
+  "USR2",
+  "PIPE",
+  "ALRM",
+  "TERM",
+  "XCPU",
+  "XFSZ",
+  "VTALRM",
+  "PROF",
+  "SYS",
+] as const;
+
+const guardExit = 99;
+
+const launchedBelowGuard = (
+  shell: readonly string[],
+  invocation: Invocation
+) => {
+  const command = guestCommand(invocation, unsharedMark());
+
+  return outputOf(
+    "sh",
+    [
+      "-c",
+      `trap 'exit ${guardExit}' ${launcherTraps.join(" ")}; "$@"; exit $?`,
+      "guard",
+      ...shell,
+      ...command.argv.slice(1),
+    ],
+    { input: new TextEncoder().encode(command.stdin ?? "") }
   );
 };
 
@@ -703,7 +860,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   }
 
   it.effect(
-    "a setup past its timeout that can't then be ended or its script removed answers its timeout and logs both failures",
+    "a setup past its timeout that can't then be ended or its script removed answers that it may still run, and logs both failures",
     () => {
       const logged: unknown[] = [];
 
@@ -732,9 +889,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const error = yield* Fiber.join(late);
 
-        expect(error.message).toContain("ran past its 1s timeout");
+        expect(error._tag).toBe("ScriptFailed");
+        expect(error.message).toContain(
+          "setup ran past its 1s timeout and couldn't then be ended, so it may still run in the guest: the guest went away"
+        );
         expect(logged.flat()).toStrictEqual([
-          "couldn't end in dev the command of an exec that ended before its exit code, which may still run there: the guest went away",
+          "couldn't end in dev the command of an exec past its 1s limit, which may still run there: the guest went away",
           "couldn't remove dev's setup script after its setup ended early: the guest went away",
         ]);
       }).pipe(
@@ -983,6 +1143,37 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a timed command whose runtime never answers with its execution answers 124 at its limit, ending what the guest may have begun",
+    () =>
+      Effect.gen(function* () {
+        const { runtime, machine } = yield* madeOn("tart");
+
+        const attaching = Runtime.of({
+          ...runtime,
+          exec: (target, command) =>
+            (command.stdin ?? "").includes("clankerbox-end")
+              ? runtime.exec(target, command)
+              : Effect.never,
+        });
+
+        const answer = yield* Effect.timed(
+          runCommand(attaching, { machine, argv: ["true"], timeoutSeconds: 1 })
+        ).pipe(Effect.timeoutOption(Duration.seconds(10)));
+
+        const [took, ran] = Option.getOrThrow(answer);
+
+        expect(ran).toStrictEqual({
+          exitCode: 124,
+          output: "",
+          truncated: false,
+        });
+        expect(Duration.toSeconds(took)).toBeGreaterThanOrEqual(1);
+        expect(Duration.toSeconds(took)).toBeLessThan(3);
+      }),
+    30_000
+  );
+
+  it.effect(
     "a timed command that ignores TERM is KILLed 5 s after it, and its 124 answers within the end's bound",
     () =>
       Effect.gen(function* () {
@@ -1004,48 +1195,101 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const pid = Number((yield* readFile(path.join(root, "pid"))).trim());
 
         expect(ran.exitCode).toBe(124);
+        expect(ran.mayStillRun).toBeUndefined();
         expect(statOf(pid)?.state ?? "gone").toMatch(/^(?:gone|Z)$/u);
-        expect(Duration.toSeconds(took)).toBeGreaterThanOrEqual(5.5);
+        expect(Duration.toSeconds(took)).toBeGreaterThanOrEqual(6);
         expect(Duration.toSeconds(took)).toBeLessThan(
-          1 + Duration.toSeconds(endTimeout)
+          1 + Duration.toSeconds(answeredWithin)
         );
       }),
     30_000
   );
 
   it.effect(
-    "an end that doesn't answer leaves a timed command answering 124 within the end's bound, and logs that the command may still run",
+    "a timed command whose end isn't confirmed answers 124 with its output, saying why it may still run, also an end that printed nothing, within 15 s of its timeout, and logs it as cut at its limit",
     () => {
       const logged: unknown[] = [];
 
       return Effect.gen(function* () {
         const { runtime, machine } = yield* madeOn("tart");
 
-        const stalling = Runtime.of({
-          ...runtime,
-          exec: (target, command) =>
-            (command.stdin ?? "").includes("clankerbox-end")
-              ? Effect.succeed({ output: Stream.never, exitCode: Effect.never })
-              : runtime.exec(target, command),
-        });
+        const ending = (end: Effect.Effect<Execution>): Runtime["Service"] =>
+          Runtime.of({
+            ...runtime,
+            exec: (target, command) =>
+              (command.stdin ?? "").includes("clankerbox-end")
+                ? end
+                : runtime.exec(target, command),
+          });
 
-        const [took, ran] = yield* Effect.timed(
-          runCommand(stalling, {
-            machine,
-            argv: ["sleep", "300"],
-            timeoutSeconds: 1,
-          })
+        const timed = (on: Runtime["Service"]) =>
+          Effect.timed(
+            runCommand(on, {
+              machine,
+              argv: ["sh", "-c", "echo owed; sleep 3"],
+              timeoutSeconds: 1,
+            })
+          );
+
+        const [took, stalled] = yield* timed(
+          ending(
+            Effect.succeed({ output: Stream.never, exitCode: Effect.never })
+          )
         );
 
-        expect(ran.exitCode).toBe(124);
+        const [, left] = yield* timed(
+          ending(
+            Effect.succeed({
+              output: Stream.make(
+                new TextEncoder().encode(
+                  "clankerbox: 3 processes of the command still ran at its last listing when its end's 10s ran out\n"
+                )
+              ),
+              exitCode: Effect.succeed(1),
+            })
+          )
+        );
+
+        const [, silent] = yield* timed(
+          ending(
+            Effect.succeed({
+              output: Stream.empty,
+              exitCode: Effect.succeed(125),
+            })
+          )
+        );
+
+        expect([stalled, left, silent]).toStrictEqual([
+          {
+            exitCode: 124,
+            output: "owed\n",
+            truncated: false,
+            mayStillRun: "the end didn't finish within 15s",
+          },
+          {
+            exitCode: 124,
+            output: "owed\n",
+            truncated: false,
+            mayStillRun:
+              "the end exited 1: clankerbox: 3 processes of the command still ran at its last listing when its end's 10s ran out",
+          },
+          {
+            exitCode: 124,
+            output: "owed\n",
+            truncated: false,
+            mayStillRun: "the end exited 125 and printed nothing",
+          },
+        ]);
         expect(Duration.toSeconds(took)).toBeGreaterThanOrEqual(
-          1 + Duration.toSeconds(endTimeout)
+          1 + Duration.toSeconds(answeredWithin)
         );
-        expect(Duration.toMillis(took)).toBeLessThan(
-          Duration.toMillis(readTimeout)
+        expect(Duration.toSeconds(took)).toBeLessThan(
+          2 + Duration.toSeconds(answeredWithin)
         );
         expect(logged.flat()).toStrictEqual([
-          `couldn't end in dev the command of an exec that ended before its exit code, which may still run there: it didn't end within ${Duration.format(endTimeout)}`,
+          "couldn't end in dev the command of an exec past its 1s limit, which may still run there: the end didn't finish within 15s",
+          "couldn't end in dev the command of an exec past its 1s limit, which may still run there: the end exited 1: clankerbox: 3 processes of the command still ran at its last listing when its end's 10s ran out",
+          "couldn't end in dev the command of an exec past its 1s limit, which may still run there: the end exited 125 and printed nothing",
         ]);
       }).pipe(
         Effect.provide(
@@ -1053,8 +1297,128 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         )
       );
     },
-    30_000
+    60_000
   );
+
+  it.effect(
+    "an exec whose machine a step leaves answers WrongState in that step's phase, saying its command may still run when its end isn't confirmed, and logs it as cut short by the step",
+    () => {
+      const logged: unknown[] = [];
+
+      return Effect.gen(function* () {
+        const { runtime, machine } = yield* madeOn("tart");
+
+        const unconfirmed = Runtime.of({
+          ...runtime,
+          exec: (target, command) =>
+            (command.stdin ?? "").includes("clankerbox-end")
+              ? Effect.succeed({
+                  output: Stream.empty,
+                  exitCode: Effect.succeed(125),
+                })
+              : runtime.exec(target, command),
+        });
+
+        const error = yield* Effect.flip(
+          runCommand(
+            unconfirmed,
+            { machine, argv: ["sh", "-c", "sleep 30"] },
+            Effect.succeed("pause")
+          )
+        );
+
+        expect(error).toStrictEqual(
+          new WrongState({
+            message:
+              "machine dev's pause ended this exec's command first, though it may still run in the guest: the end exited 125 and printed nothing",
+            machine: "dev",
+            state: "pausing",
+          })
+        );
+        expect(logged.flat()).toStrictEqual([
+          "couldn't end in dev the command of an exec that its machine's pause cut short, which may still run there: the end exited 125 and printed nothing",
+        ]);
+      }).pipe(
+        Effect.provide(
+          Logger.layer([Logger.make(({ message }) => logged.push(message))])
+        )
+      );
+    }
+  );
+
+  it.effect(
+    "an exec whose runtime fails before its exit code, and whose end then fails too, fails with the runtime's own error, not saying it may still run, and logs the end's",
+    () => {
+      const logged: unknown[] = [];
+
+      return Effect.gen(function* () {
+        const { runtime, machine } = yield* madeOn("tart");
+
+        const failing = Runtime.of({
+          ...runtime,
+          exec: (_target, command) =>
+            Effect.succeed({
+              output: Stream.empty,
+              exitCode: Effect.fail(
+                (command.stdin ?? "").includes("clankerbox-end")
+                  ? new Internal({ message: "the agent is gone" })
+                  : new Internal({ message: "the connection dropped" })
+              ),
+            }),
+        });
+
+        const error = yield* Effect.flip(
+          runCommand(failing, { machine, argv: ["true"] })
+        );
+
+        expect({ _tag: error._tag, message: error.message }).toStrictEqual({
+          _tag: "Internal",
+          message: "the connection dropped",
+        });
+        expect(logged.flat()).toStrictEqual([
+          "couldn't end in dev the command of an exec whose runtime failed before its exit code, which may still run there: the agent is gone",
+        ]);
+      }).pipe(
+        Effect.provide(
+          Logger.layer([Logger.make(({ message }) => logged.push(message))])
+        )
+      );
+    }
+  );
+
+  for (const as of ["tart", "smolvm"] as const) {
+    it.effect(
+      `a stop of a fake ${as} machine ends an exec in flight whose command ignores TERM, as its VM going down does`,
+      () =>
+        Effect.gen(function* () {
+          const { runtime, fake, machine } = yield* madeOn(as);
+          const root = fake.root(machine.name) ?? "";
+
+          const exec = yield* Effect.forkChild(
+            runCommand(runtime, {
+              machine,
+              argv: [
+                "sh",
+                "-c",
+                `trap '' TERM; echo $$ >"$CLANKERBOX_ROOT/pid"; sleep 300`,
+              ],
+            })
+          );
+
+          const pid = Number(
+            (yield* waitFor(path.join(root, "pid"), "\n")).trim()
+          );
+
+          yield* runtime.stop(machine);
+
+          const ran = yield* Fiber.join(exec);
+
+          expect(ran.exitCode).not.toBe(0);
+          expect(statOf(pid)?.state ?? "gone").toMatch(/^(?:gone|Z)$/u);
+        }),
+      30_000
+    );
+  }
 
   it.effect(
     "a command that exits leaves running what it started with its output closed, and ends nothing",
@@ -2346,7 +2710,31 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   });
 });
 
+const oneCpu = () =>
+  /(?<cpu>\d+)/u.exec(
+    spawnSync("taskset", ["-cp", String(process.pid)], { encoding: "utf-8" })
+      .stdout.split(":")
+      .at(-1) ?? ""
+  )?.groups?.["cpu"] ?? "0";
+
+const sudoLikeWatcher = [
+  'use POSIX ":sys_wait_h";',
+  '$SIG{TERM} = "IGNORE";',
+  "my $c = fork;",
+  'if (!$c) { exec "sh", "-c", "trap \\"\\" TERM; sleep 300"; }',
+  "while (1) {",
+  "  my $w = waitpid($c, WUNTRACED);",
+  "  last if $w <= 0;",
+  "  last if !WIFSTOPPED(${^CHILD_ERROR_NATIVE});",
+  '  open my $f, ">>", "$ENV{CLANKERBOX_ROOT}/saw-a-stop";',
+  '  print $f "$$\\n";',
+  "  close $f;",
+  "}",
+].join(" ");
+
 const manyLinesSeconds = 5;
+
+const chainDepth = 400;
 
 const shellCases = (shell: readonly string[]) => {
   layer(NodeServices.layer, { excludeTestServices: true })((it) => {
@@ -2486,7 +2874,7 @@ const shellCases = (shell: readonly string[]) => {
     );
 
     it.effect(
-      "an end ends by TERM what holds its mark, in its environment or arguments, and what descends from it, also a child that took its own group or cleared its environment, and records the mark",
+      "an end ends by TERM what holds its mark, in its environment or arguments, and what descends from it, also a child that took its own group or cleared its environment, and keeps no record of a mark it has ended",
       () =>
         Effect.gen(function* () {
           const root = yield* scratch;
@@ -2515,7 +2903,7 @@ const shellCases = (shell: readonly string[]) => {
             yield* readDirectory(
               path.join(root, "var", "run", "clankerbox-ended")
             )
-          ).toStrictEqual([mark]);
+          ).toStrictEqual([]);
         }),
       endsTimeout(2, 1)
     );
@@ -2538,19 +2926,108 @@ const shellCases = (shell: readonly string[]) => {
             endUnder(shell, root, mark)
           );
 
+          const unseen = unsharedMark();
+
           const [tookNone, none] = yield* Effect.timed(
-            endUnder(shell, root, unsharedMark())
+            endUnder(shell, root, unseen)
           );
 
           expect([ended.code, none.code]).toStrictEqual([0, 0]);
           expect(yield* runningOf(tree)).toStrictEqual([]);
-          expect(Duration.toSeconds(took)).toBeGreaterThanOrEqual(4.5);
-          expect(Duration.toSeconds(took)).toBeLessThan(
-            Duration.toSeconds(endTimeout)
-          );
+          expect(Duration.toSeconds(took)).toBeGreaterThanOrEqual(5);
+          expect(Duration.toSeconds(took)).toBeLessThan(endSeconds);
           expect(Duration.toSeconds(tookNone)).toBeLessThan(2);
+          expect(
+            yield* readDirectory(
+              path.join(root, "var", "run", "clankerbox-ended")
+            )
+          ).toStrictEqual([unseen]);
         }),
       endsTimeout(1, 2)
+    );
+
+    it.effect(
+      "an end leaves nothing of a command that ignores TERM and keeps forking, neither the children that keep its mark nor those that cleared their environment",
+      () =>
+        Effect.gen(function* () {
+          const root = yield* scratch;
+          const mark = unsharedMark();
+          const lasts = `30.${randomBytes(3).readUIntBE(0, 3)}`;
+          const needles = [`${markName}=${mark}`, `sleep\0${lasts}\0`];
+
+          yield* reaped(root, needles);
+          yield* marked(
+            root,
+            `trap '' TERM; while [ ! -e "$CLANKERBOX_ROOT/enough" ]; do sleep ${lasts} & env -i sleep ${lasts} & sleep 0.02; done`,
+            3,
+            mark
+          );
+
+          const ended = yield* endUnder(shell, root, mark);
+
+          expect(ended.code, ended.stderr).toBe(0);
+          expect(holdingAny(needles)).toStrictEqual([]);
+        }),
+      endsTimeout(1, 1)
+    );
+
+    it.effect(
+      `an end stops a command that grows by more than ${graceGrowth} processes after its TERM within a second of it, as it isn't winding down, not at its grace's end`,
+      () =>
+        Effect.gen(function* () {
+          const root = yield* scratch;
+          const mark = unsharedMark();
+          const lasts = `30.${randomBytes(3).readUIntBE(0, 3)}`;
+          const needles = [`${markName}=${mark}`, `sleep\0${lasts}\0`];
+
+          yield* reaped(root, needles);
+          yield* marked(
+            root,
+            `trap '' TERM; while [ ! -e "$CLANKERBOX_ROOT/enough" ]; do sleep ${lasts} & sleep 0.01; done`,
+            3,
+            mark
+          );
+
+          const [took, ended] = yield* Effect.timed(
+            endUnder(shell, root, mark)
+          );
+
+          expect(ended.code, ended.stderr).toBe(0);
+          expect(holdingAny(needles)).toStrictEqual([]);
+          expect(Duration.toSeconds(took)).toBeLessThan(3);
+        }),
+      endsTimeout(1, 1)
+    );
+
+    it.effect(
+      `an end gives its whole grace to a command whose TERM handler runs ${graceGrowth / 2} children at once, then a few more, before it exits`,
+      () =>
+        Effect.gen(function* () {
+          const root = yield* scratch;
+          const mark = unsharedMark();
+
+          const children = Array.from(
+            { length: graceGrowth / 2 },
+            () => "sleep 1.5 &"
+          ).join(" ");
+
+          const tree = yield* marked(
+            root,
+            `trap '${children} wait; for i in 1 2 3; do sleep 0.5; done; : >"$CLANKERBOX_ROOT/cleaned"; exit 0' TERM; while :; do sleep 0.1; done`,
+            2,
+            mark
+          );
+
+          const [took, ended] = yield* Effect.timed(
+            endUnder(shell, root, mark)
+          );
+
+          expect(ended.code, ended.stderr).toBe(0);
+          expect(existsSync(path.join(root, "cleaned"))).toBe(true);
+          expect(yield* runningOf(tree)).toStrictEqual([]);
+          expect(Duration.toSeconds(took)).toBeGreaterThanOrEqual(3);
+        }),
+      endsTimeout(1, 1)
     );
 
     it.effect(
@@ -2576,20 +3053,293 @@ const shellCases = (shell: readonly string[]) => {
     );
 
     it.effect(
-      "an end refuses a stdin that holds no mark, and signals nothing",
+      "the launcher exits as its command does, 0, 1, 126 and 127, and with 128 and the signal's number, saying nothing of its own, for one a signal ended",
+      () =>
+        Effect.gen(function* () {
+          const root = yield* scratch;
+          const unrunnable = path.join(root, "unrunnable");
+
+          yield* write(unrunnable, "#!/bin/sh\necho ran\n");
+
+          const codes = yield* Effect.forEach(
+            [
+              ["true"],
+              ["false"],
+              [unrunnable],
+              ["no-such-command-of-clankerbox"],
+              ["sh", "-c", "kill -s KILL $$"],
+              ["sh", "-c", "kill -s TERM $$"],
+            ] as const,
+            (argv) =>
+              Effect.map(launched(shell, { argv }), ({ code, stderr }) =>
+                code > 128 ? { code, stderr } : { code }
+              )
+          );
+
+          expect(codes).toStrictEqual([
+            { code: 0 },
+            { code: 1 },
+            { code: 126 },
+            { code: 127 },
+            { code: 137, stderr: "" },
+            { code: 143, stderr: "" },
+          ]);
+        })
+    );
+
+    it.effect(
+      "the launcher outlives each signal it traps, sent to it alone, and exits as its command then does, which keeps each signal's default",
+      () =>
+        Effect.gen(function* () {
+          const codes = yield* Effect.forEach(
+            launcherTraps,
+            (signal) =>
+              Effect.map(
+                Effect.all([
+                  launchedBelowGuard(shell, {
+                    argv: [
+                      "sh",
+                      "-c",
+                      `kill -s ${signal} $PPID; sleep 0.5; exit 7`,
+                    ],
+                  }),
+                  launchedBelowGuard(shell, {
+                    argv: ["perl", "-e", `kill "${signal}", $$; sleep 1`],
+                  }),
+                ]),
+                ([toLauncher, toCommand]) => ({
+                  signal,
+                  toLauncher: toLauncher.code,
+                  toCommand: toCommand.code,
+                })
+              ),
+            { concurrency: "unbounded" }
+          );
+
+          expect(codes).toStrictEqual(
+            launcherTraps.map((signal) => ({
+              signal,
+              toLauncher: 7,
+              toCommand: 128 + constants.signals[`SIG${signal}`],
+            }))
+          );
+        })
+    );
+
+    it.effect(
+      "an end ends a command that clears its environment, also one that execs into it, with nothing above the launcher to carry the mark",
       () =>
         Effect.gen(function* () {
           const root = yield* scratch;
 
-          const tree = yield* marked(
-            root,
-            "sleep 300 & wait",
-            2,
-            unsharedMark()
+          const results = yield* Effect.forEach(
+            [
+              (lasts: string) => ["env", "-i", "sleep", lasts] as const,
+              (lasts: string) =>
+                ["sh", "-c", `echo begun; exec env -i sleep ${lasts}`] as const,
+            ],
+            (argvOf) =>
+              Effect.gen(function* () {
+                const mark = unsharedMark();
+                const lasts = `30.${randomBytes(3).readUIntBE(0, 3)}`;
+                const needle = `sleep\0${lasts}\0`;
+                const argv = argvOf(lasts);
+
+                yield* launchedApart(shell, root, { argv }, mark, needle);
+
+                const ended = yield* endUnder(shell, root, mark);
+
+                return { code: ended.code, left: holdingAny([needle]).length };
+              })
           );
 
+          expect(results).toStrictEqual([
+            { code: 0, left: 0 },
+            { code: 0, left: 0 },
+          ]);
+        }),
+      endsTimeout(2, 2)
+    );
+
+    it.effect(
+      "an end ends a process whose name holds a newline, and what it started",
+      () =>
+        Effect.gen(function* () {
+          const root = yield* scratch;
+          const mark = unsharedMark();
+
+          const tree = yield* marked(
+            root,
+            "printf 'x\\n/proc/1/st' >/proc/$$/comm; trap '' TERM; while :; do sleep 300; done",
+            2,
+            mark
+          );
+
+          const ended = yield* endUnder(shell, root, mark);
+
+          expect(ended.code, ended.stderr).toBe(0);
+          expect(yield* runningOf(tree)).toStrictEqual([]);
+        }),
+      endsTimeout(1, 1)
+    );
+
+    it.effect(
+      "an end confirms the end of a command on a guest where no temporary file can be written, as when a full disk cut it",
+      () =>
+        Effect.gen(function* () {
+          const root = yield* scratch;
+          const mark = unsharedMark();
+          const unwritable = path.join(root, "no-temporary-files");
+
+          writeFileSync(unwritable, "");
+
+          const tree = yield* marked(
+            root,
+            "trap '' TERM; sleep 300 & wait",
+            2,
+            mark
+          );
+
+          const ended = yield* endUnder(shell, root, mark, endSeconds, {
+            TMPDIR: unwritable,
+          });
+
+          expect(ended.code, ended.stderr).toBe(0);
+          expect(yield* runningOf(tree)).toStrictEqual([]);
+        }),
+      endsTimeout(1, 1)
+    );
+
+    it.effect(
+      `an end confirms, by a listing it begins within its ${endSeconds} s deadline, the end of a command of ${confirmedUpTo} processes that ignore TERM, half of them with a cleared environment, within the ${Duration.toSeconds(answeredWithin)} s its host waits`,
+      () =>
+        Effect.gen(function* () {
+          const root = yield* scratch;
+          const mark = unsharedMark();
+          const lasts = `30.${randomBytes(3).readUIntBE(0, 3)}`;
+          const needles = [`${markName}=${mark}`, `sleep\0${lasts}\0`];
+
+          yield* reaped(root, needles);
+          yield* marked(
+            root,
+            `trap '' TERM; i=0; while [ "$i" -lt ${confirmedUpTo / 2} ]; do sleep ${lasts} & env -i sleep ${lasts} & i=$((i + 1)); done; wait`,
+            confirmedUpTo + 1,
+            mark,
+            Duration.seconds(60)
+          );
+
+          const [took, ended] = yield* Effect.timed(
+            endUnder(shell, root, mark)
+          );
+
+          expect(ended.code, ended.stderr).toBe(0);
+          expect(holdingAny(needles)).toStrictEqual([]);
+          expect(Duration.toSeconds(took)).toBeLessThan(
+            Duration.toSeconds(answeredWithin)
+          );
+        }),
+      120_000
+    );
+
+    it.effect(
+      "an end whose deadline passes lists no more, sends what it last listed KILL and CONT, and exits 1 saying how many it held",
+      () =>
+        Effect.gen(function* () {
+          const root = yield* scratch;
+          const mark = unsharedMark();
+
+          const tree = yield* marked(
+            root,
+            "trap '' TERM; sleep 300 & wait",
+            2,
+            mark
+          );
+
+          const [took, ended] = yield* Effect.timed(
+            endUnder(shell, root, mark, 1)
+          );
+
+          expect(ended.code).toBe(1);
+          expect(ended.stderr).toContain(
+            "clankerbox: 2 processes of the command still ran at its last listing when its end's 1s ran out"
+          );
+          expect(yield* goneWithin(tree, Duration.seconds(1))).toStrictEqual(
+            []
+          );
+          expect(Duration.toSeconds(took)).toBeLessThan(3);
+        }),
+      endsTimeout(1, 1)
+    );
+
+    it.effect(
+      "an end cut short by TERM sends what it last listed KILL and CONT, so none is left running or stopped, and exits 1",
+      () =>
+        Effect.gen(function* () {
+          const root = yield* scratch;
+          const mark = unsharedMark();
+          const termed = path.join(root, "termed");
+
+          const tree = yield* marked(
+            root,
+            `trap 'echo termed >"$CLANKERBOX_ROOT/termed"' TERM; sleep 300 & while :; do sleep 0.1; done`,
+            3,
+            mark
+          );
+
+          const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+
+          const end = yield* spawner.spawn(
+            ChildProcess.make(
+              shell[0] ?? "",
+              [...shell.slice(1), "-c", endScript, "clankerbox-end"],
+              {
+                env: { CLANKERBOX_ROOT: root },
+                extendEnv: true,
+                stdin: Stream.make(
+                  new TextEncoder().encode(`${mark} ${endSeconds}\n`)
+                ),
+                killSignal: "SIGKILL",
+              }
+            )
+          );
+
+          const said = yield* Effect.forkChild(
+            Stream.mkString(Stream.decodeText(end.all))
+          );
+
+          yield* waitFor(termed, "termed");
+
+          const [shellOf] = tree;
+
+          yield* Effect.sync(() => {
+            process.kill(shellOf?.pid ?? 0, "SIGSTOP");
+            process.kill(Number(end.pid), "SIGTERM");
+          });
+
+          const code = yield* end.exitCode;
+
+          expect(Number(code)).toBe(1);
+          expect(yield* Fiber.join(said)).toMatch(
+            /clankerbox: its end was cut short, with \d+ processes of the command running at its last listing/u
+          );
+          expect(yield* goneWithin(tree, Duration.seconds(1))).toStrictEqual(
+            []
+          );
+        }),
+      endsTimeout(1, 1)
+    );
+
+    it.effect(
+      "an end refuses a stdin that holds no mark, or no deadline, and signals nothing",
+      () =>
+        Effect.gen(function* () {
+          const root = yield* scratch;
+          const mark = unsharedMark();
+
+          const tree = yield* marked(root, "sleep 300 & wait", 2, mark);
+
           const refused = yield* Effect.forEach(
-            ["", "not-a-mark", "*"],
+            ["", "not-a-mark", "*", mark, `${mark} soon`],
             (stdin) =>
               Effect.map(
                 outputOf(
@@ -2605,13 +3355,200 @@ const shellCases = (shell: readonly string[]) => {
               )
           );
 
-          expect(refused).toStrictEqual([2, 2, 2]);
+          expect(refused).toStrictEqual([2, 2, 2, 2, 2]);
           expect(yield* runningOf(tree)).toStrictEqual(tree);
         }),
-      endsTimeout(1, 3)
+      endsTimeout(1, 5)
+    );
+
+    it.effect(
+      "an end stops no process before the parent that watches it, as sudo does, so no parent that still runs sees its child stop",
+      () =>
+        Effect.gen(function* () {
+          const root = yield* scratch;
+          const mark = unsharedMark();
+          const watchers = 12;
+
+          const cpu = oneCpu();
+
+          const tree = yield* marked(
+            root,
+            `taskset -cp ${cpu} $$ >/dev/null; for i in ${Array.from({ length: watchers }, (_, i) => i).join(" ")}; do perl -e '${sudoLikeWatcher}' & done; wait`,
+            1 + watchers * 3,
+            mark
+          );
+
+          const ended = yield* endUnder(
+            ["taskset", "-c", cpu, ...shell],
+            root,
+            mark
+          );
+
+          expect(ended.code, ended.stderr).toBe(0);
+          expect(yield* runningOf(tree)).toStrictEqual([]);
+          expect(existsSync(path.join(root, "saw-a-stop"))).toBe(false);
+        }),
+      endsTimeout(1, 1)
+    );
+
+    it.effect(
+      `an end confirms within its ${endSeconds} s deadline the end of a chain of ${chainDepth} processes that ignore TERM, each the parent of the next, on one CPU`,
+      () =>
+        Effect.gen(function* () {
+          const root = yield* scratch;
+          const mark = unsharedMark();
+          const cpu = oneCpu();
+          const chain = path.join(root, "chain");
+
+          yield* write(
+            chain,
+            `trap '' TERM; if [ "$1" -gt 0 ]; then sh "$0" $(($1 - 1)); exit; fi; sleep 300`
+          );
+
+          const tree = yield* marked(
+            root,
+            `taskset -cp ${cpu} $$ >/dev/null; sh ${chain} ${chainDepth}`,
+            chainDepth + 2,
+            mark,
+            Duration.seconds(60)
+          );
+
+          const ended = yield* endUnder(
+            ["taskset", "-c", cpu, ...shell],
+            root,
+            mark
+          );
+
+          expect(ended.code, ended.stderr).toBe(0);
+          expect(yield* runningOf(tree)).toStrictEqual([]);
+        }),
+      120_000
     );
   });
 };
+
+const guestAwks = [
+  ["awk"],
+  ["mawk"],
+  ["gawk"],
+  ["original-awk"],
+  ["busybox", "awk"],
+].filter(
+  ([file = "", ...rest]) =>
+    spawnSync(file, [...rest, "BEGIN { exit 0 }"]).status === 0
+);
+
+interface Listed {
+  readonly pid: number;
+  readonly ppid: number;
+  readonly state: "R" | "S" | "T";
+  readonly root: boolean;
+}
+
+const ascending = (a: number, b: number) => a - b;
+
+const seeded = (seed: number) => {
+  let state = seed;
+
+  return (below: number) => {
+    state = (Math.imul(state, 1_103_515_245) + 12_345) >>> 0;
+
+    return state % below;
+  };
+};
+
+const commandOfWrappedPids = (seed: number): readonly Listed[] => {
+  const pick = seeded(seed);
+  const pids = new Set<number>();
+
+  while (pids.size < 40) {
+    pids.add(2 + pick(32_000));
+  }
+
+  const inOrder = [...pids];
+
+  const tree = inOrder.map((pid, at): Listed => {
+    const root = at === 0 || pick(8) === 0;
+
+    return {
+      pid,
+      ppid: root ? 90_000 + at : (inOrder[pick(at)] ?? 0),
+      state: (["R", "S", "T"] as const)[pick(3)] ?? "S",
+      root,
+    };
+  });
+
+  return tree
+    .map((each) => ({ each, at: pick(1_000_000) }))
+    .toSorted((a, b) => a.at - b.at)
+    .map(({ each }) => each);
+};
+
+const listingOf = (word: string, tree: readonly Listed[]) =>
+  [
+    word,
+    ".",
+    ...tree.flatMap(({ pid, root }) => (root ? [`/proc/${pid}/cmdline`] : [])),
+    ".",
+    ...tree.map(
+      ({ pid, ppid, state }) =>
+        `/proc/${pid}/stat:${pid} (sh) ${state} ${ppid} ${pid} ${pid} 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 ${1000 + pid} 0`
+    ),
+    "",
+  ].join("\n");
+
+describe.each(guestAwks.map((argv) => ({ name: argv.join(" "), argv })))(
+  "an end's listing, by $name",
+  ({ argv }) => {
+    layer(NodeServices.layer)((it) => {
+      it("STOPs, and then KILLs, each process it lists, each after its listed parent, however the guest numbers and lists them", () => {
+        const word = `${markName}=${unsharedMark()}`;
+
+        for (const seed of Array.from({ length: 25 }, (_, i) => i + 1)) {
+          const tree = commandOfWrappedPids(seed);
+          const byPid = new Map(tree.map((each) => [each.pid, each]));
+
+          const { stdout } = spawnSync(
+            argv[0] ?? "",
+            [
+              ...argv.slice(1),
+              "-v",
+              "signal=S",
+              "-v",
+              "self=1",
+              "-v",
+              "proc=1",
+              membersProgram,
+            ],
+            { input: listingOf(word, tree), encoding: "utf-8" }
+          );
+
+          const [count = "", toStop = "", toKill = ""] = stdout.split("\n");
+
+          expect(count, `seed ${seed}`).toBe(String(tree.length));
+
+          for (const line of [toStop, toKill]) {
+            const order = line.trim().split(" ").map(Number);
+
+            expect(order.toSorted(ascending), `seed ${seed}`).toStrictEqual(
+              tree.map(({ pid }) => pid).toSorted(ascending)
+            );
+
+            for (const pid of order) {
+              const parent = byPid.get(byPid.get(pid)?.ppid ?? 0);
+
+              expect(
+                parent === undefined ||
+                  order.indexOf(parent.pid) < order.indexOf(pid),
+                `seed ${seed}: ${pid} is listed before its parent`
+              ).toBe(true);
+            }
+          }
+        }
+      });
+    });
+  }
+);
 
 const shellsRequired = process.env["CI"] !== undefined;
 

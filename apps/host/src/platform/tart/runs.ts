@@ -1,4 +1,3 @@
-/** A `tart run` process on the Mac: its pid, and the arguments after `run`, among them its VM. */
 export interface TartRun {
   readonly pid: number;
   readonly arguments: readonly string[];
@@ -57,6 +56,5 @@ export const tartRuns = (
     return rest.length === 0 ? [] : [{ pid: Number(pid), arguments: rest }];
   });
 
-/** Whether `run` runs `vm`, a handle: whether `vm` is among its arguments. */
 export const names = (run: TartRun, vm: string): boolean =>
   run.arguments.includes(vm);

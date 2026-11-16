@@ -19,7 +19,7 @@ const Bounds = Schema.Struct({
   diskGib: Schema.optionalKey(Size),
 });
 
-export type Bounds = typeof Bounds.Type;
+type Bounds = typeof Bounds.Type;
 
 /**
  * What every machine of a runtime does where runtimes differ, declared once in the runtime's own
@@ -42,8 +42,7 @@ export type Bounds = typeof Bounds.Type;
  * - `sizes`: `free`, any sizes, or `classes`, named sizes a machine's vCPUs, RAM and disk must
  *   together equal one of.
  * - `limits`: what the runtime gives a machine of each size it caps: at `least` and at `most` that,
- *   at its create, its copy's make and its resize, and at most `live` that, where a running machine
- *   grows to it, by a resize or as a copy that grows does once it runs.
+ *   at its create, its copy's make and its resize, also where a running machine grows to it.
  */
 export const RuntimeTraits = Schema.Struct({
   runtime: RuntimeName,
@@ -62,7 +61,7 @@ export const RuntimeTraits = Schema.Struct({
       ),
     }),
   ]),
-  limits: Schema.Struct({ least: Bounds, most: Bounds, live: Bounds }),
+  limits: Schema.Struct({ least: Bounds, most: Bounds }),
 }).annotate({ identifier: "RuntimeTraits" });
 
 export type RuntimeTraits = typeof RuntimeTraits.Type;
@@ -79,7 +78,6 @@ interface Offering {
   readonly traits: RuntimeTraits;
 }
 
-/** Whether a host creates from `base`: a base it names, or an image reference its runtime takes. */
 export const offers = ({ bases, traits }: Offering, base: string): boolean =>
   bases.includes(base) ||
   (traits.images === "references" && isImageReference(base));
@@ -136,29 +134,6 @@ const bounded = ({ least, most }: RuntimeTraits["limits"], sizes: Sizes) =>
   );
 
 /**
- * The first size a running machine would grow past its runtime's `live` limit to, from `from` to
- * `to`, as a refusal names the limit and what was asked: none where it grows to none.
- */
-export const grownPast = (
-  { limits: { live } }: RuntimeTraits,
-  from: Sizes,
-  to: Sizes
-): { readonly limit: string; readonly asked: string } | undefined => {
-  const size = sizeNames.find((each) => {
-    const bound = live[each];
-
-    return bound !== undefined && to[each] > from[each] && to[each] > bound;
-  });
-
-  return size === undefined
-    ? undefined
-    : {
-        limit: amount(size, live[size] ?? 0),
-        asked: amount(size, to[size]),
-      };
-};
-
-/**
  * Whether a runtime gives a machine `sizes`: sizes within its limits, any or one of its classes
  * exactly.
  */
@@ -188,39 +163,7 @@ export const givenSizes = (traits: RuntimeTraits): string => {
   ].join(" ");
 };
 
-/**
- * What a runtime makes of a resize of a machine's vCPUs and RAM from `from` to `to` while it is in
- * `state`: it `resizes`, `refuses` the state, refuses what `shrinks` where they only grow, refuses
- * sizes it doesn't give, `unfitted`, or what a running machine would grow past its `live` limit to,
- * `unlive`. A paused machine takes none. A disk only grows, on every runtime.
- */
-export const resizable = (
-  traits: RuntimeTraits,
-  state: "running" | "stopped" | "paused",
-  from: Sizes,
-  to: Sizes
-): "resizes" | "refuses" | "shrinks" | "unfitted" | "unlive" => {
-  const takes = state === "paused" ? "none" : traits.resize[state];
-
-  if (takes === "none") {
-    return "refuses";
-  }
-
-  if (takes === "grow" && (to.cpu < from.cpu || to.ramMib < from.ramMib)) {
-    return "shrinks";
-  }
-
-  if (!fitted(traits, to)) {
-    return "unfitted";
-  }
-
-  return state === "running" && grownPast(traits, from, to) !== undefined
-    ? "unlive"
-    : "resizes";
-};
-
-const sizesAsked = ({ cpu, ramMib, diskGib }: Sizes): string =>
-  `${formatCpu(cpu)}, ${formatMib(ramMib)} of RAM and ${formatGib(diskGib)} of disk`;
+export const formatSizes = (sizes: Sizes): string => listed(sizes);
 
 const resizedStates = ({ resize }: RuntimeTraits): string => {
   const taking = (["stopped", "running"] as const).filter(
@@ -236,9 +179,10 @@ const resizedStates = ({ resize }: RuntimeTraits): string => {
 
 /**
  * Why a runtime refuses a resize of machine `name` from `from` to `to`, none where it takes it: a
- * disk that would shrink, sizes it doesn't give, and, where the machine's `state` is known, all
- * `resizable` refuses. The control plane asks it before it records the resize, and the host
- * before it runs the step.
+ * disk that would shrink, and sizes it doesn't give; where the machine's `state` is known, also a
+ * state it takes no resize in, which a paused machine is in on every runtime, and vCPUs or RAM
+ * that shrink where it only grows them.
+ * The control plane asks it before it records the resize, and the host before it runs the step.
  */
 export const resizeRefusal = (
   traits: RuntimeTraits,
@@ -256,53 +200,36 @@ export const resizeRefusal = (
   }
 
   const unfitted = new Unsizable({
-    message: `the ${runtime} runtime gives ${givenSizes(traits)}, and ${name} was asked ${sizesAsked(to)}`,
+    message: `the ${runtime} runtime gives ${givenSizes(traits)}, and ${name} was asked ${formatSizes(to)}`,
   });
 
   if (state === undefined) {
     return fitted(traits, to) ? undefined : unfitted;
   }
 
-  switch (resizable(traits, state, from, to)) {
-    case "resizes": {
-      return undefined;
-    }
+  const takes = state === "paused" ? "none" : traits.resize[state];
 
-    case "refuses": {
-      return new WrongState({
-        message: `machine ${name} is ${state}, and the ${runtime} runtime resizes ${resizedStates(traits)}`,
-        machine: name,
-        state,
-      });
-    }
-
-    case "shrinks": {
-      return new Unsizable({
-        message: `a ${state} machine's vCPUs and RAM only grow, and ${name} has ${formatCpu(from.cpu)} and ${formatMib(from.ramMib)}${state === "running" && traits.resize.stopped === "any" ? ": stop it to shrink them" : ""}`,
-      });
-    }
-
-    case "unfitted": {
-      return unfitted;
-    }
-
-    case "unlive": {
-      const past = grownPast(traits, from, to);
-
-      return past === undefined
-        ? undefined
-        : new Unsizable({
-            message: `a running machine grows to at most ${past.limit} on the ${runtime} runtime, and ${name} was asked ${past.asked}${traits.resize.stopped === "none" ? "" : ": stop it to give it more"}`,
-          });
-    }
+  if (takes === "none") {
+    return new WrongState({
+      message: `machine ${name} is ${state}, and the ${runtime} runtime resizes ${resizedStates(traits)}`,
+      machine: name,
+      state,
+    });
   }
+
+  if (takes === "grow" && (to.cpu < from.cpu || to.ramMib < from.ramMib)) {
+    return new Unsizable({
+      message: `a ${state} machine's vCPUs and RAM only grow, and ${name} has ${formatCpu(from.cpu)} and ${formatMib(from.ramMib)}${state === "running" && traits.resize.stopped === "any" ? ": stop it to shrink them" : ""}`,
+    });
+  }
+
+  return fitted(traits, to) ? undefined : unfitted;
 };
 
 /**
  * Whether a fork or restore of a source sized `from` can be sized `to` by a runtime of `traits`: it
- * gives `to`, a disk only grows, a runtime whose copies `grow` keeps the vCPUs and RAM it holds and
- * grows them live no further than its `live` limit, and one whose copies are the source's `same`
- * takes no other sizes.
+ * gives `to`, a disk only grows, a runtime whose copies `grow` keeps the vCPUs and RAM it holds, and
+ * one whose copies are the source's `same` takes no other sizes.
  */
 export const copySizable = (
   traits: RuntimeTraits,
@@ -322,8 +249,7 @@ export const copySizable = (
       return (
         to.cpu >= from.cpu &&
         to.ramMib >= from.ramMib &&
-        to.diskGib >= from.diskGib &&
-        grownPast(traits, from, to) === undefined
+        to.diskGib >= from.diskGib
       );
     }
 
@@ -344,11 +270,9 @@ export const pauseCapture = (
   return traits.pause === "stops" ? "after" : "never";
 };
 
-/** Whether a template build stops its builder before it captures its copy. */
 export const stopsBeforeCapture = (traits: RuntimeTraits): boolean =>
   traits.captureFrom === "stopped";
 
-/** Whether a host of `to`'s traits can take a copy of a checkpoint made on runtime `from`. */
 export const fetchable = (from: RuntimeName, to: RuntimeTraits): boolean =>
   from === to.runtime;
 

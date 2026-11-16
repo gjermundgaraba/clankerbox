@@ -28,6 +28,7 @@ import type {
 import {
   Cause,
   Context,
+  Deferred,
   Duration,
   Effect,
   Exit,
@@ -296,6 +297,37 @@ const namedBy = (step: Step): readonly Ref[] => {
   }
 };
 
+const leftBy = (
+  step: Step
+): { readonly name: string; readonly leaving: Leaving } | undefined => {
+  switch (step._tag) {
+    case "stop":
+    case "pause": {
+      return { name: step.machine.name, leaving: step._tag };
+    }
+
+    case "remove": {
+      return { name: step.machine.name, leaving: "delete" };
+    }
+
+    case "make":
+    case "start":
+    case "resize":
+    case "join":
+    case "capture":
+    case "deleteCheckpoint":
+    case "publish":
+    case "fetch": {
+      return undefined;
+    }
+  }
+};
+
+interface InFlight {
+  readonly left: Deferred.Deferred<Leaving>;
+  readonly done: Deferred.Deferred<void>;
+}
+
 type Settings = Pick<HostSettings, "id" | "bases">;
 
 export const make = (
@@ -353,6 +385,7 @@ export const make = (
     const entries = new Map<string, Entry>();
     const scopes = new Map<string, Accepted>();
     const booting = new Map<string, MachineRef>();
+    const inFlight = new Map<string, Set<InFlight>>();
 
     const found = (machine: Ref) =>
       machine.handle === undefined
@@ -658,7 +691,7 @@ export const make = (
                 `${leaving} ${machine.name}: running its ${leaving} hook, if its guest has one and has taken its identity, for at most ${hook.timeoutSeconds}s`
               );
 
-              const { exitCode, output } = yield* leave(
+              const { exitCode, output, mayStillRun } = yield* leave(
                 runtime,
                 machine,
                 leaving,
@@ -671,8 +704,13 @@ export const make = (
                     ? `, past its ${hook.timeoutSeconds}s limit or by a timeout of its own`
                     : "";
 
+                const left =
+                  mayStillRun === undefined
+                    ? ""
+                    : `, and may still run in the guest: ${mayStillRun}`;
+
                 yield* Effect.logWarning(
-                  `${leaving} ${machine.name} goes on: its ${leaving} hook exited ${exitCode}${past}; its last output:\n${lastLines(output)}`
+                  `${leaving} ${machine.name} goes on: its ${leaving} hook exited ${exitCode}${past}${left}; its last output:\n${lastLines(output)}`
                 );
               }
             })
@@ -738,13 +776,30 @@ export const make = (
       });
     };
 
+    const relayed = (
+      progress: Progress,
+      machine: Target,
+      port: number,
+      taken: ReadonlySet<number>
+    ) =>
+      Effect.flatMap(reaches.open(machine, port, taken), (at) =>
+        Effect.sync(() => {
+          if (Option.isSome(at) && at.value !== port) {
+            progress.outcome = {
+              ...progress.outcome,
+              endpoint: reaches.endpoint(at.value),
+            };
+          }
+        })
+      );
+
     const made = (
       progress: Progress,
       step: Make,
       port: number
     ): Effect.Effect<void, HostError> =>
       Effect.gen(function* () {
-        const { machine, source, machines, authorizedKeys, join } = step;
+        const { machine, source, machines, authorizedKeys, join, taken } = step;
 
         yield* source._tag === "base"
           ? runtime.sizable(machine, machine, machine, false)
@@ -768,7 +823,7 @@ export const make = (
 
         progress.outcome = { ...progress.outcome, handle, sizes };
 
-        yield* reaches.open(ref, port);
+        yield* relayed(progress, ref, port, new Set(taken));
 
         if (
           source._tag === "base" &&
@@ -838,8 +893,16 @@ export const make = (
 
             const { port } = step.machine;
 
+            const taken = new Set(
+              machines.flatMap((other) =>
+                other.port === undefined ? [] : [other.port]
+              )
+            );
+
             const started = Effect.andThen(
-              port === undefined ? Effect.void : reaches.open(machine, port),
+              port === undefined
+                ? Effect.void
+                : relayed(progress, machine, port, taken),
               runtime.start(machine, keep)
             );
 
@@ -1074,6 +1137,102 @@ export const make = (
             );
       });
 
+    const runningStep = ({ name }: MachineRef) => {
+      const held = scopes.get(keyOf({ resource: "machine", name }));
+      const entry = held === undefined ? undefined : entries.get(held.id);
+
+      return entry?.progress.status === "running" ? entry : undefined;
+    };
+
+    const stepEnded = (machine: MachineRef) =>
+      Effect.suspend(() => {
+        const step = runningStep(machine);
+
+        return step === undefined
+          ? Effect.void
+          : Effect.asVoid(Fiber.await(step.fiber));
+      });
+
+    const flown = (name: string) =>
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          const flight: InFlight = {
+            left: Deferred.makeUnsafe(),
+            done: Deferred.makeUnsafe(),
+          };
+
+          inFlight.set(name, (inFlight.get(name) ?? new Set()).add(flight));
+
+          return flight;
+        }),
+        (flight) =>
+          Effect.andThen(
+            Effect.sync(() => {
+              const flights = inFlight.get(name);
+
+              flights?.delete(flight);
+
+              if (flights?.size === 0) {
+                inFlight.delete(name);
+              }
+            }),
+            Deferred.succeed(flight.done, undefined)
+          )
+      );
+
+    const flying = (
+      machine: MachineRef
+    ): Effect.Effect<InFlight, never, Scope.Scope> =>
+      Effect.flatMap(
+        accepting.withPermits(1)(
+          Effect.suspend(() =>
+            runningStep(machine) === undefined
+              ? Effect.asSome(flown(machine.name))
+              : Effect.succeedNone
+          )
+        ),
+        Option.match({
+          onSome: Effect.succeed,
+          onNone: () => Effect.andThen(stepEnded(machine), flying(machine)),
+        })
+      );
+
+    const execsEnded = ({
+      name,
+      leaving,
+    }: {
+      readonly name: string;
+      readonly leaving: Leaving;
+    }) =>
+      Effect.suspend(() => {
+        const flights = [...(inFlight.get(name) ?? [])];
+
+        return flights.length === 0
+          ? Effect.void
+          : Effect.andThen(
+              Effect.logInfo(
+                `${leaving} ${name}: first ending ${flights.length === 1 ? "the exec" : `the ${flights.length} execs`} in flight in it`
+              ),
+              Effect.forEach(
+                flights,
+                ({ left, done }) =>
+                  Effect.andThen(
+                    Deferred.succeed(left, leaving),
+                    Deferred.await(done)
+                  ),
+                { concurrency: "unbounded", discard: true }
+              )
+            );
+      });
+
+    const performed = (progress: Progress, step: Exclude<Step, Make>) => {
+      const left = leftBy(step);
+
+      return left === undefined
+        ? perform(progress, step)
+        : Effect.andThen(execsEnded(left), perform(progress, step));
+    };
+
     const accept = (operation: Operation, before: string | undefined) =>
       Effect.gen(function* () {
         const { id, step, scope, sequence } = operation;
@@ -1090,7 +1249,7 @@ export const make = (
             const { work, release } =
               step._tag === "make"
                 ? yield* claimed(progress, step)
-                : { work: perform(progress, step), release: Effect.void };
+                : { work: performed(progress, step), release: Effect.void };
 
             const fiber = yield* Effect.forkIn(
               apartFromItsRequest(
@@ -1184,39 +1343,35 @@ export const make = (
         }
       });
 
-    const stepEnded = ({ name }: MachineRef) =>
-      Effect.suspend(() => {
-        const held = scopes.get(keyOf({ resource: "machine", name }));
-        const entry = held === undefined ? undefined : entries.get(held.id);
-
-        return entry === undefined || entry.progress.status !== "running"
-          ? Effect.void
-          : Effect.asVoid(Fiber.await(entry.fiber));
-      });
-
     const exec: Interface["exec"] = (command) =>
       surviving(
         `exec in ${command.machine.name}`,
-        Effect.gen(function* () {
-          yield* stepEnded(command.machine);
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { left } = yield* flying(command.machine);
 
-          const machine = yield* machineTarget(command.machine);
-          const seen = yield* stateNow(machine, "given the command");
+            const machine = yield* machineTarget(command.machine);
+            const seen = yield* stateNow(machine, "given the command");
 
-          if (seen === "missing") {
-            return yield* missing(traits.runtime, machine);
-          }
+            if (seen === "missing") {
+              return yield* missing(traits.runtime, machine);
+            }
 
-          if (seen !== "running") {
-            return yield* new WrongState({
-              message: `machine ${machine.name} is ${seen}, and a command runs only in a running machine: start it first`,
-              machine: machine.name,
-              state: seen,
-            });
-          }
+            if (seen !== "running") {
+              return yield* new WrongState({
+                message: `machine ${machine.name} is ${seen}, and a command runs only in a running machine: start it first`,
+                machine: machine.name,
+                state: seen,
+              });
+            }
 
-          return yield* runCommand(runtime, { ...command, machine });
-        })
+            return yield* runCommand(
+              runtime,
+              { ...command, machine },
+              Deferred.await(left)
+            );
+          })
+        )
       );
 
     const observed = (targets: readonly Target[]) =>

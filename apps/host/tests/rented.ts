@@ -4,28 +4,15 @@ import path from "node:path";
 
 import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
-import * as NodeServices from "@effect/platform-node/NodeServices";
-import {
-  Context,
-  Effect,
-  Exit,
-  FileSystem,
-  Layer,
-  Logger,
-  Scope,
-} from "effect";
-import { HttpServer } from "effect/http";
+import { Effect, Exit, FileSystem, Scope } from "effect";
 
-import { hostLayer } from "../src/composition/host.ts";
 import type { PortRange } from "../src/machine-ports.ts";
-import * as Boat from "../src/platform/boat/boat.ts";
-import * as SmolCloud from "../src/platform/smol-cloud/smol-cloud.ts";
-import { fakeBoat, traits as boatTraits } from "./fake-boat.ts";
 import type { FakeBoat } from "./fake-boat.ts";
-import { fakeSmolCloud, traits as smolCloudTraits } from "./fake-smol-cloud.ts";
 import type { FakeSmolCloud } from "./fake-smol-cloud.ts";
 import { rentedRange, suitePorts } from "./port-slot.ts";
-import { hostConfig, image, loopbackServer } from "./support.ts";
+import { boat, smolCloud } from "./providers.ts";
+import type { Provider } from "./serving.ts";
+import { startHostOver } from "./support.ts";
 
 export type RentedApi =
   | { readonly runtime: "smol-cloud"; readonly fake: FakeSmolCloud }
@@ -40,8 +27,6 @@ export interface RentedHost {
   readonly traits: RuntimeTraits;
   readonly dispose: Effect.Effect<void>;
 }
-
-const smolCloudKey = "fake-smol-cloud-key";
 
 const guarded = (port: number): Effect.Effect<Server | undefined> =>
   Effect.callback((resume) => {
@@ -82,6 +67,48 @@ const machinePorts: Effect.Effect<PortRange, never, Scope.Scope> = Effect.gen(
   }
 );
 
+const startOn = <F>(provider: Provider<F>, dir: string, id: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const scope = yield* Scope.make();
+
+    yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+
+    const ports = yield* Scope.provide(machinePorts, scope);
+
+    const api = yield* Scope.provide(
+      provider.fake(path.join(dir, "api"), undefined),
+      scope
+    );
+
+    const keyFile = path.join(dir, "key");
+
+    yield* fs.writeFileString(keyFile, `${api.key}\n`, { mode: 0o600 });
+
+    const host = yield* Scope.provide(
+      startHostOver(
+        dir,
+        (settings) =>
+          provider.layer({ url: api.url, key: api.key, keyFile }, settings),
+        {
+          id,
+          ports,
+          bases: new Map([["ubuntu", provider.image]]),
+          http: NodeHttpClient.layerNodeHttp,
+        }
+      ),
+      scope
+    );
+
+    return {
+      id: host.id,
+      url: host.url,
+      fake: api.fake,
+      traits: provider.traits,
+      dispose: Scope.close(scope, Exit.void),
+    };
+  });
+
 /**
  * A host over the real adapter of a rented runtime, driving that provider's fake API in this
  * process, with `ubuntu` as the provider's image. It ends with the scope, or at `dispose`. Its
@@ -97,73 +124,18 @@ export const startRentedHost = (
     readonly guestPath?: string | undefined;
   }
 ) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const apiDir = path.join(dir, "api");
-    const scope = yield* Scope.make();
-
-    yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
-
-    const config = hostConfig(
-      path.join(dir, "state"),
-      yield* Scope.provide(machinePorts, scope),
-      options.id
-    );
-
-    const rented =
-      options.runtime === "smol-cloud"
-        ? yield* Effect.gen(function* () {
-            const fake = yield* fakeSmolCloud({
-              dir: apiDir,
-              key: smolCloudKey,
-              guestPath: options.guestPath,
-            });
-
-            const apiKeyFile = path.join(dir, "key");
-
-            yield* fs.writeFileString(apiKeyFile, `${smolCloudKey}\n`, {
-              mode: 0o600,
-            });
-
-            return {
-              api: { runtime: "smol-cloud", fake } as const,
-              traits: smolCloudTraits,
-              bases: new Map([["ubuntu", image]]),
-              layer: SmolCloud.layer({ apiKeyFile, api: fake.url }, config),
-            };
-          })
-        : yield* Effect.map(
-            fakeBoat({ dir: apiDir, id: options.id }),
-            (fake) => ({
-              api: { runtime: "boat", fake } as const,
-              traits: boatTraits,
-              bases: new Map([["ubuntu", Boat.image]]),
-              layer: fake.layer,
-            })
-          );
-
-    const context = yield* Layer.buildWithScope(
-      hostLayer(
-        { ...config, bases: rented.bases },
-        rented.layer,
-        loopbackServer()
-      ).pipe(
-        Layer.provideMerge(Logger.layer([])),
-        Layer.provide(NodeHttpClient.layerNodeHttp),
-        Layer.provide(NodeServices.layer)
-      ),
-      scope
-    );
-
-    const host: RentedHost = {
-      id: options.id,
-      url: HttpServer.formatAddress(
-        Context.get(context, HttpServer.HttpServer).address
-      ),
-      api: rented.api,
-      traits: rented.traits,
-      dispose: Scope.close(scope, Exit.void),
-    };
-
-    return host;
-  });
+  options.runtime === "smol-cloud"
+    ? Effect.map(
+        startOn(smolCloud(options.guestPath), dir, options.id),
+        ({ fake, ...host }): RentedHost => ({
+          ...host,
+          api: { runtime: "smol-cloud", fake },
+        })
+      )
+    : Effect.map(
+        startOn(boat(), dir, options.id),
+        ({ fake, ...host }): RentedHost => ({
+          ...host,
+          api: { runtime: "boat", fake },
+        })
+      );

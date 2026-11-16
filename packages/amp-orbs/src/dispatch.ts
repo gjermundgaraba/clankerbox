@@ -114,8 +114,13 @@ const spawn = Effect.fn("spawn")(function* (
   });
 
   if (ran.exitCode !== 0) {
+    const left =
+      ran.mayStillRun === undefined
+        ? ""
+        : `, and may still run there: ${ran.mayStillRun}`;
+
     return yield* new BootstrapFailed({
-      message: `starting amp orb bootstrap in ${name} exited ${ran.exitCode}: ${ran.output.trim()}`,
+      message: `starting amp orb bootstrap in ${name} exited ${ran.exitCode}${left}: ${ran.output.trim()}`,
     });
   }
 

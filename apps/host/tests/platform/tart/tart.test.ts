@@ -9,6 +9,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 import type { Step } from "@clankerbox/host-contract";
+import { fitted } from "@clankerbox/host-contract/traits";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
@@ -45,7 +46,6 @@ import {
   checkpointName,
   dateStamp,
   diskGb,
-  diskGibOf,
   environment,
   jobsDir,
   machineName,
@@ -56,6 +56,7 @@ import {
 } from "../../../src/platform/tart/tart.ts";
 import * as Tart from "../../../src/platform/tart/tart.ts";
 import type { Settings } from "../../../src/platform/tart/tart.ts";
+import { diskGibOf } from "../../../src/platform/tart/traits.ts";
 import * as Reach from "../../../src/reach.ts";
 import { Runtime } from "../../../src/runtime.ts";
 import type {
@@ -571,7 +572,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "Apple's refusal of a third VM, read from the job's log, is Capacity",
+    "Apple's refusal of a third VM, read from the job's log, is Capacity, and leaves its clone, which no VM count holds, to the control plane's undo",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -595,35 +596,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(error.message).toBe(
           "Apple's limit of 2 running macOS VMs per Mac refused third: The number of VMs exceeds the system limit (other running VMs: a1, a2)"
         );
-        expect(mac.vms.has(vm)).toBe(false);
-      })
-  );
-
-  it.effect(
-    "Apple's refusal stays Capacity when tart can't delete the clone, which the control plane's undo removes",
-    () =>
-      Effect.gen(function* () {
-        const { mac, runtime } = yield* runtimeOn();
-        const machine = machineOn("third");
-        const vm = vmOf(machine);
-        const log = path.join(jobsDir(mac.settings.stateDir), `${vm}.log`);
-
-        mac.hooks.kickstart = (label) => {
-          mac.exited.set(label, 1);
-          writeFileSync(
-            log,
-            "The number of VMs exceeds the system limit (other running VMs: a1, a2)\n"
-          );
-        };
-
-        mac.hooks.delete = () => ({ exitCode: 3, stderr: "tart is busy\n" });
-
-        const error = yield* Effect.flip(
-          runtime.make(machine, fromImage("base"), sshPort)
-        );
-
-        expect(error._tag).toBe("Capacity");
-        expect(mac.vms.has(vm)).toBe(true);
+        expect(mac.vms.get(vm)).toBe("stopped");
+        expect(
+          (yield* runtime.capacity([{ _tag: "found", machine }])).find(
+            ({ resource }) => resource === "runningVms"
+          )
+        ).toMatchObject({ used: 0 });
       })
   );
 
@@ -1075,11 +1053,22 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { runtime } = yield* runtimeOn();
-        const { most } = runtime.traits.limits;
+        const sized = { cpu: 4, ramMib: 8192, diskGib: 60 };
 
-        expect(most).toStrictEqual({ cpu: 65_535, diskGib: 61_034 });
-        expect(diskGb(most.diskGib ?? 0)).toBeLessThanOrEqual(65_535);
-        expect(diskGb((most.diskGib ?? 0) + 1)).toBeGreaterThan(65_535);
+        const fits = (sizes: Partial<typeof sized>) =>
+          fitted(runtime.traits, { ...sized, ...sizes });
+
+        const pastDisk =
+          Array.from({ length: 70_000 }, (_, gib) => gib).find(
+            (gib) => diskGb(gib) > 65_535
+          ) ?? 0;
+
+        expect([
+          fits({ cpu: 65_535 }),
+          fits({ cpu: 65_536 }),
+          fits({ diskGib: pastDisk - 1 }),
+          fits({ diskGib: pastDisk }),
+        ]).toStrictEqual([true, false, true, false]);
       })
   );
 
@@ -2236,7 +2225,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a hand run that starts while a capture or fork clones its source fails the copy WrongState, also when tart can't delete the copy, which the host discards or the fork's undo removes",
+    "a hand run that starts while a capture or fork clones its source fails the copy WrongState, leaving the copy to the host's discard or the fork's undo",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -2256,15 +2245,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
               return undefined;
             };
 
-            mac.hooks.delete = () => ({
-              exitCode: 3,
-              stderr: "tart is busy\n",
-            });
-
             const refused = failure(yield* Effect.flip(copying));
 
             mac.hooks.clone = () => undefined;
-            mac.hooks.delete = () => undefined;
             yield* runtime.stop(machine);
 
             return refused;

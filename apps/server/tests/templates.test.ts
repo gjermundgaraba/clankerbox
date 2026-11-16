@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { Handle } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { image } from "@gjermundgaraba/clankerbox-host/testing";
@@ -8,6 +9,7 @@ import type {
   FakeRuntimeName,
 } from "@gjermundgaraba/clankerbox-host/testing";
 import {
+  Capacity,
   Conflict,
   Internal,
   isBuildCopy,
@@ -22,6 +24,7 @@ import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import { Duration, Effect, Fiber, Logger, Option, References } from "effect";
 import { expect } from "vite-plus/test";
 
+import { Unanswered } from "../src/hosts.ts";
 import {
   callsTo,
   clientOf,
@@ -31,9 +34,10 @@ import {
   plane,
   restartedHost,
   running,
+  templatesOver,
   withClient,
 } from "./support.ts";
-import type { Started } from "./support.ts";
+import type { Plane, Started } from "./support.ts";
 
 const setup = {
   script: `#!/bin/sh\n`,
@@ -53,6 +57,23 @@ const web = (fields?: Partial<BuildRequest>): BuildRequest => ({
 const exits3 = { script: "#!/bin/sh\nexit 3\n" };
 
 const on = (as: FakeRuntimeName) => ({ hosts: [{ id: as, as }] });
+
+const movedHosts = [
+  { id: "full" },
+  { id: "roomy", options: { bases: new Map([["ubuntu", "image/roomy"]]) } },
+];
+
+const roomyAfterFull = (planned: Pick<Plane, "hosts">) => {
+  const [full, roomy] = planned.hosts;
+
+  if (full === undefined || roomy === undefined) {
+    throw new Error("a plane without two hosts");
+  }
+
+  full.fake.failNext("admit", new Capacity({ message: "no room" }));
+
+  return roomy;
+};
 
 const noMachines = (served: Pick<Started, "store">) =>
   eventually(machineNames(served), (names) => names.length === 0);
@@ -566,6 +587,189 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       expect(built.host).toBe("two");
     })
+  );
+
+  it.effect(
+    "a build whose first host has no room builds on the next, and is recorded as built there",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* running({
+          hosts: [
+            { id: "full" },
+            {
+              id: "roomy",
+              options: { bases: new Map([["ubuntu", "image/roomy"]]) },
+            },
+          ],
+        });
+
+        const client = yield* clientOf(served.url);
+        firstHost(served).fake.failNext(
+          "admit",
+          new Capacity({ message: "no room" })
+        );
+
+        const built = yield* client.buildTemplate(web());
+        const clone = yield* client.create("dev", { template: "web" });
+
+        expect(built).toMatchObject({
+          phase: "ready",
+          host: "roomy",
+          image: "image/roomy",
+        });
+        expect(
+          built.copies.filter(({ phase }) => phase === "ready")
+        ).toStrictEqual([{ host: "roomy", phase: "ready" }]);
+        expect(
+          served.hosts.map((host) => callsTo(host, "capture").length)
+        ).toStrictEqual([0, 1]);
+        expect(clone).toMatchObject({ phase: "settled", template: "web@1" });
+      })
+  );
+
+  it.effect(
+    "a build whose builder moved names the host it runs on while it builds, and when its setup fails there",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* running({ hosts: movedHosts });
+        const client = yield* clientOf(served.url);
+        const held = roomyAfterFull(served).fake.holdNext("exec");
+
+        const building = yield* Effect.forkChild(
+          Effect.flip(client.buildTemplate(web({ setup: exits3 })))
+        );
+
+        yield* held.entered;
+
+        const during = yield* client.getTemplate({ id: "web" });
+
+        yield* held.release;
+
+        const error = yield* Fiber.join(building);
+        const after = yield* client.getTemplate({ id: "web" });
+
+        expect(during.builds).toMatchObject([
+          { phase: "building", host: "roomy", image: "image/roomy" },
+        ]);
+        expect(error._tag).toBe("ScriptFailed");
+        expect(after.builds).toMatchObject([
+          { phase: "failed", host: "roomy", image: "image/roomy" },
+        ]);
+      })
+  );
+
+  it.effect(
+    "a restart that ends a build whose builder moved names the host the builder ran on",
+    () =>
+      Effect.gen(function* () {
+        const planned = yield* plane({ hosts: movedHosts });
+        const first = yield* planned.start();
+        const held = roomyAfterFull(planned).fake.holdNext("exec");
+
+        yield* first.templates.build(web());
+        yield* held.entered;
+        yield* first.crash;
+
+        const second = yield* planned.start();
+
+        yield* Effect.addFinalizer(() => second.crash);
+
+        const read = yield* second.templates.get("web");
+
+        expect(read.builds).toMatchObject([
+          { phase: "failed", host: "roomy", image: "image/roomy" },
+        ]);
+      })
+  );
+
+  it.effect(
+    "a build whose setup succeeded ends ready though a read of its builder's host would fail",
+    () =>
+      Effect.gen(function* () {
+        const planned = yield* plane();
+
+        const served = yield* templatesOver(planned, (real) => ({
+          ...real,
+          read: (host) =>
+            Effect.fail(
+              new Unanswered({ host, message: `host ${host} didn't answer` })
+            ),
+        }));
+
+        yield* Effect.addFinalizer(() => served.crash);
+        yield* served.templates.build(web());
+
+        const read = yield* eventually(
+          served.templates.get("web"),
+          ({ state }) => state !== "building"
+        );
+
+        expect(read).toMatchObject({ state: "ready", current: "web@1" });
+      })
+  );
+
+  it.effect(
+    "a template whose current build has no copy left to clone reads failed, with that build current",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* withClient();
+        const { client, host } = served;
+
+        yield* client.buildTemplate(web());
+
+        const [copy] = yield* served.store.checkpoints;
+
+        yield* host.fake.lose(copy?.handle ?? Handle.make("none"));
+        yield* Effect.flip(client.create("dev", { template: "web" }));
+
+        const read = yield* eventually(
+          client.getTemplate({ id: "web" }),
+          ({ builds }) => builds[0]?.copies[0]?.phase === "failed"
+        );
+
+        expect(read).toMatchObject({ current: "web@1", state: "failed" });
+      })
+  );
+
+  it.effect(
+    "a template whose current build's only copy is on a host that doesn't answer reads ready",
+    () =>
+      Effect.gen(function* () {
+        const { client, host } = yield* withClient();
+
+        yield* client.buildTemplate(web());
+        yield* host.dispose;
+
+        expect(yield* client.getTemplate({ id: "web" })).toMatchObject({
+          current: "web@1",
+          state: "ready",
+        });
+      })
+  );
+
+  it.effect(
+    "a build fails Capacity only once no host has room for its builder",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* running({
+          hosts: [{ id: "one" }, { id: "two" }],
+        });
+
+        const client = yield* clientOf(served.url);
+
+        for (const { fake } of served.hosts) {
+          fake.failNext("admit", new Capacity({ message: "no room" }));
+        }
+
+        const error = yield* Effect.flip(client.buildTemplate(web()));
+
+        expect(error._tag).toBe("Capacity");
+        expect(
+          served.hosts.map(({ fake }) =>
+            fake.calls.filter((call) => call.startsWith("admit "))
+          )
+        ).toStrictEqual([[expect.any(String)], [expect.any(String)]]);
+      })
   );
 
   it.effect(

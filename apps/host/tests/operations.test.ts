@@ -2,7 +2,7 @@ import path from "node:path";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 
-import type { Step } from "@clankerbox/host-contract";
+import type { Report, Step } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import {
@@ -1131,6 +1131,65 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(() => process.kill(pid, 0)).toThrow("ESRCH");
     })
   );
+
+  const leavingSteps = {
+    stopping: { _tag: "stop", machine: ref("dev"), machines: [] },
+    pausing: { _tag: "pause", machine: ref("dev"), pin: "fake 1" },
+    deleting: { _tag: "remove", machine: ref("dev"), keep: [] },
+  } as const satisfies Record<string, Step>;
+
+  for (const [phase, leaving] of Object.entries(leavingSteps)) {
+    const verb = leaving._tag === "remove" ? "delete" : leaving._tag;
+
+    it.effect(
+      `a ${verb} with an exec in flight first ends its command, as a cut does, and the exec answers WrongState in the phase ${phase}, saying the ${verb} ended it`,
+      () =>
+        Effect.gen(function* () {
+          const host = yield* runner();
+          const dev = ref("dev", reached(firstPort));
+
+          yield* finished(host, makes("dev"));
+
+          const pidFile = path.join(host.fake.root("dev") ?? "", "exec.pid");
+
+          const running = yield* Effect.forkChild(
+            Effect.flip(
+              host.operations.exec({
+                machine: dev,
+                argv: [
+                  "/bin/sh",
+                  "-c",
+                  'echo "$$" >"$0.partial" && mv "$0.partial" "$0" && exec sleep 8',
+                  pidFile,
+                ],
+              })
+            )
+          );
+
+          const pid = Number(yield* Effect.eventually(read(pidFile)));
+
+          host.fake.calls.length = 0;
+
+          const report = yield* finished(host, { ...leaving, machine: dev }, 2);
+          const error = yield* Fiber.join(running);
+
+          expect(report.status).toBe("done");
+          expect(error).toStrictEqual(
+            new WrongState({
+              message: `machine dev's ${verb} ended this exec's command first`,
+              machine: "dev",
+              state: phase,
+            })
+          );
+          expect(host.fake.calls.slice(0, 2)).toStrictEqual([
+            "exec dev",
+            `${verb} dev`,
+          ]);
+          expect(() => process.kill(pid, 0)).toThrow("ESRCH");
+        }),
+      30_000
+    );
+  }
 
   it.effect("a make from a base boots the image its host maps it to", () =>
     Effect.gen(function* () {
@@ -2476,6 +2535,42 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     }
   );
 
+  it.effect(
+    "a hook past its time limit whose end isn't confirmed logs that it may still run in the guest, and why, and the delete goes on",
+    () => {
+      const logged: string[] = [];
+
+      return Effect.gen(function* () {
+        const host = yield* runner();
+
+        yield* finished(host, makes("dev"));
+        yield* identified(host);
+        yield* guestHook(
+          host,
+          "delete",
+          `echo delete >>"${leftIn(host)}"\nexec sleep 30`
+        );
+
+        const operation = delivery(hooked(removing, 1), 2);
+
+        yield* deliver(host, operation);
+        yield* Effect.eventually(read(leftIn(host)));
+        host.fake.failNext(
+          "exec",
+          new Internal({ message: "the guest went away" })
+        );
+
+        const report = yield* ended(host, operation.id);
+
+        expect(report.status).toBe("done");
+        expect(stateOf(host)).toBe("missing");
+        expect(logged.join("\n")).toContain(
+          "delete dev goes on: its delete hook exited 124, past its 1s limit or by a timeout of its own, and may still run in the guest: the guest went away"
+        );
+      }).pipe(Effect.provide(Logger.layer([capturing(logged)])));
+    }
+  );
+
   for (const { guest, hooks, instance } of [
     {
       guest: "has no hook for its step",
@@ -3024,8 +3119,13 @@ layer(NodeServices.layer)((it) => {
   );
 });
 
-const refusedListen = (port: number) =>
-  new RegExp(`^the relay couldn't listen on 127\\.0\\.0\\.1:${port}: `, "u");
+const restarted = (name: string, made: Report, port: number) =>
+  ref(name, {
+    ...reached(port),
+    ...(made.outcome.handle === undefined
+      ? {}
+      : { handle: made.outcome.handle }),
+  });
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
@@ -3123,53 +3223,61 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a start on a host restarted since the make listens on its row's port before the runtime starts it, and one whose port is held fails before the runtime is called",
+    "a start on a host restarted since the make listens on its row's port before the runtime starts it, and moves a machine whose port another program holds to a free one no other machine of the host holds, answering that endpoint",
     () =>
       Effect.gen(function* () {
         const before = yield* runner({ relayed: true });
-        const made = yield* finished(before, makes("dev"));
+        const dev = yield* finished(before, makes("dev"));
+
+        const app = yield* finished(
+          before,
+          makes("app", { taken: [relayPorts] })
+        );
+
         const host = yield* runner({ relayed: true, fake: before.fake });
 
-        const blocked = ref("dev", {
-          ...reached(relayPorts + 5),
-          ...(made.outcome.handle === undefined
-            ? {}
-            : { handle: made.outcome.handle }),
+        const opening = delivery({
+          _tag: "start",
+          keep: [],
+          machine: restarted("dev", dev, relayPorts + 5),
+          machines: [],
         });
 
-        const refused = yield* Effect.scoped(
-          Effect.andThen(
-            holding(portIn(blocked)),
-            finished(
-              host,
-              { _tag: "start", keep: [], machine: blocked, machines: [] },
-              2
-            )
-          )
-        );
-
-        expect(errorOf(refused)).toStrictEqual(["failed", "Internal"]);
-        expect(refused.error?.message).toMatch(refusedListen(portIn(blocked)));
-        expect(host.fake.calls).not.toContain("start dev");
-
         const { release, entered } = host.fake.holdNext("start");
-
-        const opening = delivery(
-          { _tag: "start", keep: [], machine: blocked, machines: [] },
-          3
-        );
 
         yield* deliver(host, opening);
         yield* entered;
 
-        const listening = yield* accepts(portIn(blocked));
+        const listening = yield* accepts(relayPorts + 5);
 
         yield* release;
+
+        const other = ref("other", reached(relayPorts + 2));
+        const blocked = restarted("app", app, relayPorts + 6);
+
+        const moved = yield* Effect.scoped(
+          Effect.andThen(
+            holding(portIn(blocked)),
+            finished(host, {
+              _tag: "start",
+              keep: [],
+              machine: blocked,
+              machines: [other],
+            })
+          )
+        );
 
         expect([
           listening,
           (yield* ended(host, opening.id)).status,
         ]).toStrictEqual([true, "done"]);
+        expect([moved.status, moved.outcome.endpoint]).toStrictEqual([
+          "done",
+          { host: "127.0.0.1", port: relayPorts + 3 },
+        ]);
+        expect(yield* roundTrip(relayPorts + 3, "moved")).toBe("moved");
+        expect(yield* accepts(portIn(other))).toBe(false);
+        expect(host.fake.calls).toContain("start app");
       })
   );
 

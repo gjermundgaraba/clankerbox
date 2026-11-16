@@ -1,3 +1,4 @@
+import { existsSync, rmSync } from "node:fs";
 import path from "node:path";
 
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
@@ -14,7 +15,7 @@ import {
   hostKeySetup,
   running,
 } from "@gjermundgaraba/clankerbox-server/testing";
-import { Effect, Schema, Stdio, Stream } from "effect";
+import { Effect, Fiber, Schedule, Schema, Sink, Stdio, Stream } from "effect";
 import { expect, vi } from "vite-plus/test";
 
 import { ErrorDocument } from "../src/command.ts";
@@ -315,8 +316,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           (yield* decodeJson(HostsJson, json.stdout)).hosts.map(({ id }) => id)
         ).toStrictEqual(["alpha", "beta"]);
 
-        expect(json.stdout).not.toContain('"traits"');
-
         expect(capacity.code).toBe(0);
         expect(capacity.stdout).toMatch(/^alpha\s+ram\s+1G\s+-$/mu);
         expect(JSON.parse(parted.stdout)).toMatchObject({
@@ -366,7 +365,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         });
         expect(JSON.parse(json.stdout)).toMatchObject({ runtime: "smolvm" });
         expect(JSON.parse(json.stdout)).not.toHaveProperty("kind");
-        expect(JSON.parse(json.stdout)).not.toHaveProperty("traits");
         expect(table.stdout).toMatch(/^RUNTIME\s+smolvm$/mu);
         expect(
           (yield* decodeJson(CapacityJson, capacity.stdout)).usage.filter(
@@ -887,6 +885,86 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           tag: "WrongState",
           state: "stopped",
         });
+      })
+  );
+
+  it.effect(
+    "exec past its --timeout whose end its host couldn't confirm exits 124 with the output, says on stderr why the command may still run, and --json shows it",
+    () =>
+      Effect.gen(function* () {
+        const { dir, hosts, run } = yield* setUp();
+
+        yield* run(["create", "dev", ...sizes]);
+
+        const fake = hosts[0]?.fake;
+        const began = path.join(fake?.root("dev") ?? "", "began");
+
+        const unended = (flags: readonly string[]) =>
+          Effect.gen(function* () {
+            const printed: string[] = [];
+
+            const stdio = Stdio.layerTest({
+              stdout: () =>
+                Sink.forEachArray((chunks) =>
+                  Effect.sync(() => {
+                    printed.push(
+                      ...chunks.map((chunk) => Buffer.from(chunk).toString())
+                    );
+                  })
+                ),
+            });
+
+            rmSync(began, { force: true });
+
+            const ran = yield* Effect.forkChild(
+              cli(
+                [
+                  "exec",
+                  "dev",
+                  ...flags,
+                  "--timeout",
+                  "1s",
+                  "--config",
+                  path.join(dir, "config.json"),
+                  "--",
+                  "sh",
+                  "-c",
+                  'echo owed; : >"$CLANKERBOX_ROOT/began"; sleep 30',
+                ],
+                { http, stdio }
+              )
+            );
+
+            yield* Effect.sync(() => existsSync(began)).pipe(
+              Effect.repeat({
+                until: (found) => found,
+                schedule: Schedule.spaced("20 millis"),
+              })
+            );
+            fake?.failNext(
+              "exec",
+              new Internal({ message: "the guest went away" })
+            );
+
+            return { ...(yield* Fiber.join(ran)), printed: printed.join("") };
+          });
+
+        const plain = yield* unended([]);
+        const json = yield* unended(["--json"]);
+
+        expect([plain.code, plain.printed]).toStrictEqual([124, "owed\n"]);
+        expect(plain.stderr).toBe(
+          "clankerbox: the command ran past its timeout and may still run in dev: the guest went away"
+        );
+        expect([json.code, JSON.parse(json.stdout)]).toStrictEqual([
+          124,
+          {
+            exitCode: 124,
+            output: "owed\n",
+            truncated: false,
+            mayStillRun: "the guest went away",
+          },
+        ]);
       })
   );
 

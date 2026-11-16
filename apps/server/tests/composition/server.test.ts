@@ -2,6 +2,11 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
+import {
+  connection,
+  emptyAnswer,
+} from "@gjermundgaraba/clankerbox-host/testing";
+import { version, versionHeader } from "@gjermundgaraba/clankerbox-sdk";
 import { read, scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { Duration, Effect, Fiber, Logger, Schedule } from "effect";
 import { expect } from "vite-plus/test";
@@ -104,9 +109,113 @@ layer(NodeServices.layer, { excludeTestServices: true })(
   }
 );
 
+const requestHead = (action: string, length: number) =>
+  `POST /api/${action} HTTP/1.1\r\nhost: plane\r\ncontent-type: application/json\r\n${versionHeader}: ${version}\r\ncontent-length: ${length}\r\n\r\n`;
+
 layer(NodeServices.layer, { excludeTestServices: true })(
   "the control plane's stop",
   (it) => {
+    it.effect(
+      "a control plane's stop waits on no connection whose request never completes, one that sent part of its headers, one pipelined part way behind a held read, or one whose body never comes, and ends at once",
+      () =>
+        Effect.gen(function* () {
+          const served = yield* running();
+          const client = yield* clientOf(served.url);
+          const stopping = firstHost(served).fake.holdNext("stop");
+
+          yield* client.create("dev", request("dev"));
+          yield* Effect.forkChild(
+            Effect.exit(client.stopMachine({ id: "dev" }))
+          );
+          yield* stopping.entered;
+
+          const held = yield* connection(served.url);
+          const unsent = yield* connection(served.url);
+          const partial = yield* connection(served.url);
+          const heldInput = JSON.stringify({ id: "dev", holdSeconds: 5 });
+          const partway = "POST /api/getMachine HTTP/1.1\r\nhost: plane\r\n";
+
+          held.socket.write(
+            requestHead("getMachine", Buffer.byteLength(heldInput)) +
+              heldInput +
+              partway
+          );
+          unsent.socket.write(
+            `${requestHead("createMachine", 100_000)}{"id":"late","spec":`
+          );
+          partial.socket.write(partway);
+
+          yield* Effect.sleep(Duration.millis(300));
+
+          const ended = yield* Effect.forkChild(served.crash).pipe(
+            Effect.flatMap((crash) =>
+              Fiber.join(crash).pipe(Effect.timeoutOption(Duration.seconds(2)))
+            )
+          );
+
+          const closed = yield* Effect.forEach(
+            [held, unsent, partial],
+            ({ closedWithin }) => closedWithin(Duration.millis(100))
+          );
+
+          for (const { socket } of [held, unsent, partial]) {
+            socket.destroy();
+          }
+
+          yield* stopping.release;
+
+          expect({ stopEnded: ended._tag, closed }).toStrictEqual({
+            stopEnded: "Some",
+            closed: [true, true, true],
+          });
+        }),
+      60_000
+    );
+
+    it.effect(
+      "the client of an exec a control plane's stop cuts that reads slowly reads the control plane's whole 503 once the stop has ended",
+      () =>
+        Effect.gen(function* () {
+          const dir = yield* scratch;
+          const began = path.join(dir, "began");
+          const served = yield* running();
+          const client = yield* clientOf(served.url);
+
+          yield* client.create("dev", request("dev"));
+
+          const exec = yield* connection(served.url);
+
+          const execInput = JSON.stringify({
+            id: "dev",
+            argv: ["/bin/sh", "-c", `: >"${began}"; sleep 30`],
+          });
+
+          exec.socket.write(
+            requestHead("execMachine", Buffer.byteLength(execInput)) + execInput
+          );
+
+          yield* read(began).pipe(
+            Effect.retry(Schedule.spaced(Duration.millis(20)))
+          );
+
+          exec.socket.pause();
+
+          yield* served.crash;
+
+          exec.socket.resume();
+
+          const closed = yield* exec.closedWithin(Duration.seconds(1));
+
+          exec.socket.destroy();
+
+          expect({ answer: emptyAnswer(exec.read()), closed }).toStrictEqual({
+            answer: "HTTP/1.1 503 Service Unavailable",
+            closed: true,
+          });
+        }),
+      60_000
+    );
+
     it.effect(
       "a control plane told to stop cuts a request still open at once, and its client hears Unavailable, the action maybe run",
       () =>

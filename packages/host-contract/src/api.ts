@@ -190,8 +190,9 @@ export type Operation = typeof Operation.Type;
 
 /**
  * What a step leaves that only its host can tell. A make answers its machine's `handle`, the
- * `endpoint` it gave it as soon as it has one, and the `sizes` the runtime gave it; a capture and a
- * fetch answer their checkpoint's `handle`.
+ * `endpoint` it gave it as soon as it has one, and the `sizes` the runtime gave it; a start whose
+ * machine's port another program took answers the `endpoint` it moved it to; a capture and a fetch
+ * answer their checkpoint's `handle`.
  */
 export const Outcome = Schema.Struct({
   handle: Schema.optionalKey(Handle),
@@ -224,7 +225,7 @@ export type Report = typeof Report.Type;
 
 /**
  * What the control plane needs to know of a host. `traits` are its runtime's, which the control
- * plane stamps on each row it makes there, `images` is the image each of `bases` names there, `boot` is new each time its process starts, `builds` tells a host that copies template
+ * plane reads as the host answers before each decision about what the host will do, `images` is the image each of `bases` names there, `boot` is new each time its process starts, `builds` tells a host that copies template
  * builds through the build store, and `sweeps`, on a host whose runtime marks the machines it makes
  * so a sweep can find each the store retired, is the longest its sweep takes to answer.
  */
@@ -366,7 +367,7 @@ export const HostHttp = ActionHttp.make(
       ...write,
       error: [Invalid, Missing, WrongState, Internal] as const,
       description:
-        "Run a command in a running machine, once any step on it has ended, and answer its exit code and output. It runs as long as the request does, or until its timeout: either ends the command and what it started in the guest, with TERM and then KILL 5 s later, and a timeout answers exit code 124 once they have ended. The command's environment can't set `CLANKERBOX_EXEC`, the host's mark of what it started. Nothing of it is kept.",
+        "Run a command in a running machine, once any step in its scope has ended, while a capture of it or a fork from it runs beside it, and answer its exit code and output. It runs as long as the request does, or until its timeout, which also bounds the runtime's attach: either ends the command and what it started in the guest, and a timeout answers exit code 124 with the output once the end has finished, which the host waits for at most endTimeout past it, with mayStillRun saying why when their end couldn't be confirmed, so they may still run. A stop, pause or remove step on the machine first ends it so, before its hook and its runtime call, and it answers WrongState in the phase stopping, pausing or deleting. The command's environment can't set `CLANKERBOX_EXEC`, the host's mark of what it started. Nothing of it is kept.",
       input: ExecCommand,
       success: Executed,
     }),

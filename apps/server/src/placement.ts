@@ -1,15 +1,13 @@
 import type { HostInfo } from "@clankerbox/host-contract";
 import {
   fitted,
+  formatSizes,
   givenSizes,
   offered,
   offers,
 } from "@clankerbox/host-contract/traits";
 import {
   buildId,
-  formatCpu,
-  formatGib,
-  formatMib,
   NotBuilt,
   NotOffered,
   Unavailable,
@@ -18,6 +16,8 @@ import {
 import type { Sizes } from "@gjermundgaraba/clankerbox-sdk";
 import { Array as Arr, Result } from "effect";
 
+import { phaseOf as copyPhaseOf } from "./checkpoint-chart.ts";
+import type { CheckpointRow } from "./checkpoint-chart.ts";
 import type { Reached } from "./hosts.ts";
 import type { BuildRow, Source } from "./store.ts";
 
@@ -26,16 +26,13 @@ interface Miss {
   readonly cure?: "build" | "sizes";
 }
 
-const sized = ({ cpu, ramMib, diskGib }: Sizes) =>
-  `${formatCpu(cpu)}, ${formatMib(ramMib)} of RAM and ${formatGib(diskGib)} of disk`;
-
 const missed = (why: string): Miss => ({ why });
 
 const unsized = (info: HostInfo, sizes: Sizes): Miss => ({
   why:
     info.traits.sizes._tag === "classes"
-      ? `has no size class of ${sized(sizes)}, and gives ${givenSizes(info.traits)}`
-      : `gives ${givenSizes(info.traits)}, not ${sized(sizes)}`,
+      ? `has no size class of ${formatSizes(sizes)}, and gives ${givenSizes(info.traits)}`
+      : `gives ${givenSizes(info.traits)}, not ${formatSizes(sizes)}`,
   cure: "sizes",
 });
 
@@ -200,12 +197,24 @@ export const outdated = (
     : `names image ${image} for base ${build.base}, and ${build.id} was built from ${build.image}`;
 };
 
+const unreadyCopy = (
+  made: BuiltUnder,
+  { state, error }: Pick<CheckpointRow, "state" | "error">
+): Miss =>
+  copyPhaseOf(state) === "failed"
+    ? {
+        why: `holds a copy of ${made.id} that failed: ${error?.message ?? "it ended"}`,
+        cure: "build",
+      }
+    : missed(`holds a copy of ${made.id} that isn't ready yet`);
+
 /**
  * The hosts that hold one of `copies`, of `build` of `template`, by host, and can take a clone of
  * it at the sizes asked, in config order, each with its copy, to try in turn as `placing`'s are. An
- * outdated copy is passed over. With none, a holder not draining that gave no reply is
- * `Unavailable`, and `NotBuilt` otherwise, saying why each host was passed over, and to build the
- * template again where a host lacks a copy or holds an outdated one. An ask that names a host is
+ * outdated copy is passed over, as is a host whose copy is one of `unready`, saying it isn't ready
+ * yet or failed. With none, a holder not draining that gave no reply is `Unavailable`, and
+ * `NotBuilt` otherwise, saying why each host was passed over, and to build the template again
+ * where a host lacks a copy or holds an outdated or failed one. An ask that names a host is
  * placed as if that host were the only one, a build included, and one the control plane doesn't
  * know is `NotOffered`.
  */
@@ -214,7 +223,8 @@ export const holding = <A>(
   copies: ReadonlyMap<string, A>,
   template: string,
   made: BuiltUnder,
-  ask: Ask
+  ask: Ask,
+  unready: ReadonlyMap<string, Pick<CheckpointRow, "state" | "error">>
 ): Result.Result<
   Arr.NonEmptyReadonlyArray<readonly [HostInfo, A]>,
   NotBuilt | NotOffered | Unsizable | Unavailable
@@ -231,13 +241,17 @@ export const holding = <A>(
     named.success,
     (host) => {
       const copy = copies.get(host);
+      const other = unready.get(host);
 
-      return copy === undefined
-        ? Result.fail<Miss>({
-            why: `holds no copy of ${made.id}`,
-            cure: "build",
-          })
-        : Result.succeed(copy);
+      if (copy !== undefined) {
+        return Result.succeed(copy);
+      }
+
+      return Result.fail<Miss>(
+        other === undefined
+          ? { why: `holds no copy of ${made.id}`, cure: "build" }
+          : unreadyCopy(made, other)
+      );
     },
     (info, copy) => {
       const why = outdated(info, made);

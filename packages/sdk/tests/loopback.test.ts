@@ -178,6 +178,34 @@ describe("loopback", () => {
   );
 
   it.effect(
+    "a connection closed with no reply, as a stopping control plane closes one whose request came too late, is Unavailable through the Node transport: a read retryable, a mutation maybe run",
+    () =>
+      Effect.gen(function* () {
+        const url = yield* answering((response) => {
+          response.socket?.destroy();
+        });
+
+        const read = yield* calling(url, (client) =>
+          Effect.flip(client.getMachine({ id: "dev" }))
+        );
+
+        const mutation = yield* calling(url, (client) =>
+          Effect.flip(client.startMachine({ id: "dev" }))
+        );
+
+        expect(read).toMatchObject({ _tag: "Unavailable", readOnly: true });
+        expect(retryable(read)).toBe(true);
+        expect(mutation).toMatchObject({
+          _tag: "Unavailable",
+          readOnly: false,
+        });
+        expect(mutation.message).toMatch(
+          /^no reply from the control plane to startMachine dev \(.+\); the action may have run: read dev to see$/u
+        );
+      }).pipe(Effect.scoped)
+  );
+
+  it.effect(
     "a proxy's page at a status the action declares is Internal, or at 503 a control plane that didn't answer, through the Node transport",
     () =>
       Effect.gen(function* () {

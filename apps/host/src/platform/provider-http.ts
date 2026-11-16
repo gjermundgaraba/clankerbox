@@ -1,35 +1,35 @@
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import {
-  DateTime,
+  Clock,
   Duration,
   Effect,
   FileSystem,
   Option,
   Redacted,
+  Result,
   Schedule,
   Schema,
 } from "effect";
-import { HttpClientRequest } from "effect/http";
+import { Headers, HttpClientRequest } from "effect/http";
 import type { HttpClient, HttpClientResponse } from "effect/http";
 
 import { CannotStart, timeoutFail } from "../runtime.ts";
 import { describe } from "./process.ts";
 
+/**
+ * What a request asks of a provider's API, which bounds how long it may take to answer: a `read`, a
+ * `change` it answers once it has taken it, or one it answers only once the machine has `settle`d,
+ * as smol cloud's start and capture do. A request not answered in time is a lost answer, so a
+ * stalled connection costs its step a read, not its whole deadline.
+ */
 export type Asked = "read" | "change" | "settle";
 
-/**
- * How long a provider's API may take to answer a request, by what it asks: a `read`, a `change`
- * it answers once it has taken it, or one it answers only once the machine has `settle`d, as smol
- * cloud's start and capture do. A request not answered in time leaves its outcome unknown, as a
- * dropped connection does, so a stalled connection costs its step a read, not its whole deadline.
- */
-export const answerWithin: Readonly<Record<Asked, Duration.Duration>> = {
+const answerWithin: Readonly<Record<Asked, Duration.Duration>> = {
   read: Duration.seconds(30),
   change: Duration.minutes(1),
   settle: Duration.minutes(5),
 };
 
-/** How long a step on a rented runtime may take, all its provider calls and polls together. */
 export const stepWithin = Duration.minutes(10);
 
 /**
@@ -75,12 +75,12 @@ export class Unreadable extends Schema.TaggedError<
   message: Schema.String,
 }) {}
 
-export const lost =
+const lost =
   (call: string) =>
   (error: { readonly message: string }): Unanswered =>
     new Unanswered({ message: `${call}: ${error.message}` });
 
-export const within =
+const within =
   (asked: Asked, call: string) =>
   <A, E, R>(answer: Effect.Effect<A, E, R>) =>
     answer.pipe(
@@ -111,31 +111,29 @@ export const fromGateway = (
 const waits = { minimum: Duration.seconds(1), maximum: Duration.seconds(30) };
 
 /**
- * The wait a refusal's `Retry-After` asks, in seconds or until an HTTP date, within 1 and 30
- * seconds, so one that names none or less waits a second.
+ * The wait a refusal's `Retry-After` asks, in whole seconds or until an HTTP date, within 1 and 30
+ * seconds, so one that names neither, or less, waits a second.
  */
 export const retryAfter = (
   response: HttpClientResponse.HttpClientResponse
 ): Effect.Effect<Duration.Duration> =>
-  Effect.map(DateTime.now, (now) => {
-    const asked = response.headers["retry-after"]?.trim() ?? "";
-    const seconds = Number(asked);
+  Effect.map(Clock.currentTimeMillis, (now) =>
+    Duration.clamp(
+      Option.match(Headers.get(response.headers, "retry-after"), {
+        onNone: () => Duration.zero,
+        onSome: (asked) =>
+          Result.match(Headers.parseRetryAfter(asked), {
+            onFailure: () => Duration.zero,
+            onSuccess: (parsed) => Headers.retryAfterDelay(parsed, now),
+          }),
+      }),
+      waits
+    )
+  );
 
-    const wait =
-      asked !== "" && Number.isFinite(seconds)
-        ? Duration.millis(seconds * 1000)
-        : Option.match(DateTime.make(asked), {
-            onNone: () => Duration.zero,
-            onSome: (at) => DateTime.distance(now, at),
-          });
-
-    return Duration.clamp(wait, waits);
-  });
-
-/** HTTP 429: the provider took nothing and asks to be waited out, unless its answer says there is no room. */
+/** The provider took nothing and asks to be waited out, unless its answer says there is no room. */
 export const tooManyRequests = 429;
 
-/** Fails `Busy` with the wait `response` asks, within the clamp, which `askedAgain` waits. */
 export const askedToWait = (
   call: string,
   response: HttpClientResponse.HttpClientResponse,
@@ -150,7 +148,6 @@ export const askedToWait = (
     )
   );
 
-/** Reads a provider's API key from `file`, a host that can't refusing to start. */
 export const apiKey = (
   provider: string,
   file: string
@@ -201,8 +198,7 @@ export const exchanged = <A>(
     );
 };
 
-/** How many times a call is sent while its answer is lost or asks to be waited out. */
-export const triesPerCall = 6;
+const triesPerCall = 6;
 
 /**
  * Whether sending a call twice does no more than sending it once, as a read, or a delete, does.
@@ -247,10 +243,8 @@ export const askedAgain =
       )
     );
 
-/** How many times a change whose answer is lost is sent, the resource read until it rests between sends. */
 export const triesAfterLoss = 3;
 
-/** Reads `read` a `poll` apart until what it answers `rests`, which it then answers. */
 export function untilRest<A, B extends A, E, R>(
   read: Effect.Effect<A, E, R>,
   rests: (found: A) => found is B,
@@ -269,41 +263,50 @@ export function untilRest<A, E, R>(
   return Effect.repeat(read, { until: rests, schedule: Schedule.spaced(poll) });
 }
 
-export interface Change<A, E, F, G, R> {
-  readonly send: Effect.Effect<void, E | Unanswered, R>;
-  /** Reads the resource until it rests. */
+export interface Change<A, S, E, F, G, R> {
+  readonly send: Effect.Effect<S, E | Unanswered, R>;
+  /** A refusal that may still have been taken, which is read for as a lost answer is. */
+  readonly lost?: ((error: E) => boolean) | undefined;
   readonly rested: Effect.Effect<A, F, R>;
   readonly holds: (rested: A) => boolean;
-  /** The failure once `triesAfterLoss` sends were lost and the resource rests without the change. */
-  readonly unheld: (rested: A) => G;
+  /** The failure once `triesAfterLoss` sends went unanswered and the resource rests without the change. */
+  readonly unheld: (rested: A, last: E | Unanswered) => G;
 }
 
 /**
  * Sends a change that may be taken though its answer is lost: after a lost answer it reads the
- * resource until it rests, is done when that holds the change, and sends it again otherwise, at
- * most `triesAfterLoss` times in all, so a change the provider took is never sent twice.
+ * resource until it rests, answers what it read when that holds the change, and sends it again
+ * otherwise, at most `triesAfterLoss` times in all, so a change the provider took is never sent
+ * twice.
  */
-export const sentUntilHeld = <A, E, F, G, R>(
-  change: Change<A, E, F, G, R>
-): Effect.Effect<void, E | F | G, R> => {
-  const sent = (tries: number): Effect.Effect<void, E | F | G, R> =>
-    Effect.catchIf(
+export function sentUntilHeld<A, H extends A, S, E, F, G, R>(
+  change: Change<A, S, E, F, G, R> & {
+    readonly holds: (rested: A) => rested is H;
+  }
+): Effect.Effect<S | H, E | F | G, R>;
+export function sentUntilHeld<A, S, E, F, G, R>(
+  change: Change<A, S, E, F, G, R>
+): Effect.Effect<S | A, E | F | G, R>;
+export function sentUntilHeld<A, S, E, F, G, R>(
+  change: Change<A, S, E, F, G, R>
+): Effect.Effect<S | A, E | F | G, R> {
+  const sent = (tries: number): Effect.Effect<S | A, E | F | G, R> => {
+    const read = (last: E | Unanswered) =>
+      Effect.filterOrElse(change.rested, change.holds, (found) =>
+        tries > 1 ? sent(tries - 1) : Effect.fail(change.unheld(found, last))
+      );
+
+    return Effect.catchIf(
       change.send,
       (error): error is Unanswered => error instanceof Unanswered,
-      () =>
-        Effect.flatMap(change.rested, (found) => {
-          if (change.holds(found)) {
-            return Effect.void;
-          }
-
-          return tries > 1
-            ? sent(tries - 1)
-            : Effect.fail(change.unheld(found));
-        })
+      read,
+      (refused) =>
+        change.lost?.(refused) === true ? read(refused) : Effect.fail(refused)
     );
+  };
 
   return sent(triesAfterLoss);
-};
+}
 
 export interface Records<A> {
   readonly call: string;

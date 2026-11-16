@@ -17,6 +17,7 @@ import { Context, Effect, Layer, Schema } from "effect";
 import { expect } from "vite-plus/test";
 
 import { fetch, pieceBytes, publish } from "../src/builds.ts";
+import { PortProbe } from "../src/machine-ports.ts";
 import {
   make,
   minimumVersion,
@@ -80,7 +81,15 @@ const smolvmIn = (stateDir: string) => {
       bootId: "b00710ad",
     },
     { uid: 0, ended: () => Effect.succeed(true) }
-  ).pipe(Effect.provide(Layer.merge(NodeServices.layer, spawner.layer)));
+  ).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        NodeServices.layer,
+        spawner.layer,
+        Layer.succeed(PortProbe, { free: () => Effect.succeed(true) })
+      )
+    )
+  );
 };
 
 const checkpointRef = (instance: string) => ({

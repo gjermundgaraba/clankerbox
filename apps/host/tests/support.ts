@@ -1,10 +1,8 @@
 import { once } from "node:events";
-import { createServer } from "node:http";
 import { connect, createServer as createTcpServer } from "node:net";
 import type { Server } from "node:net";
 import path from "node:path";
 
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
@@ -15,14 +13,16 @@ import {
   Exit,
   Layer,
   Logger,
+  Option,
   Predicate,
+  Schedule,
   Scope,
 } from "effect";
 import { HttpClient, HttpServer } from "effect/http";
 import { expect } from "vite-plus/test";
 
 import { BuildStore } from "../src/builds.ts";
-import { hostLayer, listening } from "../src/composition/host.ts";
+import { hostLayer, hostServer } from "../src/composition/host.ts";
 import type { PortRange } from "../src/machine-ports.ts";
 import { Operations } from "../src/operations.ts";
 import type { Interface as OperationsInterface } from "../src/operations.ts";
@@ -30,6 +30,7 @@ import type { BuildsSettings } from "../src/platform/s3.ts";
 import type { TailnetSettings } from "../src/platform/tailscale.ts";
 import type {
   Admission,
+  Runtime,
   Interface as RuntimeInterface,
 } from "../src/runtime.ts";
 import type { HostSettings } from "../src/settings.ts";
@@ -65,19 +66,32 @@ export const hostConfig = (
 });
 
 export const loopbackServer = (port = 0) =>
-  NodeHttpServer.layer(
-    createServer,
-    listening({ listen: { address: "127.0.0.1", port } })
-  );
+  hostServer({ listen: { address: "127.0.0.1", port } });
 
-export interface TestHost {
+export interface HostOptions {
+  readonly id?: string;
+  readonly port?: number;
+  readonly bases?: ReadonlyMap<string, string>;
+  readonly logger?: Logger.Logger<unknown, unknown>;
+  readonly ports?: PortRange;
+  readonly tailnet?: Layer.Layer<Tailnet>;
+  readonly tailnetSettings?: TailnetSettings;
+  readonly builds?: Layer.Layer<BuildStore>;
+  readonly buildsSettings?: BuildsSettings;
+  readonly http?: Layer.Layer<HttpClient.HttpClient>;
+}
+
+export interface ServedHost {
   readonly id: string;
   readonly dir: string;
-  readonly fake: FakeRuntime;
   readonly stateDir: string;
   readonly url: string;
   readonly operations: OperationsInterface;
   readonly dispose: Effect.Effect<void>;
+}
+
+export interface TestHost extends ServedHost {
+  readonly fake: FakeRuntime;
 }
 
 export const noHttp = Layer.succeed(
@@ -87,43 +101,41 @@ export const noHttp = Layer.succeed(
   )
 );
 
-export const startHost = (
+/**
+ * A host over the runtime `runtime` makes of its settings, on loopback. It ends with the scope, or
+ * at `dispose`.
+ */
+export const startHostOver = <E>(
   dir: string,
-  options?: {
-    readonly fake?: FakeRuntime;
-    readonly id?: string;
-    readonly port?: number;
-    readonly as?: FakeRuntimeName;
-    readonly bases?: ReadonlyMap<string, string>;
-    readonly logger?: Logger.Logger<unknown, unknown>;
-    readonly runtime?: Omit<FakeOptions, "dir" | "as">;
-    readonly ports?: PortRange;
-    readonly tailnet?: Layer.Layer<Tailnet>;
-    readonly tailnetSettings?: TailnetSettings;
-    readonly builds?: Layer.Layer<BuildStore>;
-    readonly buildsSettings?: BuildsSettings;
-    readonly http?: Layer.Layer<HttpClient.HttpClient>;
-  }
+  runtime: (
+    settings: HostSettings
+  ) => Layer.Layer<
+    Runtime,
+    E,
+    NodeServices.NodeServices | HttpClient.HttpClient
+  >,
+  options?: HostOptions
 ) =>
   Effect.gen(function* () {
-    const fake =
-      options?.fake ??
-      fakeRuntime({ dir, as: options?.as, ...options?.runtime });
-
+    const id = options?.id ?? "smolvm";
     const stateDir = path.join(dir, "state");
     const scope = yield* Scope.make();
 
     yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
 
+    const settings: HostSettings = {
+      ...hostConfig(stateDir, options?.ports, id),
+      ...(options?.bases === undefined ? {} : { bases: options.bases }),
+    };
+
     const context = yield* Layer.buildWithScope(
       hostLayer(
         {
-          ...hostConfig(stateDir, options?.ports, options?.id ?? options?.as),
-          ...(options?.bases === undefined ? {} : { bases: options.bases }),
+          ...settings,
           tailnet: options?.tailnetSettings,
           builds: options?.buildsSettings,
         },
-        fake.layer,
+        runtime(settings),
         loopbackServer(options?.port)
       ).pipe(
         Layer.provide(options?.tailnet ?? Layer.empty),
@@ -137,10 +149,9 @@ export const startHost = (
       scope
     );
 
-    const host: TestHost = {
-      id: options?.id ?? options?.as ?? "smolvm",
+    const host: ServedHost = {
+      id,
       dir,
-      fake,
       stateDir,
       url: HttpServer.formatAddress(
         Context.get(context, HttpServer.HttpServer).address
@@ -151,6 +162,26 @@ export const startHost = (
 
     return host;
   });
+
+export const startHost = (
+  dir: string,
+  options?: HostOptions & {
+    readonly fake?: FakeRuntime;
+    readonly as?: FakeRuntimeName;
+    readonly runtime?: Omit<FakeOptions, "dir" | "as">;
+  }
+) => {
+  const fake =
+    options?.fake ?? fakeRuntime({ dir, as: options?.as, ...options?.runtime });
+
+  return Effect.map(
+    startHostOver(dir, () => fake.layer, {
+      ...options,
+      id: options?.id ?? options?.as ?? "smolvm",
+    }),
+    (host): TestHost => ({ ...host, fake })
+  );
+};
 
 export const hostOn =
   (ports: PortRange) =>
@@ -317,3 +348,51 @@ export const filesOf = (runtime: RuntimeInterface) =>
   runtime.files === undefined
     ? Effect.die(`the ${runtime.traits.runtime} runtime keeps no files`)
     : Effect.succeed(runtime.files);
+
+/**
+ * A raw TCP connection to the HTTP server at `url`, for a test that sends what no HTTP client
+ * would, such as part of a request, and keeps all it reads.
+ */
+export const connection = (url: string) =>
+  Effect.promise(async () => {
+    const socket = connect(Number(new URL(url).port), "127.0.0.1");
+    const chunks: Buffer[] = [];
+
+    socket.on("data", (chunk: Buffer) => {
+      chunks.push(chunk);
+    });
+    socket.on("error", () => {
+      socket.destroy();
+    });
+
+    await once(socket, "connect");
+
+    return {
+      socket,
+      read: () => Buffer.concat(chunks).toString(),
+      closedWithin: (wait: Duration.Duration) =>
+        Effect.sync(() => socket.closed).pipe(
+          Effect.repeat({
+            until: (closed) => closed,
+            schedule: Schedule.spaced(Duration.millis(10)),
+          }),
+          Effect.timeoutOption(wait),
+          Effect.map(Option.isSome)
+        ),
+    };
+  });
+
+/** The status line of `read` when it is one whole answer with no body, and what it is when not. */
+export const emptyAnswer = (read: string) => {
+  const end = read.indexOf("\r\n\r\n");
+  const head = read.slice(0, end).toLowerCase();
+  const body = read.slice(end + 4);
+
+  const whole =
+    end !== -1 &&
+    ((body === "" && head.includes("\r\ncontent-length: 0")) ||
+      (body === "0\r\n\r\n" &&
+        head.includes("\r\ntransfer-encoding: chunked")));
+
+  return whole ? read.slice(0, read.indexOf("\r\n")) : `not whole: ${read}`;
+};

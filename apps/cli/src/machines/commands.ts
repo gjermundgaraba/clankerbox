@@ -1,5 +1,6 @@
 import {
   actionsByName,
+  endTimeout,
   formatCpu,
   formatGib,
   formatMib,
@@ -12,6 +13,7 @@ import {
   ConfigProvider,
   Console,
   Context,
+  Duration,
   Effect,
   Option,
   Stdio,
@@ -335,7 +337,7 @@ export const exec = Command.make(
     limit: Flag.String("timeout").pipe(
       Flag.withMetavar("DURATION"),
       Flag.withDescription(
-        "End the command after this long, such as 90s or 30m, and exit 124; unbounded by default."
+        `End the command after this long, such as 90s or 30m, counted from when its host begins it, after a step under way on the machine, and exit 124 once its host has ended it, which the host waits for at most ${Duration.format(endTimeout)} past the limit, saying on stderr, or with --json in mayStillRun, when some of it may still run; unbounded by default.`
       ),
       Flag.optional
     ),
@@ -352,7 +354,7 @@ export const exec = Command.make(
     ),
     stdin: Flag.Boolean("stdin").pipe(
       Flag.withDescription(
-        "Send this command's stdin, read to its end, as the command's."
+        "Send this command's stdin, read to its end, as the command's: UTF-8 text, and anything else is refused."
       ),
       Flag.withDefault(false)
     ),
@@ -403,6 +405,12 @@ export const exec = Command.make(
         if (executed.truncated) {
           yield* Console.error(
             `clankerbox: the output above is only its last ${outputLimit} characters`
+          );
+        }
+
+        if (executed.mayStillRun !== undefined) {
+          yield* Console.error(
+            `clankerbox: the command ran past its timeout and may still run in ${flags.machine}: ${executed.mayStillRun}`
           );
         }
       }

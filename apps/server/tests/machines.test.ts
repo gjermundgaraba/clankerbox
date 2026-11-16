@@ -16,7 +16,7 @@ import {
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
-import { Duration, Effect, Fiber, Option, Result } from "effect";
+import { Duration, Effect, Exit, Fiber, Option, Result, Scope } from "effect";
 import { expect } from "vite-plus/test";
 
 import {
@@ -72,6 +72,23 @@ const hooksRun = (dir: string) =>
   );
 
 const portsOfHere = suitePorts.serverMachines;
+
+const heldElsewhere = (port: number) =>
+  Effect.acquireRelease(
+    Effect.callback<Server>((resume) => {
+      const server = createServer();
+
+      server.listen({ host: "127.0.0.1", port, exclusive: true }, () => {
+        resume(Effect.succeed(server));
+      });
+    }),
+    (server) =>
+      Effect.callback<undefined>((resume) => {
+        server.close(() => {
+          resume(Effect.undefined);
+        });
+      })
+  );
 
 const sizesOf = (machine: {
   readonly cpu: number;
@@ -167,6 +184,9 @@ const built = (options?: Parameters<typeof served>[0]) =>
       ...request("unused", { cpu: 2, ramMib: 2048, diskGib: 20 }),
       setup: countsRuns(plane.dir),
     });
+    yield* eventually(plane.store.machines, (rows) =>
+      rows.every(({ ephemeral }) => !ephemeral)
+    );
     plane.fake.calls.length = 0;
 
     return plane;
@@ -813,6 +833,79 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         ]);
         expect(fake.machines.size).toBe(0);
         expect(fake.calls).toStrictEqual(["admit dev"]);
+      })
+  );
+
+  it.effect(
+    "a fork of a machine whose failed create is being undone says so, advising nothing, as the create may yet move on",
+    () =>
+      Effect.gen(function* () {
+        const { client, fake } = yield* served();
+
+        fake.failNext("create", new Internal({ message: "krun EINVAL" }));
+
+        const { entered, release } = fake.holdNext("delete");
+
+        const creating = yield* Effect.forkChild(
+          Effect.flip(client.create("dev", request("dev")))
+        );
+
+        yield* entered;
+
+        const forked = yield* Effect.flip(
+          client.forkMachine({ machine: "dev", name: "copy" })
+        );
+
+        yield* release;
+        yield* Fiber.join(creating);
+
+        expect(forked).toMatchObject({
+          _tag: "NotFound",
+          message:
+            "machine dev's create failed, and is being undone: krun EINVAL",
+        });
+      })
+  );
+
+  it.effect(
+    "a request on a machine whose create failed says so, with its error, as a list shows it failed",
+    () =>
+      Effect.gen(function* () {
+        const { client, fake } = yield* served();
+
+        fake.failNext("admit", new Capacity({ message: "no room" }));
+        yield* Effect.flip(client.create("dev", request("dev")));
+
+        const answers = yield* Effect.forEach(
+          [
+            Effect.asVoid(client.startMachine({ id: "dev" })),
+            Effect.asVoid(client.stopMachine({ id: "dev" })),
+            Effect.asVoid(client.forkMachine({ machine: "dev", name: "copy" })),
+            Effect.asVoid(client.execMachine({ id: "dev", argv: ["true"] })),
+            Effect.asVoid(client.resizeMachine({ id: "dev", cpu: 2 })),
+            Effect.asVoid(
+              client.captureCheckpoint({ machine: "dev", name: "snap" })
+            ),
+          ],
+          (asked) =>
+            Effect.map(Effect.flip(asked), ({ _tag, message }) => [
+              _tag,
+              message,
+            ])
+        );
+
+        const [listed] = yield* client.listMachines();
+
+        const why = [
+          "NotFound",
+          "machine dev's create failed, so there is no machine dev: no room; delete it, or create it again",
+        ];
+
+        expect(listed).toMatchObject({
+          phase: "failed",
+          error: { message: "no room" },
+        });
+        expect(answers).toStrictEqual(Array.from({ length: 6 }, () => why));
       })
   );
 
@@ -2713,23 +2806,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "ports skip one that something else listens on, and concurrent creates get distinct ones",
     () =>
       Effect.gen(function* () {
-        yield* Effect.acquireRelease(
-          Effect.callback<Server>((resume) => {
-            const server = createServer();
-
-            server.listen(
-              { host: "127.0.0.1", port: portsOfHere.first, exclusive: true },
-              () => {
-                resume(Effect.succeed(server));
-              }
-            );
-          }),
-          (server) =>
-            Effect.callback<undefined>((resume) => {
-              server.close(() => {
-                resume(Effect.undefined);
-              });
-            })
+        yield* Scope.provide(
+          heldElsewhere(portsOfHere.first),
+          yield* Effect.scope
         );
 
         const { client, row } = yield* served({
@@ -2753,6 +2832,53 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           portsOfHere.first + 2,
           portsOfHere.first + 3,
         ]);
+      })
+  );
+
+  it.effect(
+    "a start of a stopped smolvm machine whose port another program holds fails Capacity, naming the port and the cure, with nothing sent to boot it, and starts once the port is free",
+    () =>
+      Effect.gen(function* () {
+        const { client, fake, machine, row } = yield* served({
+          runtime: { ports: portsOfHere, runtime: { probesPorts: true } },
+        });
+
+        yield* client.create("dev", request("dev"));
+        yield* client.stopMachine({ id: "dev" });
+
+        const port = (yield* row("dev")).endpoint?.port;
+
+        if (port === undefined) {
+          return yield* Effect.die("a made smolvm machine with no port");
+        }
+
+        const holding = yield* Scope.make();
+
+        yield* Scope.provide(heldElsewhere(port), holding);
+        fake.calls.length = 0;
+
+        const refused = yield* Effect.flip(client.startMachine({ id: "dev" }));
+        const failed = yield* machine("dev");
+
+        yield* Scope.close(holding, Exit.void);
+
+        const started = yield* client.startMachine({ id: "dev" });
+
+        expect([refused._tag, refused.message]).toStrictEqual([
+          "Capacity",
+          `startMachine dev needs port ${port} on 127.0.0.1, which another program on this host holds: free it, then ask again`,
+        ]);
+        expect([failed.state, failed.phase]).toStrictEqual([
+          "stopped",
+          "failed",
+        ]);
+        expect(
+          fake.calls.filter((call) => call.startsWith("start"))
+        ).toStrictEqual(["start dev"]);
+        expect([
+          started.state,
+          (yield* row("dev")).endpoint?.port,
+        ]).toStrictEqual(["running", port]);
       })
   );
 
@@ -2807,10 +2933,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a running smolvm machine's vCPUs grow live to at most 16: a resize past that is refused Unsizable before anything is recorded, and a stopped one takes it",
+    "smolvm gives a machine at most 16 vCPUs, the most its guest kernel boots: a create, a running or stopped resize and a fork past that are refused Unsizable, naming it, before anything is recorded, and a stopped resize to it is taken",
     () =>
       Effect.gen(function* () {
-        const { client, fake, row } = yield* served();
+        const { client, fake, row, rows } = yield* served();
+
+        const created = yield* Effect.flip(
+          client.create("big", request("big", { cpu: 17 }))
+        );
 
         yield* client.create("dev", request("dev"));
 
@@ -2818,56 +2948,73 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         fake.calls.length = 0;
 
-        const refused = yield* Effect.flip(
-          client.resizeMachine({ id: "dev", cpu: 32 })
+        const grown = yield* Effect.flip(
+          client.resizeMachine({ id: "dev", cpu: 17 })
         );
 
-        expect(refused._tag).toBe("Unsizable");
-        expect(refused.message).toContain("at most 16 vCPUs");
+        const forked = yield* Effect.flip(
+          client.forkMachine({ machine: "dev", name: "copy", cpu: 17 })
+        );
+
         expect(yield* row("dev")).toStrictEqual(before);
-        expect(fake.calls).toStrictEqual([]);
 
         yield* client.stopMachine({ id: "dev" });
 
-        const resized = yield* client.resizeMachine({ id: "dev", cpu: 32 });
+        const stopped = yield* row("dev");
 
-        expect(sizesOf(resized)).toStrictEqual([32, 1024, 10]);
+        fake.calls.length = 0;
+
+        const resized = yield* Effect.flip(
+          client.resizeMachine({ id: "dev", cpu: 32 })
+        );
+
+        expect(
+          [created, grown, forked, resized].map(({ _tag, message }) => [
+            _tag,
+            message.includes("up to 16 vCPUs"),
+          ])
+        ).toStrictEqual([
+          ["Unsizable", true],
+          ["Unsizable", true],
+          ["Unsizable", true],
+          ["Unsizable", true],
+        ]);
+        expect(yield* row("dev")).toStrictEqual(stopped);
+        expect(fake.calls).toStrictEqual([]);
+        expect((yield* rows).map(({ name }) => name)).toStrictEqual(["dev"]);
+
+        const taken = yield* client.resizeMachine({ id: "dev", cpu: 16 });
+
+        expect(sizesOf(taken)).toStrictEqual([16, 1024, 10]);
       })
   );
 
   it.effect(
-    "a create, a resize or a fork past the most vCPUs smolvm gives a machine is refused Unsizable, naming it, before anything is recorded",
+    "a resize past the most vCPUs smolvm gives a machine is refused before anything is recorded also where its last step failed, each time it is asked",
     () =>
       Effect.gen(function* () {
-        const { client, fake, rows } = yield* served();
-
-        const created = yield* Effect.flip(
-          client.create("big", request("big", { cpu: 255 }))
-        );
-
-        expect(created._tag).toBe("Unsizable");
-        expect(created.message).toContain("up to 254 vCPUs");
+        const { client, fake, machine, row } = yield* served();
 
         yield* client.create("dev", request("dev"));
-        yield* client.stopMachine({ id: "dev" });
+        fake.failNext("stop", new Internal({ message: "stop refused" }));
+        yield* Effect.flip(client.stopMachine({ id: "dev" }));
+
+        const failed = yield* machine("dev");
+        const before = yield* row("dev");
+
         fake.calls.length = 0;
 
-        const resized = yield* Effect.flip(
-          client.resizeMachine({ id: "dev", cpu: 255 })
+        const refusals = yield* Effect.forEach([1, 2], () =>
+          Effect.flip(client.resizeMachine({ id: "dev", cpu: 32 }))
         );
 
-        expect(resized._tag).toBe("Unsizable");
-        expect(resized.message).toContain("up to 254 vCPUs");
-
-        yield* client.startMachine({ id: "dev" });
-
-        const forked = yield* Effect.flip(
-          client.forkMachine({ machine: "dev", name: "copy", cpu: 32 })
-        );
-
-        expect(forked._tag).toBe("Unsizable");
-        expect(forked.message).toContain("at most 16 vCPUs");
-        expect((yield* rows).map(({ name }) => name)).toStrictEqual(["dev"]);
+        expect(refusal(failed)).toStrictEqual(["failed", "Internal"]);
+        expect(failed.state).toBe("running");
+        expect(refusals.map(({ _tag }) => _tag)).toStrictEqual([
+          "Unsizable",
+          "Unsizable",
+        ]);
+        expect(yield* row("dev")).toStrictEqual(before);
         expect(
           fake.calls.filter((call) => call.startsWith("resize"))
         ).toStrictEqual([]);
@@ -3348,6 +3495,48 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a fork or capture of a machine whose last step failed, in the state its host doesn't copy, is WrongState before a row is written",
+    () =>
+      Effect.gen(function* () {
+        const { client, fake, machine, rows, store } = yield* served();
+
+        yield* client.create("dev", request("dev"));
+        yield* client.stopMachine({ id: "dev" });
+        fake.failNext("start", new Internal({ message: "start refused" }));
+        yield* Effect.flip(client.startMachine({ id: "dev" }));
+
+        const failed = yield* machine("dev");
+
+        fake.calls.length = 0;
+
+        const refused = [
+          yield* Effect.flip(
+            client.forkMachine({ machine: "dev", name: "copy" })
+          ),
+          yield* Effect.flip(
+            client.captureCheckpoint({ machine: "dev", name: "snap" })
+          ),
+        ];
+
+        expect([failed.phase, failed.state]).toStrictEqual([
+          "failed",
+          "stopped",
+        ]);
+        expect(refused.map(({ _tag }) => _tag)).toStrictEqual([
+          "WrongState",
+          "WrongState",
+        ]);
+        expect((yield* rows).map(({ name }) => name)).toStrictEqual(["dev"]);
+        expect(yield* store.checkpoints).toHaveLength(0);
+        expect(
+          fake.calls.filter(
+            (call) => call.startsWith("fork") || call.startsWith("capture")
+          )
+        ).toStrictEqual([]);
+      })
+  );
+
+  it.effect(
     "a fork or capture of a running machine on a host that copies only a stopped one is WrongState before a row is written, and so is one of a stopped machine where a copy takes a running one",
     () =>
       Effect.gen(function* () {
@@ -3646,34 +3835,73 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     })
   );
 
-  it.effect("a template with no ready build fails NotBuilt", () =>
-    Effect.gen(function* () {
-      const { client, rows } = yield* built();
+  it.effect(
+    "a clone of a template past the most vCPUs its host gives a machine is refused Unsizable, naming the limit, before anything is recorded",
+    () =>
+      Effect.gen(function* () {
+        const { client, fake, rows } = yield* built();
 
-      yield* Effect.flip(
-        client.buildTemplate({
-          template: "broken",
-          ...request("unused"),
-          setup: exits3,
-        })
-      );
+        const refused = yield* Effect.flip(
+          client.create("big", { template: "web", cpu: 17 })
+        );
 
-      const [unknown, failed, unkept] = yield* Effect.all([
-        Effect.flip(client.create("a", { template: "nope" })),
-        Effect.flip(client.create("b", { template: "broken" })),
-        Effect.flip(client.create("c", { template: "web@9" })),
-      ]);
+        expect(refused).toMatchObject({
+          _tag: "Unsizable",
+          message:
+            "no host that holds a current copy of build web@1 gives the sizes asked: smolvm gives any sizes from 64M of RAM up to 16 vCPUs and 4294967295M of RAM, not 17 vCPUs, 2G of RAM and 20G of disk",
+        });
+        expect(yield* rows).toStrictEqual([]);
+        expect(fake.calls.filter((call) => call.includes("big"))).toStrictEqual(
+          []
+        );
+      })
+  );
 
-      expect(unknown).toMatchObject({ _tag: "NotBuilt", template: "nope" });
-      expect(unknown.message).toContain(
-        "template nope has no ready build: run clankerbox template build on nope's template file to make one"
-      );
-      expect(failed).toMatchObject({ _tag: "NotBuilt", template: "broken" });
-      expect(unkept.message).toBe(
-        "template web has no ready build web@9: its ready builds are web@1"
-      );
-      expect(yield* rows).toStrictEqual([]);
-    })
+  it.effect(
+    "a template with no ready build fails NotBuilt, saying of a build that failed why",
+    () =>
+      Effect.gen(function* () {
+        const { client, rows } = yield* built();
+
+        const broke = yield* Effect.flip(
+          client.buildTemplate({
+            template: "broken",
+            ...request("unused"),
+            setup: exits3,
+          })
+        );
+
+        yield* Effect.flip(
+          client.buildTemplate({
+            template: "web",
+            ...request("unused"),
+            setup: exits3,
+          })
+        );
+
+        const [unknown, failed, unkept, pinned] = yield* Effect.all([
+          Effect.flip(client.create("a", { template: "nope" })),
+          Effect.flip(client.create("b", { template: "broken" })),
+          Effect.flip(client.create("c", { template: "web@9" })),
+          Effect.flip(client.create("d", { template: "web@2" })),
+        ]);
+
+        expect(unknown).toMatchObject({ _tag: "NotBuilt", template: "nope" });
+        expect(unknown.message).toContain(
+          "template nope has no ready build: run clankerbox template build on nope's template file to make one"
+        );
+        expect(failed).toMatchObject({ _tag: "NotBuilt", template: "broken" });
+        expect(failed.message).toBe(
+          `template broken has no ready build: broken@1 failed: ${broke.message}; run clankerbox template build on broken's template file to make one`
+        );
+        expect(unkept.message).toBe(
+          "template web has no ready build web@9: its ready builds are web@1"
+        );
+        expect(pinned.message).toBe(
+          `template web has no ready build web@2: web@2 failed: ${broke.message}; its ready builds are web@1`
+        );
+        expect(yield* rows).toStrictEqual([]);
+      })
   );
 
   it.effect(

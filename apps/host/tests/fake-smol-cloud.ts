@@ -11,13 +11,12 @@ import type { HttpServerRequest } from "effect/http";
 import { HttpRouter, HttpServer, HttpServerResponse } from "effect/http";
 import { Socket } from "effect/socket";
 
+import { traits as traitsOf } from "../src/platform/smol-cloud/traits.ts";
 import { furnish, writeStubs } from "./fake-runtime.ts";
 import { guestGroups } from "./guest-groups.ts";
 import { lateLandings } from "./late-landing.ts";
 import type { Dropped, Faults } from "./runtime-contract.ts";
 import { loopbackServer } from "./support.ts";
-
-export { traits } from "../src/platform/smol-cloud/traits.ts";
 
 export type FakeState = "stopped" | "creating" | "started" | "paused";
 
@@ -64,6 +63,22 @@ export interface FakeFaults extends Faults {
    * once it reads `started`, as smol cloud's start does.
    */
   readonly holdStarts: Effect.Effect<Effect.Effect<void>>;
+  /**
+   * Has each capture, a pause's own included, read `creating` until the effect it answers runs, as
+   * smol cloud's capture of a pause can still run once the machine is resumed.
+   */
+  readonly holdCaptures: Effect.Effect<Effect.Effect<void>>;
+  /**
+   * While on, has the first delete of each checkpoint that rests refused 409 as its capture's still
+   * is, as smol cloud's refusal can lag behind its checkpoint reading `available`.
+   */
+  readonly lagCaptures: (on: boolean) => Effect.Effect<void>;
+  /**
+   * While on, holds each exec's response head until its command's first output, as a provider whose
+   * attach stalls would, so a silent command's exec never starts; off, the head comes at once, as
+   * smol cloud's does.
+   */
+  readonly stallAttach: (on: boolean) => Effect.Effect<void>;
 }
 
 export interface FakeSmolCloud {
@@ -85,6 +100,13 @@ const concurrentLimit = 4;
 const machineLimit = 20;
 
 const perMachine = { cpus: 4, memoryMb: 16_384, diskGb: 200 };
+
+/** The traits of a smol cloud host over this fake, whose plan gives a machine `perMachine`. */
+export const traits = traitsOf({
+  cpu: perMachine.cpus,
+  ramMib: perMachine.memoryMb,
+  diskGib: perMachine.diskGb,
+});
 
 const nameLimit = 63;
 
@@ -195,6 +217,8 @@ const json = (reply: Answer) =>
     ? HttpServerResponse.empty({ status: reply.status })
     : HttpServerResponse.jsonUnsafe(reply.body, { status: reply.status });
 
+const emptyWriteSendingTheHead = Stream.make("");
+
 const promised = <A>(work: () => Promise<A>) => Effect.promise(work);
 
 const now = () => new Date().toISOString();
@@ -234,6 +258,10 @@ export const fakeSmolCloud = (
     let losingResizes = 0;
 
     let startsHeld: Promise<void> | undefined;
+    let capturesHeld: FakeCheckpoint[] | undefined;
+    let capturesLag = false;
+    const laggedOnce = new Set<string>();
+    let attachStalled = false;
     const lateMakes = lateLandings();
     let quotaOn = false;
     const malformed: object[] = [];
@@ -357,7 +385,11 @@ export const fakeSmolCloud = (
 
       checkpoints.set(id, checkpoint);
       setTimeout(() => {
-        checkpoint.status = "available";
+        if (capturesHeld === undefined) {
+          checkpoint.status = "available";
+        } else {
+          capturesHeld.push(checkpoint);
+        }
       }, 100);
 
       return checkpoint;
@@ -548,9 +580,27 @@ export const fakeSmolCloud = (
       return answer(204);
     };
 
+    const lagsBehind = (checkpoint: FakeCheckpoint) => {
+      if (!capturesLag || laggedOnce.has(checkpoint.id)) {
+        return false;
+      }
+
+      laggedOnce.add(checkpoint.id);
+
+      return true;
+    };
+
     const deleteCheckpoint = async (
       checkpoint: FakeCheckpoint
     ): Promise<Answer> => {
+      if (checkpoint.status === "creating" || lagsBehind(checkpoint)) {
+        return problem(
+          409,
+          "conflict",
+          "checkpoint capture is still in progress"
+        );
+      }
+
       const holder = [...machines.values()].find(
         (machine) =>
           machine.restoredFrom === checkpoint.id ||
@@ -898,8 +948,14 @@ export const fakeSmolCloud = (
               return problem(500, "internal", `no user ${user}`);
             }
 
+            const frames = execStream(machine, body.value);
+
             return HttpServerResponse.stream(
-              Stream.encodeText(execStream(machine, body.value)),
+              Stream.encodeText(
+                attachStalled
+                  ? frames
+                  : Stream.concat(emptyWriteSendingTheHead, frames)
+              ),
               { contentType: "text/event-stream" }
             );
           }
@@ -985,6 +1041,27 @@ export const fakeSmolCloud = (
         return Effect.sync(() => {
           startsHeld = undefined;
           held.resolve(undefined);
+        });
+      }),
+      stallAttach: (on) =>
+        Effect.sync(() => {
+          attachStalled = on;
+        }),
+      lagCaptures: (on) =>
+        Effect.sync(() => {
+          capturesLag = on;
+        }),
+      holdCaptures: Effect.sync(() => {
+        const held: FakeCheckpoint[] = [];
+
+        capturesHeld = held;
+
+        return Effect.sync(() => {
+          capturesHeld = undefined;
+
+          for (const checkpoint of held) {
+            checkpoint.status = "available";
+          }
         });
       }),
     };

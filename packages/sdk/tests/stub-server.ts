@@ -70,7 +70,6 @@ export type Refusals = {
 
 export interface StubServerOptions {
   readonly bases?: readonly string[];
-  readonly runtime?: RuntimeName;
   readonly runtimeVersion?: string;
   /** The clankerbox version the stub control plane runs, whose release it serves alone. */
   readonly version?: string;
@@ -92,7 +91,7 @@ export interface StubServerOptions {
   ) => Effect.Effect<Executed, Declared<"execMachine">>;
 }
 
-export const stubRuntime = RuntimeName.make("stub");
+const stubRuntime = RuntimeName.make("stub");
 
 export const machine = (id: string, fields?: Partial<Machine>): Machine => ({
   id,
@@ -218,7 +217,6 @@ const noTemplate = (id: string) =>
  * name, cleared at once by a delete, and no machine to any other request.
  */
 export const stubServer = (options: StubServerOptions = {}) => {
-  const runtime = options.runtime ?? stubRuntime;
   const bases = options.bases ?? ["ubuntu"];
   const machines = new Map<string, Machine>();
   const checkpoints = new Map<string, Checkpoint>();
@@ -510,7 +508,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
         return yield* add(
           labelled(
             machine(request.id, {
-              runtime,
+              runtime: stubRuntime,
               base: ready.base,
               ...sized(ready, request),
               template: ready.id,
@@ -529,7 +527,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
       return yield* add(
         labelled(
           machine(request.id, {
-            runtime,
+            runtime: stubRuntime,
             base: request.base,
             cpu: request.cpu,
             ramMib: request.ramMib,
@@ -552,7 +550,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
       add(
         labelled(
           machine(name, {
-            runtime,
+            runtime: stubRuntime,
             base: found.base,
             ...sized(found, sizes),
             state: "unknown",
@@ -662,7 +660,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
   const host: Host = {
     id: "stub",
     state: "up",
-    runtime,
+    runtime: stubRuntime,
     version,
     runtimeVersion: options.runtimeVersion ?? "0.0.0-test",
     bases,

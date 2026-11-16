@@ -3,9 +3,8 @@ import { Result } from "effect";
 /**
  * A launchd job as `launchctl print` shows it: `running` while launchd runs the job's program or
  * starts it, which its print gives a pid, and `exited` while no process of it runs, with the last
- * exit code launchd recorded, if any. A job launchd has scheduled to spawn runs no process yet:
- * a host's job, without `KeepAlive`, printed `not running` within 0.3 s of a refused run and never
- * this state, measured on macOS 27.2, and if launchd does spawn it, the VM's lock says it runs.
+ * exit code launchd recorded, if any. A job launchd has scheduled to spawn runs no process yet, and
+ * if launchd does spawn it, the VM's lock says it runs.
  */
 export type Job =
   | { readonly _tag: "running"; readonly program: readonly string[] }

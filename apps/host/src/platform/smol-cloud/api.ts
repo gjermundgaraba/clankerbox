@@ -79,7 +79,6 @@ const ExitFrame = Schema.fromJsonString(
   Schema.Struct({ exitCode: Schema.Int })
 );
 
-/** The provider answered `call` with a problem. */
 export class Refused extends Schema.TaggedError<
   Refused,
   { readonly brand: unique symbol }
@@ -93,6 +92,13 @@ export class Refused extends Schema.TaggedError<
 }) {}
 
 export type ApiError = Refused | Unanswered | Busy | Unreadable;
+
+export const apiErrors = [
+  "Refused",
+  "Unanswered",
+  "Busy",
+  "Unreadable",
+] as const satisfies ReadonlyArray<ApiError["_tag"]>;
 
 export interface Sizes {
   readonly cpus?: number | undefined;

@@ -78,7 +78,7 @@ the whole CLI span domains on purpose.
   requests, places a create and starts the recheck; `Checkpoints` captures,
   deletes, and keeps a build's copy. Each gives `driver` its reads and its writes.
 - `templates.ts`: the `Templates` service, with its `make` and `layer`. A build
-  makes a builder, runs its setup, copies it and deletes it, then ends the build
+  makes a builder, placed as a create is, runs its setup, copies it and deletes it, then ends the build
   in its template's row, keeping the last 2 ready builds; a create from a
   template is `Machines`'s. A host with a build store publishes the copy before
   the build ends ready, and a recheck has every other host of the runtime fetch each
@@ -88,12 +88,9 @@ the whole CLI span domains on purpose.
 - `copies.ts`: a copy's spec, and why its source refuses it.
 - `fleet.ts`: capacity, and what a recheck does beyond each loop: tells a
   restarted host its machines, again until it finds each, and stores the handle
-  and endpoint it answers in each row; then starts, on each host that sweeps
-  and whose last sweep has ended, a sweep of the instances the store retired
-  there, which runs beside the rechecks after it for as long as the host says
-  one takes, noting when a sweep first found each gone and keeping each it
-  answers it left, and notes those of a host that doesn't sweep gone at once;
-  and ends old failures and forgets retired instances a day after.
+  and endpoint it answers in each row; starts each host's sweep (see House
+  style) once its last has ended; and ends old failures and forgets retired
+  instances a day after a sweep first found each gone.
 - `machine-view.ts`: what a client reads of a machine, and `waiting`, which a
   read tells.
 - `operations.ts`: plain functions of a step on its host. `poll` sends it when
@@ -108,8 +105,11 @@ the whole CLI span domains on purpose.
 `platform/sqlite.ts` is the `Store`, and loads each chart's `leaves` at runtime to
 validate `state`. `composition/`: `config.ts` reads the config file, `routes.ts`
 serves the client contract, and `server.ts`, the package's entry, builds the
-server over a server Layer it is given, through the host contract's `journal`. A
-domain file never imports `platform/` or `composition/`.
+server over a server Layer it is given, through the host contract's `journal`.
+Its `controlPlaneServer` is the Node server the control plane listens on, the
+entry's and the tests' alike, and closes every connection it still holds as it
+closes, which the stop does once each request it cut has answered. A domain file never
+imports `platform/` or `composition/`.
 
 **Host** (`apps/host/src`). Domain files sit flat in `src/`:
 
@@ -131,14 +131,16 @@ domain file never imports `platform/` or `composition/`.
   a probe finds it free. A `relayed` runtime's port it binds as it claims it, so
   no other program takes it while the VM boots, and holds it for the machine
   until a remove or a failed make lets it go; it relays it once the make has
-  made the VM, and on adopt binds it again, or another port where another
-  program took that one while the host was down, answering where.
+  made the VM, and on a start or an adopt binds it again, or another port, none
+  of the host's other machines', where another program took that one while the
+  host was down, answering where.
 - Ports: `Runtime` (`runtime.ts`), with its `traits`, its `guest` (`debian` or
   `macos`, which picks the base `guest.ts` prepares), its `reach` (`published` or `relayed`)
   its `prepares` (`always` where its images lack the login user, else
   `with-setup`), and the facets `admission`, `files` and `owned`, each present or
   absent as a whole,
-  `PortProbe` (`machine-ports.ts`), for a `published` runtime's port, `Box` (`box.ts`), what the box tells a host
+  `PortProbe` (`machine-ports.ts`), for a `published` runtime's port, at a make's
+  claim and at each boot its admission admits (`checkPort`), `Box` (`box.ts`), what the box tells a host
   beside its config: its uid, whether a process has ended, and its ephemeral
   ports, `Relays` (`reach.ts`), `Tailnet`
   (`tailnet.ts`), which mints a machine's tailnet key, provided only on a host
@@ -195,7 +197,11 @@ accounts. A domain file never imports `platform/` or `composition/`.
 `runtimes.ts` is the registry of runtimes, one entry each under the name a host
 config's `runtime` gives it, with its settings and its Layer, `routes.ts` serves the host contract, and `host.ts` builds the
 host over a runtime Layer and a server Layer it is given, with the config's
-tailnet and build store, if any.
+tailnet and build store, if any. Its `hostServer` is the Node server a host
+listens on, the entry's and the tests' alike, and answers 503 at once to a
+request no route takes, as one that comes while the host stops. It closes every
+connection it still holds as it closes, which the stop does once each request it
+cut has answered.
 
 **Host contract** (`packages/host-contract/src`). `api.ts`: `HostHttp`, the
 `Step`s, `Operation`, `Report`, `HostInfo`. `traits.ts`, its `./traits` export:
@@ -307,8 +313,9 @@ the run.
   comes from the leaf. What the VM is doing is read from its host, never stored,
   and so is `waiting`, which a read that finds the VM unknown shows. One loop per
   machine moves it toward what was asked a whole step at a time, and a later
-  request cuts a step short, but on boat and smol cloud, whose steps are billed
-  calls to the provider and run whole, waits for it, ten minutes at most. A request takes the row out of rest in the write
+  request cuts a step short, on boat and smol cloud only once the provider call
+  in flight, which is billed and runs whole, has ended, ten minutes at most.
+  A request takes the row out of rest in the write
   that records it, so a resting `phase` read after it has seen it. A client waits
   by reading, and works out `Superseded` from what it reads. A wait follows the
   machine it asked by `createdAt`, reads on through `waiting` as through an
@@ -333,33 +340,17 @@ the run.
   cut short reports `cancelled` only once the VM is where that command takes it.
   A smolvm host that starts resumes a machine a killed pause left `pausing`, so
   no step runs a hook in a frozen guest.
-- **A sweep deletes only what its store retired.** A runtime with the `owned`
-  facet lists the machines that carry the host's mark at its provider, and
-  nothing else, and its host's `HostInfo` says it `sweeps`, and how long a
-  sweep there takes: its list and the delete the facet bounds. A store retires a
+- **A sweep deletes only what its store retired.** A store retires a
   machine's instance on a host in the write that ends its row's hold on it
-  there: the row goes, moves to another host under a new instance, or rests
-  undone. The record outlives the row, and lasts a day of the control
-  plane's clock from the first sweep that reached its host and left nothing of
-  it, while one no sweep has reached, or the last sweep left, stays; no row takes
-  the instance again. Each recheck, after the adopts, sends each host that
-  sweeps the instances retired there, and the host deletes those it lists that
-  no step it holds names, all at once, a machine alone, leaving every
-  checkpoint it holds, and answers each it left: one a step names, and one whose delete failed. A
-  host that doesn't sweep is sent none, and its records are noted gone at once,
-  as no sweep there could find one. A
-  checkpoint's instance is never retired: every runtime that marks its machines
-  holds each checkpoint through its machine, and the start and remove below
-  prune what no row keeps. The sweep deletes
-  nothing for want of a claim, so a wiped or second store sweeps nothing of
-  another store's, and a make that lands a day after a sweep first found it
-  gone is left at its provider. A checkpoint a provider holds through its
-  machine has no mark: a `start` and a `remove` carry `keep`, every checkpoint
-  handle the rows hold on the host, as a checkpoint row names its source by name
-  alone, and the runtime deletes the machine's others, once a start runs it or
-  with the machine. That prune does delete for want of a claim, on one machine
-  the store claims, so a store restored from a backup prunes that machine's
-  checkpoints captured after the backup.
+  there, and no row takes that instance again. Each recheck sends each host
+  whose `HostInfo` says it `sweeps`, as one whose runtime has the `owned` facet
+  does, the instances retired there, and the host deletes the machines of those
+  its runtime lists under its mark that no step it holds names. A checkpoint's
+  instance is never retired: a `start` and a `remove` carry `keep`, and the
+  runtime prunes the machine's checkpoints no row keeps. Nothing else deletes
+  for want of a claim, so a wiped or second store sweeps nothing of another
+  store's. `docs/design/control-plane.md`, How an operation works, holds the
+  rest: how long a record lasts, what a sweep answers, and what it leaves.
 - **Leases are rows.** They are the `operations` table: what changes a resource
   owns it, what copies or reads it shares it, taken in the write that begins the
   operation, and a lease that refuses leaves that write undone. They survive a
@@ -371,10 +362,22 @@ the run.
   arguments and every process's environment. An exec whose scope closes before
   its command exits and its output closes, by its limit, its request ending or
   the host's stop, runs `endScript` through the runtime's own `exec` before the
-  scope's close goes on, bounded by `endTimeout`: TERM, then KILL 5 s later, to
-  each process that holds the mark or descends from one, and nothing else.
-  Smolvm's agent ends a cut command too; a Tart guest, boat and smol cloud
-  leave it running, measured on each, and the fake runtime's `cut` models each.
+  scope's close goes on, bounded by the SDK's `endTimeout`, which the control
+  plane's and the client's waits on a timed exec add: TERM, then STOP and KILL,
+  to each process whose own arguments or environment hold the mark, the exec's
+  or another's, and what descends from one, each listing one `awk` pass, until
+  the deadline the host gives it. A timed-out exec whose end isn't confirmed
+  answers 124 with its output and `mayStillRun`. The launcher waits for its
+  command, so a process holding the mark in its arguments stands above the
+  command for its whole life, unless the command kills it. A stop, pause or
+  remove step first ends its
+  machine's execs in flight so, before its hook and its runtime call:
+  `Operations` admits an exec only while no step runs in its machine's scope,
+  under the semaphore that accepts steps, so a capture of the machine and a
+  fork from it, scoped to the checkpoint and the new machine, run beside one, and the step's cut answers it `WrongState`.
+  README's `exec` bullet states the rest. Smolvm's agent
+  ends a cut command too; a Tart guest, boat and smol cloud leave it running,
+  measured on each, and the fake runtime's `cut` models each.
 - **Setup scripts stay in memory, on both sides, but for a macOS guest's
   disk.** They may carry secrets, and are never stored or logged. A make that
   hasn't reached its host when the control plane ends can't be sent again, and
@@ -387,7 +390,7 @@ the run.
   `undoing`, deletes the VM, again at each recheck while that fails, and rests
   `undone` with its error for `failedRowsLast`. A delete clears it at once and a
   create of the name replaces it. A `Capacity` failure moves the create to the
-  next host instead, for a template's the next that holds its build, once its VM is gone, while the control plane that took the create runs; after a restart it rests `undone`. So does a `Missing` that names the checkpoint a template's create restores, as each later host holds a copy of its own. Nothing ambiguous ever moves one.
+  next host instead, for a template's the next that holds its build, and for a build's builder the next that offers its base, once its VM is gone, while the control plane that took the create runs; after a restart it rests `undone`. So does a `Missing` that names the checkpoint a template's create restores, as each later host holds a copy of its own. Nothing ambiguous ever moves one.
 - **A checkpoint a make finds gone fails.** A runtime answers a make from a
   checkpoint it no longer holds `Missing`, naming the checkpoint, with nothing
   made, and the control plane then fails that checkpoint's row, if it is ready

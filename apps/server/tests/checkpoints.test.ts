@@ -1057,7 +1057,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a capture under way is no checkpoint to restore yet: a restore of it is NotFound, and a list shows it capturing as a get does",
+    "a capture under way is no checkpoint to restore yet: a restore of it is NotMade, naming it, and a list shows it capturing as a get does",
     () =>
       Effect.gen(function* () {
         const { client, host, machines, checkpoints } = yield* withSource();
@@ -1075,10 +1075,74 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* release;
 
-        expect(restoring._tag).toBe("NotFound");
+        expect(restoring).toMatchObject({
+          _tag: "NotMade",
+          checkpoint: "snap",
+          message: "checkpoint snap isn't made yet: its capture still runs",
+        });
         expect(listed).toStrictEqual([got]);
         expect(got.phase).toBe("capturing");
       })
+  );
+
+  it.effect(
+    "a restore of a checkpoint whose capture failed says so, with its error, as a list shows it failed",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* withSource();
+        const { client, host } = served;
+
+        host.fake.failNext("capture", new Internal({ message: "ENOSPC" }));
+
+        yield* Effect.flip(
+          client.captureCheckpoint({ machine: "dev", name: "snap" })
+        );
+        yield* rested(served, "snap");
+
+        const restoring = yield* Effect.flip(
+          client.restoreMachine({ checkpoint: "snap", name: "copy" })
+        );
+
+        const [listed] = yield* client.listCheckpoints();
+
+        expect(listed).toMatchObject({
+          phase: "failed",
+          error: { message: "ENOSPC" },
+        });
+        expect(restoring).toMatchObject({
+          _tag: "NotFound",
+          message:
+            "checkpoint snap failed, so nothing restores it: ENOSPC; delete it",
+        });
+        expect(yield* served.store.findMachine("copy")).toStrictEqual(
+          Option.none()
+        );
+      })
+  );
+
+  it.effect("a restore of a checkpoint being deleted says so", () =>
+    Effect.gen(function* () {
+      const served = yield* withSource();
+      const { client, host, checkpoints } = served;
+
+      yield* client.captureCheckpoint({ machine: "dev", name: "snap" });
+
+      const { release, entered } = host.fake.holdNext("deleteCheckpoint");
+
+      yield* checkpoints.delete("snap");
+      yield* entered;
+
+      const restoring = yield* Effect.flip(
+        client.restoreMachine({ checkpoint: "snap", name: "copy" })
+      );
+
+      yield* release;
+
+      expect(restoring).toMatchObject({
+        _tag: "NotFound",
+        message: "checkpoint snap is being deleted",
+      });
+    })
   );
 
   it.effect(

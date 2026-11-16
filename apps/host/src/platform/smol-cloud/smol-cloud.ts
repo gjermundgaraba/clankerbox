@@ -1,3 +1,8 @@
+import {
+  fitted,
+  formatSizes,
+  givenSizes,
+} from "@clankerbox/host-contract/traits";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import {
   Capacity,
@@ -48,8 +53,9 @@ import {
   untilRest,
 } from "../provider-http.ts";
 import * as Api from "./api.ts";
+import { apiErrors } from "./api.ts";
 import type { ApiError, MachineRecord, Refused } from "./api.ts";
-import { traits } from "./traits.ts";
+import { traits as traitsOf } from "./traits.ts";
 import { tunnel } from "./tunnel.ts";
 
 export const defaultApi = "https://api.smolmachines.com";
@@ -114,8 +120,6 @@ const transitional = new Set(["creating", "pausing", "starting", "stopping"]);
 
 const checkpointEnds = new Set(["available", "failed"]);
 
-const apiErrors = ["Refused", "Unanswered", "Busy", "Unreadable"] as const;
-
 const fromApi = (error: { readonly _tag: string }): error is ApiError =>
   apiErrors.some((tag) => tag === error._tag);
 
@@ -177,9 +181,6 @@ const stateOf = (record: MachineRecord | undefined): MachineState => {
   }
 };
 
-const unknownOutcome = (error: ApiError) =>
-  error._tag === "Unanswered" || (error._tag === "Refused" && error.retryable);
-
 const isGone = (error: ApiError) =>
   error._tag === "Refused" && error.status === 404;
 
@@ -194,6 +195,27 @@ const oversized = (error: Refused) =>
 
 const internal = (what: string) => (error: ApiError) =>
   new Internal({ message: `${what}: ${error.message}` });
+
+const autoStopSeconds = (account: Api.Account) =>
+  account.plan.allowAlwaysOn ? 0 : idleStopSeconds;
+
+const perMachine = (account: Api.Account) => ({
+  cpu: account.effectiveMaxCpus,
+  ramMib: account.effectiveMaxMemoryMb,
+  diskGib: account.effectiveMaxDiskGb,
+});
+
+const planned = (machine: Identity & Sizes, account: Api.Account) => {
+  const given = traitsOf(perMachine(account));
+
+  return fitted(given, machine)
+    ? Effect.void
+    : Effect.fail(
+        new Unsizable({
+          message: `make ${machine.name}: the account's plan now gives ${givenSizes(given)}, and ${machine.name} was asked ${formatSizes(machine)}`,
+        })
+      );
+};
 
 const waited = (error: ApiError) =>
   Effect.sleep(
@@ -268,8 +290,17 @@ export const make = (
   host: Pick<HostSettings, "id" | "listen">,
   api: Api.Api,
   sockets: Socket.WebSocketConstructor["Service"]
-): Effect.Effect<Interface> =>
-  Effect.sync(() => {
+): Effect.Effect<Interface, Internal> =>
+  Effect.gen(function* () {
+    const traits = traitsOf(
+      perMachine(
+        yield* Effect.mapError(
+          api.account,
+          internal("couldn't read the account's plan")
+        )
+      )
+    );
+
     const prefix = `cbx-${host.id}-`;
     const nameOf = (instance: string) => `${prefix}${instance}`;
 
@@ -350,10 +381,6 @@ export const make = (
 
         return Effect.fail(internal(what)(error));
       };
-
-    const autoStopSeconds = Effect.map(api.account, (account) =>
-      account.plan.allowAlwaysOn ? 0 : idleStopSeconds
-    );
 
     const rested = (handle: Handle) =>
       untilRest(
@@ -545,29 +572,33 @@ export const make = (
     const byName = (name: string) =>
       Effect.map(listed, (all) => all.find((found) => found.name === name)?.id);
 
-    const made = (machine: Identity & Sizes, origin: Origin) => {
+    const creation = (
+      machine: Identity & Sizes,
+      origin: Origin,
+      account: Api.Account
+    ): Effect.Effect<MachineRecord, ApiError> => {
       const name = nameOf(machine.instance);
 
       switch (origin._tag) {
         case "image": {
-          return Effect.flatMap(autoStopSeconds, (autoStop) =>
-            api.create({
-              name,
-              image: origin.image,
-              sizes: {
-                cpus: machine.cpu,
-                memoryMb: machine.ramMib,
-                diskGb: machine.diskGib,
-              },
-              ttlSeconds: settings.ttlSeconds,
-              autoStopSeconds: autoStop,
-            })
-          );
+          return api.create({
+            name,
+            image: origin.image,
+            sizes: {
+              cpus: machine.cpu,
+              memoryMb: machine.ramMib,
+              diskGb: machine.diskGib,
+            },
+            ttlSeconds: settings.ttlSeconds,
+            autoStopSeconds: autoStopSeconds(account),
+          });
         }
 
         case "checkpoint": {
-          return Effect.flatMap(autoStopSeconds, (autoStop) =>
-            api.restore(origin.checkpoint.handle, name, autoStop)
+          return api.restore(
+            origin.checkpoint.handle,
+            name,
+            autoStopSeconds(account)
           );
         }
 
@@ -578,38 +609,70 @@ export const make = (
     };
 
     const created = (
-      machine: Identity & Sizes,
-      origin: Origin,
-      tries = 5
-    ): Effect.Effect<Handle, ApiError> =>
-      Effect.flatMap(Effect.result(made(machine, origin)), (answered) => {
-        if (answered._tag === "Success") {
-          return Effect.succeed(answered.success.id);
-        }
+      machine: Identity,
+      send: Effect.Effect<MachineRecord, ApiError>
+    ): Effect.Effect<Handle, ApiError> => {
+      const named = byName(nameOf(machine.instance));
 
-        const error = answered.failure;
-
-        if (!unknownOutcome(error) && !isConflict(error)) {
-          return Effect.fail(error);
-        }
-
-        return Effect.andThen(
-          waited(error),
-          Effect.flatMap(byName(nameOf(machine.instance)), (handle) =>
-            Effect.fromNullishOr(handle).pipe(
-              Effect.catch(() =>
-                tries > 1 && unknownOutcome(error)
-                  ? created(machine, origin, tries - 1)
-                  : Effect.fail(error)
-              )
+      return sentUntilHeld({
+        send: send.pipe(
+          Effect.catchIf(retryable, (refused) =>
+            Effect.andThen(waited(refused), Effect.fail(refused))
+          ),
+          Effect.map(({ id }) => id)
+        ),
+        lost: retryable,
+        rested: Effect.andThen(Effect.sleep(poll), named),
+        holds: (found): found is Handle => found !== undefined,
+        unheld: (_, last) => last,
+      }).pipe(
+        Effect.catchIf(isConflict, (conflict) =>
+          Effect.andThen(
+            waited(conflict),
+            Effect.filterOrFail(
+              named,
+              (handle): handle is Handle => handle !== undefined,
+              () => conflict
             )
           )
-        );
-      });
+        )
+      );
+    };
+
+    const checkpointAtRest = (checkpoint: Handle) =>
+      untilRest(
+        api.checkpoint(checkpoint),
+        ({ status }) => checkpointEnds.has(status),
+        poll
+      );
+
+    const checkpointDeleted = (
+      checkpoint: Handle,
+      refusedAtRest = 0
+    ): Effect.Effect<void, ApiError> =>
+      api.deleteCheckpoint(checkpoint).pipe(
+        Effect.catchIf(isConflict, (refusal) =>
+          Effect.flatMap(api.checkpoint(checkpoint), ({ status }) => {
+            if (!checkpointEnds.has(status)) {
+              return Effect.andThen(
+                checkpointAtRest(checkpoint),
+                checkpointDeleted(checkpoint, refusedAtRest)
+              );
+            }
+
+            return refusedAtRest + 1 >= standingAfter
+              ? Effect.fail(refusal)
+              : Effect.andThen(
+                  waited(refusal),
+                  checkpointDeleted(checkpoint, refusedAtRest + 1)
+                );
+          })
+        ),
+        Effect.catchIf(isGone, () => Effect.void)
+      );
 
     const pruned = (machine: Target, checkpoint: Handle) =>
-      api.deleteCheckpoint(checkpoint).pipe(
-        Effect.catchIf(isGone, () => Effect.void),
+      checkpointDeleted(checkpoint).pipe(
         Effect.mapError(
           internal(
             `delete checkpoint ${checkpoint} of ${machine.name}, which no row keeps`
@@ -638,11 +701,7 @@ export const make = (
     const available = (machine: Target, checkpoint: Handle) =>
       Effect.map(
         Effect.mapError(
-          untilRest(
-            api.checkpoint(checkpoint),
-            ({ status }) => checkpointEnds.has(status),
-            poll
-          ),
+          checkpointAtRest(checkpoint),
           internal(`capture ${machine.name}`)
         ),
         ({ status }) => status === "available"
@@ -890,7 +949,16 @@ export const make = (
         Effect.gen(function* () {
           yield* told([machine]);
 
-          const handle = yield* created(machine, origin).pipe(
+          const account = yield* api.account.pipe(
+            Effect.catchTag(apiErrors, failed(`make ${machine.name}`))
+          );
+
+          yield* planned(machine, account);
+
+          const handle = yield* created(
+            machine,
+            creation(machine, origin, account)
+          ).pipe(
             Effect.catchIf(
               isGone,
               (error): Effect.Effect<never, ApiError | Missing> =>
@@ -904,7 +972,7 @@ export const make = (
               (error) => error._tag === "Refused" && oversized(error),
               (error) =>
                 Effect.fail(
-                  new Capacity({
+                  new Unsizable({
                     message: `make ${machine.name}: smol cloud makes no machine of these sizes on this account: ${error.message}`,
                   })
                 )
@@ -1016,8 +1084,7 @@ export const make = (
           })
         ),
       deleteCheckpoint: (checkpoint) =>
-        api.deleteCheckpoint(checkpoint.handle).pipe(
-          Effect.catchIf(isGone, () => Effect.void),
+        checkpointDeleted(checkpoint.handle).pipe(
           Effect.mapError((error) =>
             isConflict(error)
               ? new Conflict({

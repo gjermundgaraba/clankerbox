@@ -106,6 +106,7 @@ runServe(
             as: runtime,
             ramBudgetMib,
             pin: process.env["CLANKERBOX_FAKE_PIN"],
+            probesPorts: true,
             onCall: (call) => {
               appendFileSync(
                 path.join(evidence, "runtime-calls.txt"),

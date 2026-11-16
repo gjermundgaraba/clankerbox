@@ -195,8 +195,7 @@ as it is.
   unreachable source is refused, and the RAM budget counts `unreachable` as
   running. The ping's socket waits 3 s to read and 3 s to write
   (`connect_for_state_probe`, src/agent/client.rs), so `machine status` reads an
-  unreachable machine within the host's 8 s `machineReadWait`, which the live
-  stall test relies on.
+  unreachable machine within the host's 8 s `machineReadWait`.
 - `stop` returns after the process is dead. It needs the guest's shutdown ack;
   it hard-kills an unreachable VM or an orphaned VMM
   (`cli_recover_if_unreachable`, `kill_orphaned_boot_process`,
@@ -328,7 +327,8 @@ as it is.
   JSON carries `cpus`,
   `memory_mib` and `storage_gb`, null for the default 20 GiB
   (`machine_status_json`, src/cli/vm_common.rs; `DEFAULT_STORAGE_SIZE_GIB`,
-  src/data/storage.rs). Ours: `growsLive` is true, so the core refuses a paused
+  src/data/storage.rs). Ours: the traits' `resize.running` is `grow`, so the
+  core refuses a paused
   machine, a smaller disk and a running machine's shrinks before anything
   native. `resize` sends a stopped machine one `machine update` with every size
   the request names, and a running one a `machine resize` per named size, RAM,
@@ -341,18 +341,29 @@ as it is.
   with its source's vCPUs and RAM, so the core refuses a copy's smaller ones
   before the copy, and `restoreRam` grows a larger copy live with the sizes
   that differ from its source's once it boots. The limits are traits
-  (`platform/smolvm/traits.ts`), which the control plane checks before it
-  records a create, a copy or a resize, and the host again before it runs a
-  resize: at
-  least `MIN_MEMORY_MIB` of RAM; at most the vCPUs and RAM the CLI parses,
-  and on x86_64 254 vCPUs, libkrun's `MAX_SUPPORTED_CPUS`
-  (src/arch/src/x86_64/mptable.rs in the pinned `libkrun` submodule, whose
-  `setup_mptable` refuses more at boot; above 16, `validate` only warns, and
-  a Linux VM boots with all of them); and a running machine's vCPUs grown to
-  at most 16, the slots `configure_live_resize` reserves only for a boot of
-  16 or fewer (src/agent/krun.rs; `topology.vcpu_count = 16` in libkrun's
-  src/vmm/src/builder.rs), past which `grow_cpus_locked` refuses with the
-  VMM's `PROTOTYPE_CPU_STATUS` capacity. A live RAM grow past the region
+  (`platform/smolvm/traits.ts`). The control plane checks them before it
+  records a create or a copy. It checks a resize before it records it only
+  when it knows the machine's host and the machine is made. Otherwise it
+  records the resize, and the host refuses it. The host checks them again
+  before it runs a resize. They are: at
+  least `MIN_MEMORY_MIB` of RAM; at most the RAM the CLI parses, which
+  `krun_set_vm_config` takes as a `u32` too (src/libkrun/src/lib.rs in the
+  pinned `libkrun` submodule), and which a host's RAM budget refuses long
+  before; and at most 16 vCPUs, created, stopped or running alike, the
+  `CONFIG_NR_CPUS` of the guest kernel the `libkrunfw` submodule builds for
+  each architecture (`config-libkrunfw_x86_64`, `config-libkrunfw_aarch64`,
+  copied as the kernel's `.config` before `olddefconfig` in its `Makefile`;
+  the bundled `libkrunfw.so` is that submodule's, `lib/linux-*/libkrun.provenance`).
+  A machine asked more boots with 16, logging "CPU limit of 16 reached",
+  while its record keeps the count asked (measured on 1.34.1 with 17 and 32):
+  `validate` only warns, and libkrun's MP table would take 254 on x86_64
+  (`MAX_SUPPORTED_CPUS`, src/arch/src/x86_64/mptable.rs). libkrun reserves a
+  running machine's live-resize slots for a boot of 16 or fewer, up to 16,
+  and refuses a checkpoint whose CPU capacity is past "the current firmware
+  limit" of 16 (`topology.vcpu_count = 16`, src/vmm/src/builder.rs; src/agent/krun.rs),
+  past which `grow_cpus_locked` refuses with the VMM's
+  `PROTOTYPE_CPU_STATUS` capacity. A bump re-reads `CONFIG_NR_CPUS` at the
+  new `libkrunfw` commit. A live RAM grow past the region
   libkrun reserves, 64 GiB above the boot RAM cut to the guest's physical
   address width (`memory_growth_region_size`), is refused "within the
   platform aperture", which `grown` answers `Unsizable` (`apertureRefusal`):
@@ -398,10 +409,10 @@ as it is.
   `apps/host/src/guest.ts`); `start` scripts daemonize with `setsid -f`, and
   ours (tailscaled in `guest.ts`, the provider's recipe) redirect its output; a
   guest script that passes its timeout, or a step cut short, has `guest.ts`
-  end its command in the guest, TERM then KILL, and then ends the client, so
-  smolvm kills what is left: measured with 1.34.1, a client killed by TERM or
-  KILL, a host timeout and a host stop each left none of a cut command's
-  processes in the guest.
+  end its command in the guest, as README's `exec` bullet says, and then ends
+  the client, so smolvm kills what is left: measured with 1.34.1, a client
+  killed by TERM or KILL, a host timeout and a host stop each left none of a
+  cut command's processes in the guest.
   Live on 1.31.1: a SIGTERM to the client ended it with 143 and the guest
   command with it; a `machine stop` or `machine pause` while an exec ran
   returned at once and ended the exec with exit 1, "io operation failed:
@@ -460,8 +471,9 @@ as it is.
   directory above its data root, agent rootfs and registry
   (`ensure_traversable`, src/process.rs, called in src/agent/manager.rs). The
   agent rootfs is exported to the guest read-only. Ours: guests can't write
-  the shared agent rootfs; the live driver's teardown checks for uid ≥ 2000000
-  processes, and its test host runs no other smolvm inventory.
+  the shared agent rootfs, and a smolvm host refuses to start while another
+  process holds `boxLock`, an abstract socket (`one-per-box.ts`), so no two
+  hosts on a box run VMs under the same uids.
 - As root every restore creates `/dev/shm/smolvm-restore` and leaves it; only
   `machine pause`/`resume` stage RAM there; `SMOLVM_RESTORE_TMPFS=0` turns it
   off at no cost (`restore_tmpfs_root`, src/portable_checkpoint.rs). Ours: set
@@ -471,7 +483,15 @@ as it is.
   after, when `/dev/shm` has room for 1.25 × the machine's RAM plus 1 GiB and
   `MemAvailable` is twice that (`capture_tmpfs_root`,
   `runtime_capture_dir_preferring_tmpfs`, src/portable_checkpoint.rs). Nothing
-  turns it off. Ours: that RAM is outside the RAM budget while a capture runs.
+  turns it off. The private directory is a `checkpoint-capture-` `TempDir`
+  of the CLI's, owned by the VM's uid, which the VMM writes the RAM image
+  into and the CLI removes as it drops it (`runtime_capture_dir_at`), so a
+  CLI killed mid-capture leaves it holding what was written (one was left
+  empty on 1.34.1 by a host's stop, measured). Ours: that RAM is outside the
+  RAM budget while a capture runs, and nothing removes a leftover: the path
+  is the box's whatever the data root, and each data root counts uids up
+  from the same base, so a host can't tell its own leftover from another
+  smolvm's capture that still runs. README tells the operator.
 - Each VMM sets its own `oom_score_adj`: −500 for a branchable machine
   (`SMOLVM_FORKABLE`, which `start --branchable` passes), +500 for a clone or
   a first boot from a restore (`SMOLVM_SNAPSHOT_DIR`, set while a restore is
@@ -512,8 +532,20 @@ as it is.
 - `-p` binds loopback, or `SMOLVM_PUBLISH_ADDR`, which the VMM reads, and
   `[::1]` beside an address other than `0.0.0.0`; only a loopback bind refused
   for its port falls back to the wildcard, filtered by peer (`publish_addr`,
-  `bind_with`, crates/smolvm-network/src/publish_bind.rs). Ours:
-  `SMOLVM_PUBLISH_ADDR` is the host's `listen.address`.
+  `bind_with`, crates/smolvm-network/src/publish_bind.rs). The VMM binds
+  them at every boot, a `resume` included, which launches as a start does
+  (`resume_vm`, `launch_from_record`, src/embedded/control.rs): the IPv4 one
+  must bind, and a port another program holds there fails the boot "cannot
+  publish host TCP …: Address already in use" with the guest's console
+  (measured on 1.34.1 for a start), while the IPv6 one is skipped when it can't
+  (`bind_v6`). `machine update` moves a stopped machine's forwards (`-p`,
+  `--remove-port`) but refuses a paused one (`InvalidState`, `UpdateCmd`'s
+  `run`, src/cli/machine.rs). Ours: `SMOLVM_PUBLISH_ADDR` is the host's
+  `listen.address`; a make's claim probes the IPv4 address before the port
+  is given, and `admit` probes a machine's port before every boot of it but
+  a running resize's (`checkPort`, `machine-ports.ts`), answering
+  `Capacity` with no smolvm call where another program holds it, rather
+  than moving a port the VM of a paused machine can't leave.
 - Setting `SMOLVM_PUBLISH_ADDR` makes the egress floor strict by default; the
   values are `strict`, `metadata` and `off` (`floor_mode`,
   crates/smolvm-network/src/egress.rs), and no per-machine flag weakens strict
@@ -533,8 +565,7 @@ as it is.
   resolver, tailnet names included where it serves them, though the floor
   still refuses connecting to the answers. smolvm refuses to capture a machine
   with custom DNS (`validate_capture_profile`, src/portable_checkpoint.rs), so
-  `--dns` is no way out. Ours: no DNS setting; the live isolation probe uses
-  100.100.100.100:80, not port 53.
+  `--dns` is no way out. Ours: no DNS setting.
 - A checkpoint with published ports refuses any backend but virtio-net
   (`validate_compatibility`, src/portable_checkpoint.rs); a restore reuses the
   checkpoint's host ports verbatim (`checkpoint_network`,
@@ -554,9 +585,11 @@ as it is.
   The CLI allocates no other host port range. Ours: every branch of a
   machine passes `-p <port>:22`, and the freezer branch of a base pins none
   from a base whose forwards its park removed, so smolvm picks no port of
-  its own, and a smolvm host's `machinePorts` may lie in that range; only
-  its box's ephemeral ports are refused (`ephemeralPorts`,
-  `machine-ports.ts`; 10000–19999 by default; `config.test.ts`). A bump
+  its own, and a smolvm host's `machinePorts` (10000–19999 by default,
+  `defaultMachinePorts` in `machine-ports.ts`) may lie in that range; only
+  its box's ephemeral ports are refused (`ephemeralPorts`, which
+  `platform/box.ts` reads and `composition/config.ts` checks;
+  `config.test.ts`). A bump
   that has smolvm pick a port another way brings the refusal back.
 
 **Checkpoints, forks and identity**
@@ -607,7 +640,8 @@ as it is.
   `/bin/true` in the guest before it returns (`probe_restored_guest`,
   src/agent/fork.rs). Ours: `pin`, so a RAM state is restored only under the
   release that saved it, and a machine is captured or forked only when its VM
-  booted under the host's (`resumable`, `restorable`, `copyable`, `apps/host/src/operations.ts`); under it a
+  booted under the host's (`pinned` and `pauseOrStop` in
+  `apps/host/src/operations.ts`, over the host contract's `pinRefusal`); under it a
   restore's digest is the installed rootfs's, so the store stays empty. If
   smolvm starts enforcing the engine build itself, the pin could go.
 - Store mode: `--store` with `--history 0` (the default keeps 32 generations, so
@@ -734,8 +768,9 @@ as it is.
 
 ## Verify
 
-- Unit: `vp test` in `apps/host` (`platform/smolvm/smolvm.test.ts` fakes each smolvm call
-  as the tested release answers it; `platform/sqlite.test.ts`) and `packages/sdk`
+- Unit: `vp test` in `apps/host` (`tests/platform/smolvm/smolvm.test.ts`
+  fakes each smolvm call as the tested release answers it, and
+  `tests/requirements.test.ts` checks README's floor) and `packages/sdk`
   (`ids.test.ts`), then `vp run --no-cache ready`. Update a fake only to match
   smolvm's real behaviour at the target.
 
