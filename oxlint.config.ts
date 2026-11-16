@@ -11,6 +11,21 @@ const adapterPackages = [
 const adapterBecause =
   "an adapter imports the domain files, platform's shared process.ts, its own subfolder and the runtime traits it states; never the host contract's API, composition/ or another adapter";
 
+const domainImports = [
+  "^\\./[a-z-]+\\.ts$",
+  "^effect$",
+  "^effect/encoding$",
+  "^@gjermundgaraba/clankerbox-sdk$",
+  "^@clankerbox/host-contract(/traits)?$",
+];
+
+const rivetNodeFiles = [
+  "packages/rivet-sandbox-agent/src/fetch.ts",
+  "packages/rivet-sandbox-agent/src/index.ts",
+  "packages/rivet-sandbox-agent/src/relay.ts",
+  "packages/rivet-sandbox-agent/src/tunnel.ts",
+];
+
 const providerClients = [
   "apps/host/src/platform/boat/*.ts",
   "apps/host/src/platform/smol-cloud/*.ts",
@@ -49,13 +64,7 @@ export default config({
         "fence/allowed-imports": [
           "error",
           {
-            allow: [
-              "^\\./[a-z-]+\\.ts$",
-              "^effect$",
-              "^effect/encoding$",
-              "^@gjermundgaraba/clankerbox-sdk$",
-              "^@clankerbox/host-contract(/traits)?$",
-            ],
+            allow: domainImports,
             because:
               "a host domain file imports only other domain files, effect, the SDK and the host contract; platform/, Node and effect/process are for composition/",
           },
@@ -74,13 +83,7 @@ export default config({
         "fence/allowed-imports": [
           "error",
           {
-            allow: [
-              "^\\./[a-z-]+\\.ts$",
-              "^effect$",
-              "^effect/encoding$",
-              "^@gjermundgaraba/clankerbox-sdk$",
-              "^@clankerbox/host-contract(/traits)?$",
-            ],
+            allow: domainImports,
             because:
               "a server domain file imports only other domain files, effect, the SDK and the host contract; a host is reached through hosts.ts, and platform/ and Node are for composition/",
           },
@@ -266,12 +269,7 @@ export default config({
       },
     },
     {
-      excludeFiles: [
-        "packages/rivet-sandbox-agent/src/fetch.ts",
-        "packages/rivet-sandbox-agent/src/index.ts",
-        "packages/rivet-sandbox-agent/src/relay.ts",
-        "packages/rivet-sandbox-agent/src/tunnel.ts",
-      ],
+      excludeFiles: rivetNodeFiles,
       files: ["packages/rivet-sandbox-agent/src/**/*.ts"],
       rules: {
         "fence/allowed-imports": [
@@ -311,12 +309,7 @@ export default config({
       },
     },
     {
-      files: [
-        "packages/rivet-sandbox-agent/src/fetch.ts",
-        "packages/rivet-sandbox-agent/src/index.ts",
-        "packages/rivet-sandbox-agent/src/relay.ts",
-        "packages/rivet-sandbox-agent/src/tunnel.ts",
-      ],
+      files: rivetNodeFiles,
       rules: {
         "fence/allowed-imports": [
           "error",
