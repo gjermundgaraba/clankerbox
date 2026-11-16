@@ -72,12 +72,15 @@ const errorDocument = (error: Failure) => {
   };
 };
 
-export const failText = (error: {
+/** An error as the CLI prints it: `NotFound: no machine dev`. */
+export const errorText = (error: {
   readonly _tag: string;
   readonly message: string;
-}) =>
+}): string => `${error._tag}: ${error.message}`;
+
+const failText = (error: { readonly _tag: string; readonly message: string }) =>
   Effect.andThen(
-    Console.error(`clankerbox: ${error._tag}: ${error.message}`),
+    Console.error(`clankerbox: ${errorText(error)}`),
     Effect.fail(new Exited({ code: 1 }))
   );
 

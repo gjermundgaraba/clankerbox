@@ -8,6 +8,7 @@ import { DateTime, Effect, Schema } from "effect";
 import { Command } from "effect/cli";
 
 import {
+  errorText,
   checkpointArgument,
   clientFlags,
   deleted,
@@ -68,12 +69,7 @@ export const checkpointFields = (checkpoint: Checkpoint, now: DateTime.Utc) => [
       ? "-"
       : DateTime.formatIso(checkpoint.expiresAt),
   ],
-  [
-    "ERROR",
-    checkpoint.error === undefined
-      ? "-"
-      : `${checkpoint.error._tag}: ${checkpoint.error.message}`,
-  ],
+  ["ERROR", checkpoint.error === undefined ? "-" : errorText(checkpoint.error)],
 ];
 
 export const encodeCheckpoint = Schema.encodeSync(Checkpoint);
