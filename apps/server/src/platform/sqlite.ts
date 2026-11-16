@@ -16,7 +16,6 @@ import {
 } from "effect";
 import type { Scope } from "effect";
 
-import type { Decision } from "../chart.ts";
 import { leaves as checkpointLeaves } from "../checkpoint-chart.ts";
 import { leaves } from "../machine-chart.ts";
 import {
@@ -32,6 +31,7 @@ import {
 } from "../store.ts";
 import type {
   Advanced,
+  Decision,
   Hold,
   Interface,
   Rows,

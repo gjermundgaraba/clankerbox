@@ -6,14 +6,7 @@ import type {
 } from "xstate";
 
 import type { FreshBoot } from "./hosts.ts";
-import type { Facts, Lease, Operation } from "./store.ts";
-
-/** What a resource's write does: its next row, and the operation it begins or finishes. */
-export interface Decision<R> {
-  readonly next: R | "removed";
-  readonly begin?: Omit<Operation, "sequence">;
-  readonly finish: boolean;
-}
+import type { Decision, Facts, Lease, Operation } from "./store.ts";
 
 /** `read` and `recheck` read, and `follow` polls the operation; `none` waits for a request. */
 export type Activity = "read" | "follow" | "recheck" | "none";

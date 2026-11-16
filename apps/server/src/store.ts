@@ -16,7 +16,6 @@ import type { Conflict, Internal, Phase } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, Effect, Schema, SchemaGetter } from "effect";
 import type { Array as Arr, DateTime, Option, Result, Scope } from "effect";
 
-import type { Decision } from "./chart.ts";
 import type { CheckpointRow } from "./checkpoint-chart.ts";
 import type { MachineRow } from "./machine-chart.ts";
 
@@ -238,6 +237,13 @@ export type Advanced<R> =
     }
   | { readonly at: "absent" }
   | { readonly at: "busy"; readonly by: Operation };
+
+/** What a resource's write does: its next row, and the operation it begins or finishes. */
+export interface Decision<R> {
+  readonly next: R | "removed";
+  readonly begin?: Omit<Operation, "sequence">;
+  readonly finish: boolean;
+}
 
 export interface Interface {
   /**

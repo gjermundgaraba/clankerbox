@@ -57,6 +57,7 @@ import {
   rememberDns,
   runSetup,
   scrubNode,
+  tailnetTimeout,
 } from "./guest.ts";
 import type { TailnetReport } from "./guest.ts";
 import { Reaches } from "./reach.ts";
@@ -112,7 +113,7 @@ export class Operations extends Context.Service<Operations, Interface>()(
 
 const reportWait = Duration.seconds(5);
 
-const joinTimeout = Duration.minutes(3);
+const joinTimeout = Duration.times(tailnetTimeout, 2);
 
 const booted = {
   base: "createMachine",

@@ -599,7 +599,7 @@ export const prepare = (
     preparationTimeout
   ).pipe(Effect.map(hostKeyIn));
 
-const tailnetTimeout = Duration.seconds(90);
+export const tailnetTimeout = Duration.seconds(90);
 
 interface TailnetJoin {
   readonly key: Redacted.Redacted;
