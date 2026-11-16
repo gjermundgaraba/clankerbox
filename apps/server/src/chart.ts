@@ -209,7 +209,10 @@ export const leavesOf = (
   return under(machine.root);
 };
 
-/** What a chart's leaves say of a row: every leaf a row can hold, and each one's `meta`. */
+/** A leaf's top region, which is how far its row is. */
+export type TopOf<L> = L extends `${infer Top}.${string}` ? Top : L;
+
+/** What a chart's leaves say of a row: every leaf a row can hold, each one's `meta`, and its top region. */
 export const rowLeavesOf = <L extends string, Phase>(
   machine: Pick<AnyStateMachine, "id" | "root"> & {
     readonly getStateNodeById: (id: string) => {
@@ -227,8 +230,25 @@ export const rowLeavesOf = <L extends string, Phase>(
     return meta;
   };
 
+  const stages = Object.keys(machine.root.states).filter(
+    (top): top is TopOf<L> => top !== "gone"
+  );
+
+  const stageOf = (leaf: L): TopOf<L> => {
+    const stage = stages.find(
+      (top) => leaf === top || leaf.startsWith(`${top}.`)
+    );
+
+    if (stage === undefined) {
+      throw new Error(`leaf ${leaf} is in no region`);
+    }
+
+    return stage;
+  };
+
   return {
     leaves: leavesOf(machine).filter((path): path is L => path !== "gone"),
+    stageOf,
     metaOf,
     phaseOf: (leaf: L): Phase => metaOf(leaf).phase,
     activityOf: (leaf: L): Activity => metaOf(leaf).activity,

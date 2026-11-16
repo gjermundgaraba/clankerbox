@@ -7,7 +7,6 @@ import {
 import {
   buildId,
   execWait,
-  Internal,
   isResting,
   labelledWith,
   NotBuilt,
@@ -31,6 +30,7 @@ import type {
   RestoreRequest,
   Setup,
   Sizing,
+  Internal,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Context,
@@ -80,7 +80,7 @@ import {
   stateIn,
   stateOf,
 } from "./machine-view.ts";
-import { collect, cutShort, poll } from "./operations.ts";
+import { collect, cutShort, poll, unreported } from "./operations.ts";
 import { builtUnder, holding, placing } from "./placement.ts";
 import type { BuiltUnder, Candidate } from "./placement.ts";
 import { machineStep, refOf } from "./steps.ts";
@@ -521,9 +521,7 @@ export const make = (
 
             const written = yield* stored(name, {
               type: "lost",
-              error: new Internal({
-                message: `the ${op.kind} of machine ${name} ended before its host reported it: ${heard.why}`,
-              }),
+              error: unreported(op, heard.why),
             });
 
             if (written && op.kind === "resize") {

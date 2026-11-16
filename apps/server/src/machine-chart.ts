@@ -8,6 +8,7 @@ import type {
   LeafOf,
   Read as Begins,
   Stated,
+  TopOf,
 } from "./chart.ts";
 import type {
   Facts,
@@ -430,31 +431,13 @@ export type Leaf = LeafOf<typeof machine>;
 
 export type MachineRow = Stated<Facts, Leaf>;
 
-export const { leaves, metaOf, phaseOf, activityOf } = rowLeavesOf<
+export const { leaves, metaOf, phaseOf, activityOf, stageOf } = rowLeavesOf<
   Leaf,
   MachinePhase
 >(machine);
 
-type TopOf<L> = L extends `${infer Top}.${string}` ? Top : L;
-
 /** A leaf's top region, which is how far a machine is. */
 export type Stage = TopOf<Leaf>;
-
-const stages = Object.keys(machine.root.states).filter(
-  (top): top is Stage => top !== "gone"
-);
-
-export const stageOf = (state: Leaf): Stage => {
-  const stage = stages.find(
-    (top) => state === top || state.startsWith(`${top}.`)
-  );
-
-  if (stage === undefined) {
-    throw new Error(`leaf ${state} is in no region`);
-  }
-
-  return stage;
-};
 
 export const desiredOf = ({
   state,

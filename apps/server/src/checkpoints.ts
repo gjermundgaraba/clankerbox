@@ -6,7 +6,6 @@ import {
 } from "@clankerbox/host-contract/traits";
 import {
   copyPrefixes,
-  Internal,
   isResting,
   labelledWith,
   readTimeout,
@@ -22,6 +21,7 @@ import type {
   Machine,
   PauseRequest,
   Conflict,
+  Internal,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Cause,
@@ -46,7 +46,7 @@ import { phaseOf as machinePhaseOf, stageOf } from "./machine-chart.ts";
 import type { MachineRow } from "./machine-chart.ts";
 import { stateOf } from "./machine-view.ts";
 import { madeMachine, Machines } from "./machines.ts";
-import { collect, cutShort, poll } from "./operations.ts";
+import { collect, cutShort, poll, unreported } from "./operations.ts";
 import { checkpointStep } from "./steps.ts";
 import { notFound, Store } from "./store.ts";
 import type { Operation } from "./store.ts";
@@ -175,9 +175,7 @@ export const make = (settings: {
       Effect.map(store.findMachine(record.machine), (source) =>
         op.kind === "capture" && Option.isNone(source)
           ? notFound("machine", record.machine)
-          : new Internal({
-              message: `the ${op.kind} of checkpoint ${record.name} ended before its host reported it: ${why}`,
-            })
+          : unreported(op, why)
       );
 
     const following = (record: CheckpointRow, op: Operation, heard: Heard) =>

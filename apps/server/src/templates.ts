@@ -34,7 +34,7 @@ import {
 } from "effect";
 import type { Scope, Duration } from "effect";
 
-import { isPublished } from "./checkpoint-chart.ts";
+import { isPublished, stageOf } from "./checkpoint-chart.ts";
 import type { CheckpointRow } from "./checkpoint-chart.ts";
 import { Checkpoints } from "./checkpoints.ts";
 import { apart } from "./driver.ts";
@@ -84,11 +84,13 @@ const copyOf = (
       : { host, phase: "outdated", reason: `${host} ${why}` };
   }
 
-  if (state === "failed" || state.startsWith("discarding")) {
+  if (state === "failed" || stageOf(state) === "discarding") {
     return { host, phase: "failed", ...(error === undefined ? {} : { error }) };
   }
 
-  return state.startsWith("fetching") ? { host, phase: "fetching" } : undefined;
+  return stageOf(state) === "fetching"
+    ? { host, phase: "fetching" }
+    : undefined;
 };
 
 const unfetched = (
@@ -246,7 +248,7 @@ const begun =
   };
 
 const holds = ({ state }: CheckpointRow) =>
-  state !== "failed" && !state.startsWith("deleting");
+  state !== "failed" && stageOf(state) !== "deleting";
 
 /**
  * The fetches due: of each ready build that was published, to each host its copy is fetchable to

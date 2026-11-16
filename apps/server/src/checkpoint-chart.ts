@@ -199,7 +199,7 @@ export type Leaf = LeafOf<typeof checkpoint>;
 
 export type CheckpointRow = Stated<CheckpointFacts, Leaf>;
 
-export const { leaves, metaOf, phaseOf, activityOf } = rowLeavesOf<
+export const { leaves, metaOf, phaseOf, activityOf, stageOf } = rowLeavesOf<
   Leaf,
   ShownPhase
 >(checkpoint);
