@@ -26,6 +26,7 @@ import type { ChildProcessSpawner } from "effect/process";
 import { Socket } from "effect/socket";
 
 import {
+  targetOf,
   CannotStart,
   missing,
   missingCheckpoint,
@@ -220,12 +221,6 @@ const waited = (error: ApiError) =>
   Effect.sleep(
     error._tag === "Refused" ? Duration.seconds(error.retryAfterSeconds) : poll
   );
-
-const targetOf = (machine: Identity, handle: Handle): Target => ({
-  name: machine.name,
-  instance: machine.instance,
-  handle,
-});
 
 const holds = (record: MachineRecord, asked: Api.Sizes) =>
   (asked.cpus ?? record.resources.cpus) === record.resources.cpus &&
@@ -794,7 +789,10 @@ export const make = (
     ) =>
       exitOf(machine, { command: ["rm", "-f", file], user }).pipe(
         Effect.timeout(unstageTimeout),
-        Effect.ignore
+        Effect.ignore({
+          log: "Warn",
+          message: `couldn't remove ${machine.name}'s staged stdin ${file}`,
+        })
       );
 
     const exec = (machine: Target, command: Command) => {
@@ -1043,7 +1041,10 @@ export const make = (
           );
 
           if (!(yield* available(machine, checkpoint.id))) {
-            yield* Effect.ignore(api.deleteCheckpoint(checkpoint.id));
+            yield* Effect.ignore(api.deleteCheckpoint(checkpoint.id), {
+              log: "Warn",
+              message: `capture ${machine.name}: couldn't delete smol cloud's failed checkpoint ${checkpoint.id}`,
+            });
 
             return yield* new Internal({
               message: `capture ${machine.name}: smol cloud's checkpoint ${checkpoint.id} failed`,

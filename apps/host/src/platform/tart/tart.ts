@@ -26,8 +26,8 @@ import {
 import type { ChildProcessSpawner } from "effect/process";
 
 import { Box } from "../../box.ts";
-import { lastLines } from "../../guest.ts";
 import {
+  lastLines,
   atLeast,
   CannotStart,
   changes,

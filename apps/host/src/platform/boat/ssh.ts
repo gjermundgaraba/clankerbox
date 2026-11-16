@@ -1,10 +1,9 @@
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, FileSystem, Scope, Stream } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { Effect, FileSystem, Scope, Stream } from "effect";
 
 import { CannotStart } from "../../runtime.ts";
 import type { Command, Execution } from "../../runtime.ts";
-import { expect, files } from "../process.ts";
+import { cliIn, expect, files } from "../process.ts";
 
 export interface Pin {
   readonly host: string;
@@ -47,9 +46,12 @@ interface Attempt {
 export const make = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const identity = `${dir}/id_ed25519`;
-    const env = { PATH: process.env["PATH"], HOME: process.env["HOME"] };
+
+    const cli = yield* cliIn({
+      PATH: process.env["PATH"],
+      HOME: process.env["HOME"],
+    });
 
     const ownerOnly = (what: string, path: string, mends: string) =>
       Effect.gen(function* () {
@@ -69,41 +71,23 @@ export const make = (dir: string) =>
           fs.makeDirectory(dir, { recursive: true, mode: 0o700 })
         );
 
-    const keygen = Effect.scoped(
-      Effect.flatMap(
-        spawner.spawn(
-          ChildProcess.make(
-            "ssh-keygen",
-            [
-              "-q",
-              "-t",
-              "ed25519",
-              "-N",
-              "",
-              "-C",
-              "clankerbox-host",
-              "-f",
-              identity,
-            ],
-            { env, extendEnv: false, stdin: "ignore" }
-          )
-        ),
-        (handle) =>
-          Effect.all({
-            exitCode: handle.exitCode,
-            stdout: Stream.mkString(Stream.decodeText(handle.stdout)),
-            stderr: Stream.mkString(Stream.decodeText(handle.stderr)),
-          })
+    const keygen = cli
+      .run(
+        "ssh-keygen",
+        [
+          "-q",
+          "-t",
+          "ed25519",
+          "-N",
+          "",
+          "-C",
+          "clankerbox-host",
+          "-f",
+          identity,
+        ],
+        `ssh-keygen ${identity}`
       )
-    ).pipe(
-      Effect.mapError(
-        (error) =>
-          new Internal({
-            message: `ssh-keygen ${identity}: ${error.message}`,
-          })
-      ),
-      Effect.flatMap((ran) => expect(ran, `ssh-keygen ${identity}`))
-    );
+      .pipe(Effect.flatMap((ran) => expect(ran, `ssh-keygen ${identity}`)));
 
     yield* (yield* files(`read ${identity}`, fs.exists(identity)))
       ? ownerOnly(
@@ -143,73 +127,51 @@ export const make = (dir: string) =>
           fs.writeFileString(knownHosts, `${alias} ${pin.hostKey}\n`)
         );
 
-        const handle = yield* spawner
-          .spawn(
-            ChildProcess.make(
-              "ssh",
-              [
-                "-F",
-                "/dev/null",
-                "-i",
-                identity,
-                "-o",
-                "IdentitiesOnly=yes",
-                "-o",
-                "IdentityAgent=none",
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "StrictHostKeyChecking=yes",
-                "-o",
-                `UserKnownHostsFile=${knownHosts}`,
-                "-o",
-                "GlobalKnownHostsFile=/dev/null",
-                "-o",
-                `HostKeyAlias=${alias}`,
-                "-o",
-                "ConnectTimeout=20",
-                "-o",
-                "ServerAliveInterval=15",
-                "-o",
-                "ServerAliveCountMax=4",
-                "-o",
-                "LogLevel=ERROR",
-                "-E",
-                log,
-                "-p",
-                String(pin.port),
-                "-l",
-                sshKeyUser,
-                "--",
-                pin.host,
-                remoteCommand(command),
-              ],
-              {
-                env,
-                extendEnv: false,
-                stdin:
-                  command.stdin === undefined
-                    ? "ignore"
-                    : Stream.make(new TextEncoder().encode(command.stdin)),
-                forceKillAfter: Duration.seconds(5),
-              }
-            )
-          )
-          .pipe(
-            Effect.mapError(
-              (error) =>
-                new Internal({ message: `ssh to ${alias}: ${error.message}` })
-            )
-          );
-
-        const failed = (error: { readonly message: string }) =>
-          new Internal({ message: `ssh to ${alias}: ${error.message}` });
+        const execution = yield* cli.exec(
+          "ssh",
+          [
+            "-F",
+            "/dev/null",
+            "-i",
+            identity,
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "IdentityAgent=none",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            `UserKnownHostsFile=${knownHosts}`,
+            "-o",
+            "GlobalKnownHostsFile=/dev/null",
+            "-o",
+            `HostKeyAlias=${alias}`,
+            "-o",
+            "ConnectTimeout=20",
+            "-o",
+            "ServerAliveInterval=15",
+            "-o",
+            "ServerAliveCountMax=4",
+            "-o",
+            "LogLevel=ERROR",
+            "-E",
+            log,
+            "-p",
+            String(pin.port),
+            "-l",
+            sshKeyUser,
+            "--",
+            pin.host,
+            remoteCommand(command),
+          ],
+          command.stdin,
+          `ssh to ${alias}`
+        );
 
         return {
-          execution: {
-            output: Stream.mapError(handle.all, failed),
-            exitCode: Effect.mapError(handle.exitCode, failed),
-          },
+          execution,
           log,
         };
       });

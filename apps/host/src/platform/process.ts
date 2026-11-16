@@ -3,7 +3,7 @@ import { Duration, Effect, Fiber, Predicate, Stream } from "effect";
 import type { FileSystem, PlatformError, Scope } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-import { lastLines } from "../guest.ts";
+import { lastLines } from "../runtime.ts";
 import type { Dial, Execution } from "../runtime.ts";
 
 export const describe = (error: PlatformError.PlatformError): string =>

@@ -49,7 +49,6 @@ import {
   checkTailnet,
   identify,
   addMissingKeys,
-  lastLines,
   leave,
   prepareBase,
   prepare,
@@ -62,6 +61,7 @@ import type { Leaving, TailnetReport } from "./guest.ts";
 import { Reaches } from "./reach.ts";
 import * as Recheck from "./recheck.ts";
 import {
+  lastLines,
   inTime,
   missing,
   missingCheckpoint,

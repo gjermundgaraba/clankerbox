@@ -5,6 +5,7 @@ import {
 } from "@clankerbox/host-contract/traits";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import {
+  sizedBy,
   Capacity,
   Internal,
   Missing,
@@ -834,14 +835,7 @@ export const make = (
         }).pipe(bounded("boat", `capture ${machine.name}`)),
       resize: (machine, to) =>
         Effect.gen(function* () {
-          const type = yield* typeFor(
-            {
-              cpu: to.cpu ?? machine.cpu,
-              ramMib: to.ramMib ?? machine.ramMib,
-              diskGib: to.diskGib ?? machine.diskGib,
-            },
-            machine.name
-          );
+          const type = yield* typeFor(sizedBy(machine, to), machine.name);
 
           yield* retyped(machine, type);
         }).pipe(bounded("boat", `resize ${machine.name}`)),

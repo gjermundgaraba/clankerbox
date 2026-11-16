@@ -94,6 +94,19 @@ export const targetOf = (
   handle: Handle
 ): Target => ({ name, instance, handle });
 
+const tailLines = 20;
+
+const tailCharacters = 4000;
+
+/** The end of a command's output, as an error or a log quotes it: its last 20 lines, at most 4000 characters. */
+export const lastLines = (text: string): string =>
+  text
+    .trimEnd()
+    .split("\n")
+    .slice(-tailLines)
+    .join("\n")
+    .slice(-tailCharacters);
+
 export type Sized = Target & Sizes;
 
 /** A machine as admission and capacity count it: found, unread because its search failed, or booting on this host. */

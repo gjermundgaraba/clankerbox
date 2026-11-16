@@ -49,7 +49,6 @@ import {
   guestCommand,
   hostKeyIn,
   identify,
-  lastLines,
   identityScript,
   markName,
   membersProgram,
@@ -68,7 +67,7 @@ import {
   unkeyScript,
 } from "../src/guest.ts";
 import type { Invocation } from "../src/guest.ts";
-import { Runtime } from "../src/runtime.ts";
+import { lastLines, Runtime } from "../src/runtime.ts";
 import type { Execution } from "../src/runtime.ts";
 import {
   fakeRuntime,

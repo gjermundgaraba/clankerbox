@@ -22,25 +22,13 @@ import {
 } from "effect";
 import { Hex } from "effect/encoding";
 
-import { timeoutFail } from "./runtime.ts";
+import { lastLines, timeoutFail } from "./runtime.ts";
 import type {
   Command,
   Interface as Runtime,
   Target,
   RuntimeError,
 } from "./runtime.ts";
-
-const tailLines = 20;
-
-const tailCharacters = 4000;
-
-export const lastLines = (text: string): string =>
-  text
-    .trimEnd()
-    .split("\n")
-    .slice(-tailLines)
-    .join("\n")
-    .slice(-tailCharacters);
 
 const keptOutput = () => {
   const decoder = new TextDecoder();
