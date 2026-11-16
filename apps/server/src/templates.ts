@@ -388,21 +388,15 @@ export const make = (settings: {
           )
         );
 
-        const atRest = Effect.gen(function* () {
-          const resting = yield* machines.rest(builder);
-
-          if (Option.isNone(resting)) {
-            return yield* new Internal({
-              message: `build ${id}'s builder went before its setup ended`,
-            });
-          }
-
-          if (resting.value.error !== undefined) {
-            return yield* resting.value.error;
-          }
-
-          return resting.value;
-        });
+        const atRest = Effect.flatMap(machines.rest(builder), (resting) =>
+          Effect.fromOption(
+            resting,
+            () =>
+              new Internal({
+                message: `build ${id}'s builder went before its setup ended`,
+              })
+          )
+        );
 
         const lastSent = yield* Ref.make(Arr.headNonEmpty(placed));
 

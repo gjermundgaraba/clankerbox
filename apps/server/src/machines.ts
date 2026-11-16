@@ -23,6 +23,7 @@ import type {
   Executed,
   ExecRequest,
   ForkRequest,
+  HostError,
   Labels,
   ListFilter,
   Machine,
@@ -46,6 +47,7 @@ import type { Array as Arr, Scope } from "effect";
 import { applied } from "./chart.ts";
 import {
   checkpointChart,
+  isBuildCopy,
   phaseOf as checkpointPhaseOf,
 } from "./checkpoint-chart.ts";
 import type { CheckpointRow } from "./checkpoint-chart.ts";
@@ -154,12 +156,12 @@ export interface Interface {
   readonly capacity: Effect.Effect<CapacityRead, Internal>;
   /**
    * Waits until a machine rests or is gone, for a template build's own steps, reading its VM only once
-   * its row rests. A host that can't be reached for a whole recheck ends the wait as `Unavailable`,
-   * whatever step the machine is in.
+   * its row rests, and answers that row, failing with its error. A host that can't be reached for a
+   * whole recheck ends the wait as `Unavailable`, whatever step the machine is in.
    */
   readonly rest: (
     name: string
-  ) => Effect.Effect<Option.Option<MachineRow>, Internal | Unavailable>;
+  ) => Effect.Effect<Option.Option<MachineRow>, HostError>;
 }
 
 export class Machines extends Context.Service<Machines, Interface>()(
@@ -301,7 +303,7 @@ const restorable = (
   name: string,
   found: Option.Option<CheckpointRow>
 ): Result.Result<CheckpointRow, NotMade | NotFound> => {
-  if (Option.isNone(found) || found.value.build !== undefined) {
+  if (Option.isNone(found) || isBuildCopy(found.value)) {
     return Result.fail(notFound("checkpoint", name));
   }
 
@@ -981,9 +983,13 @@ export const make = (
       );
 
     const rest = (name: string) =>
-      Effect.andThen(
-        untilRest(settings.recheck, rests(name)),
-        store.findMachine(name)
+      untilRest(settings.recheck, rests(name)).pipe(
+        Effect.andThen(store.findMachine(name)),
+        Effect.tap((found) =>
+          Option.isSome(found) && found.value.error !== undefined
+            ? Effect.fail(found.value.error)
+            : Effect.void
+        )
       );
 
     const { tick } = yield* recheckHosts(store, hosts, settings.failedRowsLast);

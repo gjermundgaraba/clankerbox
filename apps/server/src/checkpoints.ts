@@ -27,7 +27,12 @@ import { Cause, Context, DateTime, Effect, Layer, Option } from "effect";
 import type { Scope, Duration } from "effect";
 
 import { applied } from "./chart.ts";
-import { activityOf, checkpointChart, phaseOf } from "./checkpoint-chart.ts";
+import {
+  activityOf,
+  checkpointChart,
+  isBuildCopy,
+  phaseOf,
+} from "./checkpoint-chart.ts";
 import type { CheckpointEvent, CheckpointRow } from "./checkpoint-chart.ts";
 import { uncopiable } from "./copies.ts";
 import { apart, driver, untilRest } from "./driver.ts";
@@ -150,7 +155,7 @@ export const make = (settings: {
     const row = (name: string) =>
       Effect.flatMap(store.findCheckpoint(name), (found) =>
         Effect.fromOption(
-          Option.filter(found, ({ build }) => build === undefined),
+          Option.filter(found, (record) => !isBuildCopy(record)),
           () => notFound("checkpoint", name)
         )
       );
@@ -480,8 +485,7 @@ export const make = (settings: {
       list: Effect.fn("Checkpoints.list")((filter) =>
         Effect.map(store.checkpoints, (records) =>
           records.flatMap((record) =>
-            record.build === undefined &&
-            labelledWith(record.labels, filter.labels)
+            !isBuildCopy(record) && labelledWith(record.labels, filter.labels)
               ? [shown(record)]
               : []
           )
