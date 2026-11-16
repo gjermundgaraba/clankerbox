@@ -2,6 +2,7 @@ import {
   fitted,
   formatSizes,
   givenSizes,
+  isId,
 } from "@clankerbox/host-contract/traits";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import {
@@ -78,8 +79,6 @@ const bodyLimit = 1024 * 1024;
 const unstageTimeout = Duration.seconds(30);
 
 const poll = Duration.seconds(1);
-
-const instancePattern = /^[0-9a-f]{32}$/u;
 
 type Goal = "running" | "stopped" | "paused" | "gone";
 
@@ -308,7 +307,7 @@ export const make = (
       const rest =
         name?.startsWith(prefix) === true ? name.slice(prefix.length) : "";
 
-      return instancePattern.test(rest) ? rest : undefined;
+      return isId(rest) ? rest : undefined;
     };
 
     const markedMachine = (marks: Api.Marks) =>

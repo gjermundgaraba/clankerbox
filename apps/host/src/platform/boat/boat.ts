@@ -1,4 +1,8 @@
-import { formatSizes, givenSizes } from "@clankerbox/host-contract/traits";
+import {
+  formatSizes,
+  givenSizes,
+  isId,
+} from "@clankerbox/host-contract/traits";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import {
   Capacity,
@@ -72,7 +76,8 @@ export const instanceLabel = "cbx-instance";
 
 const snapshotPrefix = "cbx-";
 
-const snapshotMark = /^cbx-[0-9a-f]{32}$/u;
+const snapshotMark = (name: string): boolean =>
+  name.startsWith(snapshotPrefix) && isId(name.slice(snapshotPrefix.length));
 
 const snapshotName = (checkpoint: Pick<Identity, "instance">): string =>
   `${snapshotPrefix}${checkpoint.instance}`;
@@ -82,9 +87,7 @@ const heldBy = (
   sandbox: string
 ): Handle[] =>
   snapshots.flatMap(({ name, sourceSandboxId }) =>
-    sourceSandboxId === sandbox && snapshotMark.test(name)
-      ? [Handle.make(name)]
-      : []
+    sourceSandboxId === sandbox && snapshotMark(name) ? [Handle.make(name)] : []
   );
 
 const running = new Set(["ready", "idle", "running"]);
@@ -462,7 +465,7 @@ export const make = (
       );
 
     const snapshots = api.savedSnapshots(snapshotPrefix, (name) =>
-      snapshotMark.test(name)
+      snapshotMark(name)
     );
 
     const searched = (machine: Identity) =>

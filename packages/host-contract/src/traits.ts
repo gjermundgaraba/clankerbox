@@ -328,3 +328,17 @@ export const pinRefusal = (
     message: `machine ${of.resume} was paused under ${under ?? "no pin"}, and this host runs ${host}; it resumes only under the same one: delete it, or resume it under that one`,
   });
 };
+
+const idPattern = /^[0-9a-f]{32}$/u;
+
+/**
+ * A new ID, of a row's instance or an operation: 16 random bytes in hex. A runtime that marks its
+ * resources with an instance tells its own apart with `isId`.
+ */
+export const newId = (): string =>
+  Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+    byte.toString(16).padStart(2, "0")
+  ).join("");
+
+/** Whether `text` is an ID `newId` could have made. */
+export const isId = (text: string): boolean => idPattern.test(text);

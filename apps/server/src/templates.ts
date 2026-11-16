@@ -1,6 +1,7 @@
 import type { HostInfo } from "@clankerbox/host-contract";
 import {
   fetchable,
+  newId,
   offers,
   stopsBeforeCapture,
 } from "@clankerbox/host-contract/traits";
@@ -42,7 +43,7 @@ import type { Reached } from "./hosts.ts";
 import { Machines } from "./machines.ts";
 import { builtUnder, imageOf, outdated, placing } from "./placement.ts";
 import type { BuiltUnder } from "./placement.ts";
-import { newId, Store } from "./store.ts";
+import { Store } from "./store.ts";
 import type { BuildRow, TemplateRow } from "./store.ts";
 
 export interface Interface {

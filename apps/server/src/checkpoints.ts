@@ -1,5 +1,9 @@
 import type { Report } from "@clankerbox/host-contract";
-import { pauseCapture, pinRefusal } from "@clankerbox/host-contract/traits";
+import {
+  newId,
+  pauseCapture,
+  pinRefusal,
+} from "@clankerbox/host-contract/traits";
 import {
   copyPrefixes,
   Internal,
@@ -44,7 +48,7 @@ import { stateOf } from "./machine-view.ts";
 import { Machines, unmade } from "./machines.ts";
 import { collect, cutShort, poll } from "./operations.ts";
 import { checkpointStep } from "./steps.ts";
-import { newId, notFound, Store } from "./store.ts";
+import { notFound, Store } from "./store.ts";
 import type { Operation } from "./store.ts";
 
 const beginPoll = Duration.millis(100);

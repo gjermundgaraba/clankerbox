@@ -22,7 +22,6 @@ import type {
   Result,
   Scope,
 } from "effect";
-import { Hex } from "effect/encoding";
 
 import type { Decision } from "./chart.ts";
 import type { CheckpointRow } from "./checkpoint-chart.ts";
@@ -76,10 +75,6 @@ export const Lease = Schema.Struct({
 });
 
 export type Lease = typeof Lease.Type;
-
-/** A new ID for a row's instance or an operation. */
-export const newId = (): string =>
-  Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(16)));
 
 export const notFound = (resource: Lease["resource"], name: string): NotFound =>
   new NotFound({ message: `no ${resource} ${name}`, id: name });
