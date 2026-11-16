@@ -12,6 +12,7 @@ import {
   readTimeout,
   templateRef,
   Unavailable,
+  sizedBy,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   CreateRequest,
@@ -49,7 +50,6 @@ import {
   cloned,
   copied,
   refusedBySource,
-  sizedBy,
   restingAs,
   uncopiable,
 } from "./copies.ts";

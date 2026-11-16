@@ -1,4 +1,4 @@
-import { HostHttp } from "@clankerbox/host-contract";
+import { HostHttp, stoppingStatus } from "@clankerbox/host-contract";
 import type { HostInfo } from "@clankerbox/host-contract";
 import {
   Client,
@@ -153,7 +153,7 @@ const unexpected = (reason: Reply) => {
 };
 
 const replied = (host: string, reason: Reply) =>
-  reason.response.status === 503 &&
+  reason.response.status === stoppingStatus &&
   reason.response.headers["content-type"] === undefined
     ? `host ${host} is stopping: it replied HTTP 503 with no body, as a host's server does to each request while the host stops`
     : `host ${host} didn't answer as the host contract says: ${unexpected(reason)}`;

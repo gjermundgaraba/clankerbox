@@ -1,17 +1,10 @@
 import type { MachineState } from "@clankerbox/host-contract";
-import {
-  copySizable,
-  fitted,
-  formatSizes,
-  givenSizes,
-} from "@clankerbox/host-contract/traits";
+import { copyRefusal, formatSizes } from "@clankerbox/host-contract/traits";
 import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
 import {
-  formatCpu,
-  formatGib,
-  formatMib,
   isResting,
   NotBuilt,
+  sizedBy,
   templateRef,
   Unsizable,
   WrongState,
@@ -35,58 +28,16 @@ export interface Spec {
   readonly diskGib: number;
 }
 
-export const sizedBy = (from: Spec, sizing: Sizing | undefined): Spec => ({
-  base: from.base,
-  cpu: sizing?.cpu ?? from.cpu,
-  ramMib: sizing?.ramMib ?? from.ramMib,
-  diskGib: sizing?.diskGib ?? from.diskGib,
-});
-
-const copyRefusal = (
-  name: string,
-  from: Spec,
-  spec: Spec,
-  traits: RuntimeTraits
-): string => {
-  const held = `the source's ${formatCpu(from.cpu)} and ${formatMib(from.ramMib)}`;
-  const shrunkDisk = `machine ${name}'s disk of ${formatGib(spec.diskGib)} is below its source's ${formatGib(from.diskGib)}, and a disk only grows`;
-
-  if (!fitted(traits, spec)) {
-    return `machine ${name}'s host gives ${givenSizes(traits)}, and it was asked ${formatSizes(spec)}`;
-  }
-
-  switch (traits.copies) {
-    case "same": {
-      return `machine ${name}'s host copies a machine only at its source's own sizes, so it keeps ${held} and its ${formatGib(from.diskGib)} disk`;
-    }
-
-    case "grow": {
-      return spec.diskGib < from.diskGib
-        ? shrunkDisk
-        : `machine ${name}'s host copies a machine only at its source's sizes or larger, so its vCPUs and RAM only grow from ${held}`;
-    }
-
-    case "any": {
-      return shrunkDisk;
-    }
-  }
-};
-
 export const copied = (
   name: string,
   from: Spec,
   sizing: Sizing | undefined,
   traits: RuntimeTraits
 ): Effect.Effect<Spec, Unsizable> => {
-  const spec = sizedBy(from, sizing);
+  const spec = { base: from.base, ...sizedBy(from, sizing) };
+  const refusal = copyRefusal(traits, name, from, spec);
 
-  if (copySizable(traits, from, spec)) {
-    return Effect.succeed(spec);
-  }
-
-  return Effect.fail(
-    new Unsizable({ message: copyRefusal(name, from, spec, traits) })
-  );
+  return refusal === undefined ? Effect.succeed(spec) : Effect.fail(refusal);
 };
 
 /**
@@ -135,7 +86,7 @@ export const cloned = (
   sizing: Sizing,
   traits: RuntimeTraits
 ): Effect.Effect<Spec, Unsizable> => {
-  const spec = sizedBy(from, sizing);
+  const spec = { base: from.base, ...sizedBy(from, sizing) };
 
   return spec.cpu < from.cpu ||
     spec.ramMib < from.ramMib ||

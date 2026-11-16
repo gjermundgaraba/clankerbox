@@ -16,6 +16,7 @@ import {
   Internal,
   timedOutExitCode,
   WrongState,
+  sizedBy,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   Executed,
@@ -65,7 +66,6 @@ import {
   missing,
   missingCheckpoint,
   Runtime,
-  sizedBy,
   stateIn,
   targetOf,
   timeoutFail,

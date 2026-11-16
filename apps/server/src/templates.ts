@@ -40,7 +40,7 @@ import { apart } from "./driver.ts";
 import { Hosts } from "./hosts.ts";
 import type { Reached } from "./hosts.ts";
 import { Machines } from "./machines.ts";
-import { builtUnder, outdated, placing } from "./placement.ts";
+import { builtUnder, imageOf, outdated, placing } from "./placement.ts";
 import type { BuiltUnder } from "./placement.ts";
 import { newId, Store } from "./store.ts";
 import type { BuildRow, TemplateRow } from "./store.ts";
@@ -202,8 +202,6 @@ const ended = (
       ? Option.some({ ...row, builds: kept })
       : Option.none();
   });
-
-const imageOf = (host: HostInfo, base: string) => host.images[base] ?? base;
 
 const sentTo = (
   host: HostInfo,

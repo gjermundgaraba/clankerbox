@@ -54,12 +54,6 @@ export type Sizes = Pick<MachineRef, "cpu" | "ramMib" | "diskGib">;
 
 export type Identity = Pick<Ref, "name" | "instance">;
 
-export const sizedBy = (from: Sizes, sizing: Sizing | undefined): Sizes => ({
-  cpu: sizing?.cpu ?? from.cpu,
-  ramMib: sizing?.ramMib ?? from.ramMib,
-  diskGib: sizing?.diskGib ?? from.diskGib,
-});
-
 export const changes = (from: Sizes, to: Sizes): Sizing => ({
   cpu: to.cpu === from.cpu ? undefined : to.cpu,
   ramMib: to.ramMib === from.ramMib ? undefined : to.ramMib,

@@ -374,6 +374,12 @@ export const HostHttp = ActionHttp.make(
   { prefix: "/host" }
 );
 
+/**
+ * The status, with no body, a host answers each request with while it stops: one that comes then,
+ * and, as Effect's HTTP server does, one the stop cuts.
+ */
+export const stoppingStatus = 503;
+
 export const hostActionsByName = Action.byName(HostHttp.actions);
 
 export type HostAction = keyof typeof hostActionsByName;

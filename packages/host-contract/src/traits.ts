@@ -227,36 +227,52 @@ export const resizeRefusal = (
 };
 
 /**
- * Whether a fork or restore of a source sized `from` can be sized `to` by a runtime of `traits`: it
- * gives `to`, a disk only grows, a runtime whose copies `grow` keeps the vCPUs and RAM it holds, and
- * one whose copies are the source's `same` takes no other sizes.
+ * Why a runtime of `traits` refuses a fork or restore `name` of a source sized `from` at `to`,
+ * none where it takes it: it gives `to`, a disk only grows, a runtime whose copies `grow` keeps the
+ * vCPUs and RAM it holds, and one whose copies are the source's `same` takes no other sizes.
  */
-export const copySizable = (
+export const copyRefusal = (
   traits: RuntimeTraits,
+  name: string,
   from: Sizes,
   to: Sizes
-): boolean => {
+): Unsizable | undefined => {
   if (!fitted(traits, to)) {
-    return false;
+    return new Unsizable({
+      message: `machine ${name}'s host gives ${givenSizes(traits)}, and it was asked ${formatSizes(to)}`,
+    });
   }
 
-  switch (traits.copies) {
-    case "same": {
-      return same(from, to);
-    }
+  const held = `the source's ${formatCpu(from.cpu)} and ${formatMib(from.ramMib)}`;
+  const shrunkDisk = `machine ${name}'s disk of ${formatGib(to.diskGib)} is below its source's ${formatGib(from.diskGib)}, and a disk only grows`;
 
-    case "grow": {
-      return (
-        to.cpu >= from.cpu &&
-        to.ramMib >= from.ramMib &&
-        to.diskGib >= from.diskGib
-      );
-    }
+  const refused = (() => {
+    switch (traits.copies) {
+      case "same": {
+        return same(from, to)
+          ? undefined
+          : `machine ${name}'s host copies a machine only at its source's own sizes, so it keeps ${held} and its ${formatGib(from.diskGib)} disk`;
+      }
 
-    case "any": {
-      return to.diskGib >= from.diskGib;
+      case "grow": {
+        if (to.diskGib < from.diskGib) {
+          return shrunkDisk;
+        }
+
+        return to.cpu >= from.cpu && to.ramMib >= from.ramMib
+          ? undefined
+          : `machine ${name}'s host copies a machine only at its source's sizes or larger, so its vCPUs and RAM only grow from ${held}`;
+      }
+
+      case "any": {
+        return to.diskGib >= from.diskGib ? undefined : shrunkDisk;
+      }
     }
-  }
+  })();
+
+  return refused === undefined
+    ? undefined
+    : new Unsizable({ message: refused });
 };
 
 /** Where a pause with a capture takes it, as `pauseMachine`'s description states the rule. */

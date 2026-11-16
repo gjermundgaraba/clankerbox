@@ -467,6 +467,13 @@ export const Sizing = Schema.Struct({
 
 export type Sizing = typeof Sizing.Type;
 
+/** The sizes of `from`, with each size `sizing` gives in place of its own. */
+export const sizedBy = (from: Sizes, sizing: Sizing | undefined): Sizes => ({
+  cpu: sizing?.cpu ?? from.cpu,
+  ramMib: sizing?.ramMib ?? from.ramMib,
+  diskGib: sizing?.diskGib ?? from.diskGib,
+});
+
 const placed = { host: Schema.optionalKey(HostId) };
 
 const fromTemplate = { template: TemplateRef, ...Sizing.fields, ...placed };

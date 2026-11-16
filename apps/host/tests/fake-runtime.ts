@@ -25,6 +25,7 @@ import {
   Internal,
   RuntimeName,
   WrongState,
+  sizedBy,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Sizing, Unsizable } from "@gjermundgaraba/clankerbox-sdk";
 import {
@@ -43,13 +44,7 @@ import type { Probe } from "../src/machine-ports.ts";
 import * as BindProbe from "../src/platform/bind-probe.ts";
 import { traits as smolvm } from "../src/platform/smolvm/traits.ts";
 import { traits as tart } from "../src/platform/tart/traits.ts";
-import {
-  Handle,
-  missing,
-  missingCheckpoint,
-  Runtime,
-  sizedBy,
-} from "../src/runtime.ts";
+import { Handle, missing, missingCheckpoint, Runtime } from "../src/runtime.ts";
 import type {
   Activation,
   Admission,

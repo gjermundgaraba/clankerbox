@@ -1,5 +1,6 @@
 import { Server } from "node:http";
 
+import { stoppingStatus } from "@clankerbox/host-contract";
 import { journal } from "@clankerbox/host-contract/journal";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
@@ -69,7 +70,7 @@ export const hostServer = ({ listen }: Pick<HostSettings, "listen">) =>
         const unrouted = server.listenerCount("request") === 1;
 
         if (unrouted) {
-          response.writeHead(503, { connection: "close" }).end();
+          response.writeHead(stoppingStatus, { connection: "close" }).end();
         }
       });
 

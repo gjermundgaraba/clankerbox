@@ -9,6 +9,7 @@ import {
   Internal,
   Unsizable,
   WrongState,
+  sizedBy,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { HostError, Sizing } from "@gjermundgaraba/clankerbox-sdk";
 import {
@@ -34,7 +35,6 @@ import {
   missing,
   missingCheckpoint,
   Runtime,
-  sizedBy,
   timeoutFail,
 } from "../../runtime.ts";
 import type {
