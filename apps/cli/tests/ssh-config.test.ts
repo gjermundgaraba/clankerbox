@@ -16,7 +16,6 @@ import { Effect } from "effect";
 import { afterEach, expect } from "vite-plus/test";
 
 import {
-  includeLines,
   renderSshConfig,
   withInclude,
   withoutInclude,
@@ -85,8 +84,10 @@ layer(NodeServices.layer)((it) => {
     expect(included).toBe(`${mine}Match all\nInclude clankerbox\n`);
     expect(withInclude(included)).toBe(included);
     expect(withoutInclude(included)).toBe(mine);
-    expect(withInclude("Host x")).toBe(`Host x\n${includeLines}`);
-    expect(withInclude("")).toBe(includeLines);
+    expect(withInclude("Host x")).toBe(
+      "Host x\nMatch all\nInclude clankerbox\n"
+    );
+    expect(withInclude("")).toBe("Match all\nInclude clankerbox\n");
   });
 
   it.effect(
