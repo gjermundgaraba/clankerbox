@@ -100,7 +100,6 @@ export const poll = (
     )
   );
 
-/** Lets the host forget a report once it is stored. */
 export const collect = (hosts: Hosts, op: Operation): Effect.Effect<void> =>
   Effect.ignore(
     hosts.call(op.host, (api) => api.collectOperation({ id: op.id }))

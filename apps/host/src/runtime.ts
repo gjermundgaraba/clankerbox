@@ -30,7 +30,6 @@ export class CannotStart extends Schema.TaggedError<
   message: Schema.String,
 }) {}
 
-/** Whether a runtime's reported `major.minor.patch` release is `floor` or later. */
 export const atLeast =
   (floor: string) =>
   (reported: string): boolean =>
@@ -73,7 +72,6 @@ export const timeoutFail =
       orElse: () => Effect.fail(error()),
     });
 
-/** Fails `Internal`, naming `what`, past the time a read of the runtime may take. */
 export const inTime = (what: string) =>
   timeoutFail(
     stateReadWait,

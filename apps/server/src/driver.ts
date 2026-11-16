@@ -25,7 +25,6 @@ const unreachableWait = Duration.seconds(1);
 
 const restPoll = Duration.millis(100);
 
-/** What a look at an operation found that its resource acts on. */
 export type Heard = Exclude<Polled, { readonly at: "unreachable" }>;
 
 type Turned = "again" | "rest" | "over";
@@ -35,12 +34,11 @@ export interface Resource<R extends { readonly state: string }> {
   readonly find: (name: string) => Effect.Effect<Option.Option<R>, Internal>;
   readonly store: Pick<Store, "operationOn" | "watch">;
   readonly activityOf: (state: R["state"]) => Activity;
-  /** Reads what the chart's `read` needs, and writes it. */
   readonly looking: (
     row: R
   ) => Effect.Effect<Advanced<R>, Internal | Unreachable>;
   readonly polling: (row: R, op: Operation) => Effect.Effect<Polled, Internal>;
-  /** Stores what a look found, which no wake cuts short, so a stored report is always collected. */
+  /** No wake cuts it short, so a stored report is always collected. */
   readonly following: (
     row: R,
     op: Operation,

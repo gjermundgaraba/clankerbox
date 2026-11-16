@@ -42,7 +42,6 @@ const socketPathMost = 103;
 
 export interface Tunnel {
   readonly running: () => boolean;
-  /** The unix socket its ssh forwards from, in the tunnel's own directory. */
   readonly socket: string;
 }
 
@@ -78,10 +77,10 @@ const refuses = (socket: string): Effect.Effect<boolean> =>
   );
 
 /**
- * Removes each directory under `under` that a tunnel of user `uid` left and that is surely dead: a
- * real directory, not a link, of that user's, named as a tunnel's is, older than twice the open
- * wait, so no open still runs in it, and whose socket is missing or refuses a connection, as ssh's
- * is once it has ended. A program ended by a signal runs no exit hook and leaves its tunnels'.
+ * Removes each directory under `under` that a tunnel of user `uid` left and that is surely dead:
+ * older than twice the open wait, so no open still runs in it, and whose socket is missing or
+ * refuses a connection, as ssh's is once it has ended. A program ended by a signal runs no exit hook
+ * and leaves its tunnels'.
  */
 export const sweep = (under: string, uid: number): Effect.Effect<void> =>
   Effect.gen(function* () {
@@ -114,7 +113,6 @@ export const sweep = (under: string, uid: number): Effect.Effect<void> =>
     );
   }).pipe(Effect.ignore);
 
-/** `sweep` of this user's tunnel directories, under the temporary directory tunnels are made in. */
 export const sweepLeft: Effect.Effect<void> = Effect.suspend(() => {
   const uid = process.getuid?.();
 
@@ -393,9 +391,8 @@ const spawnTiedToThisProcess = (
 };
 
 /**
- * An ssh forward from `start.socket`, in `start.directory`. ssh leaves its socket file however it
- * ends, so the directory goes when the process exits too, when no scope's finalizer runs. The last
- * of what ssh printed on stderr is kept in memory, for a failure to quote.
+ * ssh leaves its socket file however it ends, so the directory goes when the process exits too,
+ * when no scope's finalizer runs.
  */
 export const open = (
   start: Start

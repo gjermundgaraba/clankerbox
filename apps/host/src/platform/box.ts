@@ -62,7 +62,6 @@ const linuxEphemeral = (
     return fallback;
   });
 
-/** The box's facts on the OS Node's `process.platform` names, reading Linux's port range from `rangeFile`. */
 export const make = (
   platform: string,
   rangeFile = portRangeFile

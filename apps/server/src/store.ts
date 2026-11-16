@@ -145,10 +145,8 @@ export const Facts = Schema.Struct({
 
 export type Facts = typeof Facts.Type;
 
-/** What a client reads of a checkpoint's leaf. */
 export type ShownPhase = Checkpoint["phase"];
 
-/** What a checkpoint's row holds but for its leaf. */
 export const CheckpointFacts = Schema.Struct({
   ...made,
   runtime: RuntimeName,
@@ -194,19 +192,16 @@ export type TemplateRow = typeof TemplateFacts.Type & {
   readonly builds: Arr.NonEmptyReadonlyArray<BuildRow>;
 };
 
-/** A row of each resource, as `advance` reads and writes it. */
 export interface Rows {
   readonly machine: MachineRow;
   readonly checkpoint: CheckpointRow;
 }
 
-/** An instance on a host, as a row holds it there. */
 export interface Hold {
   readonly host: string;
   readonly instance: string;
 }
 
-/** Where a machine's row holds its instance: on its host, until it rests undone. */
 export const holdOf = ({
   host,
   instance,
@@ -214,7 +209,7 @@ export const holdOf = ({
 }: MachineRow): Hold | undefined =>
   undoneAt === undefined ? { host, instance } : undefined;
 
-/** The hold a write ends, which retires its instance on its host: the row's, once the row no longer holds it there. */
+/** The hold a write ends, which retires its instance on its host. */
 export const ended = (
   before: Hold | undefined,
   after: Hold | undefined
@@ -238,7 +233,6 @@ export type Advanced<R> =
   | { readonly at: "absent" }
   | { readonly at: "busy"; readonly by: Operation };
 
-/** What a resource's write does: its next row, and the operation it begins or finishes. */
 export interface Decision<R> {
   readonly next: R | "removed";
   readonly begin?: Omit<Operation, "sequence">;

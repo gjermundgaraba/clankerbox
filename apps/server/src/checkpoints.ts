@@ -81,12 +81,12 @@ export interface Interface {
   ) => Effect.Effect<string, HostError>;
   /** Publishes a build's copy to the build store, and waits for that to end, failing with its error. */
   readonly publish: (name: string) => Effect.Effect<void, HostError>;
-  /** Records a copy of `published`, a build's published copy, fetched by `host`, and answers at once. */
+  /** Answers once the fetch is recorded, before it runs. */
   readonly fetch: (
     published: CheckpointRow,
     host: string
   ) => Effect.Effect<void, Conflict | Internal>;
-  /** Deletes a copy of a template build, if it is there. */
+  /** A copy that isn't there is no failure. */
   readonly discard: (name: string) => Effect.Effect<void, Internal>;
 }
 

@@ -131,15 +131,12 @@ const launcher = [
 
 /**
  * A guest command as the runtime runs it: one fixed `/bin/sh` launcher, with the command's env and
- * arguments at the head of its stdin, so no process's arguments on the host carry them. Each value
- * is its count of lines, then its lines; the launcher hands them to `env`, which sets the env and
- * runs the command, whatever the guest's `/bin/sh` makes of its own special names. Its one word of
- * its own, `CLANKERBOX_EXEC=<mark>`, is in the launcher's arguments from its start and in the
- * environment of the command and of every process it starts, so an end can find them. The launcher
- * waits for `env` rather than becoming it, so a process that holds the mark in its arguments stands
- * above the command for its whole life, unless the command kills it, also one that clears its
- * environment where nothing above the launcher carries the mark, and exits as the command did, with
- * 128 and the signal's number for one a signal ended. It outlives each signal of its own that ends a
+ * arguments at the head of its stdin, so no process's arguments on the host carry them, and `env`
+ * sets the env, whatever the guest's `/bin/sh` makes of its own special names. The mark is in the
+ * environment of every process the command starts, so an end can find them. The launcher waits for
+ * `env` rather than becoming it, so a process that holds the mark in its arguments stands above the
+ * command for its whole life, also one that clears its environment, and exits as the command did,
+ * with 128 and the signal's number for one a signal ended. It outlives each signal that ends a
  * process by default and that every shell names alike, as a runtime answers an exec once the
  * launcher exits, so the command, whose subshell and `exec` set each trapped signal back to its
  * default, would run on unended: https://pubs.opengroup.org/onlinepubs/9799919799/utilities/V3_chap02.html#tag_19_29
@@ -251,27 +248,19 @@ END {
 
 /**
  * Ends in the guest each process whose own arguments or environment hold the mark read from stdin,
- * the exec's or not, and what descends from one. It reads the mark and its deadline in seconds,
- * then TERMs what it lists, and once at least the grace has passed, or nothing it TERMed runs, or a
- * listing it makes every 0.4 s of the grace, every second where the guest's `sleep` takes no
- * fraction of one, finds the command more than 32 processes larger in all than when it TERMed it, as a command that keeps
- * growing after TERM isn't winding down and would fill a small guest, STOPs
- * what it lists until a listing finds none it hasn't stopped, and KILLs them all, again until a
- * listing finds none. It signals each listing's processes in one `kill`, each after its parent, so
- * no parent of one thread sees its child stop, as sudo, which then stops its own parent's group, would, and a tree
- * costs the same listings however deep it is. Each listing is two `grep`s over `/proc`, given its paths by `xargs`, as zsh
- * globs a path below each process slowly and a guest's processes may name more paths than a command
- * line holds, or one `ps`, and one `awk` pass, and `awk` picks out each of its lines again, where
- * zsh's patterns take time that grows with the square of the listing, so its cost grows with the
- * guest's processes and not with their square, under every shell, and it writes no file. It begins
- * no listing once its deadline has passed, as `date +%s` counts it, nor the grace past it, and then,
- * or when a TERM, HUP or INT cuts it short, sends KILL and then CONT to every process it last
- * listed, so none is left stopped, and exits 1, saying how many there were: only a listing that
- * finds none confirms the end. A process found once is held by its start time, so one whose parent
- * ended while it cleared its environment is still found. It signals each pid alone, never a group,
- * pid 1 or itself. It records the mark first, so a launcher of it that begins later runs nothing,
- * lets that record go once it has ended what it found, since what it found holds the mark only
- * once that one launcher has begun, and removes each record older than an hour.
+ * the exec's or not, and what descends from one, within the deadline in seconds read with it. A
+ * command more than 32 processes larger than when it was TERMed isn't winding down and would fill
+ * a small guest, so it is STOPped and KILLed before its grace ends. A guest's `sleep` may take no
+ * fraction of a second. Each process is signalled after its parent, so no parent of one thread sees
+ * its child stop, as sudo, which then stops its own parent's group, would. A listing greps `/proc`,
+ * given its paths by `xargs`, as zsh globs a path below each process slowly and a guest's processes
+ * may name more paths than a command line holds, and `awk` picks out each line, where zsh's
+ * patterns take time that grows with the square of the listing. Past its deadline, or when a TERM,
+ * HUP or INT cuts it short, it sends KILL and then CONT to every process it last listed, so none is
+ * left stopped, and exits 1, saying how many there were: only a listing that finds none confirms
+ * the end. A process found once is held by its start time, so one whose parent ended while it
+ * cleared its environment is still found. It signals each pid alone, never a group, pid 1 or
+ * itself. It records the mark first, so a launcher of it that begins later runs nothing.
  */
 export const endScript = [
   "IFS=' ' read -r mark seconds || mark=",

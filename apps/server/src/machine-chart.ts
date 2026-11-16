@@ -19,7 +19,6 @@ import type {
   Operation,
 } from "./store.ts";
 
-/** What a machine can be asked to be. */
 export type Wish = Facts["desired"];
 
 /** What a client reads as `desired`, and what `wants` decides by. */
@@ -97,7 +96,6 @@ interface On<T extends MachineEvent["type"]> {
   readonly event: Extract<MachineEvent, { readonly type: T }>;
 }
 
-/** Whether what is asked still wants a step of `kind`. */
 export const wants = (kind: Operation["kind"], desired: Asked): boolean => {
   switch (kind) {
     case "make": {
@@ -436,7 +434,6 @@ export const { leaves, metaOf, phaseOf, activityOf, stageOf } = rowLeavesOf<
   MachinePhase
 >(machine);
 
-/** A leaf's top region, which is how far a machine is. */
 export type Stage = TopOf<Leaf>;
 
 export const desiredOf = ({

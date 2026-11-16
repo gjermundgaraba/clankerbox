@@ -235,8 +235,8 @@ const createdFrom = (origin: Exclude<Origin, { _tag: "machine" }>) => {
 const bracketed = /^\[(?<host>[^\]]+)\]$/u;
 
 /**
- * Where `/sshkey` says the guest's sshd answers: its `sshEndpoint`, as `host:port` or `[v6]:port`,
- * else its `machineIp` on port 22; `undefined` for an endpoint that names no host and port.
+ * boat's `/sshkey` names where the guest's sshd answers as `sshEndpoint`, `host:port` or
+ * `[v6]:port`, or else only as `machineIp`, on port 22.
  */
 export const endpointOf = (
   answer: SshKey

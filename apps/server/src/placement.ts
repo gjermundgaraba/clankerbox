@@ -178,10 +178,6 @@ export const builtUnder = (
   diskGib,
 });
 
-/**
- * Why a host's copy of `build` takes no create, if it doesn't: the host runs another runtime pin,
- * or its base names another image, than the build was made under.
- */
 /** The image a host gives a base: the one it names there, else the base itself, a reference. */
 export const imageOf = (info: HostInfo, base: string): string =>
   info.images[base] ?? base;

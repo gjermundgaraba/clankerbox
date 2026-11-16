@@ -76,7 +76,6 @@ export const ListFilter = Schema.Struct(labelled);
 
 export type ListFilter = typeof ListFilter.Type;
 
-/** Whether `labels` carries every pair of `wanted`. */
 export const labelledWith = (
   labels: Labels | undefined,
   wanted: Labels | undefined
@@ -171,7 +170,6 @@ export const BuildId = Schema.String.check(
 /** A template, which names its current build, or one build of it, by ID. */
 export const TemplateRef = Schema.Union([Name, BuildId]);
 
-/** The build ID of build `number` of `template`. */
 export const buildId = (template: string, number: number): string =>
   `${template}@${number}`;
 
@@ -467,7 +465,6 @@ export const Sizing = Schema.Struct({
 
 export type Sizing = typeof Sizing.Type;
 
-/** The sizes of `from`, with each size `sizing` gives in place of its own. */
 export const sizedBy = (from: Sizes, sizing: Sizing | undefined): Sizes => ({
   cpu: sizing?.cpu ?? from.cpu,
   ramMib: sizing?.ramMib ?? from.ramMib,
@@ -648,7 +645,6 @@ export const Executed = Schema.Struct({
 
 export type Executed = typeof Executed.Type;
 
-/** The sizes to give machine `id`, at least one. */
 export const ResizeRequest = Schema.Struct({
   id: Name,
   ...Sizing.fields,

@@ -136,7 +136,6 @@ const resolveConfig = (
     };
   });
 
-/** Reads the host config `file`, for the box its `Box` tells of. */
 export const loadConfig = (
   file: string
 ): Effect.Effect<

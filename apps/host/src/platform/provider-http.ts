@@ -124,10 +124,6 @@ const fromGateway = (
 
 const waits = { minimum: Duration.seconds(1), maximum: Duration.seconds(30) };
 
-/**
- * The wait a refusal's `Retry-After` asks, in whole seconds or until an HTTP date, within 1 and 30
- * seconds, so one that names neither, or less, waits a second.
- */
 export const retryAfter = (
   response: HttpClientResponse.HttpClientResponse
 ): Effect.Effect<Duration.Duration> =>
@@ -222,12 +218,6 @@ const backoff = Schedule.exponential(Duration.millis(250)).pipe(
   )
 );
 
-/**
- * Sends `call` again, backing off, while the provider asks to be waited out, and while its answer
- * is lost if it is `idempotent`, at most `triesPerCall` sends in all. A send the provider asked to
- * wait out waits the longer of that and the backoff; a call still asked to wait at its last send
- * fails saying so.
- */
 export const askedAgain =
   (repeats: Repeats) =>
   <A, E, R>(call: Effect.Effect<A, E, R>): Effect.Effect<A, E | Busy, R> =>
@@ -345,10 +335,8 @@ export interface Change<A, S, E, F, G, R> {
 }
 
 /**
- * Sends a change that may be taken though its answer is lost: after a lost answer it reads the
- * resource until it rests, answers what it read when that holds the change, and sends it again
- * otherwise, at most `triesAfterLoss` times in all, so a change the provider took is never sent
- * twice.
+ * Sends a change that may be taken though its answer is lost, reading the resource after a lost
+ * answer before sending it again, so a change the provider took is never sent twice.
  */
 export function sentUntilHeld<A, H extends A, S, E, F, G, R>(
   change: Change<A, S, E, F, G, R> & {

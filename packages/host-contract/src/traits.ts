@@ -135,10 +135,6 @@ const bounded = ({ least, most }: RuntimeTraits["limits"], sizes: Sizes) =>
       sizes[size] <= (most[size] ?? Number.POSITIVE_INFINITY)
   );
 
-/**
- * Whether a runtime gives a machine `sizes`: sizes within its limits, any or one of its classes
- * exactly.
- */
 export const fitted = (traits: RuntimeTraits, sizes: Sizes): boolean =>
   bounded(traits.limits, sizes) &&
   (traits.sizes._tag === "free" ||
@@ -331,14 +327,10 @@ export const pinRefusal = (
 
 const idPattern = /^[0-9a-f]{32}$/u;
 
-/**
- * A new ID, of a row's instance or an operation: 16 random bytes in hex. A runtime that marks its
- * resources with an instance tells its own apart with `isId`.
- */
+/** A runtime that marks its resources with an instance tells its own apart with `isId`. */
 export const newId = (): string =>
   Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (byte) =>
     byte.toString(16).padStart(2, "0")
   ).join("");
 
-/** Whether `text` is an ID `newId` could have made. */
 export const isId = (text: string): boolean => idPattern.test(text);

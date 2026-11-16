@@ -9,11 +9,7 @@ export const defaultUser = "user";
 
 export const defaultSnapshotExpiry = Duration.days(14);
 
-/**
- * The dispatch program's settings file: the control plane's URL, the sizes of each orb type, with
- * a `default` entry, the user bootstrap runs as, and how long a saved project snapshot is kept,
- * such as `"14 days"`.
- */
+/** The dispatch program's settings file. `snapshotExpiry` is a duration such as `"14 days"`. */
 export const Settings = Schema.Struct({
   server: Schema.String,
   sizes: Schema.Record(Schema.String, Sizes),

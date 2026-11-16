@@ -72,7 +72,6 @@ const errorDocument = (error: Failure) => {
   };
 };
 
-/** An error as the CLI prints it: `NotFound: no machine dev`. */
 export const errorText = (error: {
   readonly _tag: string;
   readonly message: string;

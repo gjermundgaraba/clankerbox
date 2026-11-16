@@ -6,13 +6,10 @@ import type { Job } from "./job.ts";
 import { nameFor } from "./names.ts";
 import type { Loaded } from "./settings.ts";
 
-/** The label carrying the orb's ID, as Amp gave it, on its machine and its snapshots. */
 export const orbLabel = "amp-orb";
 
-/** The label carrying the orb type the thread chose, on a machine made for one. */
 export const typeLabel = "amp-orb-type";
 
-/** The label carrying the project snapshot's ID, as Amp gave it, on the checkpoint holding it. */
 export const snapshotLabel = "amp-snapshot";
 
 /** How long starting `amp orb bootstrap` may take: it is detached at once. */
@@ -24,11 +21,10 @@ export class BootstrapFailed extends Schema.TaggedError<
 >()("BootstrapFailed", { message: Schema.String }) {}
 
 /**
- * Starts `amp orb bootstrap` as the login user, detached from the command so it runs for the life
- * of the orb, with `ORB_TOKEN` and `AMP_URL` as the command's environment gave them. It fails at
- * once when the login user has no `amp`, which the detached start would only log. One already
- * running is ended first: a resumed or restored machine keeps the processes it paused with, and
- * that bootstrap holds the previous job's token. The script goes to the shell on stdin, so no
+ * Starts `amp orb bootstrap` detached from the command, so it runs for the life of the orb. It
+ * fails at once when the login user has no `amp`, which the detached start would only log. One
+ * already running is ended first: a resumed or restored machine keeps the processes it paused with,
+ * and that bootstrap holds the previous job's token. The script goes to the shell on stdin, so no
  * command line carries its text for the pattern to match, and the bracket keeps the pattern from
  * matching the pkill itself.
  */
@@ -188,7 +184,6 @@ const remove = Effect.fn("remove")(function* (
   );
 });
 
-/** Does `job` on the control plane `client` reaches, and says what it did. */
 export const dispatch = (
   job: Job,
   settings: Loaded,

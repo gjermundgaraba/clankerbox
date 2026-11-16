@@ -280,7 +280,6 @@ const unmade = (found: MachineRow): NotMade | NotFound =>
       })
     : absent(found);
 
-/** Machine `name`'s row, once its VM is made, else why it can't be copied or run in. */
 export const madeMachine = (
   store: StoreInterface,
   name: string

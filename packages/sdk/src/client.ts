@@ -149,7 +149,6 @@ export type Calls = {
   ) => Effect.Effect<Success<N>, WaitErrorOf<N>>;
 };
 
-/** What `ensure` fails with: what making the machine or starting it does. */
 export type EnsureError =
   | WaitErrorOf<"createMachine">
   | WaitErrorOf<"restoreMachine">
@@ -190,7 +189,7 @@ export interface Interface extends Calls {
   readonly execMachine: (
     input: Input<"execMachine">
   ) => Effect.Effect<Executed, ErrorOf<"execMachine">>;
-  /** `buildTemplate`, then waits for the build to end, reading its template. */
+  /** `buildTemplate`, then waits for the build to end. */
   readonly buildTemplate: (
     input: BuildRequest
   ) => Effect.Effect<Build, WaitErrorOf<"buildTemplate">>;

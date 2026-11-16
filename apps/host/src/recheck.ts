@@ -28,7 +28,6 @@ export interface Interface {
   readonly sweep: (retired: Retired) => Effect.Effect<Retired, Internal>;
 }
 
-/** The longest a sweep takes to answer, once it runs: its list, then its deletes, which run at once. */
 export const sweepsWithin = (owned: Owned): Duration.Duration =>
   Duration.sum(stateReadWait, owned.deleteWithin);
 

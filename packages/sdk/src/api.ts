@@ -307,6 +307,5 @@ export const Http = ActionHttp.make(
 
 export const actionsByName = Action.byName(Http.actions);
 
-/** What the control plane may answer action `N` with: the errors the contract declares for it. */
 export type Declared<N extends keyof typeof actionsByName> =
   (typeof actionsByName)[N]["error"][number]["Type"];

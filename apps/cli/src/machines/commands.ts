@@ -296,7 +296,6 @@ export class Environment extends Context.Service<
   ConfigProvider.ConfigProvider
 >()("@gjermundgaraba/clankerbox/Environment") {}
 
-/** The process's environment as `exec --env NAME` reads it. */
 export const environmentOf = (env?: Record<string, string>) =>
   ConfigProvider.fromEnv({
     ...(env === undefined ? {} : { env }),

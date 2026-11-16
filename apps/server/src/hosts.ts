@@ -47,7 +47,6 @@ export class Incompatible extends Data.TaggedError("Incompatible")<Failed> {}
  */
 export class Unsent extends Data.TaggedError("Unsent")<Failed> {}
 
-/** Every way a call to a host or a read of it gets no answer it can use. */
 export type Unreachable = Unanswered | Incompatible | Unsent;
 
 const hostApi = (member: Member) =>
@@ -60,7 +59,6 @@ const hostApi = (member: Member) =>
 
 export type HostApi = Effect.Success<ReturnType<typeof hostApi>>;
 
-/** A host as a read of every member found it: what it reported, or why it couldn't be read. */
 export type Reached =
   | {
       readonly member: Member;
@@ -83,9 +81,7 @@ export interface Interface {
   readonly members: readonly Member[];
   /**
    * One call to a host, bounded by `readTimeout` unless `within` says otherwise, as a command runs
-   * as long as its request does. It fails with an error its action declares, as the host answered
-   * it, and with `Unreachable` for every way it got no answer: `Unsent` for one that never left.
-   * A call or a read that gets no answer logs at warn, with what the HTTP client said, the first
+   * as long as its request does. A call or a read that gets no answer logs at warn, with what the HTTP client said, the first
    * time since the host last answered one, and at debug after; the next answer logs that the host
    * answers again.
    */
@@ -105,7 +101,6 @@ export class Hosts extends Context.Service<Hosts, Interface>()(
   "@clankerbox/server/Hosts"
 ) {}
 
-/** What an operator reads of a host: what it reports, or why it couldn't be read. */
 export const listed = ({ member, info, problem }: Reached): Host =>
   info === undefined
     ? {

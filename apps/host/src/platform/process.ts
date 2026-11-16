@@ -9,7 +9,6 @@ import type { Dial, Execution } from "../runtime.ts";
 export const describe = (error: PlatformError.PlatformError): string =>
   `${error.reason._tag}: ${error.reason.method}${error.reason.description === undefined ? "" : `: ${error.reason.description}`}`;
 
-/** The regular files under `directory`, by their paths within it; no link or directory. */
 export const regularFiles = (
   fs: FileSystem.FileSystem,
   directory: string

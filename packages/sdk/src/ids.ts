@@ -43,7 +43,6 @@ const buildCopyPattern = new RegExp(
   "u"
 );
 
-/** Whether a checkpoint's name is one the control plane mints for a template build's copy. */
 export const isBuildCopy = (name: string): boolean =>
   buildCopyPattern.test(name);
 
