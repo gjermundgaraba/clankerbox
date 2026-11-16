@@ -16,10 +16,9 @@ import { HttpClient, HttpClientError, HttpClientRequest } from "effect/http";
 
 import {
   actionsByName as actions,
-  endTimeout,
+  execWait,
   Http,
   longestHold,
-  readTimeout,
   replyTimeout,
 } from "./api.ts";
 import type { Declared } from "./api.ts";
@@ -882,12 +881,7 @@ export const make = (
         input,
         input.id,
         undefined,
-        input.timeoutSeconds === undefined
-          ? Duration.infinity
-          : Duration.sum(
-              Duration.sum(Duration.seconds(input.timeoutSeconds), endTimeout),
-              Duration.sum(readTimeout, reply)
-            )
+        Duration.sum(execWait(input.timeoutSeconds), reply)
       );
 
     return {

@@ -36,6 +36,7 @@ import {
   RestoreRequest,
   Sizing,
   Template,
+  timedOutExitCode,
 } from "./resources.ts";
 
 /** How long the control plane waits on a host. */
@@ -52,6 +53,20 @@ export const replyTimeout = Duration.seconds(15);
  * exec its host holds behind a step, whose wait there none of them counts.
  */
 export const endTimeout = Duration.seconds(15);
+
+/**
+ * How long the control plane waits on a host for an exec bounded by `timeoutSeconds`: the timeout,
+ * `endTimeout` and `readTimeout`, which a client waits past by `replyTimeout`. Unbounded without one.
+ */
+export const execWait = (
+  timeoutSeconds: number | undefined
+): Duration.Duration =>
+  timeoutSeconds === undefined
+    ? Duration.infinity
+    : Duration.sum(
+        Duration.seconds(timeoutSeconds),
+        Duration.sum(endTimeout, readTimeout)
+      );
 
 /** The longest a read of a machine may be held for it to rest. */
 export const longestHold = Duration.seconds(5);
@@ -197,8 +212,7 @@ export const Http = ActionHttp.make(
         Unavailable,
         Internal,
       ] as const,
-      description:
-        "Run a command in a running machine, as the user it names or root, with the environment given, and answer its exit code and output once it exits, whatever the code. It waits for a step under way on the machine before it begins, though not for a capture of it or a fork from it, which run beside it, and its timeout counts from then. It runs as long as the request does: ending the request, or its timeout, ends the command and what it started in the guest, and a timeout answers exit code 124 with the output once the host's end has finished, which the host waits for at most endTimeout past it, with mayStillRun saying why when the host couldn't confirm they had ended, so they may still run. A stop, pause or delete of the machine first ends it so, and it answers WrongState in the phase stopping, pausing or deleting, its message saying when the command may still run. Nothing of it is stored or logged.",
+      description: `Run a command in a running machine, as the user it names or root, with the environment given, and answer its exit code and output once it exits, whatever the code. It waits for a step under way on the machine before it begins, though not for a capture of it or a fork from it, which run beside it, and its timeout counts from then. It runs as long as the request does: ending the request, or its timeout, ends the command and what it started in the guest, and a timeout answers exit code ${timedOutExitCode} with the output once the host's end has finished, which the host waits for at most ${Duration.format(endTimeout)} past it, with mayStillRun saying why when the host couldn't confirm they had ended, so they may still run. A stop, pause or delete of the machine first ends it so, and it answers WrongState in the phase stopping, pausing or deleting, its message saying when the command may still run. Nothing of it is stored or logged.`,
       input: ExecRequest,
       success: Executed,
     }),

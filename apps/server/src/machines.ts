@@ -2,7 +2,7 @@ import type { HostInfo, MachineState, Report } from "@clankerbox/host-contract";
 import { pinRefusal, resizeRefusal } from "@clankerbox/host-contract/traits";
 import {
   buildId,
-  endTimeout,
+  execWait,
   Internal,
   isResting,
   labelledWith,
@@ -853,12 +853,7 @@ export const make = (
           .call(
             found.host,
             (api) => api.execMachine({ machine: ref, ...command }),
-            timeoutSeconds === undefined
-              ? Duration.infinity
-              : Duration.sum(
-                  Duration.sum(Duration.seconds(timeoutSeconds), endTimeout),
-                  readTimeout
-                )
+            execWait(timeoutSeconds)
           )
           .pipe(
             Effect.catchTags({
