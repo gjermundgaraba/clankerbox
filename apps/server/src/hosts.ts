@@ -60,11 +60,18 @@ const hostApi = (member: Member) =>
 
 export type HostApi = Effect.Success<ReturnType<typeof hostApi>>;
 
-export interface Reached {
-  readonly member: Member;
-  readonly info: HostInfo | undefined;
-  readonly problem: Unreachable | undefined;
-}
+/** A host as a read of every member found it: what it reported, or why it couldn't be read. */
+export type Reached =
+  | {
+      readonly member: Member;
+      readonly info: HostInfo;
+      readonly problem: undefined;
+    }
+  | {
+      readonly member: Member;
+      readonly info: undefined;
+      readonly problem: Unreachable;
+    };
 
 /** What an operator is shown of a host whose read or call failed with `problem`. */
 export const unread = (problem: {
@@ -103,9 +110,9 @@ export const listed = ({ member, info, problem }: Reached): Host =>
   info === undefined
     ? {
         id: member.id,
-        state: problem === undefined ? "unreachable" : unread(problem),
+        state: unread(problem),
         bases: [],
-        ...(problem === undefined ? {} : { problem: problem.message }),
+        problem: problem.message,
       }
     : {
         id: member.id,

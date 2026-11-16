@@ -45,7 +45,7 @@ import { answering, Hosts } from "./hosts.ts";
 import { phaseOf as machinePhaseOf, stageOf } from "./machine-chart.ts";
 import type { MachineRow } from "./machine-chart.ts";
 import { stateOf } from "./machine-view.ts";
-import { Machines, unmade } from "./machines.ts";
+import { madeMachine, Machines } from "./machines.ts";
 import { collect, cutShort, poll } from "./operations.ts";
 import { checkpointStep } from "./steps.ts";
 import { notFound, Store } from "./store.ts";
@@ -250,17 +250,7 @@ export const make = (settings: {
       build?: string
     ) =>
       Effect.gen(function* () {
-        const present = yield* store.findMachine(source);
-
-        if (Option.isNone(present)) {
-          return yield* notFound("machine", source);
-        }
-
-        const machine = present.value;
-
-        if (stageOf(machine.state) !== "made") {
-          return yield* unmade(machine);
-        }
+        const machine = yield* madeMachine(store, source);
 
         const record: CheckpointRow = {
           name,
@@ -405,17 +395,7 @@ export const make = (settings: {
           return yield* machines.pause(id);
         }
 
-        const present = yield* store.findMachine(id);
-
-        if (Option.isNone(present)) {
-          return yield* notFound("machine", id);
-        }
-
-        const found = present.value;
-
-        if (stageOf(found.state) !== "made") {
-          return yield* unmade(found);
-        }
+        const found = yield* madeMachine(store, id);
 
         const { traits, pin } = yield* answering(hosts, found.host);
         const unpinnedRefusal = pinRefusal({ copy: id }, found.pin, pin);

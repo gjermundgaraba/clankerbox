@@ -85,7 +85,11 @@ import { builtUnder, holding, placing } from "./placement.ts";
 import type { BuiltUnder, Candidate } from "./placement.ts";
 import { machineStep, refOf } from "./steps.ts";
 import { madeOn, notFound, Store } from "./store.ts";
-import type { Operation, TemplateRow } from "./store.ts";
+import type {
+  Interface as StoreInterface,
+  Operation,
+  TemplateRow,
+} from "./store.ts";
 import { checked, due, firstCheck, ticked, unchecked } from "./tailnet.ts";
 import type { TailnetCheck } from "./tailnet.ts";
 
@@ -269,14 +273,32 @@ const absent = ({ name, state, error }: MachineRow): NotFound => {
   }
 };
 
-/** Why a machine can't be copied or resized: it may yet be made, or it won't be. */
-export const unmade = (found: MachineRow): NotMade | NotFound =>
+const unmade = (found: MachineRow): NotMade | NotFound =>
   stageOf(found.state) === "making"
     ? new NotMade({
         message: `machine ${found.name} isn't made yet: its create or setup still runs`,
         machine: found.name,
       })
     : absent(found);
+
+/** Machine `name`'s row, once its VM is made, else why it can't be copied or run in. */
+export const madeMachine = (
+  store: StoreInterface,
+  name: string
+): Effect.Effect<MachineRow, NotMade | NotFound | Internal> =>
+  Effect.gen(function* () {
+    const found = yield* store.findMachine(name);
+
+    if (Option.isNone(found)) {
+      return yield* notFound("machine", name);
+    }
+
+    if (stageOf(found.value.state) !== "made") {
+      return yield* unmade(found.value);
+    }
+
+    return found.value;
+  });
 
 const restorable = (
   name: string,
@@ -430,26 +452,19 @@ export const make = (
         return true;
       });
 
-    const sizesRead = (found: MachineRow) => {
-      const ref = refOf(found);
-
-      return ref === undefined
-        ? Effect.void
-        : hosts
-            .call(found.host, (api) => api.readSizes({ machine: ref }))
-            .pipe(
-              Effect.matchEffect({
-                onFailure: ({ message }) =>
-                  Effect.logWarning(
-                    `couldn't read the sizes of ${found.name}, so it keeps those it has: ${message}`
-                  ),
-                onSuccess: (sizing) =>
-                  Effect.asVoid(
-                    applying(found.name, { type: "sized", sizing })
-                  ),
-              })
-            );
-    };
+    const sizesRead = (found: MachineRow) =>
+      hosts
+        .call(found.host, (api) => api.readSizes({ machine: refOf(found) }))
+        .pipe(
+          Effect.matchEffect({
+            onFailure: ({ message }) =>
+              Effect.logWarning(
+                `couldn't read the sizes of ${found.name}, so it keeps those it has: ${message}`
+              ),
+            onSuccess: (sizing) =>
+              Effect.asVoid(applying(found.name, { type: "sized", sizing })),
+          })
+        );
 
     const following = (found: MachineRow, op: Operation, heard: Heard) =>
       Effect.gen(function* () {
@@ -769,11 +784,7 @@ export const make = (
       ...sizing
     }: ForkRequest & Sizing) =>
       Effect.gen(function* () {
-        const from = yield* row(id);
-
-        if (stageOf(from.state) !== "made") {
-          return yield* unmade(from);
-        }
+        const from = yield* madeMachine(store, id);
 
         const info = yield* answering(hosts, from.host);
         const spec = yield* copied(name, from, sizing, info.traits);
@@ -838,18 +849,15 @@ export const make = (
 
     const exec = ({ id, ...command }: ExecRequest) =>
       Effect.gen(function* () {
-        const made = yield* row(id);
-
-        if (stageOf(made.state) !== "made") {
-          return yield* unmade(made);
-        }
+        yield* madeMachine(store, id);
 
         const found = yield* stepless(id);
-        const ref = refOf(found);
 
-        if (stageOf(found.state) !== "made" || ref === undefined) {
+        if (stageOf(found.state) !== "made") {
           return yield* unmade(found);
         }
+
+        const ref = refOf(found);
 
         const { timeoutSeconds } = command;
 
