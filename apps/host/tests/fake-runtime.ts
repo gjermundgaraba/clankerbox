@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -12,7 +12,6 @@ import {
   cp,
   mkdir,
   readdir,
-  readFile,
   rename,
   rm,
   writeFile,
@@ -95,7 +94,6 @@ export interface Preset {
   readonly pin: string | undefined;
   readonly prepares: Interface["prepares"];
   readonly admits: boolean;
-  readonly files: { readonly keyed: boolean } | undefined;
   /** Whether it marks the machines it makes, and holds each checkpoint through its machine. */
   readonly owned: boolean;
   readonly relayed: boolean;
@@ -136,7 +134,6 @@ export const presets = {
     pin: "fake 1",
     prepares: "with-setup",
     admits: true,
-    files: { keyed: true },
     owned: false,
     relayed: false,
     cut: "ends",
@@ -148,7 +145,6 @@ export const presets = {
     pin: undefined,
     prepares: "with-setup",
     admits: true,
-    files: { keyed: false },
     owned: false,
     relayed: true,
     cut: "leaves",
@@ -160,7 +156,6 @@ export const presets = {
     pin: undefined,
     prepares: "always",
     admits: false,
-    files: undefined,
     owned: true,
     relayed: false,
     cut: "leaves",
@@ -441,7 +436,7 @@ type Injection<O extends Operation> =
 
 type Injections = { readonly [O in Operation]: Array<Injection<O>> };
 
-type Calls = Omit<Interface, "admission" | "files"> &
+type Calls = Omit<Interface, "admission"> &
   Admission &
   CheckpointFiles &
   Record<"create" | "restore" | "fork", Interface["make"]>;
@@ -451,12 +446,6 @@ type FailureOf<O extends Operation> = Calls[O] extends (
 ) => Effect.Effect<unknown, infer E, unknown>
   ? E
   : never;
-
-const keyOf = async (file: string) => {
-  const bytes = await readFile(file);
-
-  return `fake/${createHash("sha256").update(bytes).digest("hex")}`;
-};
 
 const filesIn = async (root: string): Promise<readonly string[]> => {
   const found: string[] = [];
@@ -878,55 +867,42 @@ export const fakeRuntime = (options: FakeOptions) => {
           });
     });
 
-  const files: CheckpointFiles = {
-    checkpointFiles: (checkpoint) =>
-      Effect.promise(async () => {
-        const root = heldCheckpoint(checkpoint);
-        const found = await filesIn(root);
-
-        return await Promise.all(
-          found.map(async (file) => ({
-            path: path.relative(root, file),
-            file,
-            ...(preset.files?.keyed === true ? { key: await keyOf(file) } : {}),
-          }))
-        );
-      }),
-    held: (key) =>
-      Effect.promise(async () => {
-        const all = path.join(options.dir, "checkpoints");
-
-        for (const file of existsSync(all) ? await filesIn(all) : []) {
-          if (!file.includes(".fetching") && (await keyOf(file)) === key) {
-            return file;
-          }
-        }
-
-        return undefined;
-      }),
-    staging: (checkpoint) => `${checkpointRoot(checkpoint)}.fetching`,
-    install: (checkpoint, staged) =>
-      call(
-        "install",
-        checkpoint,
-        uninterruptibleWrite(async () => {
-          const root = checkpointRoot(checkpoint);
-
-          await rename(staged, root);
-          await mkdir(path.join(root, "dev"), { recursive: true });
-          furnish(root, path.join(options.dir, "bin"));
-
-          return keptCheckpoint(checkpoint, undefined);
-        })
-      ),
-  };
-
   const layer = Layer.effect(
     Runtime,
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const layerScope = yield* Effect.scope;
       const bin = yield* Effect.sync(() => writeStubs(options.dir));
+
+      const files: CheckpointFiles = {
+        checkpointFiles: (checkpoint) =>
+          Effect.promise(async () => {
+            const root = heldCheckpoint(checkpoint);
+
+            const found = await filesIn(root);
+
+            return found.map((file) => ({
+              path: path.relative(root, file),
+              file,
+            }));
+          }),
+        held: () => Effect.undefined,
+        staging: (checkpoint) => `${checkpointRoot(checkpoint)}.fetching`,
+        install: (checkpoint, staged) =>
+          call(
+            "install",
+            checkpoint,
+            uninterruptibleWrite(async () => {
+              const root = checkpointRoot(checkpoint);
+
+              await rename(staged, root);
+              await mkdir(path.join(root, "dev"), { recursive: true });
+              furnish(root, bin);
+
+              return keptCheckpoint(checkpoint, undefined);
+            })
+          ),
+      };
 
       const probe: Probe =
         options.probesPorts === true
@@ -1042,7 +1018,7 @@ export const fakeRuntime = (options: FakeOptions) => {
             }
           : undefined,
         builds:
-          options.builds === undefined || preset.files === undefined
+          options.builds === undefined
             ? unshared(traits.runtime)
             : yield* throughBucket(options.builds, files),
         traits,
@@ -1399,7 +1375,6 @@ export const fakeRuntime = (options: FakeOptions) => {
 
   return {
     layer,
-    files,
     faults,
     calls,
     activations,

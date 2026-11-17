@@ -14,8 +14,8 @@ import type {
 } from "../../../src/platform/bucket/builds.ts";
 import { BuildsSettings, make } from "../../../src/platform/bucket/s3.ts";
 import type { Identity } from "../../../src/runtime.ts";
-import { fakeRuntime } from "../../fake-runtime.ts";
 import { dockerAnswers, seaweedfs } from "../seaweedfs.ts";
+import { directoryFiles } from "./directory-files.ts";
 
 class Seaweed extends Context.Service<Seaweed, BuildsSettings>()(
   "tests/platform/Seaweed"
@@ -43,12 +43,6 @@ const stored = Layer.effect(
 const encoder = new TextEncoder();
 
 const decoder = new TextDecoder();
-
-const filesIn = (dir: string) => {
-  const fake = fakeRuntime({ dir });
-
-  return Effect.as(Layer.build(fake.layer), fake.files);
-};
 
 const checkpointRef = (instance: string) => ({
   name: instance,
@@ -176,7 +170,7 @@ describe.skipIf(!dockerAnswers && process.env["CI"] === undefined)(
               ),
           };
 
-          const publishing = yield* filesIn(from);
+          const publishing = directoryFiles(from, true);
 
           const built = yield* planted(publishing, checkpointRef("built"), {
             "disk.raw": "the disk",
@@ -191,7 +185,7 @@ describe.skipIf(!dockerAnswers && process.env["CI"] === undefined)(
           yield* publish(store, publishing, built);
           yield* fetch(
             counted,
-            yield* filesIn(to),
+            directoryFiles(to, true),
             checkpointRef("fetched"),
             "built",
             "web@1"

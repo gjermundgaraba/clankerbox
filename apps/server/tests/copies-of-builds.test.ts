@@ -1,10 +1,7 @@
 import { Handle } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import {
-  memoryBuildStore,
-  presets,
-} from "@gjermundgaraba/clankerbox-host/testing";
+import { memoryBuildStore } from "@gjermundgaraba/clankerbox-host/testing";
 import type {
   startHost,
   TestHost,
@@ -98,14 +95,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const shared = memoryBuildStore();
 
         const served = yield* running({
-          hosts: [
-            { id: "one" },
-            {
-              id: "other",
-              options: { runtime: { traits: presets.fixed.traits } },
-            },
-            { id: "two" },
-          ],
+          hosts: [{ id: "one" }, { id: "other", as: "fixed" }, { id: "two" }],
           runtime: { builds: shared.store },
           recheck: Duration.millis(100),
         });

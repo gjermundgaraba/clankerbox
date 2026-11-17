@@ -347,7 +347,6 @@ export const eventually = <A, E>(
     return last;
   });
 
-/** The checkpoint files a runtime keeps, which a test's runtime must. */
 /**
  * A raw TCP connection to the HTTP server at `url`, for a test that sends what no HTTP client
  * would, such as part of a request, and keeps all it reads.

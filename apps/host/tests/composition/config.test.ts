@@ -464,19 +464,25 @@ layer(NodeServices.layer)((it) => {
       })
   );
 
-  it.effect("an unknown key, a kind or a bad host ID is Invalid", () =>
-    Effect.gen(function* () {
-      for (const contents of [
-        { ...config, labels: [] },
-        { ...config, kind: "mac" },
-        { ...config, id: "Smolvm" },
-        { ...config, runtime: { smolvm: { prefix: "/opt", ramBudgetMib: 0 } } },
-      ]) {
-        const { loaded } = yield* load(contents);
+  it.effect(
+    "an unknown key, at the top or in a runtime's settings, a kind or a bad host ID is Invalid",
+    () =>
+      Effect.gen(function* () {
+        for (const contents of [
+          { ...config, labels: [] },
+          { ...config, runtime: { smolvm: { prefix: "/opt", labels: [] } } },
+          { ...config, kind: "mac" },
+          { ...config, id: "Smolvm" },
+          {
+            ...config,
+            runtime: { smolvm: { prefix: "/opt", ramBudgetMib: 0 } },
+          },
+        ]) {
+          const { loaded } = yield* load(contents);
 
-        expect((yield* Effect.flip(loaded))._tag).toBe("Invalid");
-      }
-    })
+          expect((yield* Effect.flip(loaded))._tag).toBe("Invalid");
+        }
+      })
   );
 
   it.effect(
@@ -498,7 +504,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a builds setting is smolvm's or Tart's, under its runtime, and one whose endpoint holds credentials, at the top, or under boat or smol cloud is Invalid",
+    "a builds setting under smolvm or Tart is kept, and one whose endpoint holds credentials is Invalid",
     () =>
       Effect.gen(function* () {
         const credentials = {
@@ -543,23 +549,6 @@ layer(NodeServices.layer)((it) => {
         expect(error.message).toContain(
           "an http(s) URL with no path and no credentials"
         );
-
-        for (const host of [
-          { ...config, builds },
-          {
-            ...config,
-            runtime: { boat: { apiKeyFile: "/etc/boat.key", builds } },
-          },
-          {
-            ...config,
-            runtime: { "smol-cloud": { apiKeyFile: "/etc/smol.key", builds } },
-          },
-        ]) {
-          const refused = yield* Effect.flip((yield* load(host)).loaded);
-
-          expect(refused._tag, JSON.stringify(host)).toBe("Invalid");
-          expect(refused.message).toContain("builds");
-        }
       })
   );
 
