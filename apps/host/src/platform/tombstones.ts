@@ -66,8 +66,7 @@ interface Options {
  * list, and deletes each machine of a buried instance through the inner `delete`, keeping every
  * checkpoint it holds, as a row may still want one. A tombstone older than `tombstoneLast` is
  * forgotten by a sweep whose list succeeded and found nothing of it. A tombstone only ever
- * deletes, so a host with none, or one that lost its file, keeps every machine a row wants. The
- * wrapper keeps each getter of `runtime` a getter, so it still reads live.
+ * deletes, so a host with none, or one that lost its file, keeps every machine a row wants.
  */
 export const tombstoned = <
   R extends Pick<Found, "make" | "delete"> & {
@@ -232,16 +231,7 @@ export const tombstoned = <
         bury(machine.instance)
       );
 
-    const wrapped = Object.defineProperties(
-      { ...runtime, make, delete: remove },
-      Object.fromEntries(
-        Object.entries(Object.getOwnPropertyDescriptors(runtime)).filter(
-          ([, property]) => property.get !== undefined
-        )
-      )
-    );
-
-    return { runtime: wrapped, sweep };
+    return { runtime: { ...runtime, make, delete: remove }, sweep };
   });
 
 /** `runtime` with its tombstones, swept every `SweepEvery` in the scope that makes it. */
