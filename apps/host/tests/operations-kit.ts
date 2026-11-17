@@ -10,15 +10,7 @@ import type {
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import type { Setup } from "@gjermundgaraba/clankerbox-sdk";
 import { exists, scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import {
-  Cause,
-  Context,
-  Effect,
-  Fiber,
-  Layer,
-  Logger,
-  References,
-} from "effect";
+import { Cause, Context, Effect, Fiber, Layer, Logger } from "effect";
 
 import { PortProbe } from "../src/machine-ports.ts";
 import type { Probe } from "../src/machine-ports.ts";
@@ -252,27 +244,6 @@ export const capturing = (lines: string[]) =>
       ].join("\n")
     );
   });
-
-export const sweepLogged =
-  (lines: Array<readonly [string, string]>) =>
-  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    effect.pipe(
-      Effect.provide(
-        Logger.layer([
-          Logger.make(({ logLevel, message }) => {
-            lines.push([
-              logLevel,
-              [message]
-                .flat()
-                .map(String)
-                .join(" ")
-                .replaceAll(/\((?:mach|ckpt|held)-[0-9a-z-]+\)/gu, "(handle)"),
-            ]);
-          }),
-        ])
-      ),
-      Effect.provideService(References.MinimumLogLevel, "All")
-    );
 
 export const errorOf = (report: Report) => [report.status, report.error?._tag];
 

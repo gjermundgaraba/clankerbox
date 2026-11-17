@@ -9,7 +9,6 @@ import { expect } from "vite-plus/test";
 import { runCommand } from "../src/exec.ts";
 import type {
   Execution,
-  Identity,
   Interface as Runtime,
   Origin,
   Sized,
@@ -54,9 +53,10 @@ export interface Fixture {
   readonly faults: Partial<Faults>;
   /**
    * Puts a machine, with a checkpoint it holds, in the provider's account without this host's mark,
-   * as another host or user of the account would. Every runtime with `owned` gives it.
+   * as another host or user of the account would, and answers whether each is still there. Every
+   * rented runtime, whose provider holds a checkpoint through its machine, gives it.
    */
-  readonly unmarked: Effect.Effect<void> | undefined;
+  readonly unmarked: Effect.Effect<Effect.Effect<boolean>> | undefined;
 }
 
 export interface Subject {
@@ -67,6 +67,11 @@ export interface Subject {
   readonly lacks?: Readonly<Partial<Record<Fault, string>>>;
   /** Why its guest runs no processes of the commands it is given, if it runs none. */
   readonly runsNoGuest?: string | undefined;
+  /**
+   * Why nothing of a machine lands after its call answered, where its machines lie on the host's
+   * own disk, so a provider holds no checkpoint through a machine and no tombstone is kept.
+   */
+  readonly ownDisk?: string | undefined;
   readonly fixture: Effect.Effect<Fixture, never, Scope.Scope>;
 }
 
@@ -74,20 +79,6 @@ const given = <A>(fault: A | undefined) =>
   Effect.orDie(Effect.fromNullishOr(fault));
 
 const stallCaseTimeout = 120_000;
-
-const heldOf = (runtime: Runtime, machine: Identity) =>
-  Effect.gen(function* () {
-    const found = yield* runtime.find(machine);
-
-    const marked =
-      runtime.owned === undefined
-        ? []
-        : (yield* runtime.owned.machines)
-            .filter(({ instance }) => instance === machine.instance)
-            .map(({ handle }) => handle);
-
-    return { found, marked };
-  });
 
 const roundInstance = (at: StallAt, after: number) =>
   `${at === "start" ? "5" : "e"}${after.toString(16).padStart(7, "0")}${"ab".repeat(12)}`;
@@ -154,6 +145,11 @@ export const runtimeContract = (subject: Subject): void => {
 
     return why === undefined ? title : `${title}, skipped: ${why}`;
   };
+
+  const rented = subject.ownDisk === undefined;
+
+  const ifRented = (title: string) =>
+    rented ? title : `${title}, skipped: ${subject.ownDisk}`;
 
   const sized = (name: string, instance = first) => ({
     name,
@@ -533,17 +529,30 @@ export const runtimeContract = (subject: Subject): void => {
       )
     );
 
-    it.live(
-      "lists what carries its mark, and deletes with a machine each checkpoint it holds that keep lacks",
+    const restoredFrom = (
+      runtime: Runtime,
+      handle: Handle,
+      instance: string,
+      into: string
+    ) =>
+      Effect.exit(
+        runtime.make(
+          sized("copy", into),
+          {
+            _tag: "checkpoint",
+            checkpoint: { name: "snap", instance, ...subject.sizes, handle },
+          },
+          nextFree()
+        )
+      );
+
+    it.live.skipIf(!rented)(
+      ifRented(
+        "deletes with a machine each checkpoint it holds that keep lacks"
+      ),
       () =>
         withFixture(({ runtime }) =>
           Effect.gen(function* () {
-            const { owned } = runtime;
-
-            if (owned === undefined) {
-              return;
-            }
-
             const machine = yield* made(runtime, "dev");
 
             yield* inCaptureState(runtime, machine);
@@ -558,91 +567,36 @@ export const runtimeContract = (subject: Subject): void => {
               instance: second,
             });
 
-            const listed = yield* owned.machines;
-
-            expect(
-              listed.map(({ instance, handle, checkpoints }) => [
-                instance,
-                handle,
-                new Set(checkpoints),
-              ])
-            ).toStrictEqual([
-              [machine.instance, machine.handle, new Set([kept, other])],
-            ]);
-
             yield* runtime.delete(machine, new Set<Handle>([kept]));
 
-            const restoredFrom = (
-              handle: Handle,
-              instance: string,
-              into: string
-            ) =>
-              runtime.make(
-                sized("copy", into),
-                {
-                  _tag: "checkpoint",
-                  checkpoint: {
-                    name: "snap",
-                    instance,
-                    ...subject.sizes,
-                    handle,
-                  },
-                },
-                nextFree()
-              );
-
-            expect(yield* owned.machines).toStrictEqual([]);
-
-            yield* restoredFrom(kept, first, third);
-
-            const otherRestored = yield* Effect.exit(
-              restoredFrom(other, second, fourth)
+            const keptRestored = yield* restoredFrom(
+              runtime,
+              kept,
+              first,
+              third
             );
 
+            const otherRestored = yield* restoredFrom(
+              runtime,
+              other,
+              second,
+              fourth
+            );
+
+            expect(yield* runtime.find(machine)).toBeUndefined();
+            expect(keptRestored._tag).toBe("Success");
             expect(otherRestored._tag).toBe("Failure");
           })
         )
     );
 
-    it.live(
-      "lists nothing that lacks its mark, whoever put it in the account",
-      () =>
-        withFixture(({ runtime, unmarked }) =>
-          Effect.gen(function* () {
-            const { owned } = runtime;
-
-            if (owned === undefined) {
-              return;
-            }
-
-            expect(unmarked).toBeDefined();
-            yield* unmarked ?? Effect.void;
-
-            const machine = yield* made(runtime, "dev");
-            const listed = yield* owned.machines;
-
-            expect(
-              listed.map(({ instance, handle, checkpoints }) => [
-                instance,
-                handle,
-                checkpoints,
-              ])
-            ).toStrictEqual([[machine.instance, machine.handle, []]]);
-          })
-        )
-    );
-
-    it.live(
-      "deletes once a start runs the machine each checkpoint it holds that keep lacks",
+    it.live.skipIf(!rented)(
+      ifRented(
+        "deletes once a start runs the machine each checkpoint it holds that keep lacks"
+      ),
       () =>
         withFixture(({ runtime }) =>
           Effect.gen(function* () {
-            const { owned } = runtime;
-
-            if (owned === undefined) {
-              return;
-            }
-
             const machine = yield* made(runtime, "dev");
 
             yield* inCaptureState(runtime, machine);
@@ -657,20 +611,64 @@ export const runtimeContract = (subject: Subject): void => {
               instance: second,
             });
 
-            const held = Effect.map(
-              owned.machines,
-              (listed) =>
-                new Set(listed.flatMap(({ checkpoints }) => checkpoints))
-            );
-
-            const before = yield* held;
-
             yield* runtime.stop(machine);
             yield* runtime.start(machine, new Set<Handle>([kept]));
 
-            expect(before).toStrictEqual(new Set([kept, other]));
-            expect(yield* stateOf(runtime, machine)).toBe("running");
-            expect(yield* held).toStrictEqual(new Set([kept]));
+            const running = yield* stateOf(runtime, machine);
+
+            const keptRestored = yield* restoredFrom(
+              runtime,
+              kept,
+              first,
+              third
+            );
+
+            const otherRestored = yield* restoredFrom(
+              runtime,
+              other,
+              second,
+              fourth
+            );
+
+            expect(running).toBe("running");
+            expect(keptRestored._tag).toBe("Success");
+            expect(otherRestored._tag).toBe("Failure");
+          })
+        )
+    );
+
+    it.live.skipIf(!rented)(
+      ifRented(
+        "deletes what lands of an instance after its delete answered, refuses a make of it, and deletes nothing that lacks its mark"
+      ),
+      () =>
+        withFixture(({ runtime, faults, unmarked }) =>
+          Effect.gen(function* () {
+            const theirs = yield* yield* given(unmarked);
+            const land = yield* yield* given(faults.landLate);
+            const late = sized("late");
+
+            yield* Effect.flip(made(runtime, "late"));
+            yield* runtime.delete(
+              { ...late, handle: yield* runtime.find(late) },
+              new Set()
+            );
+            yield* land;
+
+            const swept = yield* runtime.find(late).pipe(
+              Effect.repeat({
+                until: (found) => found === undefined,
+                schedule: Schedule.spaced("50 millis"),
+              }),
+              Effect.timeoutOption("20 seconds")
+            );
+
+            const remade = yield* Effect.exit(made(runtime, "late"));
+
+            expect(swept._tag).toBe("Some");
+            expect(remade._tag).toBe("Failure");
+            expect(yield* runtime.find(late)).toBeUndefined();
+            expect(yield* theirs).toBe(true);
           })
         )
     );
@@ -741,9 +739,8 @@ export const runtimeContract = (subject: Subject): void => {
         )
     );
 
-    it.live.skipIf(lacks("landLate"))(
-      needing(
-        "landLate",
+    it.live.skipIf(!rented)(
+      ifRented(
         "finds a machine its make failed to answer once the provider makes it"
       ),
       () =>
@@ -805,30 +802,16 @@ export const runtimeContract = (subject: Subject): void => {
                   break;
                 }
 
-                const found = yield* runtime.find(machine);
+                const handle =
+                  (yield* runtime.find(machine)) ??
+                  (yield* runtime.make(machine, fromImage, nextFree())).handle;
 
-                if (found !== undefined) {
-                  yield* runtime.delete(
-                    { ...machine, handle: found },
-                    new Set()
-                  );
-                }
-
-                const again = yield* runtime.make(
-                  machine,
-                  fromImage,
-                  nextFree()
-                );
-
-                yield* runtime.delete(
-                  { ...machine, handle: again.handle },
-                  new Set()
-                );
+                yield* runtime.delete({ ...machine, handle }, new Set());
 
                 expect(
-                  yield* heldOf(runtime, machine),
+                  yield* runtime.find(machine),
                   `a make cut at the ${at} of its call ${after}`
-                ).toStrictEqual({ found: undefined, marked: [] });
+                ).toBeUndefined();
               }
             }
           })
@@ -903,9 +886,9 @@ export const runtimeContract = (subject: Subject): void => {
                 yield* runtime.delete(machine, new Set());
 
                 expect(
-                  yield* heldOf(runtime, machine),
+                  yield* runtime.find(machine),
                   `a delete cut at the ${at} of its call ${after}`
-                ).toStrictEqual({ found: undefined, marked: [] });
+                ).toBeUndefined();
 
                 if (!cut) {
                   expect(after, "the calls it cut").toBeGreaterThan(0);

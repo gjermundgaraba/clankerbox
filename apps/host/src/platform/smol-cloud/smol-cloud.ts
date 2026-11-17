@@ -52,10 +52,11 @@ import {
   bounded,
   providerErrors,
   sentUntilHeld,
-  stepWithin,
   triesAfterLoss,
   untilRest,
 } from "../provider-http.ts";
+import { rented } from "../tombstones.ts";
+import type { Found, MarkedMachine } from "../tombstones.ts";
 import * as Api from "./api.ts";
 import type { ApiError, MachineRecord, Refused } from "./api.ts";
 import { traits as traitsOf } from "./traits.ts";
@@ -283,10 +284,10 @@ const stagedStdin = () =>
 
 export const make = (
   settings: SmolCloudSettings,
-  host: Pick<HostSettings, "id" | "listen">,
+  host: Pick<HostSettings, "id" | "stateDir" | "listen">,
   api: Api.Api,
   sockets: Socket.WebSocketConstructor["Service"]
-): Effect.Effect<Interface, Internal> =>
+): Effect.Effect<Interface, Internal, FileSystem.FileSystem | Scope.Scope> =>
   Effect.gen(function* () {
     const traits = traitsOf(
       perMachine(
@@ -864,7 +865,7 @@ export const make = (
         new Set(ours.map(({ id }) => id))
       );
 
-      return ours.flatMap((found) => {
+      return ours.flatMap((found): MarkedMachine[] => {
         const instance = instanceOf(found.name);
 
         return instance === undefined
@@ -903,7 +904,7 @@ export const make = (
       });
     };
 
-    const runtime: Interface = {
+    const runtime: Found = {
       traits,
       guest: "debian",
       version: "v1",
@@ -916,13 +917,6 @@ export const make = (
       },
       admission: undefined,
       builds: unshared(traits.runtime),
-      owned: {
-        machines: Effect.mapError(
-          marked,
-          internal("the machines this host made")
-        ),
-        deleteWithin: stepWithin,
-      },
       sizable: () => Effect.void,
       startup: Effect.void,
       find: (machine) =>
@@ -1099,7 +1093,10 @@ export const make = (
       exec,
     };
 
-    return runtime;
+    return yield* rented(runtime, {
+      dir: `${host.stateDir}/smol-cloud`,
+      marked: Effect.mapError(marked, internal("the machines this host made")),
+    });
   });
 
 export const layer = (

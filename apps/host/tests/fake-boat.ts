@@ -1544,13 +1544,18 @@ export const fakeBoat = (
           copyOf: undefined,
         });
 
-        await born({
+        const unlabelled = await born({
           type: "small",
           labels: {},
           name: undefined,
           copyOf: undefined,
         });
+
         await save(theirs.id, `cbx-${instance}`);
+
+        return Effect.sync(
+          () => sandboxes.has(theirs.id) && sandboxes.has(unlabelled.id)
+        );
       }),
       dropAnswer,
       loseRequest: (call: BoatCall, times = 1) =>
@@ -1658,7 +1663,7 @@ export interface FakeBoat {
   readonly layer: ReturnType<typeof Boat.layer>;
   readonly layerOf: (id: string) => ReturnType<typeof Boat.layer>;
   readonly faults: Faults;
-  readonly unmarked: Effect.Effect<void>;
+  readonly unmarked: Effect.Effect<Effect.Effect<boolean>>;
   readonly dropAnswer: (call: BoatCall) => Effect.Effect<void>;
   readonly loseRequest: (call: BoatCall, times?: number) => Effect.Effect<void>;
   readonly landSaveDuringDelete: Effect.Effect<void>;

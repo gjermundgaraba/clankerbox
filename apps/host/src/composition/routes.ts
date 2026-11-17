@@ -5,7 +5,6 @@ import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Effect, Layer, Option } from "effect";
 
 import { Operations } from "../operations.ts";
-import { sweepsWithin } from "../recheck.ts";
 import { Runtime, stateIn } from "../runtime.ts";
 import type { HostSettings } from "../settings.ts";
 import { Tailnet } from "../tailnet.ts";
@@ -33,9 +32,6 @@ const app = (config: Served) =>
             ...(runtime.pin === undefined ? {} : { pin: runtime.pin }),
             joins: Option.isSome(tailnet),
             builds: runtime.builds.shared,
-            ...(runtime.owned === undefined
-              ? {}
-              : { sweeps: sweepsWithin(runtime.owned) }),
           }),
         readMachines: ({ machines }) =>
           Effect.map(operations.read(machines), (observed) =>
@@ -47,7 +43,6 @@ const app = (config: Served) =>
         readSizes: ({ machine }) => operations.sizes(machine),
         readCapacity: ({ machines }) => operations.capacity(machines),
         adoptMachines: ({ machines }) => operations.adopt(machines),
-        sweepRetired: operations.sweep,
         runOperation: operations.run,
         waitOperation: ({ id }) => operations.wait(id),
         cancelOperation: ({ id }) => operations.cancel(id),

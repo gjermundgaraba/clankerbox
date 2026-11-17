@@ -45,6 +45,8 @@ import { throughBucket } from "../src/platform/bucket/builds.ts";
 import type { CheckpointFiles, Store } from "../src/platform/bucket/builds.ts";
 import { traits as smolvm } from "../src/platform/smolvm/traits.ts";
 import { traits as tart } from "../src/platform/tart/traits.ts";
+import { rented, SweepEvery } from "../src/platform/tombstones.ts";
+import type { MarkedMachine } from "../src/platform/tombstones.ts";
 import {
   Handle,
   missing,
@@ -59,7 +61,6 @@ import type {
   Identity,
   MachineState,
   Made,
-  MarkedMachine,
   Observed,
   Interface,
   RuntimeError,
@@ -955,7 +956,7 @@ export const fakeRuntime = (options: FakeOptions) => {
           leftOf(machine)
         );
 
-      return Runtime.of({
+      const runtime = Runtime.of({
         version: "fake",
         get pin() {
           return pin;
@@ -995,26 +996,6 @@ export const fakeRuntime = (options: FakeOptions) => {
                     )
                   )
                 ),
-            }
-          : undefined,
-        owned: owned
-          ? {
-              machines: Effect.sync(() => {
-                record("marked machines");
-
-                return machines
-                  .values()
-                  .filter(({ marked }) => marked)
-                  .map((machine): MarkedMachine => ({
-                    instance: machine.instance,
-                    handle: machine.handle,
-                    checkpoints: heldBy(machine.handle).map(
-                      ([handle]) => handle
-                    ),
-                  }))
-                  .toArray();
-              }),
-              deleteWithin: Duration.minutes(1),
             }
           : undefined,
         builds:
@@ -1224,8 +1205,14 @@ export const fakeRuntime = (options: FakeOptions) => {
                 : Effect.succeed(found.sizes);
             })
           ),
-        delete: (machine, keep) =>
-          Effect.andThen(
+        delete: ({ handle, ...identity }, keep) => {
+          if (handle === undefined) {
+            return Effect.void;
+          }
+
+          const machine = { ...identity, handle };
+
+          return Effect.andThen(
             Effect.sync(() => removals.push([machine.name, keep])),
             call(
               "delete",
@@ -1248,7 +1235,8 @@ export const fakeRuntime = (options: FakeOptions) => {
                 Effect.void
               )
             )
-          ),
+          );
+        },
         capture: (machine, checkpoint) =>
           call(
             "capture",
@@ -1345,6 +1333,27 @@ export const fakeRuntime = (options: FakeOptions) => {
             })
           ),
       });
+
+      if (!owned) {
+        return runtime;
+      }
+
+      return yield* rented(runtime, {
+        dir: options.dir,
+        marked: Effect.sync(() => {
+          record("marked machines");
+
+          return machines
+            .values()
+            .filter(({ marked }) => marked)
+            .map((machine): MarkedMachine => ({
+              instance: machine.instance,
+              handle: machine.handle,
+              checkpoints: heldBy(machine.handle).map(([handle]) => handle),
+            }))
+            .toArray();
+        }),
+      }).pipe(Effect.provideService(SweepEvery, Duration.millis(100)));
     })
   );
 
@@ -1408,6 +1417,8 @@ export const fakeRuntime = (options: FakeOptions) => {
         of: owned ? handle : undefined,
       });
       remembered();
+
+      return Effect.sync(() => machines.has(handle));
     }),
     lose: (checkpoint: Handle) =>
       Effect.promise(async () => {

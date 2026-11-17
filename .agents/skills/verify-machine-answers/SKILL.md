@@ -15,7 +15,8 @@ often it is delivered. Every request gets an answer. All of that holds with the
 control plane killed at any moment, the host restarted, the link cut, and
 deliveries lost, repeated or late, given the bounds below. On a runtime that
 stops a VM unasked, or lands a make after its undo looked for it, the recheck
-starts a machine wanted running again, and the sweep deletes the late VM.
+starts a machine wanted running again, and the runtime's own sweep deletes the
+late VM, by the tombstone its delete left.
 
 **Harm.** A user or agent told that a machine is stopped while it runs (or the
 reverse) acts on a lie. A create that a crash left half done must neither leak
@@ -46,11 +47,12 @@ TLC checks these invariants on every reachable state:
 | `RestTrue`           | A row resting `settled` with no operation holds the VM it says, unless it drifted since a decided read |
 | `SupersededHonest`   | `Superseded` names what another request asked for, never the request's own                           |
 | `NoOrphan`           | A failed create once undone, and a deleted machine, leave no VM but one that landed late             |
+| `Tombstoned`         | Once the row went or rests undone after the create, the host keeps a tombstone of its instance, across restarts |
 | `OnceOnly`           | Each operation runs once, however often it is delivered                                              |
 | `FailedSays`         | A row resting `failed` carries its error                                                             |
 | `OpIsState`          | An operation is in flight exactly while the row's leaf has a step                                    |
 | `AllAnswered`        | (temporal, in `MachineAnswers.cfg` and `Drifting.cfg`) every request is answered, given fair scheduling |
-| `EventuallyNoOrphan` | (temporal, in `Drifting.cfg`) a VM whose row went or rests undone is deleted, by the sweep          |
+| `EventuallyNoOrphan` | (temporal, in `Drifting.cfg`) a VM whose row went or rests undone is deleted, by the runtime's sweep |
 | `RunsWhenWanted`     | (temporal, in `Drifting.cfg`) a machine wanted running runs, unless its row rests `lost`, or `failed` once a runtime call failed |
 
 Only `Drifting.cfg` sets `Drifts` and `LandsLate`. Elsewhere no VM drifts or
@@ -141,17 +143,15 @@ A pass covers this scope, and only it:
   every reachable state. A run takes about 2 minutes. A crash, a partition and
   a lost delivery are out: with them too, it passed 6.8 million distinct states
   in 10 minutes with its queue still growing, and was stopped.
-- **The sweep is a read and a later delete.** `SweepRead` reads whether the
-  store retired the one instance, its row gone or resting `undone` after the
-  create, and `Sweep` deletes the VM at any later moment while the host holds no
-  step. A read before the create, which the code's set of retired instances
-  never names, is the `sweep-unclaimed` break. The model has one store and one
-  instance, so a second store, a wiped or restored one, a row replaced by a
-  create of its name, and checkpoints are out; they rest on
-  `apps/server/tests/fleet.test.ts` and the store's test in
-  `apps/server/tests/platform/sqlite.test.ts`. No step the host holds ever
-  names a VM the sweep may delete, so its "no step" guard decides nothing here:
-  that a held step spares a VM rests on `apps/host/tests/recheck.test.ts`.
+- **The sweep is the runtime's own.** A remove's step that ends done leaves
+  `tomb`, the host's tombstone of the instance, set for good, whatever its
+  search found, and a host restart keeps it, as it lies on disk. `Sweep`
+  deletes the VM at any moment while `tomb` is set, with or without the control
+  plane, and a make of a tombstoned instance fails with nothing made. A
+  tombstone's day, its file and a restored control plane's make of it again
+  rest on `apps/host/tests/platform/tombstones.test.ts` and the runtime
+  contract's late-landing case; a wiped or second store, which keeps no
+  tombstone, on `apps/server/tests/fleet.test.ts`.
 - **A pause meets a VM that drifted stopped and fails**, as the fake runtime's
   pause does. A runtime whose pause stops leaves it stopped and reports done.
 - **The sequence fence is global.** The model's operation ID is its sequence,
@@ -182,7 +182,7 @@ A pass says nothing of these, which rest on tests or on nothing:
   a host of another release or contract, and every other machine's loop are
   out.
 - **No clock.** The two minutes a wait reads on before `Unavailable`, a failed
-  row's day, the retired window and an expiry are out: the model's faults end,
+  row's day, a tombstone's day and an expiry are out: the model's faults end,
   and its fairness answers every request.
 - **Drift and a late make only on `Drifting.cfg`,** without a crash, a
   partition or a lost delivery, and each at most once.
@@ -211,7 +211,7 @@ Each model part stands for this code:
 | `Crash`, `Revive`                | a new process: the store stays, `creates` goes; `machines.ts` start-up     |
 | `Drift`                          | a provider stopping a machine unasked; the fake runtime's `drift` hook     |
 | `LandLate`                       | a provider making a machine whose answer was lost; the fake's `landLate` hook |
-| `SweepRead`, `Sweep`             | the store retiring an instance in `advance`, read by `apps/server/src/fleet.ts`'s recheck and sent as `sweepRetired`; `apps/host/src/recheck.ts` `sweep`, which deletes what was retired and no step names |
+| `tomb`, `Sweep`                  | a rented runtime's `delete`, which buries its instance, and `make`, which refuses one buried; `apps/host/src/platform/tombstones.ts` `bury`, `refuse` and its sweep |
 | `Shown`                          | `machine-view.ts` `phaseShown`, in `Machines.get` and `list`               |
 | `Answer`                         | `packages/sdk/src/client.ts` `machineRest`, `machineGone`, `answerOf`      |
 
@@ -249,7 +249,7 @@ change.
 | `start-rests`: a start's report rests the row settled without a new read       | chart | `TwoClients.cfg`     | `RestTrue`           |
 | `read-fails-rests`: a read that fails writes a rest                            | chart | `MachineAnswers.cfg` | `RestTrue`           |
 | `prepared-make-rests`: a prepared make's report rests the row settled without a read | chart | `TwoClients.cfg` | `RestTrue`         |
-| `skip-undo`: a failed make skips undoing and rests undone                      | chart | `MachineAnswers.cfg` | `NoOrphan`           |
+| `skip-undo`: a failed make skips undoing and rests undone                      | chart | `MachineAnswers.cfg` | `Tombstoned`         |
 | `silent-failure`: failing a step records no error                              | chart | `MachineAnswers.cfg` | `FailedSays`         |
 | `report-enters-step`: a report enters a leaf with a step                       | chart | `TwoClients.cfg`     | `OpIsState`          |
 | `no-fence`: the host accepts any delivery, with no sequence or boot fence      | model | `TwoClients.cfg`     | `OnceOnly`           |
@@ -258,10 +258,16 @@ change.
 | `make-never-given-up`: a make the host never got is never given up             | model | `MachineAnswers.cfg` | deadlock             |
 | `restart-unnoticed`: a host restart isn't noticed                              | model | `MachineAnswers.cfg` | `AllAnswered`        |
 | `no-sweep`: the sweep never runs                                               | model | `Drifting.cfg`       | `EventuallyNoOrphan` |
-| `sweep-unclaimed`: the sweep deletes what no row claims when it reads          | model | `TwoClients.cfg`     | `RestTrue`           |
+| `sweep-untombstoned`: the sweep deletes with no tombstone                      | model | `TwoClients.cfg`     | `RestTrue`           |
+| `tomb-if-found`: a remove buries only an instance whose VM it found            | model | `Drifting.cfg`       | `Tombstoned`         |
+| `tomb-in-memory`: a host restart forgets its tombstones                        | model | `Drifting.cfg`       | `Tombstoned`         |
 | `drift-ignored`: the recheck of a settled row reads the row, not the VM        | model | `Drifting.cfg`       | `RunsWhenWanted`     |
 | `repeated-ask-rests`: a request for what a row already wants keeps its rest    | chart | `Drifting.cfg`       | `AnswerTrue`         |
 | `drift-fails`: a read of a stopped VM that should run rests the row `failed`   | chart | `Drifting.cfg`       | `RunsWhenWanted`     |
+
+`skip-undo` fails `Tombstoned` before `NoOrphan`: the remove an undo sends is
+what buries the instance, so a row that rests undone without one holds a
+retired instance no tombstone covers, before any VM need be left.
 
 `make-never-given-up` and `restart-unnoticed` break `Collect`, which stands for
 `poll`, outside the chart. An edge taken off the chart isn't a deadlock: `Collect`

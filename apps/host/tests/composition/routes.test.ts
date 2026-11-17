@@ -565,7 +565,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           readSizes: { machine: ref },
           readCapacity: { machines: [ref] },
           adoptMachines: { machines: [ref] },
-          sweepRetired: { machines: [] },
           runOperation: { ...made("op-1"), boot: yield* bootOf(url) },
           waitOperation: { id: "op-1" },
           cancelOperation: { id: "op-1" },

@@ -289,8 +289,6 @@ const checkpoint = (
   ...fields,
 });
 
-const instance = (n: number) => `${n}`.repeat(32);
-
 let nextOperation = 0;
 
 const operation = (
@@ -905,6 +903,37 @@ layer(NodeServices.layer)((it) => {
         });
         expect(after).toStrictEqual(Option.none());
         expect(later.sequence).toBe(8);
+      })
+  );
+
+  it.effect(
+    "a state dir that kept retired instances opens with them dropped, as each host keeps its own",
+    () =>
+      Effect.gen(function* () {
+        const shipped = migrations.length - 1;
+
+        const stateDir = yield* stateDirAt(shipped, (db) => {
+          for (const migration of migrations.slice(0, shipped)) {
+            db.exec(migration);
+          }
+
+          db.exec(
+            `INSERT INTO retired (host, instance, retired_at) VALUES ('linux', '0123456789abcdef0123456789abcdef', '2026-10-04T12:00:00.000Z')`
+          );
+        });
+
+        const machines = yield* withStore(stateDir, (store) => store.machines);
+
+        const tables = reading(stateDir, (db) =>
+          db
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .all()
+            .map(({ name }) => name)
+        );
+
+        expect(machines).toStrictEqual([]);
+        expect(tables).not.toContain("retired");
+        expect(tables).toContain("machines");
       })
   );
 
@@ -1786,187 +1815,6 @@ layer(NodeServices.layer)((it) => {
 
         expect(machines.toSorted()).toStrictEqual(["at", "live"]);
         expect(checkpoints.toSorted()).toStrictEqual(["at", "ready"]);
-      })
-  );
-
-  it.effect(
-    "a write that ends a machine row's hold on its instance retires it on its host, past the row, until it is forgotten once told, and a checkpoint's retires nothing",
-    () =>
-      Effect.gen(function* () {
-        const stateDir = yield* stateIn;
-        const error = new Internal({ message: "failed" });
-        const at = DateTime.makeUnsafe("2026-10-05T00:00:00Z");
-
-        const moving = (given: MachineRow) => ({
-          next: { ...given, host: "other", instance: instance(9) },
-          finish: false,
-        });
-
-        const read = yield* withStore(stateDir, (store) =>
-          Effect.gen(function* () {
-            yield* Effect.forEach([1, 2, 3, 4], (n) =>
-              store.insertMachine(row(`m${n}`, { instance: instance(n) }))
-            );
-            yield* Effect.forEach([5, 6], (n) =>
-              store.insertCheckpoint(
-                checkpoint(`c${n}`, { instance: instance(n) })
-              )
-            );
-            yield* removing(store, "m1");
-            yield* store.advance("machine", "m2", (given) => ({
-              next: { ...given, state: "undone", error, undoneAt: at },
-              finish: false,
-            }));
-            yield* store.advance("machine", "m3", moving);
-            yield* store.advance("machine", "m4", (given) => ({
-              next: { ...given, state: "made.settled" },
-              finish: false,
-            }));
-            yield* store.advance("checkpoint", "c5", (given) => ({
-              next: { ...given, state: "failed", error, failedAt: at },
-              finish: false,
-            }));
-            yield* store.advance("checkpoint", "c6", () => ({
-              next: "removed",
-              finish: false,
-            }));
-            yield* store.insertMachine(row("m2", { instance: instance(7) }));
-            yield* store.advance("machine", "m2", (given) => ({
-              next: { ...given, state: "made.settled" },
-              finish: false,
-            }));
-
-            const retired = yield* store.retired("linux");
-            const elsewhere = yield* store.retired("other");
-
-            yield* store.forgetRetired(DateTime.makeUnsafe(0));
-
-            const kept = yield* store.retired("linux");
-
-            yield* store.told(
-              "linux",
-              { gone: retired, left: { machines: [] } },
-              at
-            );
-            yield* store.forgetRetired(
-              DateTime.makeUnsafe("2100-01-01T00:00:00Z")
-            );
-
-            return {
-              retired,
-              elsewhere,
-              kept,
-              forgotten: yield* store.retired("linux"),
-            };
-          })
-        );
-
-        const none = { machines: [] };
-
-        expect(read.retired.machines.toSorted()).toStrictEqual([
-          instance(1),
-          instance(2),
-          instance(3),
-        ]);
-        expect(read.elsewhere).toStrictEqual(none);
-        expect(read.kept).toStrictEqual(read.retired);
-        expect(read.forgotten).toStrictEqual(none);
-      })
-  );
-
-  it.effect(
-    "a retired instance is forgotten only once its host was first told of it before the time given, however long ago it was retired",
-    () =>
-      Effect.gen(function* () {
-        const stateDir = yield* stateIn;
-        const first = DateTime.makeUnsafe("2026-10-05T00:00:00Z");
-        const later = DateTime.makeUnsafe("2026-10-06T00:00:00Z");
-
-        const read = yield* withStore(stateDir, (store) =>
-          Effect.gen(function* () {
-            yield* Effect.forEach([1, 2], (n) =>
-              store.insertMachine(row(`m${n}`, { instance: instance(n) }))
-            );
-            yield* removing(store, "m1");
-
-            const once = yield* store.retired("linux");
-
-            yield* store.forgetRetired(
-              DateTime.makeUnsafe("2100-01-01T00:00:00Z")
-            );
-
-            const untold = yield* store.retired("linux");
-
-            yield* store.told(
-              "linux",
-              { gone: once, left: { machines: [] } },
-              first
-            );
-            yield* removing(store, "m2");
-            yield* store.told(
-              "linux",
-              {
-                gone: yield* store.retired("linux"),
-                left: { machines: [] },
-              },
-              later
-            );
-            yield* store.forgetRetired(first);
-
-            const toldAtFirst = yield* store.retired("linux");
-
-            yield* store.forgetRetired(DateTime.addDuration(first, "1 milli"));
-
-            return {
-              untold,
-              toldAtFirst,
-              forgotten: yield* store.retired("linux"),
-            };
-          })
-        );
-
-        expect(read.untold.machines).toStrictEqual([instance(1)]);
-        expect(read.toldAtFirst.machines.toSorted()).toStrictEqual([
-          instance(1),
-          instance(2),
-        ]);
-        expect(read.forgotten.machines).toStrictEqual([instance(2)]);
-      })
-  );
-
-  it.effect(
-    "a retired instance a sweep left is untold, and outlives any forget until a sweep finds it gone",
-    () =>
-      Effect.gen(function* () {
-        const stateDir = yield* stateIn;
-        const first = DateTime.makeUnsafe("2026-10-05T00:00:00Z");
-        const later = DateTime.makeUnsafe("2026-10-06T00:00:00Z");
-        const longAfter = DateTime.makeUnsafe("2100-01-01T00:00:00Z");
-        const none = { machines: [] };
-
-        const read = yield* withStore(stateDir, (store) =>
-          Effect.gen(function* () {
-            yield* store.insertMachine(row("m1", { instance: instance(1) }));
-            yield* removing(store, "m1");
-
-            const retired = yield* store.retired("linux");
-
-            yield* store.told("linux", { gone: retired, left: none }, first);
-            yield* store.told("linux", { gone: none, left: retired }, later);
-            yield* store.forgetRetired(longAfter);
-
-            const left = yield* store.retired("linux");
-
-            yield* store.told("linux", { gone: retired, left: none }, later);
-            yield* store.forgetRetired(DateTime.addDuration(later, "1 milli"));
-
-            return { retired, left, forgotten: yield* store.retired("linux") };
-          })
-        );
-
-        expect(read.retired.machines).toStrictEqual([instance(1)]);
-        expect(read.left).toStrictEqual(read.retired);
-        expect(read.forgotten).toStrictEqual({ machines: [] });
       })
   );
 

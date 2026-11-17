@@ -97,7 +97,6 @@ export interface Interface {
     machines: readonly MachineRef[]
   ) => ReturnType<Runtime["Service"]["capacity"]>;
   readonly adopt: Recheck.Interface["adopt"];
-  readonly sweep: Recheck.Interface["sweep"];
   readonly exec: (
     command: ExecCommand
   ) => Effect.Effect<Executed, Invalid | Missing | WrongState | Internal>;
@@ -178,7 +177,6 @@ interface Progress {
 
 interface Entry {
   readonly scope: Resource;
-  readonly names: readonly Ref[];
   readonly fiber: Fiber.Fiber<void, HostError>;
   readonly progress: Progress;
 }
@@ -260,37 +258,6 @@ const instanceLeftBy = (step: Step): string | undefined => {
     case "publish":
     case "fetch": {
       return undefined;
-    }
-  }
-};
-
-const namedBy = (step: Step): readonly Ref[] => {
-  switch (step._tag) {
-    case "make": {
-      const { source } = step;
-
-      return source._tag === "base"
-        ? [step.machine]
-        : [step.machine, sourceSizes(source)];
-    }
-
-    case "capture": {
-      return [step.machine, step.checkpoint];
-    }
-
-    case "deleteCheckpoint":
-    case "publish":
-    case "fetch": {
-      return [step.checkpoint];
-    }
-
-    case "start":
-    case "stop":
-    case "pause":
-    case "remove":
-    case "resize":
-    case "join": {
-      return [step.machine];
     }
   }
 };
@@ -939,8 +906,11 @@ export const make = (
 
           return Effect.andThen(
             Effect.flatMap(found(step.machine), (handle) => {
+              const { name, instance } = step.machine;
+              const deleted = runtime.delete({ name, instance, handle }, keep);
+
               if (handle === undefined) {
-                return Effect.void;
+                return deleted;
               }
 
               const machine = targetOf(step.machine, handle);
@@ -952,7 +922,7 @@ export const make = (
                   hook,
                   stateNow(machine, "given its delete hook")
                 ),
-                runtime.delete(machine, keep)
+                deleted
               );
             }),
             reaches.close(step.machine)
@@ -1226,7 +1196,6 @@ export const make = (
 
             entries.set(id, {
               scope,
-              names: namedBy(step),
               fiber,
               progress,
             });
@@ -1391,29 +1360,10 @@ export const make = (
       return last === undefined || last.leavesInstance === instance;
     };
 
-    const recheck = yield* Recheck.make(config.id, {
+    const recheck = yield* Recheck.make({
       found,
       accepting,
       reachable,
-      named: () => {
-        const named = new Set<string>();
-
-        for (const { names, progress } of entries.values()) {
-          for (const { instance, handle } of names) {
-            named.add(instance);
-
-            if (handle !== undefined) {
-              named.add(handle);
-            }
-          }
-
-          if (progress.outcome.handle !== undefined) {
-            named.add(progress.outcome.handle);
-          }
-        }
-
-        return named;
-      },
     });
 
     return {
@@ -1437,7 +1387,6 @@ export const make = (
           inTime(`the ${traits.runtime} runtime`)
         ),
       adopt: recheck.adopt,
-      sweep: recheck.sweep,
       exec: Effect.fn("Operations.exec")(exec),
     } satisfies Interface;
   });

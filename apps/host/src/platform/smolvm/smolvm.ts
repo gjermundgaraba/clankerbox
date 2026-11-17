@@ -1388,7 +1388,6 @@ export const make = (
       version,
       pin,
       prepares: "with-setup",
-      owned: undefined,
       reach: { _tag: "published", address: settings.publishAddress },
       admission: {
         admit: Effect.fn("Smolvm.admit")((activation) =>
@@ -1642,6 +1641,11 @@ export const make = (
       delete: Effect.fn("Smolvm.delete")((machine) =>
         Effect.gen(function* () {
           const native = machine.handle;
+
+          if (native === undefined) {
+            return;
+          }
+
           const found = yield* recordOf(native);
 
           if (found === "missing") {

@@ -49,7 +49,6 @@ const facetsOf = (runtime: Interface) => ({
   pinned: runtime.pin !== undefined,
   reach: runtime.reach._tag,
   admits: runtime.admission !== undefined,
-  owned: runtime.owned !== undefined,
 });
 
 const presetFacets = (preset: Preset) => ({
@@ -59,7 +58,6 @@ const presetFacets = (preset: Preset) => ({
   pinned: preset.pin !== undefined,
   reach: preset.relayed ? "relayed" : "published",
   admits: preset.admits,
-  owned: preset.owned,
 });
 
 describe("the fake runtime's presets", () => {
@@ -92,6 +90,12 @@ const onFake = (as: FakeRuntimeName) => {
       stall:
         "the fake runtime is no adapter: it answers each call in memory, with no provider call to hold",
     },
+    ...(presets[as].owned
+      ? {}
+      : {
+          ownDisk:
+            "this preset models a runtime whose machines lie on the host's own disk",
+        }),
     fixture: Effect.gen(function* () {
       const dir = yield* scratch;
       const fake = fakeRuntime({ dir, as });
@@ -119,11 +123,11 @@ runtimeContract({
   name: "smolvm adapter's",
   runsNoGuest:
     "its model answers the commands smolvm takes, and runs none of a guest's",
+  ownDisk:
+    "a smolvm call makes the machine on the host's disk before it answers, so no make lands after its answer",
   lacks: {
     dropAnswer:
       "smolvm is a CLI on this host, whose answer is its exit status, which no connection can lose",
-    landLate:
-      "a smolvm call makes the machine before it answers, so no make lands after its answer",
     quota:
       "smolvm keeps no quota: the host's RAM budget refuses a make before smolvm runs, as the admission tests hold",
   },
@@ -154,11 +158,11 @@ runtimeContract({
   name: "Tart adapter's",
   runsNoGuest:
     "its scripted Mac answers the commands Tart takes, and runs none of a guest's",
+  ownDisk:
+    "a tart call makes the VM on the host's disk before it answers, so no make lands after its answer",
   lacks: {
     dropAnswer:
       "tart is a CLI on this host, whose answer is its exit status, which no connection can lose",
-    landLate:
-      "a tart call makes the VM before it answers, so no make lands after its answer",
   },
   image: "ghcr.io/cirruslabs/macos-sequoia-base:latest",
   sizes: { cpu: 4, ramMib: 8192, diskGib: 60 },

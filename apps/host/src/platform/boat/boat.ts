@@ -23,7 +23,7 @@ import {
   Schema,
   Stream,
 } from "effect";
-import type { FileSystem } from "effect";
+import type { FileSystem, Scope } from "effect";
 import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 
@@ -40,7 +40,6 @@ import type {
   Identity,
   Interface,
   MachineState,
-  MarkedMachine,
   Observed,
   Origin,
   Target,
@@ -51,10 +50,11 @@ import {
   apiKey,
   bounded,
   sentUntilHeld,
-  stepWithin,
   triesAfterLoss,
   untilRest,
 } from "../provider-http.ts";
+import { rented } from "../tombstones.ts";
+import type { Found, MarkedMachine } from "../tombstones.ts";
 import * as Api from "./api.ts";
 import type { ApiError, ListedSnapshot, Sandbox, SshKey } from "./api.ts";
 import * as Ssh from "./ssh.ts";
@@ -316,6 +316,7 @@ export const make = (
   | ChildProcessSpawner.ChildProcessSpawner
   | FileSystem.FileSystem
   | HttpClient.HttpClient
+  | Scope.Scope
 > =>
   Effect.gen(function* () {
     const api = yield* Api.make(
@@ -668,7 +669,7 @@ export const make = (
         }
       });
 
-    return {
+    const runtime: Found = {
       traits,
       guest: "debian",
       version: "api v1",
@@ -676,7 +677,6 @@ export const make = (
       prepares: "always",
       admission: undefined,
       builds: unshared(traits.runtime),
-      owned: { machines: markedMachines, deleteWithin: stepWithin },
       reach: {
         _tag: "relayed",
         address: host.listen.address,
@@ -884,7 +884,12 @@ export const make = (
           { last: lastPin(machine), fresh: pinned(machine) },
           command
         ),
-    } satisfies Interface;
+    };
+
+    return yield* rented(runtime, {
+      dir: `${host.stateDir}/boat`,
+      marked: markedMachines,
+    });
   });
 
 export const layer = (

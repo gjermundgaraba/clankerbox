@@ -14,10 +14,11 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it } from "@effect/vitest";
 import { WrongState } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import type { Scope, Duration } from "effect";
+import type { Scope } from "effect";
 import {
   Cause,
   Context,
+  Duration,
   Effect,
   Exit,
   Layer,
@@ -41,6 +42,7 @@ import {
   make,
 } from "../../src/platform/boat/boat.ts";
 import { types } from "../../src/platform/boat/traits.ts";
+import { SweepEvery } from "../../src/platform/tombstones.ts";
 import { Handle, Runtime } from "../../src/runtime.ts";
 import type { Interface, RuntimeError, Target } from "../../src/runtime.ts";
 import { fakeBoat } from "../fake-boat.ts";
@@ -68,7 +70,14 @@ const onFakeBoatOver = (
     const boat = yield* fakeBoat({ ...options, dir });
 
     const context = yield* Layer.build(
-      Layer.provide(boat.layer, Layer.mergeAll(NodeServices.layer, http))
+      Layer.provide(
+        boat.layer,
+        Layer.mergeAll(
+          NodeServices.layer,
+          http,
+          Layer.succeed(SweepEvery, Duration.millis(100))
+        )
+      )
     );
 
     return { boat, dir, runtime: Context.get(context, Runtime) };
@@ -132,11 +141,6 @@ const onBoat = <A, E>(
   }) => Effect.Effect<A, E, Scope.Scope>,
   options: Omit<FakeBoatOptions, "dir"> = {}
 ) => Effect.scoped(Effect.flatMap(onFakeBoatWith(options), body));
-
-const ownedBy = (runtime: Interface) =>
-  runtime.owned === undefined
-    ? Effect.die("the boat runtime lists the machines it owns")
-    : runtime.owned.machines;
 
 const keyOf = (instance: string) => `cbx-boat-${instance}`;
 
@@ -925,11 +929,13 @@ describe("the boat runtime over fake boat", () => {
               made(runtime, name)
             );
 
-            const owned = yield* ownedBy(runtime);
+            const observed = yield* runtime.observe(machines);
 
-            expect(owned.map(({ handle }) => handle).toSorted()).toStrictEqual(
-              machines.map(({ handle }) => handle).toSorted()
-            );
+            expect(Object.fromEntries(observed)).toStrictEqual({
+              a: "running",
+              b: "running",
+              c: "running",
+            });
           }),
         { pageSize: 1 }
       ),
@@ -965,22 +971,24 @@ describe("the boat runtime over fake boat", () => {
   );
 
   it.live(
-    "reads of a saved snapshot only its name and source, and fails a list on one it can't read only when the mark claims it",
+    "reads of a saved snapshot only its name and source, and fails a delete's prune on one it can't read only when the mark claims it",
     () =>
       onBoat(({ boat, runtime }) =>
         Effect.gen(function* () {
           const machine = yield* made(runtime, "dev");
+          const other = yield* made(runtime, "other");
           const elsewhere = `cbx-${instanceOf("elsewhere")}`;
           const broken = `cbx-${instanceOf("broken")}`;
 
           yield* boat.malformedSnapshot(elsewhere, "bx_other");
           yield* boat.malformedSnapshot("cbx-by-hand", 7);
-          expect(yield* ownedBy(runtime)).toHaveLength(1);
+          yield* runtime.delete(other, new Set());
 
           yield* boat.malformedSnapshot(broken, 7);
 
-          const failed = yield* Effect.flip(ownedBy(runtime));
+          const failed = yield* Effect.flip(runtime.delete(machine, new Set()));
 
+          expect(boat.sandboxes.has(other.handle)).toBe(false);
           expect(failed.message).toContain(broken);
           expect(boat.sandboxes.has(machine.handle)).toBe(true);
         })
@@ -1714,7 +1722,7 @@ describe("a boat saved-snapshot list holding a record the host can't read", () =
               : undefined;
           });
 
-          yield* (runtime.owned?.machines ?? Effect.void).pipe(
+          yield* Effect.exit(runtime.delete(bx1, new Set())).pipe(
             Effect.provide(
               Logger.layer([
                 Logger.make(({ message }) => {

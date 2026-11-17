@@ -225,9 +225,8 @@ export type Report = typeof Report.Type;
 
 /**
  * What the control plane needs to know of a host. `traits` are its runtime's, which the control
- * plane reads as the host answers before each decision about what the host will do, `images` is the image each of `bases` names there, `boot` is new each time its process starts, `builds` tells a host that copies template
- * builds through the build store, and `sweeps`, on a host whose runtime marks the machines it makes
- * so a sweep can find each the store retired, is the longest its sweep takes to answer.
+ * plane reads as the host answers before each decision about what the host will do, `images` is the image each of `bases` names there, `boot` is new each time its process starts, and `builds` tells a host that copies template
+ * builds through the build store.
  */
 export const HostInfo = Schema.Struct({
   id: Schema.String,
@@ -240,7 +239,6 @@ export const HostInfo = Schema.Struct({
   pin: Schema.optionalKey(Schema.String),
   joins: Schema.Boolean,
   builds: Schema.Boolean,
-  sweeps: Schema.optionalKey(Schema.DurationFromMillis),
 }).annotate({ identifier: "HostInfo" });
 
 export type HostInfo = typeof HostInfo.Type;
@@ -264,17 +262,6 @@ export const Adoption = Schema.Struct({
 });
 
 export type Adoption = typeof Adoption.Type;
-
-/**
- * What a sweep may delete on a host: the instances of the machines the control plane's store
- * retired there, each one a make it began on that host that ended with no row keeping it. No row
- * takes a retired instance again, so a set read at any time, by any store, names nothing a row wants.
- */
-export const Retired = Schema.Struct({
-  machines: Schema.Array(Schema.String),
-});
-
-export type Retired = typeof Retired.Type;
 
 const { id: _machine, ...command } = ExecRequest.fields;
 
@@ -324,14 +311,6 @@ export const HostHttp = ActionHttp.make(
         "Give a host that started the machines it holds, so it reaches each again, and answer what it holds of each it could resolve.",
       input: Machines,
       success: Adoption,
-    }),
-    Action.make("sweepRetired", {
-      ...write,
-      error: [Invalid, Internal] as const,
-      description:
-        "Delete each machine carrying this host's mark at its provider whose instance is retired and named by no step the host holds, and answer the retired instances it left there: each a step names, or whose delete failed. A machine goes alone, and every checkpoint it holds stays, since a row may still want one. Only a host that says its `sweeps` is sent one, and it answers within it.",
-      input: Retired,
-      success: Retired,
     }),
     Action.make("runOperation", {
       ...write,

@@ -88,9 +88,7 @@ the whole CLI span domains on purpose.
 - `copies.ts`: a copy's spec, and why its source refuses it.
 - `fleet.ts`: capacity, and what a recheck does beyond each loop: tells a
   restarted host its machines, again until it finds each, and stores the handle
-  and endpoint it answers in each row; starts each host's sweep (see House
-  style) once its last has ended; and ends old failures and forgets retired
-  instances a day after a sweep first found each gone.
+  and endpoint it answers in each row; and ends old failures.
 - `machine-view.ts`: what a client reads of a machine, and `waiting`, which a
   read tells.
 - `operations.ts`: plain functions of a step on its host. `poll` sends it when
@@ -116,11 +114,9 @@ imports `platform/` or `composition/`.
 
 - `operations.ts`: the `Operations` service. It runs a step to its end, keeps its
   report until collected, fences by sequence, and tells a restart by `boot`, and
-  serves the recheck's adopt and sweep from `recheck.ts`.
-- `recheck.ts`: the recheck's adopt, which gives a restarted host its machines,
-  and its sweep, which deletes each machine the runtime's `owned` facet lists
-  whose instance the control plane retired and no step it holds names, and
-  answers what it left. Both only read the steps the host holds.
+  serves the recheck's adopt from `recheck.ts`.
+- `recheck.ts`: the recheck's adopt, which gives a restarted host its machines.
+  It only reads the steps the host holds.
 - `exec.ts`: how a command runs in a guest: the launcher and its mark, its
   output, and the end of a command cut short.
 - `guest.ts`: setup, preparation, the tailnet, and the hook a stop, pause or
@@ -140,7 +136,7 @@ imports `platform/` or `composition/`.
   its `prepares` (`always` where its images lack the login user, else
   `with-setup`), its `builds`, how it shares template builds with the other hosts
   of its runtime, which it keeps itself, as `unshared` where it shares none, and
-  the facets `admission` and `owned`, each present or absent as a whole,
+  the facet `admission`, present or absent as a whole,
   `PortProbe` (`machine-ports.ts`), for a `published` runtime's port, at a make's
   claim and at each boot its admission admits (`checkPort`), `Box` (`box.ts`), what the box tells a host
   beside its config: its uid, whether a process has ended, and its ephemeral
@@ -159,8 +155,8 @@ imports `platform/` or `composition/`.
   states the two rules every adapter keeps, and `tests/runtime-contract.ts` is
   the suite each runtime passes over its own fake provider: the fake runtime's
   three presets, `smolvm`, `tart` and `fixed`, which is neither and has size
-  classes, a pause that stops, machines that stop on their own and the `owned`
-  facet, and the four adapters over `tests/smolvm-model.ts`,
+  classes, a pause that stops, machines that stop on their own and the
+  tombstones a rented runtime keeps, and the four adapters over `tests/smolvm-model.ts`,
   `tests/scripted-mac.ts`, `tests/fake-smol-cloud.ts` and `tests/fake-boat.ts`.
 
 Adapters live in `platform/`: `bind-probe.ts` (`PortProbe`), `box.ts` (`Box`,
@@ -347,17 +343,18 @@ the run.
   cut short reports `cancelled` only once the VM is where that command takes it.
   A smolvm host that starts resumes a machine a killed pause left `pausing`, so
   no step runs a hook in a frozen guest.
-- **A sweep deletes only what its store retired.** A store retires a
-  machine's instance on a host in the write that ends its row's hold on it
-  there, and no row takes that instance again. Each recheck sends each host
-  whose `HostInfo` says it `sweeps`, as one whose runtime has the `owned` facet
-  does, the instances retired there, and the host deletes the machines of those
-  its runtime lists under its mark that no step it holds names. A checkpoint's
-  instance is never retired: a `start` and a `remove` carry `keep`, and the
-  runtime prunes the machine's checkpoints no row keeps. Nothing else deletes
-  for want of a claim, so a wiped or second store sweeps nothing of another
-  store's. `docs/design/control-plane.md`, How an operation works, holds the
-  rest: how long a record lasts, what a sweep answers, and what it leaves.
+- **A delete answers for its instance for good.** Once a runtime's `delete`
+  has answered for an instance, anything of that instance that appears later is
+  deleted, and the control plane never makes that instance again. A `remove`
+  calls it even when its search found nothing. smolvm and Tart keep that with
+  nothing more; smol cloud and boat keep a tombstone of each instance in their
+  `stateDir` (`platform/tombstones.ts`), sweep what lands of it in their own
+  scope, keeping every checkpoint it holds, and refuse a make of it. A
+  checkpoint's instance gets no tombstone: a `start` and a `remove` carry
+  `keep`, and the runtime prunes the machine's checkpoints no row keeps.
+  Nothing else deletes for want of a claim, so a wiped or second store deletes
+  nothing of another store's. `docs/design/control-plane.md`, How an operation
+  works, holds the rest: how long a tombstone lasts, and what it leaves.
 - **Leases are rows.** They are the `operations` table: what changes a resource
   owns it, what copies or reads it shares it, taken in the write that begins the
   operation, and a lease that refuses leaves that write undone. They survive a
