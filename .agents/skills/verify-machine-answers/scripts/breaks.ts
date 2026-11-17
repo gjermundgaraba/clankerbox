@@ -111,7 +111,7 @@ const breaks: readonly Break[] = [
                     context: { ...told(context, event), error: event.error },`,
       ],
     ],
-    violated: "NoOrphan",
+    violated: "Tombstoned",
   },
   {
     name: "silent-failure",
@@ -260,24 +260,59 @@ const breaks: readonly Break[] = [
     edits: [
       [
         `Sweep ==
-  /\\ linked`,
+  /\\ tomb`,
         `Sweep ==
-  /\\ FALSE /\\ linked`,
+  /\\ FALSE /\\ tomb`,
       ],
     ],
     violated: "EventuallyNoOrphan",
   },
   {
-    name: "sweep-unclaimed",
+    name: "sweep-untombstoned",
     config: "TwoClients.cfg",
     file: answers,
     edits: [
       [
-        `Retired == cl[Creator].pc # "idle" /\\ row.state`,
-        `Retired == row.state`,
+        `Sweep ==
+  /\\ tomb /\\ vm # "missing"`,
+        `Sweep ==
+  /\\ vm # "missing"`,
       ],
     ],
     violated: "RestTrue",
+  },
+  {
+    name: "tomb-if-found",
+    config: "Drifting.cfg",
+    file: answers,
+    edits: [
+      [
+        `/\\ tomb' = (tomb \\/ runs.kind = "remove")`,
+        `/\\ tomb' = (tomb \\/ (runs.kind = "remove" /\\ vm # "missing"))`,
+      ],
+    ],
+    violated: "Tombstoned",
+  },
+  {
+    name: "tomb-in-memory",
+    config: "Drifting.cfg",
+    file: answers,
+    edits: [
+      [
+        `  /\\ high' = 0
+  /\\ runs' = NoRun`,
+        `  /\\ high' = 0
+  /\\ runs' = NoRun
+  /\\ tomb' = FALSE`,
+      ],
+      [
+        `  /\\ UNCHANGED <<row, up, script, read, known, linked, vm, net, cut, applied,
+                 tomb, cl, nextOp>>`,
+        `  /\\ UNCHANGED <<row, up, script, read, known, linked, vm, net, cut, applied,
+                 cl, nextOp>>`,
+      ],
+    ],
+    violated: "Tombstoned",
   },
   {
     name: "drift-ignored",

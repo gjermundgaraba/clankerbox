@@ -37,14 +37,14 @@ VARIABLES
               \* saw it is decided; then read
   late,       \* none; out once a make's call may yet land; then landed; swept
               \* once the sweep deleted what landed
-  sent        \* a sweep on its way to the host names the instance retired
+  tomb        \* the host keeps the instance's tombstone: a remove of it answered
 
 vars == <<row, up, script, read, known, linked, vm, boot, high, runs, net, cut,
           applied, cl, nextOp, faults, crashes, partitions, restarts,
-          drops, drift, late, sent>>
+          drops, drift, late, tomb>>
 
-hostVars == <<vm, boot, high, runs, applied>>
-worldVars == <<faults, crashes, partitions, restarts, drops, drift, late, sent>>
+hostVars == <<vm, boot, high, runs, applied, tomb>>
+worldVars == <<faults, crashes, partitions, restarts, drops, drift, late>>
 
 Idle == [pc |-> "idle", d |-> None, res |-> None, by |-> None, vmAt |-> None,
          other |-> FALSE, excused |-> FALSE, pre |-> "none"]
@@ -163,7 +163,7 @@ Read ==
   /\ known' = IF linked THEN boot ELSE known
   /\ UNCHANGED <<row, up, script, linked, net, cut, cl, nextOp>>
   /\ UNCHANGED hostVars
-  /\ UNCHANGED <<crashes, partitions, restarts, drops, drift, late, sent>>
+  /\ UNCHANGED <<crashes, partitions, restarts, drops, drift, late>>
 
 Decide ==
   /\ up /\ row.state # "absent" /\ row.op.id = 0 /\ read # None
@@ -180,7 +180,7 @@ Decide ==
   /\ drift' = IF drift = "unread" /\ read = vm THEN "read" ELSE drift
   /\ UNCHANGED <<up, script, known, linked, net, cut, cl>>
   /\ UNCHANGED hostVars
-  /\ UNCHANGED <<faults, crashes, partitions, restarts, drops, late, sent>>
+  /\ UNCHANGED <<faults, crashes, partitions, restarts, drops, late>>
 
 CanSend(r) == r.op.kind # "make" \/ script
 
@@ -222,7 +222,7 @@ Collect ==
            /\ UNCHANGED runs
   /\ known' = boot
   /\ UNCHANGED <<up, script, read, linked, net, cut, cl, nextOp>>
-  /\ UNCHANGED <<vm, boot, high, applied>> /\ UNCHANGED worldVars
+  /\ UNCHANGED <<vm, boot, high, applied, tomb>> /\ UNCHANGED worldVars
 
 Deliver ==
   /\ linked
@@ -234,7 +234,7 @@ Deliver ==
                            pc |-> "begin", prepared |-> FALSE]
           ELSE UNCHANGED <<high, runs>>
   /\ UNCHANGED <<row, up, script, read, known, linked, vm, boot, cut, applied,
-                 cl, nextOp>>
+                 tomb, cl, nextOp>>
   /\ UNCHANGED worldVars
 
 Repeat ==
@@ -245,7 +245,7 @@ Repeat ==
        /\ runs' = [id |-> m.id, kind |-> m.kind, status |-> "running",
                    pc |-> "begin", prepared |-> FALSE]
   /\ UNCHANGED <<row, up, script, read, known, linked, vm, boot, net, cut,
-                 applied, cl, nextOp>>
+                 applied, tomb, cl, nextOp>>
   /\ UNCHANGED worldVars
 
 Lose ==
@@ -254,7 +254,7 @@ Lose ==
   /\ drops' = drops + 1
   /\ UNCHANGED <<row, up, script, read, known, linked, cut, cl, nextOp>>
   /\ UNCHANGED hostVars
-  /\ UNCHANGED <<faults, crashes, partitions, restarts, drift, late, sent>>
+  /\ UNCHANGED <<faults, crashes, partitions, restarts, drift, late>>
 
 Ran(id) == applied' = [applied EXCEPT ![id] = @ + 1]
 
@@ -265,7 +265,7 @@ HostStep ==
   /\ runs.id # 0 /\ runs.status = "running"
   /\ LET k == runs.kind IN
      CASE k = "make" /\ runs.pc = "begin" ->
-            IF vm = "missing"
+            IF vm = "missing" /\ ~tomb
             THEN /\ vm' = "running"
                  /\ runs' = [runs EXCEPT !.pc = "setup"]
                  /\ Ran(runs.id)
@@ -297,6 +297,7 @@ HostStep ==
             /\ vm' = "missing"
             /\ runs' = [runs EXCEPT !.status = "done"]
             /\ Ran(runs.id)
+  /\ tomb' = (tomb \/ runs.kind = "remove")
   /\ UNCHANGED <<row, up, script, read, known, linked, boot, high, net, cut, cl,
                  nextOp>>
   /\ UNCHANGED worldVars
@@ -308,14 +309,14 @@ HostFail ==
   /\ runs' = [runs EXCEPT !.status = "failed"]
   /\ late' = IF Lands THEN "out" ELSE late
   /\ UNCHANGED <<row, up, script, read, known, linked, vm, boot, high, net, cut,
-                 applied, cl, nextOp>>
-  /\ UNCHANGED <<crashes, partitions, restarts, drops, drift, sent>>
+                 applied, tomb, cl, nextOp>>
+  /\ UNCHANGED <<crashes, partitions, restarts, drops, drift>>
 
 HostCancel ==
   /\ runs.id # 0 /\ runs.status = "running" /\ runs.id \in cut
   /\ runs' = [runs EXCEPT !.status = "cancelled"]
   /\ UNCHANGED <<row, up, script, read, known, linked, vm, boot, high, net, cut,
-                 applied, cl, nextOp>>
+                 applied, tomb, cl, nextOp>>
   /\ UNCHANGED worldVars
 
 Crash ==
@@ -326,7 +327,7 @@ Crash ==
   /\ read' = None
   /\ UNCHANGED <<row, known, linked, net, cut, cl, nextOp>>
   /\ UNCHANGED hostVars
-  /\ UNCHANGED <<faults, partitions, restarts, drops, drift, late, sent>>
+  /\ UNCHANGED <<faults, partitions, restarts, drops, drift, late>>
 
 Revive ==
   /\ ~up
@@ -340,7 +341,7 @@ Partition ==
   /\ partitions' = partitions + 1
   /\ UNCHANGED <<row, up, script, read, known, net, cut, cl, nextOp>>
   /\ UNCHANGED hostVars
-  /\ UNCHANGED <<faults, crashes, restarts, drops, drift, late, sent>>
+  /\ UNCHANGED <<faults, crashes, restarts, drops, drift, late>>
 
 Heal ==
   /\ ~linked
@@ -355,44 +356,39 @@ HostRestart ==
   /\ high' = 0
   /\ runs' = NoRun
   /\ late' = IF runs.status = "running" /\ Lands THEN "out" ELSE late
-  /\ UNCHANGED <<row, up, script, read, known, linked, vm, net, cut, applied, cl,
-                 nextOp>>
-  /\ UNCHANGED <<faults, crashes, partitions, drops, drift, sent>>
+  /\ UNCHANGED <<row, up, script, read, known, linked, vm, net, cut, applied,
+                 tomb, cl, nextOp>>
+  /\ UNCHANGED <<faults, crashes, partitions, drops, drift>>
 
 Drift ==
   /\ Drifts /\ drift = "none" /\ vm = "running"
   /\ vm' = "stopped"
   /\ drift' = "unread"
   /\ UNCHANGED <<row, up, script, read, known, linked, boot, high, runs, net,
-                 cut, applied, cl, nextOp>>
-  /\ UNCHANGED <<faults, crashes, partitions, restarts, drops, late, sent>>
+                 cut, applied, tomb, cl, nextOp>>
+  /\ UNCHANGED <<faults, crashes, partitions, restarts, drops, late>>
 
 LandLate ==
   /\ late = "out" /\ vm = "missing"
   /\ vm' = "running"
   /\ late' = "landed"
   /\ UNCHANGED <<row, up, script, read, known, linked, boot, high, runs, net,
-                 cut, applied, cl, nextOp>>
-  /\ UNCHANGED <<faults, crashes, partitions, restarts, drops, drift, sent>>
+                 cut, applied, tomb, cl, nextOp>>
+  /\ UNCHANGED <<faults, crashes, partitions, restarts, drops, drift>>
 
 \* The store retired the one instance once its row, after the create, no longer
 \* holds it: the row went or rests undone. No row takes it again.
 Retired == cl[Creator].pc # "idle" /\ row.state \in {"absent", Undone}
 
-SweepRead ==
-  /\ up /\ ~sent /\ Retired
-  /\ sent' = TRUE
-  /\ UNCHANGED <<row, up, script, read, known, linked, net, cut, cl, nextOp>>
-  /\ UNCHANGED hostVars
-  /\ UNCHANGED <<faults, crashes, partitions, restarts, drops, drift, late>>
-
+\* The adapter's own sweep, in its own scope: at any moment, with the control
+\* plane or without it, it deletes what it finds of an instance it keeps a
+\* tombstone of.
 Sweep ==
-  /\ linked /\ sent /\ runs.id = 0 /\ vm # "missing"
+  /\ tomb /\ vm # "missing"
   /\ vm' = "missing"
-  /\ sent' = FALSE
   /\ late' = IF late = "landed" THEN "swept" ELSE late
   /\ UNCHANGED <<row, up, script, read, known, linked, boot, high, runs, net,
-                 cut, applied, cl, nextOp>>
+                 cut, applied, tomb, cl, nextOp>>
   /\ UNCHANGED <<faults, crashes, partitions, restarts, drops, drift>>
 
 Init ==
@@ -418,7 +414,7 @@ Init ==
   /\ drops = 0
   /\ drift = "none"
   /\ late = "none"
-  /\ sent = FALSE
+  /\ tomb = FALSE
 
 Terminated ==
   /\ row.state = "absent" /\ net = {}
@@ -432,7 +428,7 @@ Next ==
   \/ Deliver \/ Repeat \/ Lose
   \/ HostStep \/ HostFail \/ HostCancel
   \/ Crash \/ Revive \/ Partition \/ Heal \/ HostRestart
-  \/ Drift \/ LandLate \/ SweepRead \/ Sweep
+  \/ Drift \/ LandLate \/ Sweep
   \/ Terminated
 
 Spec ==
@@ -443,7 +439,7 @@ Spec ==
   /\ WF_vars(Read) /\ WF_vars(Decide) /\ WF_vars(Send) /\ WF_vars(Cut)
   /\ WF_vars(Collect) /\ WF_vars(Deliver) /\ WF_vars(HostStep)
   /\ WF_vars(HostCancel) /\ WF_vars(Revive) /\ WF_vars(Heal)
-  /\ WF_vars(SweepRead) /\ WF_vars(Sweep)
+  /\ WF_vars(Sweep)
 
 -----------------------------------------------------------------------------
 AnswerTrue ==
@@ -460,6 +456,8 @@ RestTrue ==
     => Matches(row.desired, vm) \/ drift = "unread"
 
 NoOrphan == Orphaned => late = "landed"
+
+Tombstoned == Retired => tomb
 
 EventuallyNoOrphan == Orphaned ~> vm = "missing"
 
