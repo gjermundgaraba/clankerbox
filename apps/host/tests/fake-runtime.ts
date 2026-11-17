@@ -180,7 +180,7 @@ export interface FakeOptions {
    */
   readonly probesPorts?: boolean | undefined;
   readonly onCall?: ((call: string) => void) | undefined;
-  /** The bucket a smolvm or Tart fake shares template builds through, as its host's `builds` setting names one. */
+  /** The bucket the fake shares template builds through: any fake given one shares, `fixed` included. */
   readonly builds?: Store | undefined;
 }
 

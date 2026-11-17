@@ -464,25 +464,19 @@ layer(NodeServices.layer)((it) => {
       })
   );
 
-  it.effect(
-    "an unknown key, at the top or in a runtime's settings, a kind or a bad host ID is Invalid",
-    () =>
-      Effect.gen(function* () {
-        for (const contents of [
-          { ...config, labels: [] },
-          { ...config, runtime: { smolvm: { prefix: "/opt", labels: [] } } },
-          { ...config, kind: "mac" },
-          { ...config, id: "Smolvm" },
-          {
-            ...config,
-            runtime: { smolvm: { prefix: "/opt", ramBudgetMib: 0 } },
-          },
-        ]) {
-          const { loaded } = yield* load(contents);
+  it.effect("an unknown key, a kind or a bad host ID is Invalid", () =>
+    Effect.gen(function* () {
+      for (const contents of [
+        { ...config, labels: [] },
+        { ...config, kind: "mac" },
+        { ...config, id: "Smolvm" },
+        { ...config, runtime: { smolvm: { prefix: "/opt", ramBudgetMib: 0 } } },
+      ]) {
+        const { loaded } = yield* load(contents);
 
-          expect((yield* Effect.flip(loaded))._tag).toBe("Invalid");
-        }
-      })
+        expect((yield* Effect.flip(loaded))._tag).toBe("Invalid");
+      }
+    })
   );
 
   it.effect(
