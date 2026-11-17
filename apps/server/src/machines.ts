@@ -7,7 +7,6 @@ import {
 import {
   buildId,
   execWait,
-  isBuildCopy,
   isResting,
   labelledWith,
   NotBuilt,
@@ -48,6 +47,7 @@ import type { Array as Arr, Scope } from "effect";
 import { applied } from "./chart.ts";
 import {
   checkpointChart,
+  fromBuild,
   phaseOf as checkpointPhaseOf,
 } from "./checkpoint-chart.ts";
 import type { CheckpointRow } from "./checkpoint-chart.ts";
@@ -302,7 +302,7 @@ const restorable = (
   name: string,
   found: Option.Option<CheckpointRow>
 ): Result.Result<CheckpointRow, NotMade | NotFound> => {
-  if (Option.isNone(found) || isBuildCopy(found.value.name)) {
+  if (Option.isNone(found) || fromBuild(found.value)) {
     return Result.fail(notFound("checkpoint", name));
   }
 

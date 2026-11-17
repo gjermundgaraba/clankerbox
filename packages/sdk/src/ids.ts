@@ -33,7 +33,8 @@ export const Name = Schema.String.check(
   Schema.makeFilter((name: string) => isName(name) || nameRule)
 );
 
-const copyPrefixes = { built: "built-", fetched: "fetched-" } as const;
+/** How the control plane begins the name of a template build's copy, made or fetched. */
+export const copyPrefixes = { built: "built-", fetched: "fetched-" } as const;
 
 const prefixes = Object.values(copyPrefixes);
 

@@ -131,8 +131,8 @@ const launcher = [
 
 /**
  * A guest command as the runtime runs it: one fixed `/bin/sh` launcher, with the command's env and
- * arguments at the head of its stdin, so no process's arguments on the host carry them, and `env`
- * sets the env, whatever the guest's `/bin/sh` makes of its own special names. The mark is in the
+ * arguments at the head of its stdin, so no process's arguments on the host carry them: each value
+ * is its count of lines, then its lines. `env` sets the env, whatever the guest's `/bin/sh` makes of its own special names. The mark is in the
  * environment of every process the command starts, so an end can find them. The launcher waits for
  * `env` rather than becoming it, so a process that holds the mark in its arguments stands above the
  * command for its whole life, also one that clears its environment, and exits as the command did,
@@ -260,7 +260,8 @@ END {
  * left stopped, and exits 1, saying how many there were: only a listing that finds none confirms
  * the end. A process found once is held by its start time, so one whose parent ended while it
  * cleared its environment is still found. It signals each pid alone, never a group, pid 1 or
- * itself. It records the mark first, so a launcher of it that begins later runs nothing.
+ * itself. It records the mark first, so a launcher of it that begins later runs nothing, lets that
+ * record go once it has ended what it found, and removes each record older than an hour.
  */
 export const endScript = [
   "IFS=' ' read -r mark seconds || mark=",

@@ -408,7 +408,7 @@ as it is.
   exit trap and may leave its file in `/var/tmp` (`setupRunner` in
   `apps/host/src/guest.ts`); `start` scripts daemonize with `setsid -f`, and
   ours (tailscaled in `guest.ts`, the provider's recipe) redirect its output; a
-  guest script that passes its timeout, or a step cut short, has `guest.ts`
+  guest script that passes its timeout, or a step cut short, has `exec.ts`
   end its command in the guest, as README's `exec` bullet says, and then ends
   the client, so smolvm kills what is left: measured with 1.34.1, a client
   killed by TERM or KILL, a host timeout and a host stop each left none of a
@@ -586,7 +586,7 @@ as it is.
   machine passes `-p <port>:22`, and the freezer branch of a base pins none
   from a base whose forwards its park removed, so smolvm picks no port of
   its own, and a smolvm host's `machinePorts` (10000–19999 by default,
-  `defaultMachinePorts` in `machine-ports.ts`) may lie in that range; only
+  `defaultMachinePorts` in `settings.ts`) may lie in that range; only
   its box's ephemeral ports are refused (`ephemeralPorts`, which
   `platform/box.ts` reads and `composition/config.ts` checks;
   `config.test.ts`). A bump

@@ -145,7 +145,7 @@ when it was measured on the operator's account.
   in `/proc` with their environment, and the end there ends the cut
   command's shell, child and a child that ignores TERM, 6 s after a 10 s
   timeout, while a command another exec runs beside it runs on.
-  (`guest.ts`'s `ended`, `guest-groups.ts`, the contract's case that ends a
+  (`exec.ts`'s `ended`, `guest-groups.ts`, the contract's case that ends a
   command whose exec is cut short, and the live suite's that ends one its
   exec's timeout cut, in `tests/live/cut.ts`.)
 - The tunnel, `wss://.../v1/machines/{id}/tunnel/22`, takes the key in
