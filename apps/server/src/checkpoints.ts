@@ -5,7 +5,8 @@ import {
   pinRefusal,
 } from "@clankerbox/host-contract/traits";
 import {
-  copyPrefixes,
+  buildCopyName,
+  isBuildCopy,
   isResting,
   labelledWith,
   readTimeout,
@@ -27,12 +28,7 @@ import { Cause, Context, DateTime, Effect, Layer, Option } from "effect";
 import type { Scope, Duration } from "effect";
 
 import { applied } from "./chart.ts";
-import {
-  activityOf,
-  checkpointChart,
-  isBuildCopy,
-  phaseOf,
-} from "./checkpoint-chart.ts";
+import { activityOf, checkpointChart, phaseOf } from "./checkpoint-chart.ts";
 import type { CheckpointEvent, CheckpointRow } from "./checkpoint-chart.ts";
 import { uncopiable } from "./copies.ts";
 import { apart, driver, untilRest } from "./driver.ts";
@@ -155,7 +151,7 @@ export const make = (settings: {
     const row = (name: string) =>
       Effect.flatMap(store.findCheckpoint(name), (found) =>
         Effect.fromOption(
-          Option.filter(found, (record) => !isBuildCopy(record)),
+          Option.filter(found, (record) => !isBuildCopy(record.name)),
           () => notFound("checkpoint", name)
         )
       );
@@ -331,7 +327,8 @@ export const make = (settings: {
         return false;
       });
 
-    const rested = (name: string) => untilRest(settings.recheck, rests(name));
+    const rested = (name: string) =>
+      untilRest(store, "checkpoint", name, settings.recheck, rests(name));
 
     const begun = (name: string) =>
       readUntil(
@@ -485,7 +482,8 @@ export const make = (settings: {
       list: Effect.fn("Checkpoints.list")((filter) =>
         Effect.map(store.checkpoints, (records) =>
           records.flatMap((record) =>
-            !isBuildCopy(record) && labelledWith(record.labels, filter.labels)
+            !isBuildCopy(record.name) &&
+            labelledWith(record.labels, filter.labels)
               ? [shown(record)]
               : []
           )
@@ -498,7 +496,7 @@ export const make = (settings: {
         Effect.andThen(row(id), remove(id))
       ),
       copy: Effect.fn("Checkpoints.copy")((machine, build) => {
-        const name = `${copyPrefixes.built}${newId().slice(0, 16)}`;
+        const name = buildCopyName("built");
 
         return capturing({ machine, name }, build).pipe(
           Effect.andThen(rested(name)),
@@ -513,7 +511,7 @@ export const make = (settings: {
       ),
       fetch: Effect.fn("Checkpoints.fetch")((published, host) =>
         Effect.gen(function* () {
-          const name = `${copyPrefixes.fetched}${newId().slice(0, 16)}`;
+          const name = buildCopyName("fetched");
 
           yield* store.insertCheckpoint({
             ...published,

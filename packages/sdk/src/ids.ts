@@ -33,15 +33,23 @@ export const Name = Schema.String.check(
   Schema.makeFilter((name: string) => isName(name) || nameRule)
 );
 
-/** How the control plane begins the name of a template build's copy, made or fetched. */
-export const copyPrefixes = { built: "built-", fetched: "fetched-" } as const;
+const copyPrefixes = { built: "built-", fetched: "fetched-" } as const;
 
 const prefixes = Object.values(copyPrefixes);
 
+const copyDigits = 16;
+
 const buildCopyPattern = new RegExp(
-  `^(?:${prefixes.join("|")})[0-9a-f]{16}$`,
+  `^(?:${prefixes.join("|")})[0-9a-f]{${copyDigits}}$`,
   "u"
 );
+
+/** A new name for a template build's copy, made on the build's host or fetched to another. */
+export const buildCopyName = (kind: keyof typeof copyPrefixes): string =>
+  `${copyPrefixes[kind]}${Array.from(
+    globalThis.crypto.getRandomValues(new Uint8Array(copyDigits / 2)),
+    (byte) => byte.toString(16).padStart(2, "0")
+  ).join("")}`;
 
 export const isBuildCopy = (name: string): boolean =>
   buildCopyPattern.test(name);

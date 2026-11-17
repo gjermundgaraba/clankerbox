@@ -26,7 +26,7 @@ export const sshKeepalive = [
   ["ServerAliveInterval", keepaliveSeconds],
   [
     "ServerAliveCountMax",
-    Duration.toSeconds(Client.outageLimit) / keepaliveSeconds,
+    Math.ceil(Duration.toSeconds(Client.outageLimit) / keepaliveSeconds),
   ],
 ] as const;
 

@@ -7,6 +7,7 @@ import {
 import {
   buildId,
   execWait,
+  isBuildCopy,
   isResting,
   labelledWith,
   NotBuilt,
@@ -47,7 +48,6 @@ import type { Array as Arr, Scope } from "effect";
 import { applied } from "./chart.ts";
 import {
   checkpointChart,
-  isBuildCopy,
   phaseOf as checkpointPhaseOf,
 } from "./checkpoint-chart.ts";
 import type { CheckpointRow } from "./checkpoint-chart.ts";
@@ -302,7 +302,7 @@ const restorable = (
   name: string,
   found: Option.Option<CheckpointRow>
 ): Result.Result<CheckpointRow, NotMade | NotFound> => {
-  if (Option.isNone(found) || isBuildCopy(found.value)) {
+  if (Option.isNone(found) || isBuildCopy(found.value.name)) {
     return Result.fail(notFound("checkpoint", name));
   }
 
@@ -954,27 +954,25 @@ export const make = (
       });
 
     const held = (id: string, bound: Duration.Duration) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const first = yield* row(id);
+      Effect.gen(function* () {
+        const first = yield* row(id);
 
-          yield* Effect.timeoutOption(
-            readUntil(
-              store,
-              "machine",
-              id,
-              store.findMachine(id),
-              Option.match({
-                onNone: () => true,
-                onSome: (found: MachineRow) =>
-                  found.instance !== first.instance ||
-                  isResting(phaseOf(found.state)),
-              })
-            ),
-            bound
-          );
-        })
-      );
+        yield* Effect.timeoutOption(
+          readUntil(
+            store,
+            "machine",
+            id,
+            store.findMachine(id),
+            Option.match({
+              onNone: () => true,
+              onSome: (found: MachineRow) =>
+                found.instance !== first.instance ||
+                isResting(phaseOf(found.state)),
+            })
+          ),
+          bound
+        );
+      });
 
     const read = (id: string) =>
       Effect.flatMap(row(id), (found) =>
@@ -982,7 +980,7 @@ export const make = (
       );
 
     const rest = (name: string) =>
-      untilRest(settings.recheck, rests(name)).pipe(
+      untilRest(store, "machine", name, settings.recheck, rests(name)).pipe(
         Effect.andThen(store.findMachine(name)),
         Effect.tap((found) =>
           Option.isSome(found) && found.value.error !== undefined

@@ -23,8 +23,6 @@ import type {
 
 const unreachableWait = Duration.seconds(1);
 
-const restPoll = Duration.millis(100);
-
 export type Heard = Exclude<Polled, { readonly at: "unreachable" }>;
 
 type Turned = "again" | "rest" | "over";
@@ -189,25 +187,44 @@ export const apart =
     );
 
 /**
- * Looks until `rests` answers true. A look that fails with `Unavailable` tells of a host's fault,
- * which may pass, so it is tried again, and ends the wait once it has failed for `bound` on end.
+ * Looks until `rests` answers true, again at each write of `resource`'s row `name`, and each second
+ * between, as a look also reads a host that may stop answering with no write. A look that fails with
+ * `Unavailable` tells of a host's fault, which may pass, so it is tried again, and ends the wait
+ * once it has failed for `bound` on end.
  */
 export const untilRest = <E extends { readonly _tag: string }>(
+  store: Pick<Store, "watch">,
+  resource: Lease["resource"],
+  name: string,
   bound: Duration.Duration,
   rests: Effect.Effect<boolean, E>
 ): Effect.Effect<void, E> =>
-  rests.pipe(
-    Effect.retry({
-      while: ({ _tag }) => _tag === "Unavailable",
-      schedule: Schedule.spaced(restPoll).pipe(
-        Schedule.upTo({ duration: bound })
-      ),
-    }),
-    Effect.repeat({
-      until: (rested) => rested,
-      schedule: Schedule.spaced(restPoll),
-    }),
-    Effect.asVoid
+  Effect.scoped(
+    Effect.gen(function* () {
+      const written = yield* store.watch(resource, name);
+
+      const look = rests.pipe(
+        Effect.retry({
+          while: ({ _tag }) => _tag === "Unavailable",
+          schedule: Schedule.spaced(unreachableWait).pipe(
+            Schedule.upTo({ duration: bound })
+          ),
+        })
+      );
+
+      const until = (rested: boolean): Effect.Effect<void, E> =>
+        rested
+          ? Effect.void
+          : Effect.flatMap(
+              Effect.andThen(
+                Effect.timeoutOption(written, unreachableWait),
+                look
+              ),
+              until
+            );
+
+      yield* Effect.flatMap(look, until);
+    })
   );
 
 /**
