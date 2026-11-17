@@ -24,11 +24,10 @@ import {
 import { HttpClient, HttpServer } from "effect/http";
 import { expect } from "vite-plus/test";
 
-import { BuildStore } from "../src/builds.ts";
 import { hostLayer, hostServer } from "../src/composition/host.ts";
 import { Operations } from "../src/operations.ts";
 import type { Interface as OperationsInterface } from "../src/operations.ts";
-import type { BuildsSettings } from "../src/platform/s3.ts";
+import type { Store } from "../src/platform/bucket/builds.ts";
 import type { TailnetSettings } from "../src/platform/tailscale.ts";
 import { Runtime } from "../src/runtime.ts";
 import type {
@@ -78,8 +77,6 @@ export interface HostOptions {
   readonly ports?: PortRange;
   readonly tailnet?: Layer.Layer<Tailnet>;
   readonly tailnetSettings?: TailnetSettings;
-  readonly builds?: Layer.Layer<BuildStore>;
-  readonly buildsSettings?: BuildsSettings;
   readonly http?: Layer.Layer<HttpClient.HttpClient>;
 }
 
@@ -135,13 +132,11 @@ export const startHostOver = <E>(
         {
           ...settings,
           tailnet: options?.tailnetSettings,
-          builds: options?.buildsSettings,
         },
         runtime(settings),
         loopbackServer(options?.port)
       ).pipe(
         Layer.provide(options?.tailnet ?? Layer.empty),
-        Layer.provide(options?.builds ?? Layer.empty),
         Layer.provide(options?.http ?? noHttp),
         Layer.provideMerge(
           Logger.layer(options?.logger === undefined ? [] : [options.logger])
@@ -170,11 +165,19 @@ export const startHost = (
   options?: HostOptions & {
     readonly fake?: FakeRuntime;
     readonly as?: FakeRuntimeName;
-    readonly runtime?: Omit<FakeOptions, "dir" | "as">;
+    readonly runtime?: Omit<FakeOptions, "dir" | "as" | "builds">;
+    /** The bucket the fake runtime shares template builds through. */
+    readonly builds?: Store;
   }
 ) => {
   const fake =
-    options?.fake ?? fakeRuntime({ dir, as: options?.as, ...options?.runtime });
+    options?.fake ??
+    fakeRuntime({
+      dir,
+      as: options?.as,
+      builds: options?.builds,
+      ...options?.runtime,
+    });
 
   return Effect.map(
     startHostOver(dir, () => fake.layer, {
@@ -200,7 +203,7 @@ export const memoryBuildStore = () => {
   const objects = new Map<string, Uint8Array>();
   const downloaded: string[] = [];
 
-  const store = BuildStore.of({
+  const store: Store = {
     list: (prefix) =>
       Effect.sync(() =>
         [...objects.keys()].filter((key) => key.startsWith(prefix)).toSorted()
@@ -227,10 +230,9 @@ export const memoryBuildStore = () => {
           objects.delete(key);
         }
       }),
-  });
+  };
 
   return {
-    layer: Layer.succeed(BuildStore, store),
     store,
     objects,
     downloaded,
@@ -344,12 +346,6 @@ export const eventually = <A, E>(
 
     return last;
   });
-
-/** The checkpoint files a runtime keeps, which a test's runtime must. */
-export const filesOf = (runtime: RuntimeInterface) =>
-  runtime.files === undefined
-    ? Effect.die(`the ${runtime.traits.runtime} runtime keeps no files`)
-    : Effect.succeed(runtime.files);
 
 /**
  * A raw TCP connection to the HTTP server at `url`, for a test that sends what no HTTP client

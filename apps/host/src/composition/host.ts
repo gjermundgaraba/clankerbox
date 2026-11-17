@@ -20,10 +20,10 @@ import type { PortProbe } from "../machine-ports.ts";
 import * as Operations from "../operations.ts";
 import * as BindProbe from "../platform/bind-probe.ts";
 import * as Relay from "../platform/relay.ts";
-import * as S3 from "../platform/s3.ts";
 import * as Tailscale from "../platform/tailscale.ts";
 import * as Reach from "../reach.ts";
-import { CannotStart, Runtime } from "../runtime.ts";
+import { Runtime } from "../runtime.ts";
+import type { CannotStart } from "../runtime.ts";
 import type { HostSettings } from "../settings.ts";
 import { routes } from "./routes.ts";
 
@@ -85,23 +85,11 @@ export const hostServer = ({ listen }: Pick<HostSettings, "listen">) =>
 
 export interface HostLayerConfig extends HostSettings {
   readonly tailnet?: Tailscale.TailnetSettings | undefined;
-  readonly builds?: S3.BuildsSettings | undefined;
 }
 
-const startedUp = (config: HostLayerConfig) =>
-  Layer.effectDiscard(
-    Effect.gen(function* () {
-      const { files, startup, traits } = yield* Runtime;
-
-      if (config.builds !== undefined && files === undefined) {
-        return yield* new CannotStart({
-          message: `builds: the ${traits.runtime} runtime keeps its checkpoints at its provider, not as files, so it copies no build through a bucket; remove builds from this host's config`,
-        });
-      }
-
-      yield* startup;
-    })
-  );
+const startedUp = Layer.effectDiscard(
+  Effect.flatMap(Runtime, ({ startup }) => startup)
+);
 
 export const hostLayer = <E, R>(
   config: HostLayerConfig,
@@ -132,16 +120,11 @@ export const hostLayer = <E, R>(
     ),
     Layer.provideMerge(Operations.layer(config)),
     Layer.provideMerge(Reach.layer(config.machinePorts)),
-    Layer.provide(
-      Layer.mergeAll(BindProbe.layer, Relay.layer, startedUp(config))
-    ),
+    Layer.provide(Layer.mergeAll(BindProbe.layer, Relay.layer, startedUp)),
     Layer.provideMerge(Layer.provide(runtime, BindProbe.layer)),
     Layer.provide(
       config.tailnet === undefined
         ? Layer.empty
         : Tailscale.layer(config.tailnet)
-    ),
-    Layer.provide(
-      config.builds === undefined ? Layer.empty : S3.layer(config.builds)
     )
   );

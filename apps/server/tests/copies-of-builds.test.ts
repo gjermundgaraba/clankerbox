@@ -49,7 +49,7 @@ const onTwo = (two?: Parameters<typeof startHost>[1]) =>
         { id: "one" },
         { id: "two", ...(two === undefined ? {} : { options: two }) },
       ],
-      runtime: { builds: shared.layer },
+      runtime: { builds: shared.store },
       recheck: Duration.millis(100),
     });
 
@@ -96,7 +96,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const served = yield* running({
           hosts: [{ id: "one" }, { id: "other", as: "fixed" }, { id: "two" }],
-          runtime: { builds: shared.layer },
+          runtime: { builds: shared.store },
           recheck: Duration.millis(100),
         });
 

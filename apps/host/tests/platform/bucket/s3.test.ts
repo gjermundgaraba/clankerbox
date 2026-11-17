@@ -7,20 +7,26 @@ import { describe, expect, layer } from "@effect/vitest";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { Context, Duration, Effect, Layer, Redacted, Schema } from "effect";
 
-import { BuildStore, fetch, publish } from "../../src/builds.ts";
-import { BuildsSettings, make } from "../../src/platform/s3.ts";
-import { Runtime } from "../../src/runtime.ts";
-import type { Identity } from "../../src/runtime.ts";
-import { fakeRuntime } from "../fake-runtime.ts";
-import { filesOf } from "../support.ts";
-import { dockerAnswers, seaweedfs } from "./seaweedfs.ts";
+import { fetch, publish } from "../../../src/platform/bucket/builds.ts";
+import type {
+  CheckpointFiles,
+  Store,
+} from "../../../src/platform/bucket/builds.ts";
+import { BuildsSettings, make } from "../../../src/platform/bucket/s3.ts";
+import type { Identity } from "../../../src/runtime.ts";
+import { dockerAnswers, seaweedfs } from "../seaweedfs.ts";
+import { directoryFiles } from "./directory-files.ts";
 
 class Seaweed extends Context.Service<Seaweed, BuildsSettings>()(
   "tests/platform/Seaweed"
 ) {}
 
+class Bucket extends Context.Service<Bucket, Store>()(
+  "tests/platform/Bucket"
+) {}
+
 const stored = Layer.effect(
-  BuildStore,
+  Bucket,
   Effect.gen(function* () {
     return yield* make(yield* Seaweed);
   })
@@ -38,9 +44,6 @@ const encoder = new TextEncoder();
 
 const decoder = new TextDecoder();
 
-const runtimeIn = (dir: string) =>
-  Effect.map(Layer.build(fakeRuntime({ dir }).layer), Context.get(Runtime));
-
 const checkpointRef = (instance: string) => ({
   name: instance,
   instance,
@@ -57,12 +60,11 @@ const files = (root: string, contents: Readonly<Record<string, string>>) => {
 };
 
 const planted = (
-  runtime: Runtime["Service"],
+  held: CheckpointFiles,
   checkpoint: Identity,
   contents: Readonly<Record<string, string>>
 ) =>
   Effect.gen(function* () {
-    const held = yield* Effect.fromNullishOr(runtime.files);
     const staged = held.staging(checkpoint);
 
     files(staged, contents);
@@ -79,7 +81,7 @@ describe.skipIf(!dockerAnswers && process.env["CI"] === undefined)(
     })((it) => {
       it.effect("a put key reads back, and lists under its prefix", () =>
         Effect.gen(function* () {
-          const store = yield* BuildStore;
+          const store = yield* Bucket;
 
           yield* store.put("builds/ubuntu.json", encoder.encode('{"a":1}'));
           yield* store.put("objects/one", encoder.encode("one"));
@@ -97,7 +99,7 @@ describe.skipIf(!dockerAnswers && process.env["CI"] === undefined)(
         "a list pages past a thousand keys",
         () =>
           Effect.gen(function* () {
-            const store = yield* BuildStore;
+            const store = yield* Bucket;
 
             const keys = Array.from(
               { length: 1005 },
@@ -117,7 +119,7 @@ describe.skipIf(!dockerAnswers && process.env["CI"] === undefined)(
 
       it.effect("a remove of a key that isn't there succeeds", () =>
         Effect.gen(function* () {
-          const store = yield* BuildStore;
+          const store = yield* Bucket;
 
           yield* store.put("gone/kept", encoder.encode("kept"));
           yield* store.remove(["gone/never-put", "gone/kept"]);
@@ -154,7 +156,7 @@ describe.skipIf(!dockerAnswers && process.env["CI"] === undefined)(
 
       it.effect("a fetch downloads only the keys the host lacks", () =>
         Effect.gen(function* () {
-          const store = yield* BuildStore;
+          const store = yield* Bucket;
           const from = yield* scratch;
           const to = yield* scratch;
           const gets: string[] = [];
@@ -168,7 +170,7 @@ describe.skipIf(!dockerAnswers && process.env["CI"] === undefined)(
               ),
           };
 
-          const publishing = yield* runtimeIn(from);
+          const publishing = directoryFiles(from, true);
 
           const built = yield* planted(publishing, checkpointRef("built"), {
             "disk.raw": "the disk",
@@ -180,10 +182,10 @@ describe.skipIf(!dockerAnswers && process.env["CI"] === undefined)(
             "disk.raw": "the disk",
           });
 
-          yield* publish(store, yield* filesOf(publishing), built);
+          yield* publish(store, publishing, built);
           yield* fetch(
             counted,
-            yield* filesOf(yield* runtimeIn(to)),
+            directoryFiles(to, true),
             checkpointRef("fetched"),
             "built",
             "web@1"

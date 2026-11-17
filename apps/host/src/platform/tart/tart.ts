@@ -23,6 +23,8 @@ import {
   Schedule,
   Schema,
 } from "effect";
+import type { Path } from "effect";
+import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 
 import { Box } from "../../box.ts";
@@ -36,6 +38,7 @@ import {
   missingCheckpoint,
   Runtime,
   timeoutFail,
+  unshared,
 } from "../../runtime.ts";
 import type {
   Held,
@@ -50,6 +53,9 @@ import type {
 } from "../../runtime.ts";
 import type { HostSettings } from "../../settings.ts";
 import { allotted, inUse } from "../../usage.ts";
+import { throughBucket } from "../bucket/builds.ts";
+import type { CheckpointFiles, Store } from "../bucket/builds.ts";
+import * as S3 from "../bucket/s3.ts";
 import { cliIn, expect, files, regularFiles } from "../process.ts";
 import * as Home from "./home.ts";
 import * as Launchd from "./launchd.ts";
@@ -59,6 +65,7 @@ import { diskGibOf, traits } from "./traits.ts";
 
 export const TartSettings = Schema.Struct({
   binary: Schema.String,
+  builds: Schema.optionalKey(S3.BuildsSettings),
 });
 
 export interface Settings {
@@ -68,6 +75,8 @@ export interface Settings {
   readonly stateDir: string;
   readonly uid: number | undefined;
   readonly tartHome: string | undefined;
+  /** The bucket the host shares template builds through, if it shares them. */
+  readonly bucket?: Store | undefined;
 }
 
 const softnet = "--net-softnet-block=@host";
@@ -292,7 +301,7 @@ export const make = (
 ): Effect.Effect<
   Interface,
   HostError | CannotStart,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
 > =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -910,6 +919,30 @@ export const make = (
       }
     };
 
+    const local: CheckpointFiles = {
+      checkpointFiles: Effect.fn("Tart.checkpointFiles")((checkpoint) => {
+        const dir = home.directory(checkpoint.handle);
+
+        return Effect.map(regularFiles(fs, dir), (found) =>
+          found.map((file) => ({ path: file, file: path.join(dir, file) }))
+        );
+      }),
+      held: () => Effect.undefined,
+      staging: (checkpoint) =>
+        path.join(home.fetching, checkpointVm(checkpoint)),
+      install: Effect.fn("Tart.install")((checkpoint, staged) => {
+        const handle = checkpointVm(checkpoint);
+
+        return files(
+          `couldn't install checkpoint ${checkpoint.name}`,
+          Effect.andThen(
+            fs.makeDirectory(home.vms, { recursive: true }),
+            fs.rename(staged, home.directory(handle))
+          )
+        ).pipe(Effect.as(handle));
+      }),
+    };
+
     return {
       version: reported,
       pin: undefined,
@@ -941,29 +974,10 @@ export const make = (
           })
         ),
       },
-      files: {
-        checkpointFiles: Effect.fn("Tart.checkpointFiles")((checkpoint) => {
-          const dir = home.directory(checkpoint.handle);
-
-          return Effect.map(regularFiles(fs, dir), (found) =>
-            found.map((file) => ({ path: file, file: path.join(dir, file) }))
-          );
-        }),
-        held: () => Effect.undefined,
-        staging: (checkpoint) =>
-          path.join(home.fetching, checkpointVm(checkpoint)),
-        install: Effect.fn("Tart.install")((checkpoint, staged) => {
-          const handle = checkpointVm(checkpoint);
-
-          return files(
-            `couldn't install checkpoint ${checkpoint.name}`,
-            Effect.andThen(
-              fs.makeDirectory(home.vms, { recursive: true }),
-              fs.rename(staged, home.directory(handle))
-            )
-          ).pipe(Effect.as(handle));
-        }),
-      },
+      builds:
+        settings.bucket === undefined
+          ? unshared(traits.runtime)
+          : yield* throughBucket(settings.bucket, local),
       traits,
       guest: "macos",
       startup: Effect.andThen(
@@ -1108,18 +1122,28 @@ export const layer = (
 ): Layer.Layer<
   Runtime,
   HostError | CannotStart,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Box
+  | ChildProcessSpawner.ChildProcessSpawner
+  | FileSystem.FileSystem
+  | Path.Path
+  | HttpClient.HttpClient
+  | Box
 > =>
   Layer.effect(
     Runtime,
-    Effect.flatMap(Box, (box) =>
-      make({
+    Effect.gen(function* () {
+      const box = yield* Box;
+
+      return yield* make({
         binary: settings.binary,
         publishAddress: config.listen.address,
         hostId: config.id,
         stateDir: config.stateDir,
         uid: box.uid,
         tartHome: process.env["TART_HOME"],
-      })
-    )
+        bucket:
+          settings.builds === undefined
+            ? undefined
+            : yield* S3.make(settings.builds),
+      });
+    })
   );

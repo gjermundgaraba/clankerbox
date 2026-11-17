@@ -6,7 +6,7 @@ import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { Effect, FileSystem, Logger, Schema } from "effect";
 
-import { BuildsSettings } from "../src/platform/s3.ts";
+import * as S3 from "../src/platform/bucket/s3.ts";
 import { fakeRuntime } from "./fake-runtime.ts";
 import type { FakeRuntimeName } from "./fake-runtime.ts";
 import {
@@ -62,17 +62,19 @@ const failingFinds = (process.env["CLANKERBOX_FAKE_FAIL_FIND"] ?? "")
   .filter((name) => name !== "");
 
 const decodeBuilds = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(BuildsSettings)
+  Schema.fromJsonString(S3.BuildsSettings)
 );
 
-const buildsSetting = Effect.gen(function* () {
+const bucket = Effect.gen(function* () {
   const file = process.env["CLANKERBOX_FAKE_BUILDS"];
 
   return file === undefined
     ? undefined
-    : yield* decodeBuilds(
-        yield* (yield* FileSystem.FileSystem).readFileString(file)
-      );
+    : yield* S3.make(
+        yield* decodeBuilds(
+          yield* (yield* FileSystem.FileSystem).readFileString(file)
+        )
+      ).pipe(Effect.provide(NodeHttpClient.layerNodeHttp));
 });
 
 runServe(
@@ -90,7 +92,7 @@ runServe(
           writeTailscaleStubs(path.join(kept, "bin"));
         }
 
-        const builds = yield* buildsSetting;
+        const builds = yield* bucket;
 
         const host = yield* startHost(dir, {
           id,
@@ -99,7 +101,6 @@ runServe(
           bases: new Map([[base, image]]),
           ...(port === undefined ? {} : { port }),
           logger: Logger.consolePretty({ colors: false }),
-          ...(builds === undefined ? {} : { buildsSettings: builds }),
           http: NodeHttpClient.layerNodeHttp,
           fake: fakeRuntime({
             dir: kept,
@@ -107,6 +108,7 @@ runServe(
             ramBudgetMib,
             pin: process.env["CLANKERBOX_FAKE_PIN"],
             probesPorts: true,
+            builds,
             onCall: (call) => {
               appendFileSync(
                 path.join(evidence, "runtime-calls.txt"),

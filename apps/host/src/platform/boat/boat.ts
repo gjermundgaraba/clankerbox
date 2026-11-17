@@ -33,6 +33,7 @@ import {
   missing,
   missingCheckpoint,
   Runtime,
+  unshared,
 } from "../../runtime.ts";
 import type {
   Dial,
@@ -674,7 +675,7 @@ export const make = (
       pin: undefined,
       prepares: "always",
       admission: undefined,
-      files: undefined,
+      builds: unshared(traits.runtime),
       owned: { machines: markedMachines, deleteWithin: stepWithin },
       reach: {
         _tag: "relayed",

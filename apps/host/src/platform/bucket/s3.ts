@@ -2,11 +2,11 @@ import { createHash, createHmac } from "node:crypto";
 import type { BinaryLike } from "node:crypto";
 
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { DateTime, Effect, Layer, Redacted, Schema } from "effect";
+import { DateTime, Effect, Redacted, Schema } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
 import type { HttpMethod } from "effect/http";
 
-import { BuildStore } from "../builds.ts";
+import type { Store } from "./builds.ts";
 
 const nonEmpty = Schema.String.check(Schema.isNonEmpty());
 
@@ -90,7 +90,7 @@ const success = (status: number) => status >= 200 && status < 300;
 
 export const make = (
   settings: BuildsSettings
-): Effect.Effect<BuildStore["Service"], never, HttpClient.HttpClient> =>
+): Effect.Effect<Store, never, HttpClient.HttpClient> =>
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient;
 
@@ -230,8 +230,3 @@ export const make = (
 
     return { list, get, put, remove };
   });
-
-export const layer = (
-  settings: BuildsSettings
-): Layer.Layer<BuildStore, never, HttpClient.HttpClient> =>
-  Layer.effect(BuildStore, make(settings));

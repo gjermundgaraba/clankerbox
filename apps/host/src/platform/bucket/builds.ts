@@ -1,15 +1,22 @@
 import { describeFileError, Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Context, Effect, FileSystem, Option, Path, Schema } from "effect";
+import { Effect, FileSystem, Option, Path, Schema } from "effect";
 import type { PlatformError } from "effect";
 import { Hex } from "effect/encoding";
 
-import type { CheckpointFiles, Handle, Identity, Target } from "./runtime.ts";
+import type {
+  Builds,
+  Handle,
+  Identity,
+  RuntimeError,
+  Target,
+} from "../../runtime.ts";
 
 /**
- * Where a host copies template builds to and from, shared by every host of the fleet: objects by
- * key. A key names the same bytes for good, so a put of a key that is there changes nothing.
+ * The bucket a smolvm or Tart host copies template builds to and from, shared by every host of its
+ * runtime: objects by key. A key names the same bytes for good, so a put of a key that is there
+ * changes nothing.
  */
-export interface Interface {
+export interface Store {
   readonly list: (prefix: string) => Effect.Effect<readonly string[], Internal>;
   readonly get: (key: string) => Effect.Effect<Uint8Array, Internal>;
   readonly put: (
@@ -20,9 +27,32 @@ export interface Interface {
   readonly remove: (keys: readonly string[]) => Effect.Effect<void, Internal>;
 }
 
-export class BuildStore extends Context.Service<BuildStore, Interface>()(
-  "@clankerbox/host/BuildStore"
-) {}
+/**
+ * A file of a checkpoint, as the bucket copies it: `path` within the checkpoint, and `file` where it
+ * lies on this host. A runtime that names a file by its content gives that name as `key`, which
+ * `held` finds again on any host that holds it; any other file is copied in pieces.
+ */
+export interface CheckpointFile {
+  readonly path: string;
+  readonly file: string;
+  readonly key?: string | undefined;
+}
+
+/** A runtime's checkpoints as the files the bucket copies. */
+export interface CheckpointFiles {
+  readonly checkpointFiles: (
+    checkpoint: Target
+  ) => Effect.Effect<readonly CheckpointFile[], RuntimeError>;
+  /** Where a file of `key` lies on this host, in any of its checkpoints, if one does. */
+  readonly held: (key: string) => Effect.Effect<string | undefined>;
+  /** Where a copy of `checkpoint` is put together, on the filesystem it will lie on. */
+  readonly staging: (checkpoint: Identity) => string;
+  /** Makes `checkpoint` of the files put together in `staged`, which it takes. */
+  readonly install: (
+    checkpoint: Identity,
+    staged: string
+  ) => Effect.Effect<Handle, RuntimeError>;
+}
 
 export const pieceBytes = 16 * 1024 * 1024;
 
@@ -179,7 +209,7 @@ const referenced = (manifest: Manifest) =>
         )
   );
 
-const readManifest = (store: Interface, name: string) =>
+const readManifest = (store: Store, name: string) =>
   Effect.flatMap(store.get(manifestKey(name)), (body) =>
     decodeManifest(new TextDecoder().decode(body)).pipe(
       Effect.mapError(
@@ -196,7 +226,7 @@ const readManifest = (store: Interface, name: string) =>
  * manifest last, so whatever reads the manifest finds every object it names.
  */
 export const publish = (
-  store: Interface,
+  store: Store,
   local: CheckpointFiles,
   checkpoint: Target
 ): Effect.Effect<void, Internal, FileSystem.FileSystem> =>
@@ -277,7 +307,7 @@ export const publish = (
  * holds by its key is linked from where it lies, and only the rest is downloaded.
  */
 export const fetch = (
-  store: Interface,
+  store: Store,
   local: CheckpointFiles,
   checkpoint: Identity,
   from: string,
@@ -396,7 +426,7 @@ export const fetch = (
  * which also clears what a publish that never ended left.
  */
 export const unpublish = (
-  store: Interface,
+  store: Store,
   name: string
 ): Effect.Effect<void, Internal> =>
   Effect.gen(function* () {
@@ -419,3 +449,20 @@ export const unpublish = (
       `unpublish ${name} removed ${unused.length} objects no other build holds`
     );
   });
+
+/** The builds of a runtime whose checkpoints are files, shared through `store`. */
+export const throughBucket = (
+  store: Store,
+  local: CheckpointFiles
+): Effect.Effect<Builds, never, FileSystem.FileSystem | Path.Path> =>
+  Effect.map(Effect.context<FileSystem.FileSystem | Path.Path>(), (files) => ({
+    shared: true,
+    publish: (checkpoint) =>
+      Effect.provideContext(publish(store, local, checkpoint), files),
+    fetch: (checkpoint, from, build) =>
+      Effect.provideContext(
+        fetch(store, local, checkpoint, from, build),
+        files
+      ),
+    unpublish: (name) => unpublish(store, name),
+  }));

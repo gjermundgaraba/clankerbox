@@ -26,7 +26,8 @@ import {
   Schema,
   Semaphore,
 } from "effect";
-import type { Scope } from "effect";
+import type { Path, Scope } from "effect";
+import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 
 import { Box } from "../../box.ts";
@@ -43,6 +44,7 @@ import {
   Runtime,
   stateReadWait,
   timeoutFail,
+  unshared,
 } from "../../runtime.ts";
 import type {
   Command,
@@ -57,6 +59,9 @@ import type {
 } from "../../runtime.ts";
 import type { HostSettings } from "../../settings.ts";
 import { allotted, checkRamBudget, inUse } from "../../usage.ts";
+import { throughBucket } from "../bucket/builds.ts";
+import type { CheckpointFiles, Store } from "../bucket/builds.ts";
+import * as S3 from "../bucket/s3.ts";
 import { cliIn, expect, failure, files, regularFiles } from "../process.ts";
 import { aloneOnBox, boxLock } from "./one-per-box.ts";
 import { traits } from "./traits.ts";
@@ -66,6 +71,7 @@ const Size = Schema.Int.check(Schema.isGreaterThan(0));
 export const SmolvmSettings = Schema.Struct({
   prefix: Schema.String,
   ramBudgetMib: Schema.optionalKey(Size),
+  builds: Schema.optionalKey(S3.BuildsSettings),
 });
 
 const mib = 1024 * 1024;
@@ -87,6 +93,8 @@ export interface Settings {
   readonly stateDir: string;
   readonly arch: string;
   readonly bootId: string;
+  /** The bucket the host shares template builds through, if it shares them. */
+  readonly bucket?: Store | undefined;
 }
 
 const bootIdFile = "/proc/sys/kernel/random/boot_id";
@@ -396,6 +404,7 @@ export const make = (
   HostError | CannotStart,
   | ChildProcessSpawner.ChildProcessSpawner
   | FileSystem.FileSystem
+  | Path.Path
   | PortProbe
   | Scope.Scope
 > =>
@@ -1301,6 +1310,80 @@ export const make = (
       );
     };
 
+    const local: CheckpointFiles = {
+      checkpointFiles: Effect.fn("Smolvm.checkpointFiles")((checkpoint) =>
+        Effect.map(regularFiles(fs, storedAt(checkpoint.handle)), (found) =>
+          found.flatMap((file) => {
+            const object = storedObject(file);
+
+            return file === captureOwner
+              ? []
+              : [
+                  {
+                    path: file,
+                    file: path.join(storedAt(checkpoint.handle), file),
+                    ...(object === undefined
+                      ? {}
+                      : { key: `${objectKeyPrefix}${object}` }),
+                  },
+                ];
+          })
+        )
+      ),
+      held: (key) => {
+        const hash = key.slice(objectKeyPrefix.length);
+        const file = path.join(paths.store, "objects", hash);
+
+        return key.startsWith(objectKeyPrefix) && objectName.test(hash)
+          ? Effect.map(
+              Effect.orElseSucceed(fs.exists(file), () => false),
+              (exists) => (exists ? file : undefined)
+            )
+          : Effect.undefined;
+      },
+      staging: (checkpoint) =>
+        path.join(paths.store, `${nativeName(checkpoint)}.fetching`),
+      install: Effect.fn("Smolvm.install")((checkpoint, staged) =>
+        Effect.gen(function* () {
+          yield* files(
+            `couldn't create ${objects}`,
+            fs.makeDirectory(objects, { recursive: true, mode: 0o700 })
+          );
+
+          // Prune removes every store object with one link:
+          // https://github.com/smol-machines/smolvm/blob/v1.34.1/crates/smolvm-checkpoint/src/store.rs#L3021
+          for (const file of yield* regularFiles(fs, staged)) {
+            const object = storedObject(file);
+
+            if (object !== undefined) {
+              yield* files(
+                `couldn't add object ${object} to the store`,
+                fs
+                  .link(path.join(staged, file), path.join(objects, object))
+                  .pipe(
+                    Effect.catchReason(
+                      "PlatformError",
+                      "AlreadyExists",
+                      () => Effect.void
+                    )
+                  )
+              );
+            }
+          }
+
+          const handle = nativeName(checkpoint);
+
+          yield* files(
+            `couldn't install checkpoint ${checkpoint.name}`,
+            fs.rename(staged, storedAt(handle))
+          );
+          yield* parked({ ...checkpoint, handle });
+
+          return handle;
+        })
+      ),
+    };
+
     return {
       version,
       pin,
@@ -1317,79 +1400,10 @@ export const make = (
           )
         ),
       },
-      files: {
-        checkpointFiles: Effect.fn("Smolvm.checkpointFiles")((checkpoint) =>
-          Effect.map(regularFiles(fs, storedAt(checkpoint.handle)), (found) =>
-            found.flatMap((file) => {
-              const object = storedObject(file);
-
-              return file === captureOwner
-                ? []
-                : [
-                    {
-                      path: file,
-                      file: path.join(storedAt(checkpoint.handle), file),
-                      ...(object === undefined
-                        ? {}
-                        : { key: `${objectKeyPrefix}${object}` }),
-                    },
-                  ];
-            })
-          )
-        ),
-        held: (key) => {
-          const hash = key.slice(objectKeyPrefix.length);
-          const file = path.join(paths.store, "objects", hash);
-
-          return key.startsWith(objectKeyPrefix) && objectName.test(hash)
-            ? Effect.map(
-                Effect.orElseSucceed(fs.exists(file), () => false),
-                (exists) => (exists ? file : undefined)
-              )
-            : Effect.undefined;
-        },
-        staging: (checkpoint) =>
-          path.join(paths.store, `${nativeName(checkpoint)}.fetching`),
-        install: Effect.fn("Smolvm.install")((checkpoint, staged) =>
-          Effect.gen(function* () {
-            yield* files(
-              `couldn't create ${objects}`,
-              fs.makeDirectory(objects, { recursive: true, mode: 0o700 })
-            );
-
-            // Prune removes every store object with one link:
-            // https://github.com/smol-machines/smolvm/blob/v1.34.1/crates/smolvm-checkpoint/src/store.rs#L3021
-            for (const file of yield* regularFiles(fs, staged)) {
-              const object = storedObject(file);
-
-              if (object !== undefined) {
-                yield* files(
-                  `couldn't add object ${object} to the store`,
-                  fs
-                    .link(path.join(staged, file), path.join(objects, object))
-                    .pipe(
-                      Effect.catchReason(
-                        "PlatformError",
-                        "AlreadyExists",
-                        () => Effect.void
-                      )
-                    )
-                );
-              }
-            }
-
-            const handle = nativeName(checkpoint);
-
-            yield* files(
-              `couldn't install checkpoint ${checkpoint.name}`,
-              fs.rename(staged, storedAt(handle))
-            );
-            yield* parked({ ...checkpoint, handle });
-
-            return handle;
-          })
-        ),
-      },
+      builds:
+        settings.bucket === undefined
+          ? unshared(traits.runtime)
+          : yield* throughBucket(settings.bucket, local),
       traits,
       guest: "debian",
       startup: Effect.gen(function* () {
@@ -1660,6 +1674,8 @@ export const layer = (
   HostError | CannotStart,
   | ChildProcessSpawner.ChildProcessSpawner
   | FileSystem.FileSystem
+  | Path.Path
+  | HttpClient.HttpClient
   | Box
   | PortProbe
 > =>
@@ -1687,6 +1703,10 @@ export const layer = (
           stateDir: config.stateDir,
           arch: process.arch,
           bootId: bootId.replaceAll("-", "").slice(0, 8),
+          bucket:
+            settings.builds === undefined
+              ? undefined
+              : yield* S3.make(settings.builds),
         },
         box
       );

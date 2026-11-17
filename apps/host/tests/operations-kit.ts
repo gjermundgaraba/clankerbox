@@ -20,10 +20,10 @@ import {
   References,
 } from "effect";
 
-import type { BuildStore } from "../src/builds.ts";
 import { PortProbe } from "../src/machine-ports.ts";
 import type { Probe } from "../src/machine-ports.ts";
 import * as Operations from "../src/operations.ts";
+import type { Store } from "../src/platform/bucket/builds.ts";
 import * as Relay from "../src/platform/relay.ts";
 import * as Reach from "../src/reach.ts";
 import { Handle, Runtime } from "../src/runtime.ts";
@@ -45,7 +45,7 @@ export const freePorts: ReadonlyMap<FakeRuntimeName, string> = new Map([
 
 export interface RunnerOptions {
   readonly fake?: FakeRuntime;
-  readonly builds?: Layer.Layer<BuildStore>;
+  readonly builds?: Store;
   readonly as?: FakeRuntimeName;
   readonly pin?: string;
   readonly ramBudgetMib?: number;
@@ -70,6 +70,7 @@ export const runner = (options?: RunnerOptions) =>
         ramBudgetMib: options?.ramBudgetMib,
         pin: options?.pin,
         relayed: options?.relayed,
+        builds: options?.builds,
       });
 
     const first = options?.relayed === true ? relayPorts : firstPort;
@@ -103,8 +104,7 @@ export const runner = (options?: RunnerOptions) =>
           options?.tailnet === undefined
             ? Layer.empty
             : Layer.succeed(Tailnet, options.tailnet)
-        ),
-        Layer.provide(options?.builds ?? Layer.empty)
+        )
       )
     ).pipe(Effect.map(Context.get(Operations.Operations)));
 

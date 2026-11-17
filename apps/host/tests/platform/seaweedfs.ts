@@ -5,7 +5,7 @@ import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Schedule } from "effect";
 import type { Scope } from "effect";
 
-import type { BuildsSettings } from "../../src/platform/s3.ts";
+import type { BuildsSettings } from "../../src/platform/bucket/s3.ts";
 
 const image =
   "chrislusf/seaweedfs:4.52@sha256:57877e32bb90073b37dc109b438ba66e84fd5ed9ced5f5c04f56444ef243ce59";
@@ -54,8 +54,8 @@ const runningWhileStdinOpen = (args: readonly string[]) =>
 
 /**
  * A SeaweedFS S3 store in a container of its own, with the bucket `templates`, removed when the
- * scope closes or the test process ends. Its settings are as a host's config holds them under
- * `builds`.
+ * scope closes or the test process ends. Its settings are as a smolvm or Tart host's config holds
+ * them under its runtime's `builds`.
  */
 export const seaweedfs: Effect.Effect<
   typeof BuildsSettings.Encoded,

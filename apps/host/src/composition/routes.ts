@@ -4,7 +4,6 @@ import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Effect, Layer, Option } from "effect";
 
-import { BuildStore } from "../builds.ts";
 import { Operations } from "../operations.ts";
 import { sweepsWithin } from "../recheck.ts";
 import { Runtime, stateIn } from "../runtime.ts";
@@ -20,7 +19,6 @@ const app = (config: Served) =>
       const operations = yield* Operations;
       const runtime = yield* Runtime;
       const tailnet = yield* Effect.serviceOption(Tailnet);
-      const builds = yield* Effect.serviceOption(BuildStore);
 
       return {
         readHost: () =>
@@ -34,7 +32,7 @@ const app = (config: Served) =>
             boot: operations.boot,
             ...(runtime.pin === undefined ? {} : { pin: runtime.pin }),
             joins: Option.isSome(tailnet),
-            builds: Option.isSome(builds),
+            builds: runtime.builds.shared,
             ...(runtime.owned === undefined
               ? {}
               : { sweeps: sweepsWithin(runtime.owned) }),

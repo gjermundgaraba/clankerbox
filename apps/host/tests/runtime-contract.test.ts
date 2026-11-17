@@ -49,7 +49,6 @@ const facetsOf = (runtime: Interface) => ({
   pinned: runtime.pin !== undefined,
   reach: runtime.reach._tag,
   admits: runtime.admission !== undefined,
-  files: runtime.files !== undefined,
   owned: runtime.owned !== undefined,
 });
 
@@ -60,7 +59,6 @@ const presetFacets = (preset: Preset) => ({
   pinned: preset.pin !== undefined,
   reach: preset.relayed ? "relayed" : "published",
   admits: preset.admits,
-  files: preset.files !== undefined,
   owned: preset.owned,
 });
 

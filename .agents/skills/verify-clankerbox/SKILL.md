@@ -85,8 +85,8 @@ Each serve program reads its settings from the environment `launch.sh` and
 its machines to a fake tailnet; set it for `start-host` too, or the restarted
 host joins nothing. A fake runtime's host also reads `CLANKERBOX_FAKE_PIN`, the
 runtime pin its fake runs, `CLANKERBOX_FAKE_UBUNTU_IMAGE`, the image smolvm's
-`ubuntu` names, and `CLANKERBOX_FAKE_BUILDS`, a JSON file of the host's `builds`
-setting, for a build store.
+`ubuntu` names, and `CLANKERBOX_FAKE_BUILDS`, a JSON file of a smolvm or Tart
+runtime's `builds` setting, for a build store.
 
 The budget applies to each host. A `fixed` host's fake has no admission, so no
 start there is checked against it; it shows only as the limit its `capacity`

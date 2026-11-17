@@ -5,15 +5,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { version, versionHeader } from "@gjermundgaraba/clankerbox-sdk";
 import { read, scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import {
-  Duration,
-  Effect,
-  Fiber,
-  Layer,
-  Logger,
-  Redacted,
-  Schedule,
-} from "effect";
+import { Duration, Effect, Fiber, Layer, Logger, Schedule } from "effect";
 import { expect } from "vite-plus/test";
 
 import { hostLayer } from "../../src/composition/host.ts";
@@ -415,36 +407,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         });
       }),
     60_000
-  );
-
-  it.effect(
-    "a host whose runtime keeps no checkpoint as files refuses a builds setting, naming both, before its runtime starts anything",
-    () =>
-      Effect.gen(function* () {
-        const dir = yield* scratch;
-        const calls: string[] = [];
-
-        const failure = yield* refused(
-          {
-            ...hostConfig(dir),
-            builds: {
-              endpoint: "http://127.0.0.1:8333",
-              bucket: "builds",
-              region: "us-east-1",
-              accessKeyId: "id",
-              secretAccessKey: Redacted.make("secret"),
-            },
-          },
-          dir,
-          "fixed",
-          calls
-        );
-
-        expect(calls).toStrictEqual([]);
-        expect(failure._tag).toBe("CannotStart");
-        expect(failure.message).toContain("builds");
-        expect(failure.message).toContain("fixed");
-      })
   );
 
   it.effect("a host whose address is taken says where it couldn't listen", () =>
