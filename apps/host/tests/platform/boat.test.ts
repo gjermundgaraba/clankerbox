@@ -1219,6 +1219,31 @@ describe("each boat goal from each state boat holds", () => {
   );
 
   it.live(
+    "a make, and a start onto a new machine, end only once boat has restored every file",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          const answered = (handle: string) =>
+            boat.sandboxes.get(handle)?.answeredHydrated;
+
+          yield* boat.hydrateNext(6);
+
+          const machine = yield* made(runtime, "dev");
+
+          expect(answered(machine.handle)).toBe(true);
+
+          yield* runtime.stop(machine);
+          yield* boat.keepStoppedFor(0);
+          yield* boat.hydrateNext(6);
+          yield* runtime.start(machine, new Set());
+
+          expect(answered(machine.handle)).toBe(true);
+        })
+      ),
+    30_000
+  );
+
+  it.live(
     "a make whose sandbox boat cancels for want of a machine answers Capacity",
     () =>
       onBoat(({ boat, runtime }) =>
