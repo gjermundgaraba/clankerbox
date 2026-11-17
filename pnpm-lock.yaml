@@ -177,8 +177,8 @@ catalogs:
       specifier: 4.1.4
       version: 4.1.4
     '@gjermundgaraba/effect-actions':
-      specifier: 0.31.0
-      version: 0.31.0
+      specifier: 0.33.0
+      version: 0.33.0
     '@types/node':
       specifier: 26.6.6
       version: 26.6.6
@@ -253,7 +253,7 @@ importers:
         version: link:../server
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.31.0(effect@4.1.4)
+        version: 0.33.0(effect@4.1.4)
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.6
@@ -280,7 +280,7 @@ importers:
         version: 4.1.4(effect@4.1.4)(redis@6.3.0)
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.31.0(effect@4.1.4)
+        version: 0.33.0(effect@4.1.4)
       effect:
         specifier: 'catalog:'
         version: 4.1.4
@@ -317,7 +317,7 @@ importers:
         version: 4.1.4(effect@4.1.4)(redis@6.3.0)
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.31.0(effect@4.1.4)
+        version: 0.33.0(effect@4.1.4)
       effect:
         specifier: 'catalog:'
         version: 4.1.4
@@ -360,7 +360,7 @@ importers:
         version: 4.1.4(effect@4.1.4)(redis@6.3.0)
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.31.0(effect@4.1.4)
+        version: 0.33.0(effect@4.1.4)
       effect:
         specifier: 'catalog:'
         version: 4.1.4
@@ -400,7 +400,7 @@ importers:
         version: link:../sdk
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.31.0(effect@4.1.4)
+        version: 0.33.0(effect@4.1.4)
       effect:
         specifier: 'catalog:'
         version: 4.1.4
@@ -444,7 +444,7 @@ importers:
         version: link:../../apps/server
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.31.0(effect@4.1.4)
+        version: 0.33.0(effect@4.1.4)
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.6
@@ -474,7 +474,7 @@ importers:
         version: 4.1.4(effect@4.1.4)(vitest@5.1.0)
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.31.0(effect@4.1.4)
+        version: 0.33.0(effect@4.1.4)
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.6
@@ -618,11 +618,11 @@ packages:
       effect: ^4.1.4
       vitest: 5.1.0
 
-  '@gjermundgaraba/effect-actions@0.31.0':
-    resolution: {integrity: sha512-3aOILY3L1tdy1DP3GGAOSuCkNFz6rgIArg3q1FNvASi3Wszp/4s95mLXIirfN8I34ZiHwO1CuQXRKYCvqA22+A==}
+  '@gjermundgaraba/effect-actions@0.33.0':
+    resolution: {integrity: sha512-xVZfWrw2/eWcTMglt/PNkMK37ZsDtHbcT5Kp+BoDl9xvqe6BGMtEWSnsTkLVk2AlVSjT+I4AYvnHJ/n9VBqnpw==}
     engines: {node: '>=26.13.0'}
     peerDependencies:
-      effect: ~4.1.3
+      effect: ~4.1.4
 
   '@jridgewell/resolve-uri@3.1.2':
     resolution: {integrity: sha512-bRISgCIjP20/tbWSPWMEi54QVPRZExkuD9lJL+UIxUKtwVJA8wW1Trb1jMs1RFXo1CBTNZ/5hpC9QvmKWdopKw==}
@@ -2140,7 +2140,7 @@ snapshots:
       effect: 4.1.4
       vitest: 5.1.0(@types/node@26.6.6)(@vitest/browser-preview@5.1.0)(@vitest/ui@5.1.0)(@voidzero-dev/vite-plus-core@1.5.1(@types/node@26.6.6)(typescript@7.0.2)(yaml@2.9.1))
 
-  '@gjermundgaraba/effect-actions@0.31.0(effect@4.1.4)':
+  '@gjermundgaraba/effect-actions@0.33.0(effect@4.1.4)':
     dependencies:
       effect: 4.1.4
 
