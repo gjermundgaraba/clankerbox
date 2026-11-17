@@ -71,7 +71,7 @@ import type {
 import { binary, scriptedMac } from "../../scripted-mac.ts";
 import type { ScriptedMac } from "../../scripted-mac.ts";
 import { scripted } from "../../scripted.ts";
-import { admitOn, eventually, suitePorts } from "../../support.ts";
+import { admitOn, eventually, noHttp, suitePorts } from "../../support.ts";
 
 const failure = (error: HostError) => [error._tag, error.message];
 
@@ -245,6 +245,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
               }
             )
           ).pipe(
+            Effect.provide(noHttp),
             Effect.provideService(
               Box,
               Box.of({

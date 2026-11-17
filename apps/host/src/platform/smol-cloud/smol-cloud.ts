@@ -31,6 +31,7 @@ import {
   missing,
   missingCheckpoint,
   Runtime,
+  unshared,
 } from "../../runtime.ts";
 import type {
   Command,
@@ -914,7 +915,7 @@ export const make = (
         dial: tunnel(api, sockets),
       },
       admission: undefined,
-      files: undefined,
+      builds: unshared(traits.runtime),
       owned: {
         machines: Effect.mapError(
           marked,

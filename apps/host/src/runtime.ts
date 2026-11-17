@@ -172,17 +172,6 @@ export const missingCheckpoint = (
     checkpoint: checkpoint.name,
   });
 
-/**
- * A file of a checkpoint, as a build store copies it: `path` within the checkpoint, and `file` where
- * it lies on this host. A runtime that names a file by its content gives that name as `key`, which
- * `held` finds again on any host that holds it; any other file is copied in pieces.
- */
-export interface CheckpointFile {
-  readonly path: string;
-  readonly file: string;
-  readonly key?: string | undefined;
-}
-
 export type Dial = (
   input: Stream.Stream<Uint8Array>
 ) => Stream.Stream<Uint8Array, RuntimeError>;
@@ -199,20 +188,44 @@ export interface Admission {
   readonly admit: (activation: Activation) => Effect.Effect<void, RoomError>;
 }
 
-export interface CheckpointFiles {
-  readonly checkpointFiles: (
-    checkpoint: Target
-  ) => Effect.Effect<readonly CheckpointFile[], RuntimeError>;
-  /** Where a file of `key` lies on this host, in any of its checkpoints, if one does. */
-  readonly held: (key: string) => Effect.Effect<string | undefined>;
-  /** Where a copy of `checkpoint` is put together, on the filesystem it will lie on. */
-  readonly staging: (checkpoint: Identity) => string;
-  /** Makes `checkpoint` of the files put together in `staged`, which it takes. */
-  readonly install: (
+/**
+ * How a host shares the template builds its runtime holds with the other hosts of that runtime,
+ * which the control plane reads as its `builds`: `publish` makes a build's checkpoint fetchable by
+ * its name, `fetch` makes `checkpoint` of what was published as `from`, of template build `build`,
+ * and `unpublish` removes what was published as `name`. Each runtime keeps them itself, smolvm and
+ * Tart through the bucket their settings name. On a host whose builds stay on it, `shared` is false:
+ * the control plane sends it no publish or fetch, which fail, and its `unpublish` only logs.
+ */
+export interface Builds {
+  readonly shared: boolean;
+  readonly publish: (checkpoint: Target) => Effect.Effect<void, RuntimeError>;
+  readonly fetch: (
     checkpoint: Identity,
-    staged: string
+    from: string,
+    build: string
   ) => Effect.Effect<Handle, RuntimeError>;
+  readonly unpublish: (name: string) => Effect.Effect<void, RuntimeError>;
 }
+
+/** The builds of a host that keeps its builds to itself. */
+export const unshared = (runtime: RuntimeName): Builds => {
+  const refused = (what: string) =>
+    Effect.fail(
+      new Internal({
+        message: `this host's ${runtime} runtime shares no template builds, so it can't ${what}`,
+      })
+    );
+
+  return {
+    shared: false,
+    publish: (checkpoint) => refused(`publish ${checkpoint.name}`),
+    fetch: (_, __, build) => refused(`fetch build ${build}`),
+    unpublish: (name) =>
+      Effect.logWarning(
+        `unpublish ${name}: this host's ${runtime} runtime shares no template builds, so what it published stays in the build store`
+      ),
+  };
+};
 
 /**
  * A machine carrying this host's mark, the instance the mark names, and the handle of each
@@ -255,7 +268,7 @@ export interface Interface {
   readonly reach: Reach;
   readonly prepares: "with-setup" | "always";
   readonly admission: Admission | undefined;
-  readonly files: CheckpointFiles | undefined;
+  readonly builds: Builds;
   readonly owned: Owned | undefined;
   readonly sizable: (
     machine: Pick<MachineRef, "name">,

@@ -42,13 +42,20 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { checkPort, PortProbe } from "../src/machine-ports.ts";
 import type { Probe } from "../src/machine-ports.ts";
 import * as BindProbe from "../src/platform/bind-probe.ts";
+import { throughBucket } from "../src/platform/bucket/builds.ts";
+import type { CheckpointFiles, Store } from "../src/platform/bucket/builds.ts";
 import { traits as smolvm } from "../src/platform/smolvm/traits.ts";
 import { traits as tart } from "../src/platform/tart/traits.ts";
-import { Handle, missing, missingCheckpoint, Runtime } from "../src/runtime.ts";
+import {
+  Handle,
+  missing,
+  missingCheckpoint,
+  Runtime,
+  unshared,
+} from "../src/runtime.ts";
 import type {
   Activation,
   Admission,
-  CheckpointFiles,
   Held,
   Identity,
   MachineState,
@@ -178,6 +185,8 @@ export interface FakeOptions {
    */
   readonly probesPorts?: boolean | undefined;
   readonly onCall?: ((call: string) => void) | undefined;
+  /** The bucket a smolvm or Tart fake shares template builds through, as its host's `builds` setting names one. */
+  readonly builds?: Store | undefined;
 }
 
 export const hostKeySetup = "ssh-keygen -A\n";
@@ -869,6 +878,49 @@ export const fakeRuntime = (options: FakeOptions) => {
           });
     });
 
+  const files: CheckpointFiles = {
+    checkpointFiles: (checkpoint) =>
+      Effect.promise(async () => {
+        const root = heldCheckpoint(checkpoint);
+        const found = await filesIn(root);
+
+        return await Promise.all(
+          found.map(async (file) => ({
+            path: path.relative(root, file),
+            file,
+            ...(preset.files?.keyed === true ? { key: await keyOf(file) } : {}),
+          }))
+        );
+      }),
+    held: (key) =>
+      Effect.promise(async () => {
+        const all = path.join(options.dir, "checkpoints");
+
+        for (const file of existsSync(all) ? await filesIn(all) : []) {
+          if (!file.includes(".fetching") && (await keyOf(file)) === key) {
+            return file;
+          }
+        }
+
+        return undefined;
+      }),
+    staging: (checkpoint) => `${checkpointRoot(checkpoint)}.fetching`,
+    install: (checkpoint, staged) =>
+      call(
+        "install",
+        checkpoint,
+        uninterruptibleWrite(async () => {
+          const root = checkpointRoot(checkpoint);
+
+          await rename(staged, root);
+          await mkdir(path.join(root, "dev"), { recursive: true });
+          furnish(root, path.join(options.dir, "bin"));
+
+          return keptCheckpoint(checkpoint, undefined);
+        })
+      ),
+  };
+
   const layer = Layer.effect(
     Runtime,
     Effect.gen(function* () {
@@ -989,59 +1041,10 @@ export const fakeRuntime = (options: FakeOptions) => {
               deleteWithin: Duration.minutes(1),
             }
           : undefined,
-        files:
-          preset.files === undefined
-            ? undefined
-            : {
-                checkpointFiles: (checkpoint) =>
-                  Effect.promise(async () => {
-                    const root = heldCheckpoint(checkpoint);
-                    const found = await filesIn(root);
-
-                    return await Promise.all(
-                      found.map(async (file) => ({
-                        path: path.relative(root, file),
-                        file,
-                        ...(preset.files?.keyed === true
-                          ? { key: await keyOf(file) }
-                          : {}),
-                      }))
-                    );
-                  }),
-                held: (key) =>
-                  Effect.promise(async () => {
-                    const all = path.join(options.dir, "checkpoints");
-
-                    for (const file of existsSync(all)
-                      ? await filesIn(all)
-                      : []) {
-                      if (
-                        !file.includes(".fetching") &&
-                        (await keyOf(file)) === key
-                      ) {
-                        return file;
-                      }
-                    }
-
-                    return undefined;
-                  }),
-                staging: (checkpoint) =>
-                  `${checkpointRoot(checkpoint)}.fetching`,
-                install: (checkpoint, staged) =>
-                  call(
-                    "install",
-                    checkpoint,
-                    uninterruptibleWrite(async () => {
-                      const root = checkpointRoot(checkpoint);
-
-                      await rename(staged, root);
-                      await mkdir(path.join(root, "dev"), { recursive: true });
-                      furnish(root, bin);
-
-                      return keptCheckpoint(checkpoint, undefined);
-                    })
-                  ),
-              },
+        builds:
+          options.builds === undefined || preset.files === undefined
+            ? unshared(traits.runtime)
+            : yield* throughBucket(options.builds, files),
         traits,
         guest: preset.guest,
         sizable: (machine, from, to, live) => {
@@ -1396,6 +1399,7 @@ export const fakeRuntime = (options: FakeOptions) => {
 
   return {
     layer,
+    files,
     faults,
     calls,
     activations,

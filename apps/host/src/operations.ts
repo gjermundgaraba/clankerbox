@@ -33,18 +33,15 @@ import {
   Duration,
   Effect,
   Exit,
-  FileSystem,
   Fiber,
   Layer,
   Option,
-  Path,
   References,
   Semaphore,
 } from "effect";
 import type { Scope } from "effect";
 import { Hex } from "effect/encoding";
 
-import { BuildStore, fetch, publish, unpublish } from "./builds.ts";
 import { runCommand } from "./exec.ts";
 import type { Leaving } from "./exec.ts";
 import {
@@ -74,7 +71,6 @@ import {
 } from "./runtime.ts";
 import type {
   Booting,
-  CheckpointFiles,
   Handle,
   Held,
   Observed,
@@ -334,11 +330,7 @@ type Settings = Pick<HostSettings, "id" | "bases">;
 
 export const make = (
   config: Settings
-): Effect.Effect<
-  Interface,
-  never,
-  Runtime | Reaches | FileSystem.FileSystem | Path.Path | Scope.Scope
-> =>
+): Effect.Effect<Interface, never, Runtime | Reaches | Scope.Scope> =>
   Effect.gen(function* () {
     const runtime = yield* Runtime;
     const { traits } = runtime;
@@ -360,20 +352,6 @@ export const make = (
         runtime.stop(machine)
       );
     };
-
-    const builds = yield* Effect.serviceOption(BuildStore);
-
-    const copying = Option.flatMap(builds, (store) =>
-      Option.map(Option.fromNullishOr(runtime.files), (local) => ({
-        store,
-        local,
-      }))
-    );
-
-    const files = Context.make(
-      FileSystem.FileSystem,
-      yield* FileSystem.FileSystem
-    ).pipe(Context.add(Path.Path, yield* Path.Path));
 
     const reaches = yield* Reaches;
     const hostScope = yield* Effect.scope;
@@ -850,24 +828,6 @@ export const make = (
         }
       });
 
-    const withBuilds = <A>(
-      what: string,
-      work: (
-        store: BuildStore["Service"],
-        local: CheckpointFiles
-      ) => Effect.Effect<A, HostError, FileSystem.FileSystem | Path.Path>
-    ) =>
-      Option.match(copying, {
-        onNone: () =>
-          Effect.fail(
-            new Internal({
-              message: `host ${config.id} copies no build through a bucket, so it can't ${what}`,
-            })
-          ),
-        onSome: ({ store, local }) =>
-          Effect.provideContext(work(store, local), files),
-      });
-
     const perform = (
       progress: Progress,
       step: Exclude<Step, Make>
@@ -1039,13 +999,7 @@ export const make = (
 
           const unpublished =
             step.unpublish === true
-              ? Option.match(builds, {
-                  onNone: () =>
-                    Effect.logWarning(
-                      `delete ${checkpoint.name}: host ${config.id} has no builds setting, so what it published stays in the build store`
-                    ),
-                  onSome: (store) => unpublish(store, checkpoint.name),
-                })
+              ? runtime.builds.unpublish(checkpoint.name)
               : Effect.void;
 
           return Effect.andThen(unpublished, checkpointDeleted(checkpoint));
@@ -1067,10 +1021,9 @@ export const make = (
         }
 
         case "publish": {
-          return withBuilds(`publish ${step.checkpoint.name}`, (store, local) =>
-            Effect.flatMap(checkpointTarget(step.checkpoint), (checkpoint) =>
-              publish(store, local, checkpoint)
-            )
+          return Effect.flatMap(
+            checkpointTarget(step.checkpoint),
+            runtime.builds.publish
           );
         }
 
@@ -1078,13 +1031,11 @@ export const make = (
           const { checkpoint, from, build } = step;
 
           return Effect.tapError(
-            withBuilds(`fetch build ${build}`, (store, local) =>
-              Effect.map(
-                fetch(store, local, checkpoint, from, build),
-                (handle) => {
-                  progress.outcome = { ...progress.outcome, handle };
-                }
-              )
+            Effect.map(
+              runtime.builds.fetch(checkpoint, from, build),
+              (handle) => {
+                progress.outcome = { ...progress.outcome, handle };
+              }
             ),
             () => cleared
           );
@@ -1493,8 +1444,5 @@ export const make = (
 
 export const layer = (
   config: Settings
-): Layer.Layer<
-  Operations,
-  never,
-  Runtime | Reaches | FileSystem.FileSystem | Path.Path
-> => Layer.effect(Operations, make(config));
+): Layer.Layer<Operations, never, Runtime | Reaches> =>
+  Layer.effect(Operations, make(config));

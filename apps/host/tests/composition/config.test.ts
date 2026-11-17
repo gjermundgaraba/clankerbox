@@ -498,19 +498,43 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a builds endpoint with credentials in it is Invalid, and one without is kept",
+    "a builds setting is smolvm's or Tart's, under its runtime, and one whose endpoint holds credentials, at the top, or under boat or smol cloud is Invalid",
     () =>
       Effect.gen(function* () {
-        const builds = {
+        const credentials = {
           bucket: "builds",
           region: "us-east-1",
           accessKeyId: "id",
           secretAccessKey: "secret",
         };
 
+        const builds = { ...credentials, endpoint: "http://127.0.0.1:8333" };
+
+        for (const host of [
+          {
+            ...config,
+            runtime: { smolvm: { ...config.runtime.smolvm, builds } },
+          },
+          { ...mac, runtime: { tart: { ...mac.runtime.tart, builds } } },
+        ]) {
+          const { loaded } = yield* load(host);
+
+          expect(yield* loaded).toMatchObject({
+            runtime: { settings: { builds: { endpoint: builds.endpoint } } },
+          });
+        }
+
         const { loaded } = yield* load({
           ...config,
-          builds: { ...builds, endpoint: "http://id:secret@127.0.0.1:8333" },
+          runtime: {
+            smolvm: {
+              ...config.runtime.smolvm,
+              builds: {
+                ...credentials,
+                endpoint: "http://id:secret@127.0.0.1:8333",
+              },
+            },
+          },
         });
 
         const error = yield* Effect.flip(loaded);
@@ -520,14 +544,22 @@ layer(NodeServices.layer)((it) => {
           "an http(s) URL with no path and no credentials"
         );
 
-        const kept = yield* load({
-          ...config,
-          builds: { ...builds, endpoint: "http://127.0.0.1:8333" },
-        });
+        for (const host of [
+          { ...config, builds },
+          {
+            ...config,
+            runtime: { boat: { apiKeyFile: "/etc/boat.key", builds } },
+          },
+          {
+            ...config,
+            runtime: { "smol-cloud": { apiKeyFile: "/etc/smol.key", builds } },
+          },
+        ]) {
+          const refused = yield* Effect.flip((yield* load(host)).loaded);
 
-        expect(yield* kept.loaded).toMatchObject({
-          builds: { endpoint: "http://127.0.0.1:8333" },
-        });
+          expect(refused._tag, JSON.stringify(host)).toBe("Invalid");
+          expect(refused.message).toContain("builds");
+        }
       })
   );
 

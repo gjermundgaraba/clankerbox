@@ -10,7 +10,6 @@ import { Address } from "@gjermundgaraba/clankerbox-sdk/node";
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
 
 import { Box } from "../box.ts";
-import { BuildsSettings } from "../platform/s3.ts";
 import { TailnetSettings } from "../platform/tailscale.ts";
 import { defaultMachinePorts } from "../settings.ts";
 import type { HostSettings } from "../settings.ts";
@@ -37,7 +36,6 @@ const common = {
   ),
   machinePorts: Schema.optionalKey(MachinePorts),
   tailnet: Schema.optionalKey(TailnetSettings),
-  builds: Schema.optionalKey(BuildsSettings),
 };
 
 const HostConfigFile = Schema.Struct({
@@ -48,7 +46,7 @@ const HostConfigFile = Schema.Struct({
 type HostConfigFile = typeof HostConfigFile.Type;
 
 export interface HostConfig
-  extends HostSettings, Pick<HostConfigFile, "tailnet" | "builds"> {
+  extends HostSettings, Pick<HostConfigFile, "tailnet"> {
   readonly runtime: ChosenRuntime;
 }
 

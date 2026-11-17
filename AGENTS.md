@@ -127,8 +127,6 @@ imports `platform/` or `composition/`.
   delete runs first, each a script `exec.ts` runs in the guest.
 - `usage.ts`: the machines in use, and the RAM a runtime holds beside them, for the RAM budget and capacity.
 - `settings.ts`: what a host runs on, and the port ranges it keeps.
-- `builds.ts`: `publish`, `fetch` and `unpublish` of a checkpoint through the
-  `BuildStore` port, objects by key and a manifest per build, written last.
 - `reach.ts`: the `Reaches` service. It claims a make's port, answers the
   endpoint a client reaches it at, and has a `published` runtime bind it, after
   a probe finds it free. A `relayed` runtime's port it binds as it claims it, so
@@ -140,15 +138,15 @@ imports `platform/` or `composition/`.
 - Ports: `Runtime` (`runtime.ts`), with its `traits`, its `guest` (`debian` or
   `macos`, which picks the base `guest.ts` prepares), its `reach` (`published` or `relayed`)
   its `prepares` (`always` where its images lack the login user, else
-  `with-setup`), and the facets `admission`, `files` and `owned`, each present or
-  absent as a whole,
+  `with-setup`), its `builds`, how it shares template builds with the other hosts
+  of its runtime, which it keeps itself, as `unshared` where it shares none, and
+  the facets `admission` and `owned`, each present or absent as a whole,
   `PortProbe` (`machine-ports.ts`), for a `published` runtime's port, at a make's
   claim and at each boot its admission admits (`checkPort`), `Box` (`box.ts`), what the box tells a host
   beside its config: its uid, whether a process has ended, and its ephemeral
   ports, `Relays` (`reach.ts`), `Tailnet`
   (`tailnet.ts`), which mints a machine's tailnet key, provided only on a host
-  that joins a tailnet, and `BuildStore` (`builds.ts`), provided only on a host
-  with a `builds` setting. Each `Runtime` method that acts on a machine or
+  that joins a tailnet. Each `Runtime` method that acts on a machine or
   checkpoint already made takes a `Target`, the runtime's own opaque `Handle`
   beside the name and instance. `find` answers the handle for a machine's
   instance while the runtime keeps anything of it, also of one a delete removed
@@ -168,8 +166,11 @@ imports `platform/` or `composition/`.
 Adapters live in `platform/`: `bind-probe.ts` (`PortProbe`), `box.ts` (`Box`,
 which reads Linux's `ip_local_port_range`), `relay.ts`
 (`Relays`, a TCP listener bound at the claim, which closes each connection until
-it carries them through the machine's dial), `tailscale.ts` (`Tailnet`, over Tailscale's API), `s3.ts` (`BuildStore`,
-over S3, path-style and signed), the runtimes `smolvm/` (the lock that keeps
+it carries them through the machine's dial), `tailscale.ts` (`Tailnet`, over Tailscale's API), `bucket/`, the `builds`
+smolvm and Tart share through a bucket their runtime's settings name (`publish`,
+`fetch` and `unpublish` of a checkpoint's files in `builds.ts`, objects by key
+and a manifest per build, written last, and its `Store` over S3, path-style and
+signed, in `s3.ts`), the runtimes `smolvm/` (the lock that keeps
 a box to one smolvm host in `one-per-box.ts`), `tart/` (the Tart home's VM
 directories in `home.ts`, a VM's lock read through macOS's Perl in `locks.ts`,
 `launchctl print` read in `launchd.ts`, the `tart run` processes `ps` shows in
@@ -202,7 +203,7 @@ accounts. A domain file never imports `platform/` or `composition/`.
 `runtimes.ts` is the registry of runtimes, one entry each under the name a host
 config's `runtime` gives it, with its settings and its Layer, `routes.ts` serves the host contract, and `host.ts` builds the
 host over a runtime Layer and a server Layer it is given, with the config's
-tailnet and build store, if any. Its `hostServer` is the Node server a host
+tailnet, if any. Its `hostServer` is the Node server a host
 listens on, the entry's and the tests' alike, and answers 503 at once to a
 request no route takes, as one that comes while the host stops. It closes every
 connection it still holds as it closes, which the stop does once each request it
@@ -430,8 +431,8 @@ the run.
   host package; the server's only adapter is the `Store`, and a host's adapters
   can't import `node:sqlite`; a host adapter imports domain files, its own
   folder, `platform/`'s `process.ts` and the host contract's `./traits`, never
-  its API, and the boat and smol cloud clients
-  `provider-http.ts` too; the host contract
+  its API, the boat and smol cloud clients
+  `provider-http.ts` too, and smolvm and Tart `bucket/`; the host contract
   imports `effect`, the SDK and effect-actions, but for `journal.ts`, which
   imports `effect` and its `http` alone, and the server's `composition/` takes
   only its journal; an app command imports only

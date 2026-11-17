@@ -13,23 +13,30 @@ import { gzipSync } from "node:zlib";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { Context, Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import { expect } from "vite-plus/test";
 
-import { fetch, pieceBytes, publish } from "../src/builds.ts";
-import { PortProbe } from "../src/machine-ports.ts";
+import { PortProbe } from "../../../src/machine-ports.ts";
+import {
+  fetch,
+  pieceBytes,
+  publish,
+} from "../../../src/platform/bucket/builds.ts";
+import type {
+  CheckpointFiles,
+  Store,
+} from "../../../src/platform/bucket/builds.ts";
 import {
   make,
   minimumVersion,
   nativeName,
   templates,
-} from "../src/platform/smolvm/smolvm.ts";
-import { Runtime } from "../src/runtime.ts";
-import type { Identity } from "../src/runtime.ts";
-import type { FakeRuntimeName } from "./fake-runtime.ts";
-import { fakeRuntime } from "./fake-runtime.ts";
-import { scripted } from "./scripted.ts";
-import { filesOf, memoryBuildStore } from "./support.ts";
+} from "../../../src/platform/smolvm/smolvm.ts";
+import type { Identity } from "../../../src/runtime.ts";
+import type { FakeRuntimeName } from "../../fake-runtime.ts";
+import { fakeRuntime } from "../../fake-runtime.ts";
+import { scripted } from "../../scripted.ts";
+import { memoryBuildStore } from "../../support.ts";
 
 const Written = Schema.fromJsonString(
   Schema.Struct({
@@ -50,13 +57,13 @@ const encoder = new TextEncoder();
 
 const decoder = new TextDecoder();
 
-const runtimeIn = (dir: string, faked: FakeRuntimeName) =>
-  Effect.map(
-    Layer.build(fakeRuntime({ dir, as: faked }).layer),
-    Context.get(Runtime)
-  );
+const filesIn = (dir: string, faked: FakeRuntimeName) => {
+  const fake = fakeRuntime({ dir, as: faked });
 
-const smolvmIn = (stateDir: string) => {
+  return Effect.as(Layer.build(fake.layer), fake.files);
+};
+
+const smolvmIn = (stateDir: string, bucket: Store) => {
   const prefix = path.join(stateDir, "smolvm");
 
   mkdirSync(prefix, { recursive: true });
@@ -79,6 +86,7 @@ const smolvmIn = (stateDir: string) => {
       stateDir,
       arch: "x64",
       bootId: "b00710ad",
+      bucket,
     },
     { uid: 0, ended: () => Effect.succeed(true) }
   ).pipe(
@@ -101,12 +109,11 @@ const checkpointRef = (instance: string) => ({
 });
 
 const planted = (
-  runtime: Runtime["Service"],
+  files: CheckpointFiles,
   checkpoint: Identity,
   contents: ReadonlyMap<string, string | Uint8Array>
 ) =>
   Effect.gen(function* () {
-    const files = yield* Effect.fromNullishOr(runtime.files);
     const staged = files.staging(checkpoint);
 
     for (const [name, content] of contents) {
@@ -132,17 +139,17 @@ const published = (
 ) =>
   Effect.gen(function* () {
     const root = yield* scratch;
-    const from = yield* runtimeIn(path.join(root, "from"), faked);
+    const from = yield* filesIn(path.join(root, "from"), faked);
     const memory = memoryBuildStore();
 
     yield* publish(
       memory.store,
-      yield* filesOf(from),
+      from,
       yield* planted(from, checkpointRef("built"), contents)
     );
 
     const to = path.join(root, "to");
-    const runtime = yield* runtimeIn(to, faked);
+    const local = yield* filesIn(to, faked);
 
     const manifest = () =>
       Schema.decodeSync(Written)(
@@ -164,7 +171,7 @@ const published = (
 
     const fetched = fetch(
       memory.store,
-      yield* filesOf(runtime),
+      local,
       checkpointRef("fetched"),
       "built",
       "web@1"
@@ -418,16 +425,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           writeFileSync(target, content);
         }
 
-        yield* publish(memory.store, yield* filesOf(yield* smolvmIn(from)), {
+        yield* (yield* smolvmIn(from, memory.store)).builds.publish({
           ...built,
           handle: nativeName(built),
         });
 
         const to = path.join(root, "to");
 
-        yield* fetch(
-          memory.store,
-          yield* filesOf(yield* smolvmIn(to)),
+        yield* (yield* smolvmIn(to, memory.store)).builds.fetch(
           fetchedRef,
           "built",
           "web@1"

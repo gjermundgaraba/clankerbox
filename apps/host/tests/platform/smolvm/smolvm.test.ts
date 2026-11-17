@@ -33,7 +33,6 @@ import { TestClock } from "effect/testing";
 import { expect } from "vite-plus/test";
 
 import type { Facts } from "../../../src/box.ts";
-import { fetch, publish } from "../../../src/builds.ts";
 import { runCommand } from "../../../src/exec.ts";
 import { PortProbe } from "../../../src/machine-ports.ts";
 import type { Probe } from "../../../src/machine-ports.ts";
@@ -66,12 +65,7 @@ import type {
 import { scripted as scriptedSpawner } from "../../scripted.ts";
 import type { Call, Reply } from "../../scripted.ts";
 import { prepared, smolvmModel } from "../../smolvm-model.ts";
-import {
-  admitOn,
-  eventually,
-  filesOf,
-  memoryBuildStore,
-} from "../../support.ts";
+import { admitOn, eventually, memoryBuildStore } from "../../support.ts";
 
 const failure = (error: HostError) => [error._tag, error.message];
 
@@ -2554,39 +2548,35 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "an install of a build's copy parks its base before it returns, and one whose park fails is installed all the same and logs why",
+    "a fetch of a build's copy parks its base before it returns, and one whose park fails is installed all the same and logs why",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const settings = yield* prepared();
         const model = smolvmModel();
-        const runtime = yield* runtimeOf(settings, model.spawner);
-        const files = runtime.files ?? (yield* Effect.die("smolvm has files"));
+
+        const runtime = yield* runtimeOf(
+          { ...settings, bucket: memoryBuildStore().store },
+          model.spawner
+        );
+
         const logged: unknown[] = [];
         const store = path.join(settings.stateDir, "checkpoints");
         const fetched = { ...buildRef, name: "fetched-fedcba9876543210" };
         const failing = { ...buildRef, name: "fetched-0123456789abcdef" };
 
-        const staged = (checkpoint: Identity) =>
-          Effect.as(
-            fs.copy(
-              path.join(store, `${nativeName(buildRef)}.checkpoint`),
-              files.staging(checkpoint)
-            ),
-            files.staging(checkpoint)
-          );
-
         building(model);
         yield* runtime.capture(builderRef, buildRef);
-        yield* files.install(fetched, yield* staged(fetched));
+        yield* runtime.builds.publish(buildRef);
+        yield* runtime.builds.fetch(fetched, buildRef.name, "web@1");
 
         const parked = model.vms.get(baseOf(fetched))?.state;
 
         model.faults.reply = ({ args }) =>
           args[1] === "create" ? locked : undefined;
 
-        yield* files
-          .install(failing, yield* staged(failing))
+        yield* runtime.builds
+          .fetch(failing, buildRef.name, "web@1")
           .pipe(Effect.provide(logging(logged)));
 
         expect(parked).toBe("frozen");
@@ -2602,6 +2592,7 @@ layer(NodeServices.layer)((it) => {
           [
             `park build ${failing.name}: smolvm machine create ${baseOf(failing)} exited 1: Error: database is locked`,
           ],
+          [expect.stringMatching(/^fetch web@1 downloaded /u)],
         ]);
       })
   );
@@ -2611,20 +2602,29 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const { store } = memoryBuildStore();
+        const { store: bucket } = memoryBuildStore();
         const source = smolvmModel();
         const other = smolvmModel();
         const fetched = { ...buildRef, name: "fetched-fedcba9876543210" };
         const base = baseOf(fetched, "5bfae059");
-        const settings = { ...(yield* prepared()), bootId: "5bfae059" };
-        const builds = yield* runtimeOf(yield* prepared(), source.spawner);
+
+        const settings = {
+          ...(yield* prepared()),
+          bootId: "5bfae059",
+          bucket,
+        };
+
+        const builds = yield* runtimeOf(
+          { ...(yield* prepared()), bucket },
+          source.spawner
+        );
+
         const fetches = yield* runtimeOf(settings, other.spawner);
-        const files = yield* filesOf(fetches);
         let hung = false;
 
         building(source);
         yield* builds.capture(builderRef, buildRef);
-        yield* publish(store, yield* filesOf(builds), buildRef);
+        yield* builds.builds.publish(buildRef);
 
         other.faults.reply = ({ args }) => {
           if (args[1] !== "create" || !args.includes(base)) {
@@ -2637,7 +2637,7 @@ layer(NodeServices.layer)((it) => {
         };
 
         const fetching = yield* Effect.forkChild(
-          fetch(store, files, fetched, buildRef.name, "web@1")
+          fetches.builds.fetch(fetched, buildRef.name, "web@1")
         );
 
         yield* waitFor(
@@ -2654,7 +2654,13 @@ layer(NodeServices.layer)((it) => {
               `${nativeName(fetched)}.checkpoint`
             )
           ),
-          staging: yield* fs.exists(files.staging(fetched)),
+          staging: yield* fs.exists(
+            path.join(
+              settings.stateDir,
+              "checkpoints",
+              `${nativeName(fetched)}.fetching`
+            )
+          ),
         }).toStrictEqual({ installed: true, staging: false });
       })
   );
@@ -3629,22 +3635,30 @@ layer(NodeServices.layer)((it) => {
     "a host that fetches a build's copy parks its base before the fetch ends, so its first restore branches, and parks one again when it starts",
     () =>
       Effect.gen(function* () {
-        const { store } = memoryBuildStore();
+        const { store: bucket } = memoryBuildStore();
         const source = smolvmModel();
         const other = smolvmModel();
         const fetched = { ...buildRef, name: "fetched-fedcba9876543210" };
         const child = childOf("web-1");
-        const settings = { ...(yield* prepared()), bootId: "5bfae059" };
-        const builds = yield* runtimeOf(yield* prepared(), source.spawner);
+
+        const settings = {
+          ...(yield* prepared()),
+          bootId: "5bfae059",
+          bucket,
+        };
+
+        const builds = yield* runtimeOf(
+          { ...(yield* prepared()), bucket },
+          source.spawner
+        );
+
         const fetches = yield* runtimeOf(settings, other.spawner);
 
         building(source);
         yield* builds.capture(builderRef, buildRef);
-        yield* publish(store, yield* filesOf(builds), buildRef);
+        yield* builds.builds.publish(buildRef);
 
-        const handle = yield* fetch(
-          store,
-          yield* filesOf(fetches),
+        const handle = yield* fetches.builds.fetch(
           fetched,
           buildRef.name,
           "web@1"

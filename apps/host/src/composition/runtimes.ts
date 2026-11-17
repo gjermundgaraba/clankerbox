@@ -1,5 +1,5 @@
 import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
-import type { FileSystem, Layer, Schema } from "effect";
+import type { FileSystem, Layer, Path, Schema } from "effect";
 import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 
@@ -17,6 +17,7 @@ type RuntimeLayer = Layer.Layer<
   HostError | CannotStart,
   | ChildProcessSpawner.ChildProcessSpawner
   | FileSystem.FileSystem
+  | Path.Path
   | HttpClient.HttpClient
   | Box
   | PortProbe

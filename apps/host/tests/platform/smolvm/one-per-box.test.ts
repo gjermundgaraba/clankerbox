@@ -10,6 +10,7 @@ import * as BindProbe from "../../../src/platform/bind-probe.ts";
 import * as NodeBox from "../../../src/platform/box.ts";
 import { aloneOnBox } from "../../../src/platform/smolvm/one-per-box.ts";
 import { layer as smolvmLayer } from "../../../src/platform/smolvm/smolvm.ts";
+import { noHttp } from "../../support.ts";
 
 const started = (lock: string) =>
   Effect.scoped(
@@ -23,7 +24,9 @@ const started = (lock: string) =>
         lock
       )
     )
-  ).pipe(Effect.provide(Layer.merge(NodeBox.layer, BindProbe.layer)));
+  ).pipe(
+    Effect.provide(Layer.mergeAll(NodeBox.layer, BindProbe.layer, noHttp))
+  );
 
 const connected = (lock: string) =>
   Effect.acquireRelease(

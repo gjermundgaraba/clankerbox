@@ -31,6 +31,11 @@ const providerClients = [
   "apps/host/src/platform/smol-cloud/*.ts",
 ];
 
+const bucketRuntimes = [
+  "apps/host/src/platform/smolvm/*.ts",
+  "apps/host/src/platform/tart/*.ts",
+];
+
 export default config({
   jsPlugins: [{ name: "fence", specifier: "./tools/lint-fence/src/index.ts" }],
   testBlocks: ["it", "it.effect", "it.live", "it.prop", "it.effect.prop"],
@@ -218,7 +223,7 @@ export default config({
       },
     },
     {
-      excludeFiles: providerClients,
+      excludeFiles: [...providerClients, ...bucketRuntimes],
       files: ["apps/host/src/platform/*/*.ts"],
       rules: {
         "fence/allowed-imports": [
@@ -249,6 +254,25 @@ export default config({
             ],
             because:
               "a provider's client imports the domain files, platform's shared process.ts, the rules provider-http.ts holds for a provider's HTTP API, and its own subfolder; never composition/ or another adapter",
+          },
+        ],
+      },
+    },
+    {
+      files: bucketRuntimes,
+      rules: {
+        "fence/allowed-imports": [
+          "error",
+          {
+            allow: [
+              "^\\./[a-z-]+\\.ts$",
+              "^\\.\\./process\\.ts$",
+              "^\\.\\./bucket/(builds|s3)\\.ts$",
+              "^\\.\\./\\.\\./[a-z-]+\\.ts$",
+              ...adapterPackages,
+            ],
+            because:
+              "a runtime whose checkpoints are files imports the domain files, platform's shared process.ts, the bucket it shares template builds through, and its own subfolder; never composition/ or another adapter",
           },
         ],
       },

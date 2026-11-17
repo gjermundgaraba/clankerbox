@@ -1651,7 +1651,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a fetch cut short after its install ends cancelled, keeps the checkpoint it installed, and leaves no staging folder",
     () =>
       Effect.gen(function* () {
-        const host = yield* runner({ builds: memoryBuildStore().layer });
+        const host = yield* runner({ builds: memoryBuildStore().store });
 
         yield* finished(host, makes("dev"));
         yield* finished(host, capturingSnap);
@@ -1693,7 +1693,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const logged: string[] = [];
 
       return Effect.gen(function* () {
-        const { layer: builds, objects } = memoryBuildStore();
+        const { store: builds, objects } = memoryBuildStore();
         const host = yield* runner({ builds });
 
         yield* finished(host, makes("dev"));
