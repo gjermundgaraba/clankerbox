@@ -947,7 +947,6 @@ export const make = (
       version: reported,
       pin: undefined,
       prepares: "with-setup",
-      owned: undefined,
       reach: {
         _tag: "relayed",
         address: settings.publishAddress,
@@ -1056,7 +1055,9 @@ export const make = (
       ),
       stop: Effect.fn("Tart.stop")(stop),
       pause: Effect.fn("Tart.pause")(suspend),
-      delete: Effect.fn("Tart.delete")((machine) => removed(machine.handle)),
+      delete: Effect.fn("Tart.delete")((machine) =>
+        machine.handle === undefined ? Effect.void : removed(machine.handle)
+      ),
       capture: Effect.fn("Tart.capture")((machine, checkpoint) => {
         const handle = checkpointVm(checkpoint);
 

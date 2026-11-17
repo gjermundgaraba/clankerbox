@@ -6,11 +6,12 @@ import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it } from "@effect/vitest";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import type { Duration } from "effect";
 import {
   Cause,
   Context,
+  Duration,
   Effect,
+  FileSystem,
   Exit,
   Fiber,
   Layer,
@@ -29,6 +30,7 @@ import { Operations } from "../../src/operations.ts";
 import { Unanswered } from "../../src/platform/provider-http.ts";
 import * as Api from "../../src/platform/smol-cloud/api.ts";
 import * as SmolCloud from "../../src/platform/smol-cloud/smol-cloud.ts";
+import { SweepEvery } from "../../src/platform/tombstones.ts";
 import { Handle, Runtime } from "../../src/runtime.ts";
 import type { Interface, Target } from "../../src/runtime.ts";
 import { Tailnet } from "../../src/tailnet.ts";
@@ -96,6 +98,8 @@ const unmarkedIn = (fake: FakeSmolCloud) =>
 
     await posted(`${fake.url}/v1/machines/${id}/start`);
     await posted(`${fake.url}/v1/machines/${id}/checkpoints?wait=true`);
+
+    return Effect.sync(() => fake.machines.has(id));
   });
 
 runtimeContract({
@@ -110,7 +114,11 @@ runtimeContract({
       SmolCloud.layer(
         settings,
         hostConfig(path.join(dir, "state"), undefined, hostId)
-      ).pipe(Layer.provide(http.layer), Layer.provide(NodeServices.layer))
+      ).pipe(
+        Layer.provide(http.layer),
+        Layer.provide(NodeServices.layer),
+        Layer.provide(Layer.succeed(SweepEvery, Duration.millis(100)))
+      )
     );
 
     return {
@@ -120,6 +128,11 @@ runtimeContract({
     };
   }).pipe(provided, Effect.orDie),
 });
+
+const markedAt = (fake: FakeSmolCloud) =>
+  Effect.flatMap(Api.make(fake.url, Redacted.make(key)), (api) =>
+    SmolCloud.marked(api, hostId)
+  ).pipe(Effect.provide(NodeHttpClient.layerNodeHttp));
 
 const onHost = (
   tailnet: Layer.Layer<Tailnet> | Layer.Layer<never> = Layer.empty
@@ -351,40 +364,11 @@ describe("the smol cloud runtime on its host", () => {
   );
 
   it.live(
-    "a sweep deletes a retired machine and spares the rest, the checkpoints it held included",
+    "a machine restored from a template's copy is found and listed by its name",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { runtime, operations, fake } = yield* onHost();
-          const dev = yield* made(runtime, "dev");
-          const kept = yield* made(runtime, "kept");
-
-          const snap = yield* runtime.capture(dev, {
-            name: "snap",
-            instance: "snap-1",
-          });
-
-          const held = yield* runtime.capture(kept, {
-            name: "held",
-            instance: "held-1",
-          });
-
-          yield* operations.sweep({ machines: [dev.instance] });
-
-          expect([...fake.machines.keys()]).toStrictEqual([kept.handle]);
-          expect(new Set(fake.checkpoints.keys())).toStrictEqual(
-            new Set([snap, held])
-          );
-        })
-      )
-  );
-
-  it.live(
-    "a machine restored from a template's copy is found and swept by its name",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { runtime, operations, fake } = yield* onHost();
+          const { runtime, fake } = yield* onHost();
           const builder = yield* made(runtime, "builder");
 
           const copy = yield* runtime.capture(builder, {
@@ -405,12 +389,19 @@ describe("the smol cloud runtime on its host", () => {
 
           const found = yield* runtime.find(fast);
 
+          const listed = yield* markedAt(fake);
+
           expect(found).toBeDefined();
-
-          yield* operations.sweep({ machines: [fast.instance] });
-
-          expect([...fake.machines.keys()]).toStrictEqual([builder.handle]);
-          expect(fake.checkpoints.has(copy)).toBe(true);
+          expect(
+            listed
+              .map(({ instance, handle }) => [instance, handle])
+              .toSorted(([a = ""], [b = ""]) => a.localeCompare(b))
+          ).toStrictEqual(
+            [
+              [builder.instance, builder.handle],
+              [fast.instance, found],
+            ].toSorted(([a = ""], [b = ""]) => a.localeCompare(b))
+          );
         })
       )
   );
@@ -733,11 +724,6 @@ describe("the smol cloud runtime on its host", () => {
   );
 });
 
-const ownedBy = (runtime: Interface) =>
-  runtime.owned === undefined
-    ? Effect.die("the smol cloud runtime lists the machines it owns")
-    : runtime.owned.machines;
-
 const onCloud = Effect.gen(function* () {
   const { dir, fake, settings } = yield* provider;
 
@@ -822,10 +808,15 @@ describe("the smol cloud runtime over an account without a card", () => {
 
           yield* fake.malformedMachine("someone-elses");
 
-          const listed = yield* Effect.andThen(
-            ownedBy(runtime),
-            ownedBy(runtime)
-          ).pipe(Effect.provide(Logger.layer([capturing(lines)])));
+          const api = yield* Api.make(fake.url, Redacted.make(key)).pipe(
+            Effect.provide(NodeHttpClient.layerNodeHttp)
+          );
+
+          const listedOnce = SmolCloud.marked(api, hostId);
+
+          const listed = yield* Effect.andThen(listedOnce, listedOnce).pipe(
+            Effect.provide(Logger.layer([capturing(lines)]))
+          );
 
           expect(listed.map(({ handle }) => handle)).toStrictEqual([
             dev.handle,
@@ -838,7 +829,7 @@ describe("the smol cloud runtime over an account without a card", () => {
 
           yield* fake.malformedMachine(`cbx-${hostId}-${"ab".repeat(16)}`);
 
-          expect((yield* Effect.flip(ownedBy(runtime))).message).toContain(
+          expect((yield* Effect.flip(markedAt(fake))).message).toContain(
             `cbx-${hostId}-${"ab".repeat(16)}`
           );
         })
@@ -1395,6 +1386,13 @@ const scripted = (
   );
 };
 
+const unwritten = FileSystem.layerNoop({
+  exists: () => Effect.succeed(false),
+  makeDirectory: () => Effect.void,
+  writeFileString: () => Effect.void,
+  rename: () => Effect.void,
+});
+
 const scriptedRuntime = (client: HttpClient.HttpClient) =>
   Effect.gen(function* () {
     const api = yield* Api.make("https://smol.test", Redacted.make(key)).pipe(
@@ -1409,7 +1407,7 @@ const scriptedRuntime = (client: HttpClient.HttpClient) =>
         throw new Error("no tunnel in a scripted provider");
       }
     );
-  });
+  }).pipe(Effect.provide(unwritten));
 
 const scriptedMake = (busy: number, state = "starting") =>
   Effect.gen(function* () {

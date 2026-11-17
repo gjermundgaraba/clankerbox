@@ -1,12 +1,11 @@
-import type { Adopted, Retired } from "@clankerbox/host-contract";
-import { readTimeout } from "@gjermundgaraba/clankerbox-sdk";
+import type { Adopted } from "@clankerbox/host-contract";
 import type {
   Internal,
   Unreported,
   Usage,
 } from "@gjermundgaraba/clankerbox-sdk";
-import type { Scope } from "effect";
-import { Cause, DateTime, Duration, Effect, FiberMap, Option } from "effect";
+import { Cause, DateTime, Effect, Option } from "effect";
+import type { Duration } from "effect";
 
 import { applied } from "./chart.ts";
 import { unread } from "./hosts.ts";
@@ -134,116 +133,29 @@ const adopted = (store: Store, hosts: Hosts, host: string, boot: string) =>
     }
   });
 
-/**
- * How long a store names an instance it retired, from the first sweep that reached its host and left
- * nothing of it. A make that lands at its provider later than this is left there.
- */
-export const retiredLast = Duration.days(1);
-
-const swept = (
-  store: Store,
-  hosts: Hosts,
-  host: string,
-  sweeps: Duration.Duration | undefined
-) =>
-  Effect.gen(function* () {
-    const retired = yield* store.retired(host);
-
-    if (retired.machines.length === 0) {
-      return;
-    }
-
-    const left =
-      sweeps === undefined
-        ? Option.some<Retired>({ machines: [] })
-        : yield* hosts
-            .call(
-              host,
-              (api) => api.sweepRetired(retired),
-              Duration.sum(sweeps, readTimeout)
-            )
-            .pipe(
-              Effect.asSome,
-              Effect.catch(({ message }) =>
-                Effect.as(
-                  Effect.logWarning(
-                    `host ${host} couldn't sweep what the store retired, so the next recheck tries again: ${message}`
-                  ),
-                  Option.none<Retired>()
-                )
-              )
-            );
-
-    if (Option.isSome(left)) {
-      const kept = new Set(left.value.machines);
-
-      yield* store.told(
-        host,
-        {
-          gone: {
-            machines: retired.machines.filter(
-              (instance) => !kept.has(instance)
-            ),
-          },
-          left: left.value,
-        },
-        yield* DateTime.now
-      );
-    }
-  });
-
-/**
- * The recheck, a tick at a time: it gives each restarted host its machines, starts a sweep of what
- * the store retired on each host whose last sweep has ended, and ends old failures. A sweep waits as
- * long as its host says one takes, so it runs on beside the ticks after it.
- */
+/** A tick of the recheck: it gives each restarted host its machines, and ends old failures. */
 export const recheckHosts = (
   store: Store,
   hosts: Hosts,
   failedRowsLast: Duration.Duration
-): Effect.Effect<{ readonly tick: Effect.Effect<void> }, never, Scope.Scope> =>
+): Effect.Effect<void> =>
   Effect.gen(function* () {
-    const sweeping = yield* FiberMap.make<string>();
+    const reached = yield* hosts.reachAll;
 
-    const sweep = (host: string, sweeps: Duration.Duration | undefined) =>
-      FiberMap.run(sweeping, host, { onlyIfMissing: true })(
-        swept(store, hosts, host, sweeps).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logError(
-              `the sweep of host ${host} failed:\n${Cause.pretty(cause)}`
-            )
-          )
-        )
-      );
-
-    const tick = Effect.gen(function* () {
-      const reached = yield* hosts.reachAll;
-
-      yield* Effect.forEach(
-        reached,
-        ({ member, info }) =>
-          info === undefined
-            ? Effect.void
-            : adopted(store, hosts, member.id, info.boot),
-        { discard: true }
-      );
-
-      yield* Effect.forEach(
-        reached,
-        ({ member, info }) =>
-          info === undefined ? Effect.void : sweep(member.id, info.sweeps),
-        { discard: true }
-      );
-
-      const now = yield* DateTime.now;
-
-      yield* store.expire(DateTime.subtractDuration(now, failedRowsLast));
-      yield* store.forgetRetired(DateTime.subtractDuration(now, retiredLast));
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logError(`the recheck failed:\n${Cause.pretty(cause)}`)
-      )
+    yield* Effect.forEach(
+      reached,
+      ({ member, info }) =>
+        info === undefined
+          ? Effect.void
+          : adopted(store, hosts, member.id, info.boot),
+      { discard: true }
     );
 
-    return { tick };
-  });
+    const now = yield* DateTime.now;
+
+    yield* store.expire(DateTime.subtractDuration(now, failedRowsLast));
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logError(`the recheck failed:\n${Cause.pretty(cause)}`)
+    )
+  );

@@ -23,7 +23,7 @@ import {
   Schema,
   Stream,
 } from "effect";
-import type { FileSystem } from "effect";
+import type { FileSystem, Scope } from "effect";
 import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 
@@ -40,7 +40,6 @@ import type {
   Identity,
   Interface,
   MachineState,
-  MarkedMachine,
   Observed,
   Origin,
   Target,
@@ -51,10 +50,11 @@ import {
   apiKey,
   bounded,
   sentUntilHeld,
-  stepWithin,
   triesAfterLoss,
   untilRest,
 } from "../provider-http.ts";
+import * as Tombstones from "../tombstones.ts";
+import type { Marked } from "../tombstones.ts";
 import * as Api from "./api.ts";
 import type { ApiError, ListedSnapshot, Sandbox, SshKey } from "./api.ts";
 import * as Ssh from "./ssh.ts";
@@ -307,6 +307,27 @@ const tcp =
       )
     );
 
+/** What carries host `id`'s mark at boat: each sandbox, with the snapshots it holds. */
+export const marked = (api: Api.Api, id: string) =>
+  Effect.gen(function* () {
+    const sandboxes = yield* api.sandboxes({ [hostLabel]: id });
+    const saved = yield* api.savedSnapshots(snapshotPrefix, snapshotMark);
+
+    return sandboxes.flatMap((sandbox): Marked[] => {
+      const instance = sandbox.labels?.[instanceLabel];
+
+      return instance === undefined
+        ? []
+        : [
+            {
+              instance,
+              handle: Handle.make(sandbox.id),
+              checkpoints: heldBy(saved, sandbox.id),
+            },
+          ];
+    });
+  }).pipe(Effect.mapError(internal("couldn't list what this host marked")));
+
 export const make = (
   settings: BoatSettings,
   host: Pick<HostSettings, "id" | "stateDir" | "listen">
@@ -316,6 +337,7 @@ export const make = (
   | ChildProcessSpawner.ChildProcessSpawner
   | FileSystem.FileSystem
   | HttpClient.HttpClient
+  | Scope.Scope
 > =>
   Effect.gen(function* () {
     const api = yield* Api.make(
@@ -500,24 +522,7 @@ export const make = (
         found.find((sandbox) => heldOf(sandbox) !== "cancelled")
       );
 
-    const markedMachines = Effect.gen(function* () {
-      const sandboxes = yield* api.sandboxes(mark);
-      const saved = yield* snapshots;
-
-      return sandboxes.flatMap((sandbox): MarkedMachine[] => {
-        const instance = sandbox.labels?.[instanceLabel];
-
-        return instance === undefined
-          ? []
-          : [
-              {
-                instance,
-                handle: Handle.make(sandbox.id),
-                checkpoints: heldBy(saved, sandbox.id),
-              },
-            ];
-      });
-    }).pipe(Effect.mapError(internal("couldn't list what this host marked")));
+    const markedMachines = marked(api, host.id);
 
     const prune = (machine: Target, keep: ReadonlySet<Handle>) =>
       Effect.gen(function* () {
@@ -570,6 +575,25 @@ export const make = (
             )
         )
       );
+
+    const deleted = (machine: Target, keep: ReadonlySet<Handle>) =>
+      Effect.gen(function* () {
+        yield* prune(machine, keep);
+        yield* api
+          .remove(machine.handle)
+          .pipe(Effect.mapError(internal(`couldn't delete ${machine.name}`)));
+        yield* toward(machine, "gone");
+        yield* prune(machine, keep);
+        pins.delete(machine.handle);
+      }).pipe(bounded("boat", `delete ${machine.name}`));
+
+    const tombstones = yield* Tombstones.make({
+      dir: `${host.stateDir}/boat`,
+      provider: "boat",
+      marked: markedMachines,
+      remove: ({ instance, handle, checkpoints }) =>
+        deleted({ name: instance, instance, handle }, new Set(checkpoints)),
+    });
 
     const retyped = (
       machine: Target,
@@ -676,7 +700,6 @@ export const make = (
       prepares: "always",
       admission: undefined,
       builds: unshared(traits.runtime),
-      owned: { machines: markedMachines, deleteWithin: stepWithin },
       reach: {
         _tag: "relayed",
         address: host.listen.address,
@@ -725,6 +748,8 @@ export const make = (
         ),
       make: (machine, origin) =>
         Effect.gen(function* () {
+          yield* tombstones.refuse(machine);
+
           const type = yield* typeFor(machine, machine.name);
           const labels = labelsOf(machine);
 
@@ -817,16 +842,13 @@ export const make = (
         bounded("boat", `stop ${machine.name}`)(stopped(machine)),
       pause: (machine) =>
         bounded("boat", `pause ${machine.name}`)(stopped(machine)),
-      delete: (machine, keep) =>
-        Effect.gen(function* () {
-          yield* prune(machine, keep);
-          yield* api
-            .remove(machine.handle)
-            .pipe(Effect.mapError(internal(`couldn't delete ${machine.name}`)));
-          yield* toward(machine, "gone");
-          yield* prune(machine, keep);
-          pins.delete(machine.handle);
-        }).pipe(bounded("boat", `delete ${machine.name}`)),
+      delete: ({ handle, ...machine }, keep) =>
+        Effect.andThen(
+          handle === undefined
+            ? Effect.void
+            : deleted({ ...machine, handle }, keep),
+          tombstones.bury(machine.instance)
+        ),
       capture: (machine, checkpoint) =>
         Effect.gen(function* () {
           const name = snapshotName(checkpoint);

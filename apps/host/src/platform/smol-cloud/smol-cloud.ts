@@ -52,10 +52,11 @@ import {
   bounded,
   providerErrors,
   sentUntilHeld,
-  stepWithin,
   triesAfterLoss,
   untilRest,
 } from "../provider-http.ts";
+import * as Tombstones from "../tombstones.ts";
+import type { Marked } from "../tombstones.ts";
 import * as Api from "./api.ts";
 import type { ApiError, MachineRecord, Refused } from "./api.ts";
 import { traits as traitsOf } from "./traits.ts";
@@ -281,12 +282,56 @@ const bodyLength = (body: Api.ExecBody) =>
 const stagedStdin = () =>
   `/dev/shm/clankerbox-stdin-${Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(8)))}`;
 
+const prefixOf = (id: string) => `cbx-${id}-`;
+
+const instanceIn = (id: string, name: string | null | undefined) => {
+  const prefix = prefixOf(id);
+
+  const rest =
+    name?.startsWith(prefix) === true ? name.slice(prefix.length) : "";
+
+  return isId(rest) ? rest : undefined;
+};
+
+const markedBy = (id: string) => (marks: Api.Marks) =>
+  instanceIn(id, marks.name) !== undefined;
+
+/** What carries host `id`'s mark at smol cloud: each machine, with the checkpoints it holds. */
+export const marked = (api: Api.Api, id: string) =>
+  Effect.gen(function* () {
+    const ours = (yield* api.machines(markedBy(id))).filter((found) =>
+      markedBy(id)(found)
+    );
+
+    const handles = new Set<string>(ours.map(({ id: handle }) => handle));
+
+    const checkpoints = yield* api.checkpoints(
+      ({ machineId }) => machineId !== undefined && handles.has(machineId)
+    );
+
+    return ours.flatMap((found): Marked[] => {
+      const instance = instanceIn(id, found.name);
+
+      return instance === undefined
+        ? []
+        : [
+            {
+              instance,
+              handle: found.id,
+              checkpoints: checkpoints
+                .filter(({ machineId }) => machineId === found.id)
+                .map(({ id: handle }) => handle),
+            },
+          ];
+    });
+  });
+
 export const make = (
   settings: SmolCloudSettings,
-  host: Pick<HostSettings, "id" | "listen">,
+  host: Pick<HostSettings, "id" | "stateDir" | "listen">,
   api: Api.Api,
   sockets: Socket.WebSocketConstructor["Service"]
-): Effect.Effect<Interface, Internal> =>
+): Effect.Effect<Interface, Internal, FileSystem.FileSystem | Scope.Scope> =>
   Effect.gen(function* () {
     const traits = traitsOf(
       perMachine(
@@ -297,20 +342,10 @@ export const make = (
       )
     );
 
-    const prefix = `cbx-${host.id}-`;
-    const nameOf = (instance: string) => `${prefix}${instance}`;
-
-    const instanceOf = (name: string | null | undefined) => {
-      const rest =
-        name?.startsWith(prefix) === true ? name.slice(prefix.length) : "";
-
-      return isId(rest) ? rest : undefined;
-    };
-
-    const markedMachine = (marks: Api.Marks) =>
-      instanceOf(marks.name) !== undefined;
-
+    const nameOf = (instance: string) => `${prefixOf(host.id)}${instance}`;
+    const markedMachine = markedBy(host.id);
     const listed = api.machines(markedMachine);
+    const prefix = prefixOf(host.id);
 
     const checkpointsOf = (handles: ReadonlySet<string>) =>
       api.checkpoints(
@@ -857,28 +892,29 @@ export const make = (
       return readings;
     });
 
-    const marked = Effect.gen(function* () {
-      const ours = (yield* listed).filter((found) => markedMachine(found));
-
-      const checkpoints = yield* checkpointsOf(
-        new Set(ours.map(({ id }) => id))
+    const deleted = (machine: Target, keep: ReadonlySet<Handle>) =>
+      toward(machine, "gone", heldByFork(machine)).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            warnedHeld.delete(machine.handle);
+            names.delete(machine.instance);
+          })
+        ),
+        Effect.andThen(unkept(machine, keep)),
+        Effect.catchTag("HeldByFork", (held) => heldUp(machine, held)),
+        bounded("smol cloud", `delete ${machine.name}`),
+        Effect.mapError((error) => new Internal({ message: error.message }))
       );
 
-      return ours.flatMap((found) => {
-        const instance = instanceOf(found.name);
-
-        return instance === undefined
-          ? []
-          : [
-              {
-                instance,
-                handle: found.id,
-                checkpoints: checkpoints
-                  .filter(({ machineId }) => machineId === found.id)
-                  .map(({ id }) => id),
-              },
-            ];
-      });
+    const tombstones = yield* Tombstones.make({
+      dir: `${host.stateDir}/smol-cloud`,
+      provider: "smol cloud",
+      marked: Effect.mapError(
+        marked(api, host.id),
+        internal("the machines this host made")
+      ),
+      remove: ({ instance, handle, checkpoints }) =>
+        deleted({ name: instance, instance, handle }, new Set(checkpoints)),
     });
 
     const observe = (machines: readonly Target[]) => {
@@ -916,13 +952,6 @@ export const make = (
       },
       admission: undefined,
       builds: unshared(traits.runtime),
-      owned: {
-        machines: Effect.mapError(
-          marked,
-          internal("the machines this host made")
-        ),
-        deleteWithin: stepWithin,
-      },
       sizable: () => Effect.void,
       startup: Effect.void,
       find: (machine) =>
@@ -947,6 +976,7 @@ export const make = (
       make: (machine, origin) =>
         Effect.gen(function* () {
           yield* told([machine]);
+          yield* tombstones.refuse(machine);
 
           const account = yield* api.account.pipe(
             Effect.catchIf(fromApi, failed(`make ${machine.name}`))
@@ -1012,18 +1042,12 @@ export const make = (
         Effect.catchTag(settled(machine, "paused"), "Capacity", (error) =>
           Effect.fail(new Internal({ message: error.message }))
         ),
-      delete: (machine, keep) =>
-        toward(machine, "gone", heldByFork(machine)).pipe(
-          Effect.andThen(
-            Effect.sync(() => {
-              warnedHeld.delete(machine.handle);
-              names.delete(machine.instance);
-            })
-          ),
-          Effect.andThen(unkept(machine, keep)),
-          Effect.catchTag("HeldByFork", (held) => heldUp(machine, held)),
-          bounded("smol cloud", `delete ${machine.name}`),
-          Effect.mapError((error) => new Internal({ message: error.message }))
+      delete: ({ handle, ...machine }, keep) =>
+        Effect.andThen(
+          handle === undefined
+            ? Effect.void
+            : deleted({ ...machine, handle }, keep),
+          tombstones.bury(machine.instance)
         ),
       capture: (machine) =>
         Effect.gen(function* () {

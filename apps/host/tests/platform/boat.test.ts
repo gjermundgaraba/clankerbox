@@ -14,10 +14,11 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it } from "@effect/vitest";
 import { WrongState } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import type { Scope, Duration } from "effect";
+import type { Scope } from "effect";
 import {
   Cause,
   Context,
+  Duration,
   Effect,
   Exit,
   Layer,
@@ -39,8 +40,10 @@ import {
   endpointOf,
   image,
   make,
+  marked,
 } from "../../src/platform/boat/boat.ts";
 import { types } from "../../src/platform/boat/traits.ts";
+import { SweepEvery } from "../../src/platform/tombstones.ts";
 import { Handle, Runtime } from "../../src/runtime.ts";
 import type { Interface, RuntimeError, Target } from "../../src/runtime.ts";
 import { fakeBoat } from "../fake-boat.ts";
@@ -68,7 +71,14 @@ const onFakeBoatOver = (
     const boat = yield* fakeBoat({ ...options, dir });
 
     const context = yield* Layer.build(
-      Layer.provide(boat.layer, Layer.mergeAll(NodeServices.layer, http))
+      Layer.provide(
+        boat.layer,
+        Layer.mergeAll(
+          NodeServices.layer,
+          http,
+          Layer.succeed(SweepEvery, Duration.millis(100))
+        )
+      )
     );
 
     return { boat, dir, runtime: Context.get(context, Runtime) };
@@ -133,10 +143,10 @@ const onBoat = <A, E>(
   options: Omit<FakeBoatOptions, "dir"> = {}
 ) => Effect.scoped(Effect.flatMap(onFakeBoatWith(options), body));
 
-const ownedBy = (runtime: Interface) =>
-  runtime.owned === undefined
-    ? Effect.die("the boat runtime lists the machines it owns")
-    : runtime.owned.machines;
+const markedAt = (boat: FakeBoat) =>
+  Effect.flatMap(BoatApi.make(boat.url, Redacted.make(boat.apiKey)), (api) =>
+    marked(api, "boat")
+  ).pipe(Effect.provide(NodeHttpClient.layerNodeHttp));
 
 const keyOf = (instance: string) => `cbx-boat-${instance}`;
 
@@ -919,13 +929,13 @@ describe("the boat runtime over fake boat", () => {
     "lists every page of the sandboxes this host marked",
     () =>
       onBoat(
-        ({ runtime }) =>
+        ({ boat, runtime }) =>
           Effect.gen(function* () {
             const machines = yield* Effect.forEach(["a", "b", "c"], (name) =>
               made(runtime, name)
             );
 
-            const owned = yield* ownedBy(runtime);
+            const owned = yield* markedAt(boat);
 
             expect(owned.map(({ handle }) => handle).toSorted()).toStrictEqual(
               machines.map(({ handle }) => handle).toSorted()
@@ -975,11 +985,11 @@ describe("the boat runtime over fake boat", () => {
 
           yield* boat.malformedSnapshot(elsewhere, "bx_other");
           yield* boat.malformedSnapshot("cbx-by-hand", 7);
-          expect(yield* ownedBy(runtime)).toHaveLength(1);
+          expect(yield* markedAt(boat)).toHaveLength(1);
 
           yield* boat.malformedSnapshot(broken, 7);
 
-          const failed = yield* Effect.flip(ownedBy(runtime));
+          const failed = yield* Effect.flip(markedAt(boat));
 
           expect(failed.message).toContain(broken);
           expect(boat.sandboxes.has(machine.handle)).toBe(true);
@@ -1402,6 +1412,7 @@ describe("a boat request's bound", () => {
 interface Scripted {
   readonly runtime: Interface;
   readonly asked: readonly string[];
+  readonly listed: ReturnType<typeof marked>;
 }
 
 const boatLimits = {
@@ -1447,7 +1458,12 @@ const scriptedBoat = (
       { id: "boat", stateDir: dir, listen: { address: "127.0.0.1", port: 0 } }
     ).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
-    return { runtime, asked };
+    const listed = Effect.flatMap(
+      BoatApi.make("https://boat.test/api/v1", Redacted.make("fake")),
+      (api) => marked(api, "boat")
+    ).pipe(Effect.provideService(HttpClient.HttpClient, client));
+
+    return { runtime, asked, listed };
   }).pipe(Effect.provide(NodeServices.layer), Effect.orDie);
 
 const sandboxIn = (state: string, type = "small") =>
@@ -1699,7 +1715,7 @@ describe("a boat saved-snapshot list holding a record the host can't read", () =
           const planted = "PLANTED-TOKEN-7f3a";
           const logged: string[] = [];
 
-          const { runtime } = yield* scriptedBoat((route) => {
+          const { listed } = yield* scriptedBoat((route) => {
             if (route === "GET /saved-snapshots") {
               return Response.json({
                 snapshots: [
@@ -1714,7 +1730,7 @@ describe("a boat saved-snapshot list holding a record the host can't read", () =
               : undefined;
           });
 
-          yield* (runtime.owned?.machines ?? Effect.void).pipe(
+          yield* listed.pipe(
             Effect.provide(
               Logger.layer([
                 Logger.make(({ message }) => {

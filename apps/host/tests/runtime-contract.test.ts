@@ -49,7 +49,6 @@ const facetsOf = (runtime: Interface) => ({
   pinned: runtime.pin !== undefined,
   reach: runtime.reach._tag,
   admits: runtime.admission !== undefined,
-  owned: runtime.owned !== undefined,
 });
 
 const presetFacets = (preset: Preset) => ({
@@ -59,7 +58,6 @@ const presetFacets = (preset: Preset) => ({
   pinned: preset.pin !== undefined,
   reach: preset.relayed ? "relayed" : "published",
   admits: preset.admits,
-  owned: preset.owned,
 });
 
 describe("the fake runtime's presets", () => {
@@ -91,6 +89,12 @@ const onFake = (as: FakeRuntimeName) => {
     lacks: {
       stall:
         "the fake runtime is no adapter: it answers each call in memory, with no provider call to hold",
+      ...(presets[as].owned
+        ? {}
+        : {
+            landLate:
+              "this preset models a runtime whose machines lie on the host's own disk, where no make lands after its answer",
+          }),
     },
     fixture: Effect.gen(function* () {
       const dir = yield* scratch;
@@ -103,7 +107,7 @@ const onFake = (as: FakeRuntimeName) => {
       return {
         runtime: Context.get(context, Runtime),
         faults: fake.faults,
-        unmarked: fake.unmarked,
+        unmarked: presets[as].owned ? fake.unmarked : undefined,
       };
     }).pipe(Effect.provide(NodeServices.layer), Effect.orDie),
   });

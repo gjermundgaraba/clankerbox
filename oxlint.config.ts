@@ -248,12 +248,12 @@ export default config({
           {
             allow: [
               "^\\./[a-z-]+\\.ts$",
-              "^\\.\\./(process|provider-http)\\.ts$",
+              "^\\.\\./(process|provider-http|tombstones)\\.ts$",
               "^\\.\\./\\.\\./[a-z-]+\\.ts$",
               ...adapterPackages,
             ],
             because:
-              "a provider's client imports the domain files, platform's shared process.ts, the rules provider-http.ts holds for a provider's HTTP API, and its own subfolder; never composition/ or another adapter",
+              "a provider's client imports the domain files, platform's shared process.ts, the rules provider-http.ts holds for a provider's HTTP API, the tombstones a rented runtime keeps in tombstones.ts, and its own subfolder; never composition/ or another adapter",
           },
         ],
       },

@@ -989,7 +989,7 @@ export const make = (
         )
       );
 
-    const { tick } = yield* recheckHosts(store, hosts, settings.failedRowsLast);
+    const tick = recheckHosts(store, hosts, settings.failedRowsLast);
 
     yield* tick;
 

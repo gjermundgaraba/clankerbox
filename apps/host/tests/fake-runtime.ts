@@ -45,6 +45,8 @@ import { throughBucket } from "../src/platform/bucket/builds.ts";
 import type { CheckpointFiles, Store } from "../src/platform/bucket/builds.ts";
 import { traits as smolvm } from "../src/platform/smolvm/traits.ts";
 import { traits as tart } from "../src/platform/tart/traits.ts";
+import * as Tombstones from "../src/platform/tombstones.ts";
+import type { Marked } from "../src/platform/tombstones.ts";
 import {
   Handle,
   missing,
@@ -59,7 +61,6 @@ import type {
   Identity,
   MachineState,
   Made,
-  MarkedMachine,
   Observed,
   Interface,
   RuntimeError,
@@ -867,6 +868,32 @@ export const fakeRuntime = (options: FakeOptions) => {
           });
     });
 
+  const removed = (machine: Target, keep: ReadonlySet<Handle>) =>
+    Effect.andThen(
+      Effect.sync(() => removals.push([machine.name, keep])),
+      call(
+        "delete",
+        machine,
+        lost(
+          "delete",
+          Effect.andThen(
+            endCommands(machine),
+            uninterruptibleWrite(async () => {
+              const found = machineOf(machine);
+
+              if (found === undefined) {
+                return;
+              }
+
+              machines.delete(found.handle);
+              await pruned(found.handle, keep);
+            })
+          ),
+          Effect.void
+        )
+      )
+    );
+
   const layer = Layer.effect(
     Runtime,
     Effect.gen(function* () {
@@ -955,6 +982,30 @@ export const fakeRuntime = (options: FakeOptions) => {
           leftOf(machine)
         );
 
+      const tombstones = owned
+        ? yield* Tombstones.make({
+            dir: options.dir,
+            provider: traits.runtime,
+            marked: Effect.sync(() => {
+              record("marked machines");
+
+              return machines
+                .values()
+                .filter(({ marked }) => marked)
+                .map((machine): Marked => ({
+                  instance: machine.instance,
+                  handle: machine.handle,
+                  checkpoints: heldBy(machine.handle).map(([handle]) => handle),
+                }))
+                .toArray();
+            }),
+            remove: ({ instance, handle, checkpoints: held }) =>
+              removed({ name: instance, instance, handle }, new Set(held)),
+          }).pipe(
+            Effect.provideService(Tombstones.SweepEvery, Duration.millis(100))
+          )
+        : undefined;
+
       return Runtime.of({
         version: "fake",
         get pin() {
@@ -997,26 +1048,6 @@ export const fakeRuntime = (options: FakeOptions) => {
                 ),
             }
           : undefined,
-        owned: owned
-          ? {
-              machines: Effect.sync(() => {
-                record("marked machines");
-
-                return machines
-                  .values()
-                  .filter(({ marked }) => marked)
-                  .map((machine): MarkedMachine => ({
-                    instance: machine.instance,
-                    handle: machine.handle,
-                    checkpoints: heldBy(machine.handle).map(
-                      ([handle]) => handle
-                    ),
-                  }))
-                  .toArray();
-              }),
-              deleteWithin: Duration.minutes(1),
-            }
-          : undefined,
         builds:
           options.builds === undefined
             ? unshared(traits.runtime)
@@ -1046,74 +1077,83 @@ export const fakeRuntime = (options: FakeOptions) => {
         checkpointHandle,
         observe,
         capacity,
-        make: (machine, origin) => {
-          const held = lateMakes.next();
+        make: (machine, origin) =>
+          Effect.andThen(
+            tombstones === undefined ? Effect.void : tombstones.refuse(machine),
+            Effect.suspend(() => {
+              const held = lateMakes.next();
 
-          if (held !== undefined) {
-            return Effect.andThen(
-              Effect.promise(async () => {
-                record(`make ${machine.name}`);
-                await held(() => {
-                  landed(machine, origin._tag === "image" ? origin.image : "");
-                });
-              }),
-              Effect.fail(
-                new Internal({
-                  message: `the ${traits.runtime} provider didn't answer the make of ${machine.name}`,
-                })
-              )
-            );
-          }
+              if (held !== undefined) {
+                return Effect.andThen(
+                  Effect.promise(async () => {
+                    record(`make ${machine.name}`);
+                    await held(() => {
+                      landed(
+                        machine,
+                        origin._tag === "image" ? origin.image : ""
+                      );
+                    });
+                  }),
+                  Effect.fail(
+                    new Internal({
+                      message: `the ${traits.runtime} provider didn't answer the make of ${machine.name}`,
+                    })
+                  )
+                );
+              }
 
-          switch (origin._tag) {
-            case "image": {
-              return created(machine, origin.image);
-            }
+              switch (origin._tag) {
+                case "image": {
+                  return created(machine, origin.image);
+                }
 
-            case "checkpoint": {
-              const { checkpoint } = origin;
+                case "checkpoint": {
+                  const { checkpoint } = origin;
 
-              return checkpoints.has(checkpoint.handle)
-                ? call(
-                    "restore",
+                  return checkpoints.has(checkpoint.handle)
+                    ? call(
+                        "restore",
+                        machine,
+                        Effect.andThen(
+                          room,
+                          lost(
+                            "make",
+                            copyInto(heldCheckpoint(checkpoint), machine),
+                            madeAgain(machine, `restore ${machine.name}`)
+                          )
+                        ),
+                        leftOf(machine)
+                      )
+                    : Effect.fail(
+                        missingCheckpoint(traits.runtime, checkpoint)
+                      );
+                }
+
+                case "machine": {
+                  const source = origin.machine;
+
+                  return call(
+                    "fork",
                     machine,
                     Effect.andThen(
                       room,
-                      lost(
-                        "make",
-                        copyInto(heldCheckpoint(checkpoint), machine),
-                        madeAgain(machine, `restore ${machine.name}`)
+                      Effect.andThen(
+                        copyable(source),
+                        Effect.flatMap(rootOf(source), (root) =>
+                          lost(
+                            "make",
+                            copyInto(root, machine),
+                            madeAgain(machine, `fork ${machine.name}`)
+                          )
+                        )
                       )
                     ),
                     leftOf(machine)
-                  )
-                : Effect.fail(missingCheckpoint(traits.runtime, checkpoint));
-            }
-
-            case "machine": {
-              const source = origin.machine;
-
-              return call(
-                "fork",
-                machine,
-                Effect.andThen(
-                  room,
-                  Effect.andThen(
-                    copyable(source),
-                    Effect.flatMap(rootOf(source), (root) =>
-                      lost(
-                        "make",
-                        copyInto(root, machine),
-                        madeAgain(machine, `fork ${machine.name}`)
-                      )
-                    )
-                  )
-                ),
-                leftOf(machine)
-              );
-            }
-          }
-        },
+                  );
+                }
+              }
+            })
+          ),
         start: (machine, keep) =>
           Effect.andThen(
             Effect.sync(() => starts.push([machine.name, keep])),
@@ -1224,30 +1264,14 @@ export const fakeRuntime = (options: FakeOptions) => {
                 : Effect.succeed(found.sizes);
             })
           ),
-        delete: (machine, keep) =>
+        delete: ({ handle, ...machine }, keep) =>
           Effect.andThen(
-            Effect.sync(() => removals.push([machine.name, keep])),
-            call(
-              "delete",
-              machine,
-              lost(
-                "delete",
-                Effect.andThen(
-                  endCommands(machine),
-                  uninterruptibleWrite(async () => {
-                    const found = machineOf(machine);
-
-                    if (found === undefined) {
-                      return;
-                    }
-
-                    machines.delete(found.handle);
-                    await pruned(found.handle, keep);
-                  })
-                ),
-                Effect.void
-              )
-            )
+            handle === undefined
+              ? Effect.void
+              : removed({ ...machine, handle }, keep),
+            tombstones === undefined
+              ? Effect.void
+              : tombstones.bury(machine.instance)
           ),
         capture: (machine, checkpoint) =>
           call(
@@ -1408,6 +1432,8 @@ export const fakeRuntime = (options: FakeOptions) => {
         of: owned ? handle : undefined,
       });
       remembered();
+
+      return Effect.sync(() => machines.has(handle));
     }),
     lose: (checkpoint: Handle) =>
       Effect.promise(async () => {

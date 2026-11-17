@@ -2,13 +2,8 @@ import { cpSync, rmSync } from "node:fs";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import {
-  Internal,
-  readTimeout,
-  RuntimeName,
-} from "@gjermundgaraba/clankerbox-sdk";
 import type { BuildRequest } from "@gjermundgaraba/clankerbox-sdk";
-import { DateTime, Duration, Effect, Fiber, Logger } from "effect";
+import { Duration, Effect, Fiber } from "effect";
 import { expect } from "vite-plus/test";
 
 import {
@@ -18,10 +13,7 @@ import {
   firstHost,
   plane,
   request,
-  restartedHost,
   running,
-  stubHost,
-  stubInfo,
 } from "./support.ts";
 import type { Started } from "./support.ts";
 
@@ -176,28 +168,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a sweep of what was retired before a create keeps the machine it makes, whatever the clocks say",
-    () =>
-      Effect.gen(function* () {
-        const served = yield* onFixed();
-
-        yield* served.client.create("old", request("old"));
-        yield* served.client.deleteMachine({ id: "old" });
-
-        const retired = yield* served.store.retired("fixed");
-        const created = yield* served.client.create("dev", request("dev"));
-
-        yield* served.host.operations.sweep(retired);
-
-        expect(retired.machines).toHaveLength(1);
-        expect(created.phase).toBe("settled");
-        expect(callsTo(served.host, "delete")).toStrictEqual(["delete old"]);
-        expect(served.host.fake.machines.has("dev")).toBe(true);
-      })
-  );
-
-  it.effect(
-    "a sweep of what was retired before a capture keeps the checkpoint it makes",
+    "a host's sweep keeps a machine a row wants, and a checkpoint made after, beside one it deleted",
     () =>
       Effect.gen(function* () {
         const served = yield* onFixed();
@@ -206,242 +177,25 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* served.client.deleteMachine({ id: "old" });
         yield* served.client.create("dev", request("dev"));
         yield* served.client.stopMachine({ id: "dev" });
-
-        const retired = yield* served.store.retired("fixed");
-
         yield* served.client.captureCheckpoint({
           machine: "dev",
           name: "snap",
         });
-        yield* Effect.sleep(Duration.millis(200));
-        yield* served.host.operations.sweep(retired);
+        yield* eventually(
+          Effect.sync(() => callsTo(served.host, "marked")),
+          (lists) => lists.length >= 2
+        );
 
         const restored = yield* served.client.restoreMachine({
           checkpoint: "snap",
           name: "copy",
         });
 
-        expect(retired.machines).toHaveLength(1);
         expect(callsTo(served.host, "deleteCheckpoint")).toStrictEqual([]);
         expect(callsTo(served.host, "delete")).toStrictEqual(["delete old"]);
         expect(served.host.fake.machines.has("dev")).toBe(true);
         expect(restored.phase).toBe("settled");
       })
-  );
-
-  it.effect(
-    "the recheck's sweeps keep a machine a row wants beside one the store retired",
-    () =>
-      Effect.gen(function* () {
-        const served = yield* onFixed({ recheck: Duration.millis(100) });
-        const created = yield* served.client.create("dev", request("dev"));
-
-        yield* served.client.create("old", request("old"));
-        yield* served.client.deleteMachine({ id: "old" });
-        yield* Effect.sleep(Duration.seconds(1));
-
-        expect((yield* served.store.retired("fixed")).machines).toHaveLength(1);
-        expect(created.phase).toBe("settled");
-        expect(callsTo(served.host, "delete")).toStrictEqual(["delete old"]);
-        expect(served.host.fake.machines.has("dev")).toBe(true);
-      })
-  );
-
-  it.effect(
-    "a recheck sends no sweep to a host whose runtime marks nothing, and forgets what it retired there a day on",
-    () =>
-      Effect.gen(function* () {
-        const asked: string[] = [];
-        const url = yield* stubHost(200, { ...stubInfo, id: "plain" }, asked);
-        const longAfter = DateTime.makeUnsafe("2100-01-01T00:00:00Z");
-
-        const served = yield* running({
-          hosts: [],
-          members: [{ id: "plain", url, draining: false }],
-          recheck: Duration.millis(50),
-        });
-
-        yield* served.store.insertMachine({
-          name: "old",
-          instance: "0123456789abcdef0123456789abcdef",
-          createdAt: DateTime.makeUnsafe("2026-10-04T12:00:00Z"),
-          runtime: RuntimeName.make("smolvm"),
-          captures: "ram",
-          base: "ubuntu",
-          cpu: 1,
-          ramMib: 1024,
-          diskGib: 10,
-          host: "plain",
-          handle: undefined,
-          endpoint: undefined,
-          desired: "running",
-          state: "made.settled",
-          prepared: true,
-          error: undefined,
-          resize: undefined,
-          ephemeral: false,
-          source: { kind: "base" },
-          template: undefined,
-          hostKey: undefined,
-          pin: undefined,
-          undoneAt: undefined,
-          labels: undefined,
-          after: undefined,
-        });
-        yield* served.store.advance("machine", "old", () => ({
-          next: "removed",
-          finish: false,
-        }));
-
-        const retired = yield* served.store.retired("plain");
-
-        const forgotten = yield* eventually(
-          Effect.andThen(
-            served.store.forgetRetired(longAfter),
-            served.store.retired("plain")
-          ),
-          ({ machines }) => machines.length === 0
-        );
-
-        expect(retired.machines).toHaveLength(1);
-        expect(forgotten.machines).toStrictEqual([]);
-        expect(asked).not.toContain("/host/sweepRetired");
-      })
-  );
-
-  it.effect(
-    "a retired instance outlives any time its host doesn't answer, and its day runs from the first sweep that reached the host",
-    () =>
-      Effect.gen(function* () {
-        const served = yield* onFixed({ recheck: Duration.millis(100) });
-        const longAfter = DateTime.makeUnsafe("2100-01-01T00:00:00Z");
-
-        yield* served.client.create("old", request("old"));
-        yield* served.host.dispose;
-        yield* served.store.advance("machine", "old", () => ({
-          next: "removed",
-          finish: false,
-        }));
-        yield* Effect.sleep(Duration.seconds(1));
-        yield* served.store.forgetRetired(longAfter);
-
-        const whileDown = yield* served.store.retired("fixed");
-        const back = yield* restartedHost(served.host);
-
-        yield* Effect.addFinalizer(() => back.dispose);
-
-        const once = yield* eventually(
-          Effect.andThen(
-            served.store.forgetRetired(longAfter),
-            served.store.retired("fixed")
-          ),
-          ({ machines }) => machines.length === 0
-        );
-
-        expect(whileDown.machines).toHaveLength(1);
-        expect(once.machines).toStrictEqual([]);
-        expect(back.fake.calls).toContain("marked machines");
-      })
-  );
-
-  it.effect(
-    "a retired instance outlives the sweeps whose delete of it fails, and is forgotten only once one deletes it",
-    () =>
-      Effect.gen(function* () {
-        const served = yield* onFixed({ recheck: Duration.seconds(1) });
-        const longAfter = DateTime.makeUnsafe("2100-01-01T00:00:00Z");
-
-        yield* served.client.create("old", request("old"));
-
-        for (let failures = 0; failures < 3; failures += 1) {
-          served.host.fake.failNext(
-            "delete",
-            new Internal({ message: "EBUSY" })
-          );
-        }
-
-        yield* served.store.advance("machine", "old", () => ({
-          next: "removed",
-          finish: false,
-        }));
-        yield* eventually(
-          Effect.sync(() => callsTo(served.host, "delete").length),
-          (deletes) => deletes >= 2
-        );
-        yield* served.store.forgetRetired(longAfter);
-
-        const whileFailing = yield* served.store.retired("fixed");
-
-        yield* eventually(
-          Effect.sync(() => served.host.fake.machines.has("old")),
-          (kept) => !kept
-        );
-
-        const once = yield* eventually(
-          Effect.andThen(
-            served.store.forgetRetired(longAfter),
-            served.store.retired("fixed")
-          ),
-          ({ machines }) => machines.length === 0
-        );
-
-        expect(whileFailing.machines).toHaveLength(1);
-        expect(once.machines).toStrictEqual([]);
-      }),
-    20_000
-  );
-
-  it.effect(
-    "a sweep whose delete outlasts a read is answered, and told once the delete ends",
-    () =>
-      Effect.gen(function* () {
-        const lines: string[] = [];
-
-        const served = yield* running({
-          hosts: [fixed],
-          recheck: Duration.millis(100),
-          logger: Logger.make(({ message }) => {
-            lines.push(String(message));
-          }),
-        });
-
-        const host = firstHost(served);
-        const longAfter = DateTime.makeUnsafe("2100-01-01T00:00:00Z");
-        const client = yield* clientOf(served.url);
-
-        yield* client.create("old", request("old"));
-
-        const held = host.fake.holdNext("delete", { runsOn: true });
-
-        yield* served.store.advance("machine", "old", () => ({
-          next: "removed",
-          finish: false,
-        }));
-        yield* held.entered;
-
-        yield* Effect.sleep(Duration.sum(readTimeout, Duration.seconds(2)));
-        yield* served.store.forgetRetired(longAfter);
-
-        const whileHeld = yield* served.store.retired("fixed");
-
-        yield* held.release;
-
-        const told = yield* eventually(
-          Effect.andThen(
-            served.store.forgetRetired(longAfter),
-            served.store.retired("fixed")
-          ),
-          ({ machines }) => machines.length === 0
-        );
-
-        expect(whileHeld.machines).toHaveLength(1);
-        expect(told.machines).toStrictEqual([]);
-        expect(callsTo(host, "delete")).toHaveLength(1);
-        expect(
-          lines.filter((line) => line.includes("couldn't sweep"))
-        ).toStrictEqual([]);
-      }),
-    30_000
   );
 
   it.effect(
@@ -493,7 +247,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a control plane over a wiped store sweeps only what it retired, and nothing of the first store's",
+    "a control plane over a wiped store deletes only what it deleted, and nothing of the first store's",
     () =>
       Effect.gen(function* () {
         const planned = yield* onPlane();
@@ -515,7 +269,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* other.deleteMachine({ id: "its-own" });
         yield* Effect.sleep(Duration.seconds(1));
 
-        expect((yield* second.store.retired("fixed")).machines).toHaveLength(1);
         expect(callsTo(planned.host, "deleteCheckpoint")).toStrictEqual([]);
         expect(callsTo(planned.host, "delete")).toStrictEqual([
           "delete its-own",
@@ -565,7 +318,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a control plane restored from a backup sweeps only what it retired, and no machine made after the backup",
+    "a control plane restored from a backup deletes only what it deleted, and no machine made after the backup",
     () =>
       Effect.gen(function* () {
         const planned = yield* onPlane();
