@@ -322,8 +322,17 @@ export const tailnetScript = [
   // The CLI retries a refused socket for 2 seconds, and up to 5 while any tailscaled runs:
   // https://github.com/tailscale/tailscale/blob/v1.104.4/safesocket/safesocket.go#L43
   "  answering=",
+  "  stuck=",
   "  started=",
-  `  case "$comm" in *tailscaled) if ts status --json >/dev/null 2>&1; then answering=1; fi ;; esac`,
+  `  case "$comm" in *tailscaled) if ts status --json >/dev/null 2>&1; then answering=1; else stuck=1; fi ;; esac`,
+  `  if [ -n "$stuck" ]; then`,
+  `    kill -9 "$pid" 2>/dev/null || true`,
+  "    waited=0",
+  String.raw`    while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 50 ]; do`,
+  "      sleep 0.1",
+  "      waited=$((waited + 1))",
+  "    done",
+  "  fi",
   `  if [ -z "$answering" ]; then`,
   "    if command -v setsid >/dev/null 2>&1; then detach=setsid; else detach=nohup; fi",
   `    TS_PERMIT_CERT_UID="$user" "$detach" tailscaled --statedir="$dir/state" --socket="$dir/tailscaled.sock" --port=0 </dev/null >"$dir/tailscaled.log" 2>&1 &`,
