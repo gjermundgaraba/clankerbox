@@ -10,6 +10,7 @@ import { Effect, Option, Path, Schema } from "effect";
 import { Argument, Command } from "effect/cli";
 
 import {
+  errorText,
   clientFlags,
   deleted,
   listCommand,
@@ -32,7 +33,7 @@ const encodeTemplate = Schema.encodeSync(Template);
 const encodeBuild = Schema.encodeSync(Build);
 
 const failure = (error: Build["error"]) =>
-  error === undefined ? "-" : `${error._tag}: ${error.message}`;
+  error === undefined ? "-" : errorText(error);
 
 export const templateRows = (templates: readonly Template[]) => [
   ["NAME", "BASE", "CURRENT", "STATE"],

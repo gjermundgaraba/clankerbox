@@ -3,7 +3,7 @@ import path from "node:path";
 
 import type { MachineRef, Step } from "@clankerbox/host-contract";
 import {
-  copySizable,
+  copyRefusal,
   fitted,
   resizeRefusal,
 } from "@clankerbox/host-contract/traits";
@@ -34,7 +34,7 @@ import { expect } from "vite-plus/test";
 
 import type { Facts } from "../../../src/box.ts";
 import { fetch, publish } from "../../../src/builds.ts";
-import { runCommand } from "../../../src/guest.ts";
+import { runCommand } from "../../../src/exec.ts";
 import { PortProbe } from "../../../src/machine-ports.ts";
 import type { Probe } from "../../../src/machine-ports.ts";
 import * as Operations from "../../../src/operations.ts";
@@ -3008,7 +3008,7 @@ layer(NodeServices.layer)((it) => {
               cpu: 16,
               ramMib: 4096,
             })?._tag,
-            copySizable(runtime.traits, old, old),
+            copyRefusal(runtime.traits, "dev", old, old) === undefined,
           ],
         }).toStrictEqual({
           ramMib: [true, false],

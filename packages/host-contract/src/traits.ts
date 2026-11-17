@@ -1,4 +1,5 @@
 import {
+  CheckpointKind,
   formatCpu,
   formatGib,
   formatMib,
@@ -47,7 +48,7 @@ type Bounds = typeof Bounds.Type;
 export const RuntimeTraits = Schema.Struct({
   runtime: RuntimeName,
   images: Schema.Literals(["named", "references"]),
-  checkpoint: Schema.Literals(["ram", "disk"]),
+  checkpoint: CheckpointKind,
   captureFrom: Schema.Literals(["running", "stopped"]),
   pause: Schema.Literals(["saves", "stops"]),
   stop: Schema.Literals(["resumes", "discards"]),
@@ -114,7 +115,8 @@ const amount = (size: SizeName, value: number): string => {
   }
 };
 
-const listed = (bounds: Bounds): string => {
+/** Sizes, or bounds on them, as a refusal names them: `1 vCPU, 1G of RAM and 10G of disk`. */
+export const formatSizes = (bounds: Bounds): string => {
   const each = sizeNames.flatMap((size) => {
     const bound = bounds[size];
 
@@ -133,10 +135,6 @@ const bounded = ({ least, most }: RuntimeTraits["limits"], sizes: Sizes) =>
       sizes[size] <= (most[size] ?? Number.POSITIVE_INFINITY)
   );
 
-/**
- * Whether a runtime gives a machine `sizes`: sizes within its limits, any or one of its classes
- * exactly.
- */
 export const fitted = (traits: RuntimeTraits, sizes: Sizes): boolean =>
   bounded(traits.limits, sizes) &&
   (traits.sizes._tag === "free" ||
@@ -147,14 +145,14 @@ export const givenSizes = (traits: RuntimeTraits): string => {
   if (traits.sizes._tag === "classes") {
     return `only its size classes ${traits.sizes.classes
       .map(
-        ({ name, cpu, ramMib, diskGib }) =>
-          `${name} (${formatCpu(cpu)}, ${formatMib(ramMib)} of RAM, ${formatGib(diskGib)} of disk)`
+        (given) =>
+          `${given.name} (${sizeNames.map((size) => amount(size, given[size])).join(", ")})`
       )
       .join(", ")}`;
   }
 
-  const least = listed(traits.limits.least);
-  const most = listed(traits.limits.most);
+  const least = formatSizes(traits.limits.least);
+  const most = formatSizes(traits.limits.most);
 
   return [
     "any sizes",
@@ -162,8 +160,6 @@ export const givenSizes = (traits: RuntimeTraits): string => {
     ...(most === "" ? [] : [`up to ${most}`]),
   ].join(" ");
 };
-
-export const formatSizes = (sizes: Sizes): string => listed(sizes);
 
 const resizedStates = ({ resize }: RuntimeTraits): string => {
   const taking = (["stopped", "running"] as const).filter(
@@ -227,36 +223,52 @@ export const resizeRefusal = (
 };
 
 /**
- * Whether a fork or restore of a source sized `from` can be sized `to` by a runtime of `traits`: it
- * gives `to`, a disk only grows, a runtime whose copies `grow` keeps the vCPUs and RAM it holds, and
- * one whose copies are the source's `same` takes no other sizes.
+ * Why a runtime of `traits` refuses a fork or restore `name` of a source sized `from` at `to`,
+ * none where it takes it: it gives `to`, a disk only grows, a runtime whose copies `grow` keeps the
+ * vCPUs and RAM it holds, and one whose copies are the source's `same` takes no other sizes.
  */
-export const copySizable = (
+export const copyRefusal = (
   traits: RuntimeTraits,
+  name: string,
   from: Sizes,
   to: Sizes
-): boolean => {
+): Unsizable | undefined => {
   if (!fitted(traits, to)) {
-    return false;
+    return new Unsizable({
+      message: `machine ${name}'s host gives ${givenSizes(traits)}, and it was asked ${formatSizes(to)}`,
+    });
   }
 
-  switch (traits.copies) {
-    case "same": {
-      return same(from, to);
-    }
+  const held = `the source's ${formatCpu(from.cpu)} and ${formatMib(from.ramMib)}`;
+  const shrunkDisk = `machine ${name}'s disk of ${formatGib(to.diskGib)} is below its source's ${formatGib(from.diskGib)}, and a disk only grows`;
 
-    case "grow": {
-      return (
-        to.cpu >= from.cpu &&
-        to.ramMib >= from.ramMib &&
-        to.diskGib >= from.diskGib
-      );
-    }
+  const refused = (() => {
+    switch (traits.copies) {
+      case "same": {
+        return same(from, to)
+          ? undefined
+          : `machine ${name}'s host copies a machine only at its source's own sizes, so it keeps ${held} and its ${formatGib(from.diskGib)} disk`;
+      }
 
-    case "any": {
-      return to.diskGib >= from.diskGib;
+      case "grow": {
+        if (to.diskGib < from.diskGib) {
+          return shrunkDisk;
+        }
+
+        return to.cpu >= from.cpu && to.ramMib >= from.ramMib
+          ? undefined
+          : `machine ${name}'s host copies a machine only at its source's sizes or larger, so its vCPUs and RAM only grow from ${held}`;
+      }
+
+      case "any": {
+        return to.diskGib >= from.diskGib ? undefined : shrunkDisk;
+      }
     }
-  }
+  })();
+
+  return refused === undefined
+    ? undefined
+    : new Unsizable({ message: refused });
 };
 
 /** Where a pause with a capture takes it, as `pauseMachine`'s description states the rule. */
@@ -312,3 +324,13 @@ export const pinRefusal = (
     message: `machine ${of.resume} was paused under ${under ?? "no pin"}, and this host runs ${host}; it resumes only under the same one: delete it, or resume it under that one`,
   });
 };
+
+const idPattern = /^[0-9a-f]{32}$/u;
+
+/** A runtime that marks its resources with an instance tells its own apart with `isId`. */
+export const newId = (): string =>
+  Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+    byte.toString(16).padStart(2, "0")
+  ).join("");
+
+export const isId = (text: string): boolean => idPattern.test(text);

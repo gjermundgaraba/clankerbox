@@ -1,7 +1,7 @@
 import { Context } from "effect";
 import type { Effect } from "effect";
 
-import type { ReservedPorts } from "./machine-ports.ts";
+import type { ReservedPorts } from "./settings.ts";
 
 /** What the box a host runs on tells it beside its config. */
 export interface Facts {

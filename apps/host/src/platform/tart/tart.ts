@@ -9,6 +9,7 @@ import {
   Internal,
   Unsizable,
   WrongState,
+  sizedBy,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { HostError, Sizing } from "@gjermundgaraba/clankerbox-sdk";
 import {
@@ -25,8 +26,8 @@ import {
 import type { ChildProcessSpawner } from "effect/process";
 
 import { Box } from "../../box.ts";
-import { lastLines } from "../../guest.ts";
 import {
+  lastLines,
   atLeast,
   CannotStart,
   changes,
@@ -34,7 +35,6 @@ import {
   missing,
   missingCheckpoint,
   Runtime,
-  sizedBy,
   timeoutFail,
 } from "../../runtime.ts";
 import type {

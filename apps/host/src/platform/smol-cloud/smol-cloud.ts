@@ -2,6 +2,7 @@ import {
   fitted,
   formatSizes,
   givenSizes,
+  isId,
 } from "@clankerbox/host-contract/traits";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import {
@@ -25,6 +26,7 @@ import type { ChildProcessSpawner } from "effect/process";
 import { Socket } from "effect/socket";
 
 import {
+  targetOf,
   CannotStart,
   missing,
   missingCheckpoint,
@@ -42,18 +44,18 @@ import type {
   Sizes,
   Target,
 } from "../../runtime.ts";
-import { KeyedApiUrl } from "../../settings.ts";
 import type { HostSettings } from "../../settings.ts";
 import {
+  KeyedApiUrl,
   apiKey,
   bounded,
+  providerErrors,
   sentUntilHeld,
   stepWithin,
   triesAfterLoss,
   untilRest,
 } from "../provider-http.ts";
 import * as Api from "./api.ts";
-import { apiErrors } from "./api.ts";
 import type { ApiError, MachineRecord, Refused } from "./api.ts";
 import { traits as traitsOf } from "./traits.ts";
 import { tunnel } from "./tunnel.ts";
@@ -78,8 +80,6 @@ const bodyLimit = 1024 * 1024;
 const unstageTimeout = Duration.seconds(30);
 
 const poll = Duration.seconds(1);
-
-const instancePattern = /^[0-9a-f]{32}$/u;
 
 type Goal = "running" | "stopped" | "paused" | "gone";
 
@@ -121,7 +121,8 @@ const transitional = new Set(["creating", "pausing", "starting", "stopping"]);
 const checkpointEnds = new Set(["available", "failed"]);
 
 const fromApi = (error: { readonly _tag: string }): error is ApiError =>
-  apiErrors.some((tag) => tag === error._tag);
+  error instanceof Api.Refused ||
+  providerErrors.some((type) => error instanceof type);
 
 const standingAfter = 3;
 
@@ -222,12 +223,6 @@ const waited = (error: ApiError) =>
     error._tag === "Refused" ? Duration.seconds(error.retryAfterSeconds) : poll
   );
 
-const targetOf = (machine: Identity, handle: Handle): Target => ({
-  name: machine.name,
-  instance: machine.instance,
-  handle,
-});
-
 const holds = (record: MachineRecord, asked: Api.Sizes) =>
   (asked.cpus ?? record.resources.cpus) === record.resources.cpus &&
   (asked.memoryMb ?? record.resources.memoryMb) === record.resources.memoryMb &&
@@ -308,7 +303,7 @@ export const make = (
       const rest =
         name?.startsWith(prefix) === true ? name.slice(prefix.length) : "";
 
-      return instancePattern.test(rest) ? rest : undefined;
+      return isId(rest) ? rest : undefined;
     };
 
     const markedMachine = (marks: Api.Marks) =>
@@ -795,7 +790,10 @@ export const make = (
     ) =>
       exitOf(machine, { command: ["rm", "-f", file], user }).pipe(
         Effect.timeout(unstageTimeout),
-        Effect.ignore
+        Effect.ignore({
+          log: "Warn",
+          message: `couldn't remove ${machine.name}'s staged stdin ${file}`,
+        })
       );
 
     const exec = (machine: Target, command: Command) => {
@@ -950,7 +948,7 @@ export const make = (
           yield* told([machine]);
 
           const account = yield* api.account.pipe(
-            Effect.catchTag(apiErrors, failed(`make ${machine.name}`))
+            Effect.catchIf(fromApi, failed(`make ${machine.name}`))
           );
 
           yield* planned(machine, account);
@@ -977,7 +975,7 @@ export const make = (
                   })
                 )
             ),
-            Effect.catchTag(apiErrors, failed(`make ${machine.name}`))
+            Effect.catchIf(fromApi, failed(`make ${machine.name}`))
           );
 
           yield* toward(targetOf(machine, handle), "running");
@@ -1044,7 +1042,10 @@ export const make = (
           );
 
           if (!(yield* available(machine, checkpoint.id))) {
-            yield* Effect.ignore(api.deleteCheckpoint(checkpoint.id));
+            yield* Effect.ignore(api.deleteCheckpoint(checkpoint.id), {
+              log: "Warn",
+              message: `capture ${machine.name}: couldn't delete smol cloud's failed checkpoint ${checkpoint.id}`,
+            });
 
             return yield* new Internal({
               message: `capture ${machine.name}: smol cloud's checkpoint ${checkpoint.id} failed`,
@@ -1059,7 +1060,7 @@ export const make = (
           memoryMb: to.ramMib,
           diskGb: to.diskGib,
         }).pipe(
-          Effect.catchTag(apiErrors, (error) =>
+          Effect.catchIf(fromApi, (error) =>
             Effect.fail(
               error._tag === "Refused" &&
                 (error.status === 400 || error.status === 422)

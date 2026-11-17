@@ -1,5 +1,13 @@
-import { loginUser } from "@gjermundgaraba/clankerbox-sdk";
-import { Config, Console, Effect, FileSystem, Option, Path } from "effect";
+import { Client, loginUser } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  Config,
+  Console,
+  Duration,
+  Effect,
+  FileSystem,
+  Option,
+  Path,
+} from "effect";
 
 export const includeLines = "Match all\nInclude clankerbox\n";
 
@@ -7,15 +15,19 @@ const usableShell = /^\/[^\s"'$`\\%]*$/u;
 
 export const machineDomain = ".cbx";
 
+const keepaliveSeconds = 30;
+
 /**
  * The ssh options that end a session whose endpoint goes silent once it has sent its banner, which
- * no other bound covers: a relay whose host stops answering may hold the connection open. ssh asks a
- * quiet endpoint every 30 s and gives up after 4 asks go unanswered, so a session rides out a network
- * that drops for less than two minutes, the patience a wait has for an outage.
+ * no other bound covers: a relay whose host stops answering may hold the connection open. A session
+ * rides out a network that drops for as long as a wait rides out an outage.
  */
 export const sshKeepalive = [
-  ["ServerAliveInterval", 30],
-  ["ServerAliveCountMax", 4],
+  ["ServerAliveInterval", keepaliveSeconds],
+  [
+    "ServerAliveCountMax",
+    Math.ceil(Duration.toSeconds(Client.outageLimit) / keepaliveSeconds),
+  ],
 ] as const;
 
 export const renderSshConfig = (shell: string): string =>

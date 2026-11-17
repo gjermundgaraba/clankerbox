@@ -1,9 +1,12 @@
 import type { HostInfo, MachineState, Report } from "@clankerbox/host-contract";
-import { pinRefusal, resizeRefusal } from "@clankerbox/host-contract/traits";
+import {
+  newId,
+  pinRefusal,
+  resizeRefusal,
+} from "@clankerbox/host-contract/traits";
 import {
   buildId,
-  endTimeout,
-  Internal,
+  execWait,
   isResting,
   labelledWith,
   NotBuilt,
@@ -12,6 +15,7 @@ import {
   readTimeout,
   templateRef,
   Unavailable,
+  sizedBy,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   CreateRequest,
@@ -19,6 +23,7 @@ import type {
   Executed,
   ExecRequest,
   ForkRequest,
+  HostError,
   Labels,
   ListFilter,
   Machine,
@@ -26,6 +31,7 @@ import type {
   RestoreRequest,
   Setup,
   Sizing,
+  Internal,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Context,
@@ -35,13 +41,13 @@ import {
   Layer,
   Option,
   Result,
-  Schedule,
 } from "effect";
 import type { Array as Arr, Scope } from "effect";
 
 import { applied } from "./chart.ts";
 import {
   checkpointChart,
+  fromBuild,
   phaseOf as checkpointPhaseOf,
 } from "./checkpoint-chart.ts";
 import type { CheckpointRow } from "./checkpoint-chart.ts";
@@ -49,7 +55,6 @@ import {
   cloned,
   copied,
   refusedBySource,
-  sizedBy,
   restingAs,
   uncopiable,
 } from "./copies.ts";
@@ -76,12 +81,16 @@ import {
   stateIn,
   stateOf,
 } from "./machine-view.ts";
-import { collect, cutShort, poll } from "./operations.ts";
+import { collect, cutShort, poll, unreported } from "./operations.ts";
 import { builtUnder, holding, placing } from "./placement.ts";
 import type { BuiltUnder, Candidate } from "./placement.ts";
 import { machineStep, refOf } from "./steps.ts";
-import { madeOn, newId, notFound, Store } from "./store.ts";
-import type { Operation, TemplateRow } from "./store.ts";
+import { madeOn, notFound, readUntil, Store } from "./store.ts";
+import type {
+  Interface as StoreInterface,
+  Operation,
+  TemplateRow,
+} from "./store.ts";
 import { checked, due, firstCheck, ticked, unchecked } from "./tailnet.ts";
 import type { TailnetCheck } from "./tailnet.ts";
 
@@ -91,8 +100,6 @@ export interface Settings {
   readonly authorizedKeys: string;
   readonly hookTimeoutSeconds: number;
 }
-
-const stepPoll = Duration.millis(100);
 
 export interface Interface {
   readonly list: (
@@ -149,12 +156,12 @@ export interface Interface {
   readonly capacity: Effect.Effect<CapacityRead, Internal>;
   /**
    * Waits until a machine rests or is gone, for a template build's own steps, reading its VM only once
-   * its row rests. A host that can't be reached for a whole recheck ends the wait as `Unavailable`,
-   * whatever step the machine is in.
+   * its row rests, and answers that row, failing with its error. A host that can't be reached for a
+   * whole recheck ends the wait as `Unavailable`, whatever step the machine is in.
    */
   readonly rest: (
     name: string
-  ) => Effect.Effect<Option.Option<MachineRow>, Internal | Unavailable>;
+  ) => Effect.Effect<Option.Option<MachineRow>, HostError>;
 }
 
 export class Machines extends Context.Service<Machines, Interface>()(
@@ -265,8 +272,7 @@ const absent = ({ name, state, error }: MachineRow): NotFound => {
   }
 };
 
-/** Why a machine can't be copied or resized: it may yet be made, or it won't be. */
-export const unmade = (found: MachineRow): NotMade | NotFound =>
+const unmade = (found: MachineRow): NotMade | NotFound =>
   stageOf(found.state) === "making"
     ? new NotMade({
         message: `machine ${found.name} isn't made yet: its create or setup still runs`,
@@ -274,11 +280,29 @@ export const unmade = (found: MachineRow): NotMade | NotFound =>
       })
     : absent(found);
 
+export const madeMachine = (
+  store: StoreInterface,
+  name: string
+): Effect.Effect<MachineRow, NotMade | NotFound | Internal> =>
+  Effect.gen(function* () {
+    const found = yield* store.findMachine(name);
+
+    if (Option.isNone(found)) {
+      return yield* notFound("machine", name);
+    }
+
+    if (stageOf(found.value.state) !== "made") {
+      return yield* unmade(found.value);
+    }
+
+    return found.value;
+  });
+
 const restorable = (
   name: string,
   found: Option.Option<CheckpointRow>
 ): Result.Result<CheckpointRow, NotMade | NotFound> => {
-  if (Option.isNone(found) || found.value.build !== undefined) {
+  if (Option.isNone(found) || fromBuild(found.value)) {
     return Result.fail(notFound("checkpoint", name));
   }
 
@@ -426,26 +450,19 @@ export const make = (
         return true;
       });
 
-    const sizesRead = (found: MachineRow) => {
-      const ref = refOf(found);
-
-      return ref === undefined
-        ? Effect.void
-        : hosts
-            .call(found.host, (api) => api.readSizes({ machine: ref }))
-            .pipe(
-              Effect.matchEffect({
-                onFailure: ({ message }) =>
-                  Effect.logWarning(
-                    `couldn't read the sizes of ${found.name}, so it keeps those it has: ${message}`
-                  ),
-                onSuccess: (sizing) =>
-                  Effect.asVoid(
-                    applying(found.name, { type: "sized", sizing })
-                  ),
-              })
-            );
-    };
+    const sizesRead = (found: MachineRow) =>
+      hosts
+        .call(found.host, (api) => api.readSizes({ machine: refOf(found) }))
+        .pipe(
+          Effect.matchEffect({
+            onFailure: ({ message }) =>
+              Effect.logWarning(
+                `couldn't read the sizes of ${found.name}, so it keeps those it has: ${message}`
+              ),
+            onSuccess: (sizing) =>
+              Effect.asVoid(applying(found.name, { type: "sized", sizing })),
+          })
+        );
 
     const following = (found: MachineRow, op: Operation, heard: Heard) =>
       Effect.gen(function* () {
@@ -502,9 +519,7 @@ export const make = (
 
             const written = yield* stored(name, {
               type: "lost",
-              error: new Internal({
-                message: `the ${op.kind} of machine ${name} ended before its host reported it: ${heard.why}`,
-              }),
+              error: unreported(op, heard.why),
             });
 
             if (written && op.kind === "resize") {
@@ -580,7 +595,7 @@ export const make = (
     const drive = yield* driver(settings.recheck, {
       kind: "machine",
       find: store.findMachine,
-      operationOn: store.operationOn,
+      store,
       activityOf,
       looking,
       polling: (found, op) =>
@@ -765,11 +780,7 @@ export const make = (
       ...sizing
     }: ForkRequest & Sizing) =>
       Effect.gen(function* () {
-        const from = yield* row(id);
-
-        if (stageOf(from.state) !== "made") {
-          return yield* unmade(from);
-        }
+        const from = yield* madeMachine(store, id);
 
         const info = yield* answering(hosts, from.host);
         const spec = yield* copied(name, from, sizing, info.traits);
@@ -823,29 +834,27 @@ export const make = (
       });
 
     const stepless = (name: string) =>
-      row(name).pipe(
-        Effect.repeat({
-          until: (found) => activityOf(found.state) !== "follow",
-          schedule: Schedule.spaced(stepPoll).pipe(
-            Schedule.upTo({ duration: readTimeout })
-          ),
-        })
+      readUntil(
+        store,
+        "machine",
+        name,
+        row(name),
+        (found) => activityOf(found.state) !== "follow"
+      ).pipe(
+        Effect.timeoutOrElse({ duration: readTimeout, orElse: () => row(name) })
       );
 
     const exec = ({ id, ...command }: ExecRequest) =>
       Effect.gen(function* () {
-        const made = yield* row(id);
-
-        if (stageOf(made.state) !== "made") {
-          return yield* unmade(made);
-        }
+        yield* madeMachine(store, id);
 
         const found = yield* stepless(id);
-        const ref = refOf(found);
 
-        if (stageOf(found.state) !== "made" || ref === undefined) {
+        if (stageOf(found.state) !== "made") {
           return yield* unmade(found);
         }
+
+        const ref = refOf(found);
 
         const { timeoutSeconds } = command;
 
@@ -853,12 +862,7 @@ export const make = (
           .call(
             found.host,
             (api) => api.execMachine({ machine: ref, ...command }),
-            timeoutSeconds === undefined
-              ? Duration.infinity
-              : Duration.sum(
-                  Duration.sum(Duration.seconds(timeoutSeconds), endTimeout),
-                  readTimeout
-                )
+            execWait(timeoutSeconds)
           )
           .pipe(
             Effect.catchTags({
@@ -950,29 +954,25 @@ export const make = (
       });
 
     const held = (id: string, bound: Duration.Duration) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { now, next } = yield* store.watchMachine(id);
+      Effect.gen(function* () {
+        const first = yield* row(id);
 
-          const first = yield* Effect.fromOption(now, () =>
-            notFound("machine", id)
-          );
-
-          const answers = Option.match({
-            onNone: () => true,
-            onSome: (found: MachineRow) =>
-              found.instance !== first.instance ||
-              isResting(phaseOf(found.state)),
-          });
-
-          if (!answers(now)) {
-            yield* Effect.timeoutOption(
-              Effect.repeat(next, { until: answers }),
-              bound
-            );
-          }
-        })
-      );
+        yield* Effect.timeoutOption(
+          readUntil(
+            store,
+            "machine",
+            id,
+            store.findMachine(id),
+            Option.match({
+              onNone: () => true,
+              onSome: (found: MachineRow) =>
+                found.instance !== first.instance ||
+                isResting(phaseOf(found.state)),
+            })
+          ),
+          bound
+        );
+      });
 
     const read = (id: string) =>
       Effect.flatMap(row(id), (found) =>
@@ -980,9 +980,13 @@ export const make = (
       );
 
     const rest = (name: string) =>
-      Effect.andThen(
-        untilRest(settings.recheck, rests(name)),
-        store.findMachine(name)
+      untilRest(store, "machine", name, settings.recheck, rests(name)).pipe(
+        Effect.andThen(store.findMachine(name)),
+        Effect.tap((found) =>
+          Option.isSome(found) && found.value.error !== undefined
+            ? Effect.fail(found.value.error)
+            : Effect.void
+        )
       );
 
     const { tick } = yield* recheckHosts(store, hosts, settings.failedRowsLast);

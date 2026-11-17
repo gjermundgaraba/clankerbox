@@ -388,7 +388,7 @@ Each: what Tart does, where, and what of ours depends on it.
   proxy in `executeThenClose`, ControlSocket.swift): measured on 2.41.1, a
   silent command, one with a child and a writing loop's orphaned shell all
   ran on 15 s after the client was killed by KILL, TERM or INT. Ours:
-  `guest.ts` ends a cut command through a second `tart exec`, which root's
+  `exec.ts` ends a cut command through a second `tart exec`, which root's
   `ps -axEww` serves, showing every user's environment and a newline as
   `\012`: measured, it ended a silent command, a writing loop, a child, a
   `setpgrp` child, a nested `sudo`'s children, an orphan and a TERM trap in

@@ -1,11 +1,12 @@
 import { Schema } from "effect";
+import { Hex } from "effect/encoding";
 
 const hostIdPattern = /^[a-z][a-z0-9-]{0,31}$/u;
 
 const hostIdRule =
   "a host ID is 1 to 32 lowercase letters, digits and '-', starting with a letter";
 
-const maxNameLength = 62;
+export const maxNameLength = 62;
 
 const namePattern = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*$/u;
 
@@ -38,12 +39,19 @@ export const copyPrefixes = { built: "built-", fetched: "fetched-" } as const;
 
 const prefixes = Object.values(copyPrefixes);
 
+const copyDigits = 16;
+
 const buildCopyPattern = new RegExp(
-  `^(?:${prefixes.join("|")})[0-9a-f]{16}$`,
+  `^(?:${prefixes.join("|")})[0-9a-f]{${copyDigits}}$`,
   "u"
 );
 
-/** Whether a checkpoint's name is one the control plane mints for a template build's copy. */
+/** A new name for a template build's copy, made on the build's host or fetched to another. */
+export const buildCopyName = (kind: keyof typeof copyPrefixes): string =>
+  `${copyPrefixes[kind]}${Hex.encode(
+    globalThis.crypto.getRandomValues(new Uint8Array(copyDigits / 2))
+  )}`;
+
 export const isBuildCopy = (name: string): boolean =>
   buildCopyPattern.test(name);
 

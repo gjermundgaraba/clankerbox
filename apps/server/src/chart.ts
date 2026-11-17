@@ -6,14 +6,7 @@ import type {
 } from "xstate";
 
 import type { FreshBoot } from "./hosts.ts";
-import type { Facts, Lease, Operation } from "./store.ts";
-
-/** What a resource's write does: its next row, and the operation it begins or finishes. */
-export interface Decision<R> {
-  readonly next: R | "removed";
-  readonly begin?: Omit<Operation, "sequence">;
-  readonly finish: boolean;
-}
+import type { Decision, Facts, Lease, Operation } from "./store.ts";
 
 /** `read` and `recheck` read, and `follow` polls the operation; `none` waits for a request. */
 export type Activity = "read" | "follow" | "recheck" | "none";
@@ -33,19 +26,17 @@ export type PathOf<Value> = Value extends string
   : { [K in keyof Value & string]: `${K}.${PathOf<Value[K]>}` }[keyof Value &
       string];
 
-/** A leaf a row can hold. `gone` isn't one: the row goes in the write that reaches it. */
+/** `gone` isn't one: the row goes in the write that reaches it. */
 export type LeafOf<M extends AnyStateMachine> = Exclude<
   PathOf<SnapshotFrom<M>["value"]>,
   "gone"
 >;
 
-/** A row: the chart's context, and the leaf it rests in. */
 export type Stated<C, L> = C & { readonly state: L };
 
 /** What a `read` carries for the operation it begins, when the leaf it enters has a step. */
 export interface Read {
   readonly boot: FreshBoot;
-  /** The ID of the operation this read begins. */
   readonly id: string;
 }
 
@@ -197,7 +188,6 @@ const valueOf = (path: string): StateValue => {
     : { [path.slice(0, dot)]: valueOf(path.slice(dot + 1)) };
 };
 
-/** Every leaf of a chart's tree, in the order the tree declares them. */
 export const leavesOf = (
   machine: Pick<AnyStateMachine, "root">
 ): readonly string[] => {
@@ -209,7 +199,9 @@ export const leavesOf = (
   return under(machine.root);
 };
 
-/** What a chart's leaves say of a row: every leaf a row can hold, and each one's `meta`. */
+export type TopOf<L> = L extends `${infer Top}.${string}` ? Top : L;
+
+/** What a chart's leaves say of a row: every leaf a row can hold, each one's `meta`, and its top region. */
 export const rowLeavesOf = <L extends string, Phase>(
   machine: Pick<AnyStateMachine, "id" | "root"> & {
     readonly getStateNodeById: (id: string) => {
@@ -227,8 +219,25 @@ export const rowLeavesOf = <L extends string, Phase>(
     return meta;
   };
 
+  const stages = Object.keys(machine.root.states).filter(
+    (top): top is TopOf<L> => top !== "gone"
+  );
+
+  const stageOf = (leaf: L): TopOf<L> => {
+    const stage = stages.find(
+      (top) => leaf === top || leaf.startsWith(`${top}.`)
+    );
+
+    if (stage === undefined) {
+      throw new Error(`leaf ${leaf} is in no region`);
+    }
+
+    return stage;
+  };
+
   return {
     leaves: leavesOf(machine).filter((path): path is L => path !== "gone"),
+    stageOf,
     metaOf,
     phaseOf: (leaf: L): Phase => metaOf(leaf).phase,
     activityOf: (leaf: L): Activity => metaOf(leaf).activity,

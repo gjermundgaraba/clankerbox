@@ -1,16 +1,5 @@
-import { describeIssues, Invalid } from "@gjermundgaraba/clankerbox-sdk";
+import { describeIssues, Invalid, Sizes } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, FileSystem, Schema } from "effect";
-
-const Size = Schema.Int.check(Schema.isGreaterThan(0));
-
-/** The sizes an orb type gets. */
-export const Sizes = Schema.Struct({
-  cpu: Size,
-  ramMib: Size,
-  diskGib: Size,
-});
-
-export type Sizes = typeof Sizes.Type;
 
 /** The orb type a thread gets when it picks none, and whose sizes an unknown type gets too. */
 export const defaultType = "default";
@@ -20,11 +9,7 @@ export const defaultUser = "user";
 
 export const defaultSnapshotExpiry = Duration.days(14);
 
-/**
- * The dispatch program's settings file: the control plane's URL, the sizes of each orb type, with
- * a `default` entry, the user bootstrap runs as, and how long a saved project snapshot is kept,
- * such as `"14 days"`.
- */
+/** The dispatch program's settings file. `snapshotExpiry` is a duration such as `"14 days"`. */
 export const Settings = Schema.Struct({
   server: Schema.String,
   sizes: Schema.Record(Schema.String, Sizes),

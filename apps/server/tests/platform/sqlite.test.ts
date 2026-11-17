@@ -15,7 +15,15 @@ import {
   scratch,
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { Arbitrary, DateTime, Effect, Option, Result, Schema } from "effect";
+import {
+  Arbitrary,
+  DateTime,
+  Effect,
+  Fiber,
+  Option,
+  Result,
+  Schema,
+} from "effect";
 import { expect } from "vite-plus/test";
 
 import { applied } from "../../src/chart.ts";
@@ -1553,6 +1561,50 @@ layer(NodeServices.layer)((it) => {
       );
       expect(again.at).toBe("written");
     })
+  );
+
+  it.effect(
+    "a watch hears a finish that leaves the row as it was, and neither another row's write nor an advance that writes nothing",
+    () =>
+      Effect.gen(function* () {
+        const stateDir = yield* stateIn;
+
+        const early = yield* withStore(stateDir, (store) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              yield* store.insertMachine(row("dev"));
+              yield* store.insertMachine(row("web"));
+              yield* beginning(store, operation("dev"));
+
+              const written = yield* store.watch("machine", "dev");
+              const heard = yield* Effect.forkChild(written);
+
+              yield* store.advance("machine", "web", (given) => ({
+                next: { ...given, state: "made.observing" },
+                finish: false,
+              }));
+              yield* store.advance("machine", "dev", (given) => ({
+                next: given,
+                finish: false,
+              }));
+              yield* Effect.yieldNow;
+
+              const polled = yield* Effect.sync(() => heard.pollUnsafe());
+
+              yield* store.advance("machine", "dev", (given) => ({
+                next: given,
+                finish: true,
+              }));
+
+              yield* Fiber.join(heard);
+
+              return polled;
+            })
+          )
+        );
+
+        expect(early).toBeUndefined();
+      })
   );
 
   it.effect(

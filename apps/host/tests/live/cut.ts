@@ -2,7 +2,7 @@ import { endTimeout } from "@gjermundgaraba/clankerbox-sdk";
 import { Clock, Duration, Effect, Fiber, Logger, Schedule } from "effect";
 import { Hex } from "effect/encoding";
 
-import { markName, runCommand } from "../../src/guest.ts";
+import { markName, runCommand } from "../../src/exec.ts";
 import type { Interface as Runtime, Target } from "../../src/runtime.ts";
 
 const cutAfter = Duration.seconds(10);

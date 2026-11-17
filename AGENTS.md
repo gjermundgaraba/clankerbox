@@ -100,7 +100,8 @@ the whole CLI span domains on purpose.
   that stops answering.
 - `placement.ts`: which hosts can take a create, in order.
 - `tailnet.ts`: when a join is due. `settings.ts`: what the server runs on.
-- `store.ts`: the `Store` port, the rows, the operations and their leases.
+- `store.ts`: the `Store` port, the rows, the operations and their leases, and
+  `readUntil`, which reads again at each write of a row the store announces.
 
 `platform/sqlite.ts` is the `Store`, and loads each chart's `leaves` at runtime to
 validate `state`. `composition/`: `config.ts` reads the config file, `routes.ts`
@@ -120,10 +121,12 @@ imports `platform/` or `composition/`.
   and its sweep, which deletes each machine the runtime's `owned` facet lists
   whose instance the control plane retired and no step it holds names, and
   answers what it left. Both only read the steps the host holds.
-- `guest.ts`: setup, preparation, and the hook a stop, pause or delete
-  runs first, all run in the guest, and the end of a command cut short.
+- `exec.ts`: how a command runs in a guest: the launcher and its mark, its
+  output, and the end of a command cut short.
+- `guest.ts`: setup, preparation, the tailnet, and the hook a stop, pause or
+  delete runs first, each a script `exec.ts` runs in the guest.
 - `usage.ts`: the machines in use, and the RAM a runtime holds beside them, for the RAM budget and capacity.
-- `settings.ts`: what a host runs on.
+- `settings.ts`: what a host runs on, and the port ranges it keeps.
 - `builds.ts`: `publish`, `fetch` and `unpublish` of a checkpoint through the
   `BuildStore` port, objects by key and a manifest per build, written last.
 - `reach.ts`: the `Reaches` service. It claims a make's port, answers the
@@ -175,7 +178,8 @@ directories in `home.ts`, a VM's lock read through macOS's Perl in `locks.ts`,
 channel in `ssh.ts`, OpenSSH from the host pinned to the host key boat answers),
 each with its `RuntimeTraits` in its `traits.ts`, and what they share:
 `process.ts`, a child process's run, and `provider-http.ts`, what the smol
-cloud and boat clients keep with their provider's API: the key, read from its
+cloud and boat clients keep with their provider's API: the URL it is sent to
+(`KeyedApiUrl`), how its refusals are read (`sender`), the key, read from its
 file, which a host that can't read refuses to start, each request sent with it,
 each request's bound by
 what it asks, a gateway's 5xx and an unanswered request as a lost answer, a
@@ -207,8 +211,9 @@ cut has answered.
 `Step`s, `Operation`, `Report`, `HostInfo`. `traits.ts`, its `./traits` export:
 a runtime's `RuntimeTraits`, which `HostInfo` carries and each adapter states,
 and the pure rules each decision about a machine goes through, which the server
-calls before it writes a row and the host before it runs a step; a client sees
-only a runtime's name. `journal.ts`: `journal`, what the
+calls before it writes a row and the host before it runs a step, beside `newId`,
+which mints an instance, and `isId`, which an adapter tells its own by; a client
+sees only a runtime's name. `journal.ts`: `journal`, what the
 control plane's log and a host's hold of the requests each serves, one
 middleware for both, as both must log no secret a request carries: a request
 that answers `Internal` or fails as no action declares logs at error, with its

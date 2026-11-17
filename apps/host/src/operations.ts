@@ -16,6 +16,7 @@ import {
   Internal,
   timedOutExitCode,
   WrongState,
+  sizedBy,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   Executed,
@@ -44,28 +45,29 @@ import type { Scope } from "effect";
 import { Hex } from "effect/encoding";
 
 import { BuildStore, fetch, publish, unpublish } from "./builds.ts";
+import { runCommand } from "./exec.ts";
+import type { Leaving } from "./exec.ts";
 import {
   checkTailnet,
   identify,
   addMissingKeys,
-  lastLines,
   leave,
   prepareBase,
   prepare,
   rememberDns,
-  runCommand,
   runSetup,
   scrubNode,
+  tailnetTimeout,
 } from "./guest.ts";
-import type { Leaving, TailnetReport } from "./guest.ts";
+import type { TailnetReport } from "./guest.ts";
 import { Reaches } from "./reach.ts";
 import * as Recheck from "./recheck.ts";
 import {
+  lastLines,
   inTime,
   missing,
   missingCheckpoint,
   Runtime,
-  sizedBy,
   stateIn,
   targetOf,
   timeoutFail,
@@ -111,7 +113,7 @@ export class Operations extends Context.Service<Operations, Interface>()(
 
 const reportWait = Duration.seconds(5);
 
-const joinTimeout = Duration.minutes(3);
+const joinTimeout = Duration.times(tailnetTimeout, 2);
 
 const booted = {
   base: "createMachine",

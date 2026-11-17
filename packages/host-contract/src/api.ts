@@ -1,4 +1,5 @@
 import {
+  endTimeout,
   Conflict,
   Executed,
   ExecRequest,
@@ -12,20 +13,19 @@ import {
   PublicKeys,
   Reading,
   Setup,
+  Size,
+  Sizes,
   Sizing,
   SshEndpoint,
   TailnetStatus,
   WrongState,
+  timedOutExitCode,
 } from "@gjermundgaraba/clankerbox-sdk";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
-import { Schema } from "effect";
+import { Duration, Schema } from "effect";
 
 import { RuntimeTraits } from "./traits.ts";
-
-const Size = Schema.Int.check(Schema.isGreaterThan(0));
-
-const sizes = { cpu: Size, ramMib: Size, diskGib: Size };
 
 /** A runtime's own ID for a machine or a checkpoint, which the control plane keeps and sends back. */
 export const Handle = Schema.String.check(Schema.isMinLength(1)).pipe(
@@ -53,13 +53,13 @@ export type Ref = typeof Ref.Type;
 /** A machine as a step names it: `port`, once its make gave it one, is the host's port its sshd is reached at. */
 export const MachineRef = Schema.Struct({
   ...identity,
-  ...sizes,
+  ...Sizes.fields,
   port: Schema.optionalKey(Port),
 });
 
 export type MachineRef = typeof MachineRef.Type;
 
-export const CheckpointRef = Schema.Struct({ ...identity, ...sizes });
+export const CheckpointRef = Schema.Struct({ ...identity, ...Sizes.fields });
 
 export type CheckpointRef = typeof CheckpointRef.Type;
 
@@ -198,7 +198,7 @@ export const Outcome = Schema.Struct({
   handle: Schema.optionalKey(Handle),
   endpoint: Schema.optionalKey(SshEndpoint),
   hostKey: Schema.optionalKey(Schema.String),
-  sizes: Schema.optionalKey(Schema.Struct(sizes)),
+  sizes: Schema.optionalKey(Sizes),
   tailnet: Schema.optionalKey(TailnetStatus),
   /** A copy's make that gave it its own identity and prepared it, so it needs no start. */
   prepared: Schema.optionalKey(Schema.Literal(true)),
@@ -366,14 +366,19 @@ export const HostHttp = ActionHttp.make(
     Action.make("execMachine", {
       ...write,
       error: [Invalid, Missing, WrongState, Internal] as const,
-      description:
-        "Run a command in a running machine, once any step in its scope has ended, while a capture of it or a fork from it runs beside it, and answer its exit code and output. It runs as long as the request does, or until its timeout, which also bounds the runtime's attach: either ends the command and what it started in the guest, and a timeout answers exit code 124 with the output once the end has finished, which the host waits for at most endTimeout past it, with mayStillRun saying why when their end couldn't be confirmed, so they may still run. A stop, pause or remove step on the machine first ends it so, before its hook and its runtime call, and it answers WrongState in the phase stopping, pausing or deleting. The command's environment can't set `CLANKERBOX_EXEC`, the host's mark of what it started. Nothing of it is kept.",
+      description: `Run a command in a running machine, once any step in its scope has ended, while a capture of it or a fork from it runs beside it, and answer its exit code and output. It runs as long as the request does, or until its timeout, which also bounds the runtime's attach: either ends the command and what it started in the guest, and a timeout answers exit code ${timedOutExitCode} with the output once the end has finished, which the host waits for at most ${Duration.format(endTimeout)} past it, with mayStillRun saying why when their end couldn't be confirmed, so they may still run. A stop, pause or remove step on the machine first ends it so, before its hook and its runtime call, and it answers WrongState in the phase stopping, pausing or deleting. The command's environment can't set \`CLANKERBOX_EXEC\`, the host's mark of what it started. Nothing of it is kept.`,
       input: ExecCommand,
       success: Executed,
     }),
   ],
   { prefix: "/host" }
 );
+
+/**
+ * The status, with no body, a host answers each request with while it stops: one that comes then,
+ * and, as Effect's HTTP server does, one the stop cuts.
+ */
+export const stoppingStatus = 503;
 
 export const hostActionsByName = Action.byName(HostHttp.actions);
 

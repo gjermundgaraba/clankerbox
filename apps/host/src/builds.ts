@@ -10,7 +10,6 @@ import type { CheckpointFiles, Handle, Identity, Target } from "./runtime.ts";
  * key. A key names the same bytes for good, so a put of a key that is there changes nothing.
  */
 export interface Interface {
-  /** Every key that starts with `prefix`. */
   readonly list: (prefix: string) => Effect.Effect<readonly string[], Internal>;
   readonly get: (key: string) => Effect.Effect<Uint8Array, Internal>;
   readonly put: (

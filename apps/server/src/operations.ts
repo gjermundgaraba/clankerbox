@@ -18,6 +18,12 @@ export type Polled =
 export const cutShort = ({ kind, name }: Operation) =>
   new Internal({ message: `the ${kind} of ${name} ended on its host` });
 
+/** Why an operation its host no longer holds, as `why` tells, ended unreported. */
+export const unreported = ({ kind, resource, name }: Operation, why: string) =>
+  new Internal({
+    message: `the ${kind} of ${resource} ${name} ended before its host reported it: ${why}`,
+  });
+
 /**
  * One look at an operation: sends it when its host hasn't had it, and asks for `cancel` first when
  * `cut`. `step` builds the step afresh, or answers undefined when it can't be sent again, as a
@@ -94,7 +100,6 @@ export const poll = (
     )
   );
 
-/** Lets the host forget a report once it is stored. */
 export const collect = (hosts: Hosts, op: Operation): Effect.Effect<void> =>
   Effect.ignore(
     hosts.call(op.host, (api) => api.collectOperation({ id: op.id }))

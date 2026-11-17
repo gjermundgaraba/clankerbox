@@ -16,6 +16,21 @@ import type { HttpClient, HttpClientResponse } from "effect/http";
 import { CannotStart, timeoutFail } from "../runtime.ts";
 import { describe } from "./process.ts";
 
+const loopback = /^(?:localhost|\[::1\]|127(?:\.\d{1,3}){3})$/u;
+
+/** A provider's API URL, which its key rides on with every request: `https`, or `http` only to a loopback address. */
+export const KeyedApiUrl = Schema.String.check(
+  Schema.makeFilter((text: string) => {
+    const url = URL.parse(text);
+
+    return (
+      url?.protocol === "https:" ||
+      (url?.protocol === "http:" && loopback.test(url.hostname)) ||
+      "an https URL, or an http one to a loopback address, as the key rides on every request"
+    );
+  })
+);
+
 /**
  * What a request asks of a provider's API, which bounds how long it may take to answer: a `read`, a
  * `change` it answers once it has taken it, or one it answers only once the machine has `settle`d,
@@ -75,6 +90,14 @@ export class Unreadable extends Schema.TaggedError<
   message: Schema.String,
 }) {}
 
+/** How a call to a provider's API fails besides the provider's own refusal. */
+export const providerErrors = [Unanswered, Busy, Unreadable] as const;
+
+/** How a call to a provider's API fails, with the provider's own `Refused`. */
+export type ProviderError<Refused> =
+  | Refused
+  | InstanceType<(typeof providerErrors)[number]>;
+
 const lost =
   (call: string) =>
   (error: { readonly message: string }): Unanswered =>
@@ -93,11 +116,7 @@ const within =
       )
     );
 
-/**
- * A 5xx whose body is no answer of the provider's is a gateway's, whatever that body holds, which
- * leaves the outcome unknown. Each adapter says what its provider's own answer looks like.
- */
-export const fromGateway = (
+const fromGateway = (
   call: string,
   status: number,
   answered: boolean
@@ -110,10 +129,6 @@ export const fromGateway = (
 
 const waits = { minimum: Duration.seconds(1), maximum: Duration.seconds(30) };
 
-/**
- * The wait a refusal's `Retry-After` asks, in whole seconds or until an HTTP date, within 1 and 30
- * seconds, so one that names neither, or less, waits a second.
- */
 export const retryAfter = (
   response: HttpClientResponse.HttpClientResponse
 ): Effect.Effect<Duration.Duration> =>
@@ -134,7 +149,7 @@ export const retryAfter = (
 /** The provider took nothing and asks to be waited out, unless its answer says there is no room. */
 export const tooManyRequests = 429;
 
-export const askedToWait = (
+const askedToWait = (
   call: string,
   response: HttpClientResponse.HttpClientResponse,
   why: string
@@ -166,21 +181,14 @@ export const apiKey = (
     );
   });
 
-/**
- * Sends `request` to the API at `url` with the account's `key`, asking JSON, and answers what
- * `read` makes of the response, within the bound of what it `asked`; no answer, or one that
- * couldn't be received, is a lost answer.
- */
-export const exchanged = <A>(
+const exchanged = <A, E>(
   http: HttpClient.HttpClient,
   url: string,
   key: Redacted.Redacted,
   request: HttpClientRequest.HttpClientRequest,
   asked: Asked,
-  read: (
-    response: HttpClientResponse.HttpClientResponse
-  ) => Effect.Effect<A, Unanswered>
-): Effect.Effect<A, Unanswered> => {
+  read: (response: HttpClientResponse.HttpClientResponse) => Effect.Effect<A, E>
+): Effect.Effect<A, E | Unanswered> => {
   const call = `${request.method} ${request.url}`;
 
   return http
@@ -215,12 +223,6 @@ const backoff = Schedule.exponential(Duration.millis(250)).pipe(
   )
 );
 
-/**
- * Sends `call` again, backing off, while the provider asks to be waited out, and while its answer
- * is lost if it is `idempotent`, at most `triesPerCall` sends in all. A send the provider asked to
- * wait out waits the longer of that and the backoff; a call still asked to wait at its last send
- * fails saying so.
- */
 export const askedAgain =
   (repeats: Repeats) =>
   <A, E, R>(call: Effect.Effect<A, E, R>): Effect.Effect<A, E | Busy, R> =>
@@ -242,6 +244,70 @@ export const askedAgain =
           )
       )
     );
+
+/** What an adapter reads of its provider's answer of HTTP 400 or more. */
+export interface Refusal<Refused> {
+  /** Whether the body is the provider's own answer, which a gateway's 5xx isn't. */
+  readonly own: boolean;
+  /** Why the provider asks to be waited out, if it does. */
+  readonly waits: string | undefined;
+  readonly refused: Refused;
+}
+
+/**
+ * The calls to a provider's API at `url` with the account's `key`. A call sends its request asking
+ * JSON, within the bound of what it `asked`, and answers what `answered` reads of a response under
+ * 400; no answer, or one that couldn't be received, is a lost answer. Of any other response,
+ * `refusal` reads the provider's own answer: a 5xx whose body is none is a gateway's, whatever that
+ * body holds, and a lost answer; else one that asks to be waited out fails `Busy`; else the call
+ * fails with the provider's refusal. It is sent again as `askedAgain` says.
+ */
+export const sender =
+  <Refused>(
+    http: HttpClient.HttpClient,
+    url: string,
+    key: Redacted.Redacted,
+    refusal: (
+      response: HttpClientResponse.HttpClientResponse,
+      asked: Asked,
+      call: string
+    ) => Effect.Effect<Refusal<Refused>>
+  ) =>
+  <A>(
+    request: HttpClientRequest.HttpClientRequest,
+    asked: Asked,
+    repeats: Repeats,
+    answered: (
+      response: HttpClientResponse.HttpClientResponse
+    ) => Effect.Effect<A, Unanswered>
+  ): Effect.Effect<A, Refused | Unanswered | Busy> => {
+    const call = `${request.method} ${request.url}`;
+
+    const refused = (
+      response: HttpClientResponse.HttpClientResponse,
+      read: Refusal<Refused>
+    ): Effect.Effect<never, Refused | Unanswered | Busy> => {
+      const gateway = fromGateway(call, response.status, read.own);
+
+      if (gateway !== undefined) {
+        return Effect.fail(gateway);
+      }
+
+      return read.waits === undefined
+        ? Effect.fail(read.refused)
+        : askedToWait(call, response, read.waits);
+    };
+
+    return askedAgain(repeats)(
+      exchanged(http, url, key, request, asked, (response) =>
+        response.status < 400
+          ? answered(response)
+          : Effect.flatMap(refusal(response, asked, call), (read) =>
+              refused(response, read)
+            )
+      )
+    );
+  };
 
 export const triesAfterLoss = 3;
 
@@ -274,10 +340,8 @@ export interface Change<A, S, E, F, G, R> {
 }
 
 /**
- * Sends a change that may be taken though its answer is lost: after a lost answer it reads the
- * resource until it rests, answers what it read when that holds the change, and sends it again
- * otherwise, at most `triesAfterLoss` times in all, so a change the provider took is never sent
- * twice.
+ * Sends a change that may be taken though its answer is lost, reading the resource after a lost
+ * answer before sending it again, so a change the provider took is never sent twice.
  */
 export function sentUntilHeld<A, H extends A, S, E, F, G, R>(
   change: Change<A, S, E, F, G, R> & {

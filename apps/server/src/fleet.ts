@@ -45,9 +45,7 @@ export const capacity = (
       reached,
       ({ member, info, problem }) => {
         if (info === undefined) {
-          if (problem !== undefined) {
-            unreportedBy(member.id, problem);
-          }
+          unreportedBy(member.id, problem);
 
           return Effect.succeed<Usage[]>([]);
         }

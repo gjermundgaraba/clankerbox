@@ -30,7 +30,6 @@ export class CannotStart extends Schema.TaggedError<
   message: Schema.String,
 }) {}
 
-/** Whether a runtime's reported `major.minor.patch` release is `floor` or later. */
 export const atLeast =
   (floor: string) =>
   (reported: string): boolean =>
@@ -54,12 +53,6 @@ export type Sizes = Pick<MachineRef, "cpu" | "ramMib" | "diskGib">;
 
 export type Identity = Pick<Ref, "name" | "instance">;
 
-export const sizedBy = (from: Sizes, sizing: Sizing | undefined): Sizes => ({
-  cpu: sizing?.cpu ?? from.cpu,
-  ramMib: sizing?.ramMib ?? from.ramMib,
-  diskGib: sizing?.diskGib ?? from.diskGib,
-});
-
 export const changes = (from: Sizes, to: Sizes): Sizing => ({
   cpu: to.cpu === from.cpu ? undefined : to.cpu,
   ramMib: to.ramMib === from.ramMib ? undefined : to.ramMib,
@@ -79,7 +72,6 @@ export const timeoutFail =
       orElse: () => Effect.fail(error()),
     });
 
-/** Fails `Internal`, naming `what`, past the time a read of the runtime may take. */
 export const inTime = (what: string) =>
   timeoutFail(
     stateReadWait,
@@ -99,6 +91,19 @@ export const targetOf = (
   { name, instance }: Identity,
   handle: Handle
 ): Target => ({ name, instance, handle });
+
+const tailLines = 20;
+
+const tailCharacters = 4000;
+
+/** The end of a command's output, as an error or a log quotes it. */
+export const lastLines = (text: string): string =>
+  text
+    .trimEnd()
+    .split("\n")
+    .slice(-tailLines)
+    .join("\n")
+    .slice(-tailCharacters);
 
 export type Sized = Target & Sizes;
 

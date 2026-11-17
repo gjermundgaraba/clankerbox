@@ -1,6 +1,7 @@
 import type { HostInfo } from "@clankerbox/host-contract";
 import {
   fetchable,
+  newId,
   offers,
   stopsBeforeCapture,
 } from "@clankerbox/host-contract/traits";
@@ -33,16 +34,16 @@ import {
 } from "effect";
 import type { Scope, Duration } from "effect";
 
-import { isPublished } from "./checkpoint-chart.ts";
+import { isPublished, stageOf } from "./checkpoint-chart.ts";
 import type { CheckpointRow } from "./checkpoint-chart.ts";
 import { Checkpoints } from "./checkpoints.ts";
 import { apart } from "./driver.ts";
 import { Hosts } from "./hosts.ts";
 import type { Reached } from "./hosts.ts";
 import { Machines } from "./machines.ts";
-import { builtUnder, outdated, placing } from "./placement.ts";
+import { builtUnder, imageOf, outdated, placing } from "./placement.ts";
 import type { BuiltUnder } from "./placement.ts";
-import { newId, Store } from "./store.ts";
+import { Store } from "./store.ts";
 import type { BuildRow, TemplateRow } from "./store.ts";
 
 export interface Interface {
@@ -83,11 +84,13 @@ const copyOf = (
       : { host, phase: "outdated", reason: `${host} ${why}` };
   }
 
-  if (state === "failed" || state.startsWith("discarding")) {
+  if (state === "failed" || stageOf(state) === "discarding") {
     return { host, phase: "failed", ...(error === undefined ? {} : { error }) };
   }
 
-  return state.startsWith("fetching") ? { host, phase: "fetching" } : undefined;
+  return stageOf(state) === "fetching"
+    ? { host, phase: "fetching" }
+    : undefined;
 };
 
 const unfetched = (
@@ -203,8 +206,6 @@ const ended = (
       : Option.none();
   });
 
-const imageOf = (host: HostInfo, base: string) => host.images[base] ?? base;
-
 const sentTo = (
   host: HostInfo,
   base: string
@@ -247,7 +248,7 @@ const begun =
   };
 
 const holds = ({ state }: CheckpointRow) =>
-  state !== "failed" && !state.startsWith("deleting");
+  state !== "failed" && stageOf(state) !== "deleting";
 
 /**
  * The fetches due: of each ready build that was published, to each host its copy is fetchable to
@@ -387,21 +388,15 @@ export const make = (settings: {
           )
         );
 
-        const atRest = Effect.gen(function* () {
-          const resting = yield* machines.rest(builder);
-
-          if (Option.isNone(resting)) {
-            return yield* new Internal({
-              message: `build ${id}'s builder went before its setup ended`,
-            });
-          }
-
-          if (resting.value.error !== undefined) {
-            return yield* resting.value.error;
-          }
-
-          return resting.value;
-        });
+        const atRest = Effect.flatMap(machines.rest(builder), (resting) =>
+          Effect.fromOption(
+            resting,
+            () =>
+              new Internal({
+                message: `build ${id}'s builder went before its setup ended`,
+              })
+          )
+        );
 
         const lastSent = yield* Ref.make(Arr.headNonEmpty(placed));
 

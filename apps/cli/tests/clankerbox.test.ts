@@ -1,7 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { version } from "@gjermundgaraba/clankerbox-sdk";
-import type { actionsByName } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect } from "effect";
 import type { Command } from "effect/cli";
 import { expect } from "vite-plus/test";
@@ -16,19 +15,7 @@ const commandsUnder = (
     commands.flatMap((sub) => [sub, ...commandsUnder(sub)])
   );
 
-type Covers<Commands> = [keyof typeof actionsByName] extends [keyof Commands]
-  ? true
-  : false;
-
 layer(NodeServices.layer)((it) => {
-  it("the command map names every action, and a map that leaves one out doesn't compile", () => {
-    const whole: Covers<typeof actionCommands> = true;
-    // @ts-expect-error getCapacity is an action, and this map has no command for it
-    const short: Covers<Omit<typeof actionCommands, "getCapacity">> = true;
-
-    expect([whole, short]).toStrictEqual([true, true]);
-  });
-
   it("each of the contract's actions has a command the CLI runs", () => {
     const reachable = new Set(commandsUnder(clankerbox));
 

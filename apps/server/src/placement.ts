@@ -62,7 +62,7 @@ const sifted = <K, A>(
       passed(member.id, missed(`can't be used: ${problem.message}`));
     } else if (info === undefined) {
       noReply = true;
-      misses.push(`${member.id} failed: ${problem?.message ?? "no answer"}`);
+      misses.push(`${member.id} failed: ${problem.message}`);
     } else {
       const took = take(info, known.success);
 
@@ -178,15 +178,15 @@ export const builtUnder = (
   diskGib,
 });
 
-/**
- * Why a host's copy of `build` takes no create, if it doesn't: the host runs another runtime pin,
- * or its base names another image, than the build was made under.
- */
+/** The image a host gives a base: the one it names there, else the base itself, a reference. */
+export const imageOf = (info: HostInfo, base: string): string =>
+  info.images[base] ?? base;
+
 export const outdated = (
   info: HostInfo,
   build: BuiltUnder
 ): string | undefined => {
-  const image = info.images[build.base] ?? build.base;
+  const image = imageOf(info, build.base);
 
   if (info.pin !== build.pin) {
     return `runs runtime pin ${info.pin ?? "none"}, and ${build.id} was built under ${build.pin ?? "none"}`;

@@ -1,8 +1,11 @@
 import type { Report } from "@clankerbox/host-contract";
-import { pauseCapture, pinRefusal } from "@clankerbox/host-contract/traits";
 import {
-  copyPrefixes,
-  Internal,
+  newId,
+  pauseCapture,
+  pinRefusal,
+} from "@clankerbox/host-contract/traits";
+import {
+  buildCopyName,
   isResting,
   labelledWith,
   readTimeout,
@@ -18,21 +21,18 @@ import type {
   Machine,
   PauseRequest,
   Conflict,
+  Internal,
 } from "@gjermundgaraba/clankerbox-sdk";
-import {
-  Cause,
-  Context,
-  DateTime,
-  Duration,
-  Effect,
-  Layer,
-  Option,
-  Schedule,
-} from "effect";
-import type { Scope } from "effect";
+import { Cause, Context, DateTime, Effect, Layer, Option } from "effect";
+import type { Scope, Duration } from "effect";
 
 import { applied } from "./chart.ts";
-import { activityOf, checkpointChart, phaseOf } from "./checkpoint-chart.ts";
+import {
+  activityOf,
+  checkpointChart,
+  fromBuild,
+  phaseOf,
+} from "./checkpoint-chart.ts";
 import type { CheckpointEvent, CheckpointRow } from "./checkpoint-chart.ts";
 import { uncopiable } from "./copies.ts";
 import { apart, driver, untilRest } from "./driver.ts";
@@ -41,13 +41,11 @@ import { answering, Hosts } from "./hosts.ts";
 import { phaseOf as machinePhaseOf, stageOf } from "./machine-chart.ts";
 import type { MachineRow } from "./machine-chart.ts";
 import { stateOf } from "./machine-view.ts";
-import { Machines, unmade } from "./machines.ts";
-import { collect, cutShort, poll } from "./operations.ts";
+import { madeMachine, Machines } from "./machines.ts";
+import { collect, cutShort, poll, unreported } from "./operations.ts";
 import { checkpointStep } from "./steps.ts";
-import { newId, notFound, Store } from "./store.ts";
+import { notFound, readUntil, Store } from "./store.ts";
 import type { Operation } from "./store.ts";
-
-const beginPoll = Duration.millis(100);
 
 export interface Interface {
   readonly list: (
@@ -83,12 +81,12 @@ export interface Interface {
   ) => Effect.Effect<string, HostError>;
   /** Publishes a build's copy to the build store, and waits for that to end, failing with its error. */
   readonly publish: (name: string) => Effect.Effect<void, HostError>;
-  /** Records a copy of `published`, a build's published copy, fetched by `host`, and answers at once. */
+  /** Answers once the fetch is recorded, before it runs. */
   readonly fetch: (
     published: CheckpointRow,
     host: string
   ) => Effect.Effect<void, Conflict | Internal>;
-  /** Deletes a copy of a template build, if it is there. */
+  /** A copy that isn't there is no failure. */
   readonly discard: (name: string) => Effect.Effect<void, Internal>;
 }
 
@@ -157,7 +155,7 @@ export const make = (settings: {
     const row = (name: string) =>
       Effect.flatMap(store.findCheckpoint(name), (found) =>
         Effect.fromOption(
-          Option.filter(found, ({ build }) => build === undefined),
+          Option.filter(found, (record) => !fromBuild(record)),
           () => notFound("checkpoint", name)
         )
       );
@@ -171,9 +169,7 @@ export const make = (settings: {
       Effect.map(store.findMachine(record.machine), (source) =>
         op.kind === "capture" && Option.isNone(source)
           ? notFound("machine", record.machine)
-          : new Internal({
-              message: `the ${op.kind} of checkpoint ${record.name} ended before its host reported it: ${why}`,
-            })
+          : unreported(op, why)
       );
 
     const following = (record: CheckpointRow, op: Operation, heard: Heard) =>
@@ -194,7 +190,7 @@ export const make = (settings: {
     const drive = yield* driver(settings.recheck, {
       kind: "checkpoint",
       find: store.findCheckpoint,
-      operationOn: store.operationOn,
+      store,
       activityOf,
       looking: (record) =>
         Effect.gen(function* () {
@@ -220,14 +216,12 @@ export const make = (settings: {
     const driveOnRest = (name: string, machine: string) => {
       const rests = (found: Option.Option<MachineRow>) => !awaits(name, found);
 
-      return Effect.scoped(
-        Effect.gen(function* () {
-          const { now, next } = yield* store.watchMachine(machine);
-
-          if (!rests(now)) {
-            yield* Effect.repeat(next, { until: rests });
-          }
-        })
+      return readUntil(
+        store,
+        "machine",
+        machine,
+        store.findMachine(machine),
+        rests
       ).pipe(
         Effect.andThen(drive(name)),
         Effect.catch(({ message }) =>
@@ -246,17 +240,7 @@ export const make = (settings: {
       build?: string
     ) =>
       Effect.gen(function* () {
-        const present = yield* store.findMachine(source);
-
-        if (Option.isNone(present)) {
-          return yield* notFound("machine", source);
-        }
-
-        const machine = present.value;
-
-        if (stageOf(machine.state) !== "made") {
-          return yield* unmade(machine);
-        }
+        const machine = yield* madeMachine(store, source);
 
         const record: CheckpointRow = {
           name,
@@ -347,26 +331,25 @@ export const make = (settings: {
         return false;
       });
 
-    const rested = (name: string) => untilRest(settings.recheck, rests(name));
+    const rested = (name: string) =>
+      untilRest(store, "checkpoint", name, settings.recheck, rests(name));
 
     const begun = (name: string) =>
-      Effect.gen(function* () {
-        const record = yield* store.findCheckpoint(name);
+      readUntil(
+        store,
+        "checkpoint",
+        name,
+        Effect.gen(function* () {
+          const record = yield* store.findCheckpoint(name);
 
-        return (
-          Option.isNone(record) ||
-          record.value.state !== "capturing.due" ||
-          Option.isSome(yield* store.operationOn("checkpoint", name))
-        );
-      }).pipe(
-        Effect.repeat({
-          until: (has) => has,
-          schedule: Schedule.spaced(beginPoll).pipe(
-            Schedule.upTo({ duration: readTimeout })
-          ),
+          return (
+            Option.isNone(record) ||
+            record.value.state !== "capturing.due" ||
+            Option.isSome(yield* store.operationOn("checkpoint", name))
+          );
         }),
-        Effect.asVoid
-      );
+        (has) => has
+      ).pipe(Effect.timeoutOption(readTimeout), Effect.asVoid);
 
     const asked = (request: CaptureRequest) =>
       Effect.gen(function* () {
@@ -401,17 +384,7 @@ export const make = (settings: {
           return yield* machines.pause(id);
         }
 
-        const present = yield* store.findMachine(id);
-
-        if (Option.isNone(present)) {
-          return yield* notFound("machine", id);
-        }
-
-        const found = present.value;
-
-        if (stageOf(found.state) !== "made") {
-          return yield* unmade(found);
-        }
+        const found = yield* madeMachine(store, id);
 
         const { traits, pin } = yield* answering(hosts, found.host);
         const unpinnedRefusal = pinRefusal({ copy: id }, found.pin, pin);
@@ -513,8 +486,7 @@ export const make = (settings: {
       list: Effect.fn("Checkpoints.list")((filter) =>
         Effect.map(store.checkpoints, (records) =>
           records.flatMap((record) =>
-            record.build === undefined &&
-            labelledWith(record.labels, filter.labels)
+            !fromBuild(record) && labelledWith(record.labels, filter.labels)
               ? [shown(record)]
               : []
           )
@@ -527,7 +499,7 @@ export const make = (settings: {
         Effect.andThen(row(id), remove(id))
       ),
       copy: Effect.fn("Checkpoints.copy")((machine, build) => {
-        const name = `${copyPrefixes.built}${newId().slice(0, 16)}`;
+        const name = buildCopyName("built");
 
         return capturing({ machine, name }, build).pipe(
           Effect.andThen(rested(name)),
@@ -542,7 +514,7 @@ export const make = (settings: {
       ),
       fetch: Effect.fn("Checkpoints.fetch")((published, host) =>
         Effect.gen(function* () {
-          const name = `${copyPrefixes.fetched}${newId().slice(0, 16)}`;
+          const name = buildCopyName("fetched");
 
           yield* store.insertCheckpoint({
             ...published,

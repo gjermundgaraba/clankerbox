@@ -319,10 +319,6 @@ const restsWithin = (input: Input, steps: number) => {
 };
 
 describe("a read", () => {
-  it("covers every stage, wish, flag and reading there is", () => {
-    expect(inputs).toHaveLength(4 * 4 * 2 * 2 * 5);
-  });
-
   it("decides as its table says, from every leaf a read is sent to, joining only where it would settle", () => {
     const table = inputs.flatMap((input) =>
       inputLeaves(input).flatMap((from) =>

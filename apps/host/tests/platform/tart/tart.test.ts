@@ -37,7 +37,7 @@ import { TestClock } from "effect/testing";
 import { expect } from "vite-plus/test";
 
 import { Box } from "../../../src/box.ts";
-import { runCommand } from "../../../src/guest.ts";
+import { runCommand } from "../../../src/exec.ts";
 import { PortProbe } from "../../../src/machine-ports.ts";
 import * as Operations from "../../../src/operations.ts";
 import { defaultEphemeralPorts } from "../../../src/platform/box.ts";
@@ -159,6 +159,8 @@ const calls = (mac: ScriptedMac) =>
     );
 
 const vmOf = (machine: Identity) => machineName("mac", machine);
+
+const tags = (xml: string) => xml.replaceAll(/>\s+</gu, "><").trim();
 
 const launchctlPrint = (name: string) =>
   readFileSync(new URL(`launchctl/${name}.txt`, import.meta.url), "utf-8");
@@ -419,55 +421,58 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
   it("a job plist names only tart, never restarts, and escapes what it holds", () => {
     expect(
-      plist({
-        label: "cbx-mac-m-a-01234567",
-        program: [
-          "/opt/tart & co/tart",
-          "run",
-          "--no-graphics",
-          "cbx-mac-m-a-01234567",
-        ],
-        environment: {
-          PATH: "/usr/bin",
-          HOME: "/Users/a<b>",
-          TART_HOME: undefined,
-        },
-        log: "/state/launchd/cbx-mac-m-a-01234567.log",
-      })
+      tags(
+        plist({
+          label: "cbx-mac-m-a-01234567",
+          program: [
+            "/opt/tart & co/tart",
+            "run",
+            "--no-graphics",
+            "cbx-mac-m-a-01234567",
+          ],
+          environment: {
+            PATH: "/usr/bin",
+            HOME: "/Users/a<b>",
+            TART_HOME: undefined,
+          },
+          log: "/state/launchd/cbx-mac-m-a-01234567.log",
+        })
+      )
     ).toBe(
-      [
-        `<?xml version="1.0" encoding="UTF-8"?>`,
-        `<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">`,
-        `<plist version="1.0">`,
-        `<dict>`,
-        `  <key>Label</key>`,
-        `  <string>cbx-mac-m-a-01234567</string>`,
-        `  <key>ProgramArguments</key>`,
-        `  <array>`,
-        `    <string>/opt/tart &amp; co/tart</string>`,
-        `    <string>run</string>`,
-        `    <string>--no-graphics</string>`,
-        `    <string>cbx-mac-m-a-01234567</string>`,
-        `  </array>`,
-        `  <key>EnvironmentVariables</key>`,
-        `  <dict>`,
-        `    <key>PATH</key>`,
-        `    <string>/usr/bin</string>`,
-        `    <key>HOME</key>`,
-        `    <string>/Users/a&lt;b&gt;</string>`,
-        `  </dict>`,
-        `  <key>RunAtLoad</key>`,
-        `  <false/>`,
-        `  <key>KeepAlive</key>`,
-        `  <false/>`,
-        `  <key>StandardOutPath</key>`,
-        `  <string>/state/launchd/cbx-mac-m-a-01234567.log</string>`,
-        `  <key>StandardErrorPath</key>`,
-        `  <string>/state/launchd/cbx-mac-m-a-01234567.log</string>`,
-        `</dict>`,
-        `</plist>`,
-        ``,
-      ].join("\n")
+      tags(
+        [
+          `<?xml version="1.0" encoding="UTF-8"?>`,
+          `<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">`,
+          `<plist version="1.0">`,
+          `<dict>`,
+          `  <key>Label</key>`,
+          `  <string>cbx-mac-m-a-01234567</string>`,
+          `  <key>ProgramArguments</key>`,
+          `  <array>`,
+          `    <string>/opt/tart &amp; co/tart</string>`,
+          `    <string>run</string>`,
+          `    <string>--no-graphics</string>`,
+          `    <string>cbx-mac-m-a-01234567</string>`,
+          `  </array>`,
+          `  <key>EnvironmentVariables</key>`,
+          `  <dict>`,
+          `    <key>PATH</key>`,
+          `    <string>/usr/bin</string>`,
+          `    <key>HOME</key>`,
+          `    <string>/Users/a&lt;b&gt;</string>`,
+          `  </dict>`,
+          `  <key>RunAtLoad</key>`,
+          `  <false/>`,
+          `  <key>KeepAlive</key>`,
+          `  <false/>`,
+          `  <key>StandardOutPath</key>`,
+          `  <string>/state/launchd/cbx-mac-m-a-01234567.log</string>`,
+          `  <key>StandardErrorPath</key>`,
+          `  <string>/state/launchd/cbx-mac-m-a-01234567.log</string>`,
+          `</dict>`,
+          `</plist>`,
+        ].join("\n")
+      )
     );
   });
 

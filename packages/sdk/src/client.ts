@@ -16,10 +16,9 @@ import { HttpClient, HttpClientError, HttpClientRequest } from "effect/http";
 
 import {
   actionsByName as actions,
-  endTimeout,
+  execWait,
   Http,
   longestHold,
-  readTimeout,
   replyTimeout,
 } from "./api.ts";
 import type { Declared } from "./api.ts";
@@ -150,7 +149,6 @@ export type Calls = {
   ) => Effect.Effect<Success<N>, WaitErrorOf<N>>;
 };
 
-/** What `ensure` fails with: what making the machine or starting it does. */
 export type EnsureError =
   | WaitErrorOf<"createMachine">
   | WaitErrorOf<"restoreMachine">
@@ -191,7 +189,7 @@ export interface Interface extends Calls {
   readonly execMachine: (
     input: Input<"execMachine">
   ) => Effect.Effect<Executed, ErrorOf<"execMachine">>;
-  /** `buildTemplate`, then waits for the build to end, reading its template. */
+  /** `buildTemplate`, then waits for the build to end. */
   readonly buildTemplate: (
     input: BuildRequest
   ) => Effect.Effect<Build, WaitErrorOf<"buildTemplate">>;
@@ -322,6 +320,20 @@ const fromUndeclared = (
     Forbidden: (failure) => unexpected(context, failure),
   });
 
+/**
+ * Fails, as the HTTP failure it is, a call that died of one. In effect 4.1.3 an HTTP API client's
+ * call over Node, answered at a status its action declares with a body that isn't JSON, dies:
+ * `Cause.combine` hashes the Node response, whose `jsonUnsafe` getter throws.
+ */
+export const failHttpDefects = <A, E, R>(
+  call: Effect.Effect<A, E, R>
+): Effect.Effect<A, E | HttpClientError.HttpClientError, R> =>
+  Effect.catchDefect(call, (defect) =>
+    HttpClientError.isHttpClientError(defect)
+      ? Effect.fail(defect)
+      : Effect.die(defect)
+  );
+
 const settle = <A, E>(
   call: Effect.Effect<A, E | Undeclared>,
   context: CallContext
@@ -331,11 +343,7 @@ const settle = <A, E>(
       duration: context.timeout,
       orElse: () => Effect.fail(unanswered(context, context.timedOut)),
     }),
-    Effect.catchDefect((defect) =>
-      HttpClientError.isHttpClientError(defect)
-        ? Effect.fail(defect)
-        : Effect.die(defect)
-    ),
+    failHttpDefects,
     Effect.catchIf(isUndeclared, (error) =>
       Effect.fail(fromUndeclared(error, context))
     )
@@ -382,7 +390,8 @@ const decodeUrl = Schema.decodeUnknownEffect(ServerUrl);
 
 const defaultPoll = Duration.millis(250);
 
-const outageLimit = Duration.minutes(2);
+/** How long a wait rides out a control plane that doesn't answer before it ends `Unavailable`. */
+export const outageLimit = Duration.minutes(2);
 
 const saved = (subject: string, why: string): Unavailable =>
   new Unavailable({
@@ -882,12 +891,7 @@ export const make = (
         input,
         input.id,
         undefined,
-        input.timeoutSeconds === undefined
-          ? Duration.infinity
-          : Duration.sum(
-              Duration.sum(Duration.seconds(input.timeoutSeconds), endTimeout),
-              Duration.sum(readTimeout, reply)
-            )
+        Duration.sum(execWait(input.timeoutSeconds), reply)
       );
 
     return {

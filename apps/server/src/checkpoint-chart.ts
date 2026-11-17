@@ -199,7 +199,7 @@ export type Leaf = LeafOf<typeof checkpoint>;
 
 export type CheckpointRow = Stated<CheckpointFacts, Leaf>;
 
-export const { leaves, metaOf, phaseOf, activityOf } = rowLeavesOf<
+export const { leaves, metaOf, phaseOf, activityOf, stageOf } = rowLeavesOf<
   Leaf,
   ShownPhase
 >(checkpoint);
@@ -209,6 +209,10 @@ export const isPublished = ({
   name,
   published,
 }: Pick<CheckpointRow, "name" | "published">): boolean => published === name;
+
+/** Whether the row is a template build's copy, which no client reads as a checkpoint. */
+export const fromBuild = ({ build }: Pick<CheckpointRow, "build">): boolean =>
+  build !== undefined;
 
 /**
  * What every publish shares and a delete of what was published owns, so a delete that removes the

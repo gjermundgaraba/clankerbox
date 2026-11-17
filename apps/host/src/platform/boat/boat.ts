@@ -1,6 +1,11 @@
-import { formatSizes, givenSizes } from "@clankerbox/host-contract/traits";
+import {
+  formatSizes,
+  givenSizes,
+  isId,
+} from "@clankerbox/host-contract/traits";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import {
+  sizedBy,
   Capacity,
   Internal,
   Missing,
@@ -39,9 +44,9 @@ import type {
   Origin,
   Target,
 } from "../../runtime.ts";
-import { KeyedApiUrl } from "../../settings.ts";
 import type { HostSettings } from "../../settings.ts";
 import {
+  KeyedApiUrl,
   apiKey,
   bounded,
   sentUntilHeld,
@@ -72,7 +77,8 @@ export const instanceLabel = "cbx-instance";
 
 const snapshotPrefix = "cbx-";
 
-const snapshotMark = /^cbx-[0-9a-f]{32}$/u;
+const snapshotMark = (name: string): boolean =>
+  name.startsWith(snapshotPrefix) && isId(name.slice(snapshotPrefix.length));
 
 const snapshotName = (checkpoint: Pick<Identity, "instance">): string =>
   `${snapshotPrefix}${checkpoint.instance}`;
@@ -82,9 +88,7 @@ const heldBy = (
   sandbox: string
 ): Handle[] =>
   snapshots.flatMap(({ name, sourceSandboxId }) =>
-    sourceSandboxId === sandbox && snapshotMark.test(name)
-      ? [Handle.make(name)]
-      : []
+    sourceSandboxId === sandbox && snapshotMark(name) ? [Handle.make(name)] : []
   );
 
 const running = new Set(["ready", "idle", "running"]);
@@ -231,8 +235,8 @@ const createdFrom = (origin: Exclude<Origin, { _tag: "machine" }>) => {
 const bracketed = /^\[(?<host>[^\]]+)\]$/u;
 
 /**
- * Where `/sshkey` says the guest's sshd answers: its `sshEndpoint`, as `host:port` or `[v6]:port`,
- * else its `machineIp` on port 22; `undefined` for an endpoint that names no host and port.
+ * boat's `/sshkey` names where the guest's sshd answers as `sshEndpoint`, `host:port` or
+ * `[v6]:port`, or else only as `machineIp`, on port 22.
  */
 export const endpointOf = (
   answer: SshKey
@@ -462,7 +466,7 @@ export const make = (
       );
 
     const snapshots = api.savedSnapshots(snapshotPrefix, (name) =>
-      snapshotMark.test(name)
+      snapshotMark(name)
     );
 
     const searched = (machine: Identity) =>
@@ -831,14 +835,7 @@ export const make = (
         }).pipe(bounded("boat", `capture ${machine.name}`)),
       resize: (machine, to) =>
         Effect.gen(function* () {
-          const type = yield* typeFor(
-            {
-              cpu: to.cpu ?? machine.cpu,
-              ramMib: to.ramMib ?? machine.ramMib,
-              diskGib: to.diskGib ?? machine.diskGib,
-            },
-            machine.name
-          );
+          const type = yield* typeFor(sizedBy(machine, to), machine.name);
 
           yield* retyped(machine, type);
         }).pipe(bounded("boat", `resize ${machine.name}`)),

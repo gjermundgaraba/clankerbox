@@ -115,7 +115,7 @@ Each line names where the code holds it and how to check it again.
   `sudo`, reads every process's environment in `/proc`, and ends the cut
   command's `sudo`, shell, child and a child that ignores TERM, 6 s after a
   10 s timeout, while a command another exec runs beside it runs on. (`ssh.ts`'s
-  `exec`; `guest.ts`'s `ended`; `fake-boat.ts`'s `fakeBoatSsh`,
+  `exec`; `exec.ts`'s `ended`; `fake-boat.ts`'s `fakeBoatSsh`,
   `guest-groups.ts`, the contract's case that ends a command whose exec is
   cut short, and the live suite's that ends one its exec's timeout cut, in
   `tests/live/cut.ts`.)

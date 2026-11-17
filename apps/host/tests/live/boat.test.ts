@@ -14,12 +14,12 @@ import { Hex } from "effect/encoding";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { expect } from "vite-plus/test";
 
+import { runCommand } from "../../src/exec.ts";
 import {
   checkTailnet,
   identify,
   prepare,
   prepareBase,
-  runCommand,
   scrubNode,
 } from "../../src/guest.ts";
 import type { TailnetReport } from "../../src/guest.ts";

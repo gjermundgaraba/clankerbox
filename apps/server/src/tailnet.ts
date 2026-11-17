@@ -17,7 +17,6 @@ export const unchecked: TailnetCheck = {
   backoff: 1,
 };
 
-/** What a machine starts from once it runs: due, as nothing has looked at it yet. */
 export const firstCheck: TailnetCheck = { ...unchecked, wait: 0 };
 
 export const checked = (

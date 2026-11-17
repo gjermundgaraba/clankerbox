@@ -25,7 +25,9 @@ const info = (id: string, bases: readonly string[]): HostInfo => ({
   builds: false,
 });
 
-const up = (id: string, bases: readonly string[] = ["ubuntu"]): Reached => ({
+type Up = Extract<Reached, { readonly problem: undefined }>;
+
+const up = (id: string, bases: readonly string[] = ["ubuntu"]): Up => ({
   member: { id, url: `http://${id}`, draining: false },
   info: info(id, bases),
   problem: undefined,
@@ -47,28 +49,25 @@ const classed = (
 
   return {
     ...reached,
-    info:
-      reached.info === undefined
-        ? undefined
-        : {
-            ...reached.info,
-            traits: {
-              ...reached.info.traits,
-              sizes: {
-                _tag: "classes",
-                classes: [
-                  named(first, 0),
-                  ...rest.map((sizes, index) => named(sizes, index + 1)),
-                ],
-              },
-            },
-          },
+    info: {
+      ...reached.info,
+      traits: {
+        ...reached.info.traits,
+        sizes: {
+          _tag: "classes",
+          classes: [
+            named(first, 0),
+            ...rest.map((sizes, index) => named(sizes, index + 1)),
+          ],
+        },
+      },
+    },
   };
 };
 
-const withTraits = (reached: Reached, traits: HostInfo["traits"]): Reached => ({
+const withTraits = (reached: Up, traits: HostInfo["traits"]): Reached => ({
   ...reached,
-  info: reached.info === undefined ? undefined : { ...reached.info, traits },
+  info: { ...reached.info, traits },
 });
 
 const draining = (id: string): Reached => {

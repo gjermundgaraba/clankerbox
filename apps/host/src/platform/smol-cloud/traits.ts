@@ -1,7 +1,7 @@
 import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
 import { RuntimeName } from "@gjermundgaraba/clankerbox-sdk";
 
-/** smol cloud's traits, with the most the account's plan gives one machine. */
+/** `most` is the most the account's plan gives one machine. */
 export const traits = (
   most: RuntimeTraits["limits"]["most"]
 ): RuntimeTraits => ({

@@ -110,9 +110,6 @@ const sourceStep = (store: Store, found: MachineRow, held: Setup | undefined) =>
       : undefined;
   });
 
-const hooked = (found: MachineRow, timeoutSeconds: number) =>
-  found.ephemeral ? {} : { hook: { timeoutSeconds } };
-
 /**
  * What a host is sent for a machine's operation, built afresh from the rows at each delivery, or
  * undefined when it can't be sent: its source went, or the setup `held` in memory for a template's
@@ -135,13 +132,18 @@ export const machineStep = (
     const ref = refOf(found);
     const { name } = found;
     const { machines, taken } = yield* others(store, found);
+    const hostname = `cbx-${name}`;
+
+    const hook = found.ephemeral
+      ? {}
+      : { hook: { timeoutSeconds: hookTimeoutSeconds } };
 
     if (op.kind === "remove") {
       return {
         _tag: "remove",
         machine: identityOf(found),
         keep: yield* keptOn(store, found.host),
-        ...hooked(found, hookTimeoutSeconds),
+        ...hook,
       };
     }
 
@@ -157,9 +159,7 @@ export const machineStep = (
             ...(found.ephemeral || found.template !== undefined
               ? { authorizedKeys }
               : {}),
-            ...(found.ephemeral && joins
-              ? { join: { hostname: `cbx-${name}` } }
-              : {}),
+            ...(found.ephemeral && joins ? { join: { hostname } } : {}),
             taken,
             machines,
           };
@@ -182,7 +182,7 @@ export const machineStep = (
           machine: ref,
           ...pinned(found.pin),
           machines,
-          ...hooked(found, hookTimeoutSeconds),
+          ...hook,
         };
       }
 
@@ -191,7 +191,7 @@ export const machineStep = (
           _tag: "pause",
           machine: ref,
           ...pinned(found.pin),
-          ...hooked(found, hookTimeoutSeconds),
+          ...hook,
         };
       }
 
@@ -200,7 +200,7 @@ export const machineStep = (
       }
 
       case "join": {
-        return { _tag: "join", machine: ref, hostname: `cbx-${name}` };
+        return { _tag: "join", machine: ref, hostname };
       }
 
       case "capture":

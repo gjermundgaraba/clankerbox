@@ -3,9 +3,9 @@ import type { SshEndpoint, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, Effect, Layer, Option, Semaphore } from "effect";
 
 import { PortProbe } from "./machine-ports.ts";
-import type { PortRange } from "./machine-ports.ts";
 import { Runtime } from "./runtime.ts";
 import type { Dial, Identity, Reach, Target } from "./runtime.ts";
+import type { PortRange } from "./settings.ts";
 
 /** A port a relay has bound. It closes each connection until `relay` gives it the dial to carry them through. */
 export interface Listener {

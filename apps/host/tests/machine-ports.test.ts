@@ -2,10 +2,12 @@ import { describe, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 import { expect } from "vite-plus/test";
 
-import { defaultMachinePorts, PortProbe } from "../src/machine-ports.ts";
-import type { PortRange, Probe } from "../src/machine-ports.ts";
+import { PortProbe } from "../src/machine-ports.ts";
+import type { Probe } from "../src/machine-ports.ts";
 import { defaultEphemeralPorts } from "../src/platform/box.ts";
 import * as Reach from "../src/reach.ts";
+import { defaultMachinePorts } from "../src/settings.ts";
+import type { PortRange } from "../src/settings.ts";
 
 const probing = (busy: ReadonlySet<number>) => {
   const probed: number[] = [];

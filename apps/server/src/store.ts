@@ -13,18 +13,16 @@ import {
   Sizing,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Conflict, Internal, Phase } from "@gjermundgaraba/clankerbox-sdk";
-import { Context, Schema, SchemaGetter } from "effect";
+import { Context, Effect, Schema, SchemaGetter } from "effect";
 import type {
   Array as Arr,
   DateTime,
-  Effect,
   Option,
   Result,
   Scope,
+  Duration,
 } from "effect";
-import { Hex } from "effect/encoding";
 
-import type { Decision } from "./chart.ts";
 import type { CheckpointRow } from "./checkpoint-chart.ts";
 import type { MachineRow } from "./machine-chart.ts";
 
@@ -76,10 +74,6 @@ export const Lease = Schema.Struct({
 });
 
 export type Lease = typeof Lease.Type;
-
-/** A new ID for a row's instance or an operation. */
-export const newId = (): string =>
-  Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(16)));
 
 export const notFound = (resource: Lease["resource"], name: string): NotFound =>
   new NotFound({ message: `no ${resource} ${name}`, id: name });
@@ -158,10 +152,8 @@ export const Facts = Schema.Struct({
 
 export type Facts = typeof Facts.Type;
 
-/** What a client reads of a checkpoint's leaf. */
 export type ShownPhase = Checkpoint["phase"];
 
-/** What a checkpoint's row holds but for its leaf. */
 export const CheckpointFacts = Schema.Struct({
   ...made,
   runtime: RuntimeName,
@@ -207,19 +199,16 @@ export type TemplateRow = typeof TemplateFacts.Type & {
   readonly builds: Arr.NonEmptyReadonlyArray<BuildRow>;
 };
 
-/** A row of each resource, as `advance` reads and writes it. */
 export interface Rows {
   readonly machine: MachineRow;
   readonly checkpoint: CheckpointRow;
 }
 
-/** An instance on a host, as a row holds it there. */
 export interface Hold {
   readonly host: string;
   readonly instance: string;
 }
 
-/** Where a machine's row holds its instance: on its host, until it rests undone. */
 export const holdOf = ({
   host,
   instance,
@@ -227,7 +216,7 @@ export const holdOf = ({
 }: MachineRow): Hold | undefined =>
   undoneAt === undefined ? { host, instance } : undefined;
 
-/** The hold a write ends, which retires its instance on its host: the row's, once the row no longer holds it there. */
+/** The hold a write ends, which retires its instance on its host. */
 export const ended = (
   before: Hold | undefined,
   after: Hold | undefined
@@ -251,15 +240,21 @@ export type Advanced<R> =
   | { readonly at: "absent" }
   | { readonly at: "busy"; readonly by: Operation };
 
-export interface Watched {
-  readonly now: Option.Option<MachineRow>;
-  readonly next: Effect.Effect<Option.Option<MachineRow>, Internal>;
+export interface Decision<R> {
+  readonly next: R | "removed";
+  readonly begin?: Omit<Operation, "sequence">;
+  readonly finish: boolean;
 }
 
 export interface Interface {
-  readonly watchMachine: (
+  /**
+   * The next write of a resource's row, from now on: an insert, a move of its leaf or facts, or
+   * the begin or end of its operation.
+   */
+  readonly watch: (
+    resource: Lease["resource"],
     name: string
-  ) => Effect.Effect<Watched, Internal, Scope.Scope>;
+  ) => Effect.Effect<Effect.Effect<void>, never, Scope.Scope>;
   readonly machines: Effect.Effect<readonly MachineRow[], Internal>;
   readonly findMachine: (
     name: string
@@ -341,3 +336,33 @@ export interface Interface {
 export class Store extends Context.Service<Store, Interface>()(
   "@clankerbox/server/Store"
 ) {}
+
+/**
+ * Reads `read` until what it answers is `done`, again after each write of `resource`'s row `name`,
+ * and, given `orEvery`, once that long passes with no write.
+ */
+export const readUntil = <A, E>(
+  store: Pick<Interface, "watch">,
+  resource: Lease["resource"],
+  name: string,
+  read: Effect.Effect<A, E>,
+  done: (found: A) => boolean,
+  orEvery?: Duration.Duration
+): Effect.Effect<A, E> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const written = yield* store.watch(resource, name);
+
+      const wake =
+        orEvery === undefined
+          ? written
+          : Effect.timeoutOption(written, orEvery);
+
+      const until = (found: A): Effect.Effect<A, E> =>
+        done(found)
+          ? Effect.succeed(found)
+          : Effect.flatMap(Effect.andThen(wake, read), until);
+
+      return yield* Effect.flatMap(read, until);
+    })
+  );

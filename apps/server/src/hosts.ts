@@ -1,6 +1,7 @@
-import { HostHttp } from "@clankerbox/host-contract";
+import { HostHttp, stoppingStatus } from "@clankerbox/host-contract";
 import type { HostInfo } from "@clankerbox/host-contract";
 import {
+  Client,
   HostError,
   readTimeout,
   release,
@@ -46,7 +47,6 @@ export class Incompatible extends Data.TaggedError("Incompatible")<Failed> {}
  */
 export class Unsent extends Data.TaggedError("Unsent")<Failed> {}
 
-/** Every way a call to a host or a read of it gets no answer it can use. */
 export type Unreachable = Unanswered | Incompatible | Unsent;
 
 const hostApi = (member: Member) =>
@@ -59,11 +59,17 @@ const hostApi = (member: Member) =>
 
 export type HostApi = Effect.Success<ReturnType<typeof hostApi>>;
 
-export interface Reached {
-  readonly member: Member;
-  readonly info: HostInfo | undefined;
-  readonly problem: Unreachable | undefined;
-}
+export type Reached =
+  | {
+      readonly member: Member;
+      readonly info: HostInfo;
+      readonly problem: undefined;
+    }
+  | {
+      readonly member: Member;
+      readonly info: undefined;
+      readonly problem: Unreachable;
+    };
 
 /** What an operator is shown of a host whose read or call failed with `problem`. */
 export const unread = (problem: {
@@ -75,9 +81,7 @@ export interface Interface {
   readonly members: readonly Member[];
   /**
    * One call to a host, bounded by `readTimeout` unless `within` says otherwise, as a command runs
-   * as long as its request does. It fails with an error its action declares, as the host answered
-   * it, and with `Unreachable` for every way it got no answer: `Unsent` for one that never left.
-   * A call or a read that gets no answer logs at warn, with what the HTTP client said, the first
+   * as long as its request does. A call or a read that gets no answer logs at warn, with what the HTTP client said, the first
    * time since the host last answered one, and at debug after; the next answer logs that the host
    * answers again.
    */
@@ -97,14 +101,13 @@ export class Hosts extends Context.Service<Hosts, Interface>()(
   "@clankerbox/server/Hosts"
 ) {}
 
-/** What an operator reads of a host: what it reports, or why it couldn't be read. */
 export const listed = ({ member, info, problem }: Reached): Host =>
   info === undefined
     ? {
         id: member.id,
-        state: problem === undefined ? "unreachable" : unread(problem),
+        state: unread(problem),
         bases: [],
-        ...(problem === undefined ? {} : { problem: problem.message }),
+        problem: problem.message,
       }
     : {
         id: member.id,
@@ -152,7 +155,7 @@ const unexpected = (reason: Reply) => {
 };
 
 const replied = (host: string, reason: Reply) =>
-  reason.response.status === 503 &&
+  reason.response.status === stoppingStatus &&
   reason.response.headers["content-type"] === undefined
     ? `host ${host} is stopping: it replied HTTP 503 with no body, as a host's server does to each request while the host stops`
     : `host ${host} didn't answer as the host contract says: ${unexpected(reason)}`;
@@ -279,11 +282,7 @@ export const make = (
             : bounded(
                 host,
                 run(api).pipe(
-                  Effect.catchDefect((defect) =>
-                    HttpClientError.isHttpClientError(defect)
-                      ? Effect.fail(defect)
-                      : Effect.die(defect)
-                  ),
+                  Client.failHttpDefects,
                   Effect.catchIf(
                     (
                       error: E | HttpClientError.HttpClientError

@@ -3,7 +3,7 @@ import { Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
 
 import {
-  copySizable,
+  copyRefusal,
   fitted,
   offered,
   offers,
@@ -194,14 +194,14 @@ describe("resizeRefusal", () => {
   );
 });
 
-describe("copySizable", () => {
+describe("copyRefusal", () => {
   it.effect.prop(
     "a copy whose disk is below its source's is never made",
     { traits: RuntimeTraits, from: Sizes, to: Sizes },
     ({ traits, from, to }) =>
       Effect.sync(() => {
         if (to.diskGib < from.diskGib) {
-          expect(copySizable(traits, from, to)).toBe(false);
+          expect(copyRefusal(traits, "dev", from, to)?._tag).toBe("Unsizable");
         }
       })
   );
@@ -211,9 +211,9 @@ describe("copySizable", () => {
     { traits: RuntimeTraits, given: Given, from: Sizes },
     ({ traits, given, from }) =>
       Effect.sync(() => {
-        expect(copySizable({ ...traits, ...given }, from, from)).toBe(
-          gives(given, from)
-        );
+        expect(
+          copyRefusal({ ...traits, ...given }, "dev", from, from) === undefined
+        ).toBe(gives(given, from));
       })
   );
 
@@ -236,9 +236,13 @@ describe("copySizable", () => {
           copies,
         });
 
-        expect(copySizable(sized("grow"), from, to)).toBe(disk && grows);
-        expect(copySizable(sized("any"), from, to)).toBe(disk);
-        expect(copySizable(sized("same"), from, to)).toBe(
+        expect(copyRefusal(sized("grow"), "dev", from, to) === undefined).toBe(
+          disk && grows
+        );
+        expect(copyRefusal(sized("any"), "dev", from, to) === undefined).toBe(
+          disk
+        );
+        expect(copyRefusal(sized("same"), "dev", from, to) === undefined).toBe(
           equal && gives(given, to)
         );
       })

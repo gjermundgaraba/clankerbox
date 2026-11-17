@@ -10,9 +10,10 @@ import {
 
 import { Desired, HostError } from "./errors.ts";
 import { CheckpointName, HostId, Name, RuntimeName } from "./ids.ts";
-import { Size } from "./sizes.ts";
+import { Size, Sizes } from "./sizes.ts";
 
-const CheckpointKind = Schema.Literals(["ram", "disk"]);
+/** What a checkpoint holds: a running machine's memory and disk, or its disk alone. */
+export const CheckpointKind = Schema.Literals(["ram", "disk"]);
 
 /**
  * The user a machine with an SSH login is logged in as: the user a host's preparation creates, or a
@@ -75,7 +76,6 @@ export const ListFilter = Schema.Struct(labelled);
 
 export type ListFilter = typeof ListFilter.Type;
 
-/** Whether `labels` carries every pair of `wanted`. */
 export const labelledWith = (
   labels: Labels | undefined,
   wanted: Labels | undefined
@@ -170,7 +170,6 @@ export const BuildId = Schema.String.check(
 /** A template, which names its current build, or one build of it, by ID. */
 export const TemplateRef = Schema.Union([Name, BuildId]);
 
-/** The build ID of build `number` of `template`. */
 export const buildId = (template: string, number: number): string =>
   `${template}@${number}`;
 
@@ -205,9 +204,7 @@ export const Machine = Schema.Struct({
   base: Schema.String,
   template: Schema.optionalKey(BuildId),
   ...labelled,
-  cpu: Size,
-  ramMib: Size,
-  diskGib: Size,
+  ...Sizes.fields,
   state: Schema.Literals([
     "running",
     "stopped",
@@ -263,9 +260,7 @@ export const Checkpoint = Schema.Struct({
   base: Schema.String,
   ...labelled,
   ...expiring,
-  cpu: Size,
-  ramMib: Size,
-  diskGib: Size,
+  ...Sizes.fields,
 }).annotate({ identifier: "Checkpoint" });
 
 export type Checkpoint = typeof Checkpoint.Type;
@@ -306,9 +301,7 @@ export const Build = Schema.Struct({
   pin: Schema.optionalKey(Schema.String),
   image: Schema.String,
   base: Schema.String,
-  cpu: Size,
-  ramMib: Size,
-  diskGib: Size,
+  ...Sizes.fields,
   setupTimeoutSeconds: Schema.optionalKey(Size),
   copies: Schema.Array(BuildCopy),
 }).annotate({ identifier: "Build" });
@@ -472,15 +465,19 @@ export const Sizing = Schema.Struct({
 
 export type Sizing = typeof Sizing.Type;
 
+export const sizedBy = (from: Sizes, sizing: Sizing | undefined): Sizes => ({
+  cpu: sizing?.cpu ?? from.cpu,
+  ramMib: sizing?.ramMib ?? from.ramMib,
+  diskGib: sizing?.diskGib ?? from.diskGib,
+});
+
 const placed = { host: Schema.optionalKey(HostId) };
 
 const fromTemplate = { template: TemplateRef, ...Sizing.fields, ...placed };
 
 const fromBase = {
   base: Schema.String,
-  cpu: Size,
-  ramMib: Size,
-  diskGib: Size,
+  ...Sizes.fields,
   ...placed,
 };
 
@@ -648,7 +645,6 @@ export const Executed = Schema.Struct({
 
 export type Executed = typeof Executed.Type;
 
-/** The sizes to give machine `id`, at least one. */
 export const ResizeRequest = Schema.Struct({
   id: Name,
   ...Sizing.fields,

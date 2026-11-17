@@ -13,6 +13,7 @@ import type { Scope } from "effect";
 import type { Activity } from "./chart.ts";
 import type { Unreachable } from "./hosts.ts";
 import type { Polled } from "./operations.ts";
+import { readUntil } from "./store.ts";
 import type {
   Advanced,
   Interface as Store,
@@ -20,13 +21,8 @@ import type {
   Operation,
 } from "./store.ts";
 
-const busyWait = Duration.millis(100);
-
 const unreachableWait = Duration.seconds(1);
 
-const restPoll = Duration.millis(100);
-
-/** What a look at an operation found that its resource acts on. */
 export type Heard = Exclude<Polled, { readonly at: "unreachable" }>;
 
 type Turned = "again" | "rest" | "over";
@@ -34,14 +30,13 @@ type Turned = "again" | "rest" | "over";
 export interface Resource<R extends { readonly state: string }> {
   readonly kind: Lease["resource"];
   readonly find: (name: string) => Effect.Effect<Option.Option<R>, Internal>;
-  readonly operationOn: Store["operationOn"];
+  readonly store: Pick<Store, "operationOn" | "watch">;
   readonly activityOf: (state: R["state"]) => Activity;
-  /** Reads what the chart's `read` needs, and writes it. */
   readonly looking: (
     row: R
   ) => Effect.Effect<Advanced<R>, Internal | Unreachable>;
   readonly polling: (row: R, op: Operation) => Effect.Effect<Polled, Internal>;
-  /** Stores what a look found, which no wake cuts short, so a stored report is always collected. */
+  /** No wake cuts it short, so a stored report is always collected. */
   readonly following: (
     row: R,
     op: Operation,
@@ -53,12 +48,14 @@ const ended = <R extends { readonly state: string }>(
   resource: Resource<R>,
   by: Operation
 ) =>
-  resource.operationOn(by.resource, by.name).pipe(
-    Effect.repeat({
-      until: (op) => !Option.exists(op, ({ id }) => id === by.id),
-      schedule: Schedule.spaced(busyWait),
-    }),
-    Effect.asVoid
+  Effect.asVoid(
+    readUntil(
+      resource.store,
+      by.resource,
+      by.name,
+      resource.store.operationOn(by.resource, by.name),
+      (op) => !Option.exists(op, ({ id }) => id === by.id)
+    )
   );
 
 const looked = <R extends { readonly state: string }>(
@@ -129,7 +126,7 @@ const followed = <R extends { readonly state: string }>(
 ) =>
   Effect.gen(function* () {
     const op = yield* Effect.fromOption(
-      yield* resource.operationOn(resource.kind, name),
+      yield* resource.store.operationOn(resource.kind, name),
       () =>
         new Internal({
           message: `${resource.kind} ${name} is at ${found.state} with no operation`,
@@ -190,26 +187,33 @@ export const apart =
     );
 
 /**
- * Looks until `rests` answers true. A look that fails with `Unavailable` tells of a host's fault,
- * which may pass, so it is tried again, and ends the wait once it has failed for `bound` on end.
+ * Looks until `rests` answers true, again at each write of `resource`'s row `name`, and each second
+ * between, as a look also reads a host that may stop answering with no write. A look that fails with
+ * `Unavailable` tells of a host's fault, which may pass, so it is tried again, and ends the wait
+ * once it has failed for `bound` on end.
  */
 export const untilRest = <E extends { readonly _tag: string }>(
+  store: Pick<Store, "watch">,
+  resource: Lease["resource"],
+  name: string,
   bound: Duration.Duration,
   rests: Effect.Effect<boolean, E>
 ): Effect.Effect<void, E> =>
-  rests.pipe(
-    Effect.retry({
-      while: ({ _tag }) => _tag === "Unavailable",
-      schedule: Schedule.spaced(restPoll).pipe(
-        Schedule.upTo({ duration: bound })
-      ),
-    }),
-    Effect.repeat({
-      until: (rested) => rested,
-      schedule: Schedule.spaced(restPoll),
-    }),
-    Effect.asVoid
-  );
+  readUntil(
+    store,
+    resource,
+    name,
+    rests.pipe(
+      Effect.retry({
+        while: ({ _tag }) => _tag === "Unavailable",
+        schedule: Schedule.spaced(unreachableWait).pipe(
+          Schedule.upTo({ duration: bound })
+        ),
+      })
+    ),
+    (rested) => rested,
+    unreachableWait
+  ).pipe(Effect.asVoid);
 
 /**
  * The loops of one resource, at most one per name, each moving its row a whole step at a time. The

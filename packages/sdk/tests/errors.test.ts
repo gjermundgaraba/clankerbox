@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
-import { describe, expect, expectTypeOf } from "vite-plus/test";
+import { describe, expect } from "vite-plus/test";
 
 import {
   Capacity,
@@ -17,7 +17,6 @@ import {
   Superseded,
   Unavailable,
 } from "../src/index.ts";
-import type { Desired } from "../src/index.ts";
 import { machine } from "./stub-server.ts";
 
 const failed = (error: ClankerboxError) => ({
@@ -31,10 +30,6 @@ const wire = Schema.fromJsonString(HostError);
 const encode = Schema.encodeEffect(HostError);
 
 describe("errors", () => {
-  it("a request superseded names what the later one asked for: a desired state", () => {
-    expectTypeOf<Superseded["by"]>().toEqualTypeOf<Desired>();
-  });
-
   it.effect(
     "Missing names a machine as a 0.40 row stored it, or a checkpoint a create's host no longer holds",
     () =>

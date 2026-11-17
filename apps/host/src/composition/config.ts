@@ -10,9 +10,9 @@ import { Address } from "@gjermundgaraba/clankerbox-sdk/node";
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
 
 import { Box } from "../box.ts";
-import { defaultMachinePorts } from "../machine-ports.ts";
 import { BuildsSettings } from "../platform/s3.ts";
 import { TailnetSettings } from "../platform/tailscale.ts";
+import { defaultMachinePorts } from "../settings.ts";
 import type { HostSettings } from "../settings.ts";
 import { isRuntimeKey, runtimes, settingsOf } from "./runtimes.ts";
 import type { ChosenRuntime, RuntimeKey } from "./runtimes.ts";
@@ -136,7 +136,6 @@ const resolveConfig = (
     };
   });
 
-/** Reads the host config `file`, for the box its `Box` tells of. */
 export const loadConfig = (
   file: string
 ): Effect.Effect<
