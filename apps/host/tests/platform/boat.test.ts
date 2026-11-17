@@ -40,7 +40,6 @@ import {
   endpointOf,
   image,
   make,
-  marked,
 } from "../../src/platform/boat/boat.ts";
 import { types } from "../../src/platform/boat/traits.ts";
 import { SweepEvery } from "../../src/platform/tombstones.ts";
@@ -142,11 +141,6 @@ const onBoat = <A, E>(
   }) => Effect.Effect<A, E, Scope.Scope>,
   options: Omit<FakeBoatOptions, "dir"> = {}
 ) => Effect.scoped(Effect.flatMap(onFakeBoatWith(options), body));
-
-const markedAt = (boat: FakeBoat) =>
-  Effect.flatMap(BoatApi.make(boat.url, Redacted.make(boat.apiKey)), (api) =>
-    marked(api, "boat")
-  ).pipe(Effect.provide(NodeHttpClient.layerNodeHttp));
 
 const keyOf = (instance: string) => `cbx-boat-${instance}`;
 
@@ -929,17 +923,19 @@ describe("the boat runtime over fake boat", () => {
     "lists every page of the sandboxes this host marked",
     () =>
       onBoat(
-        ({ boat, runtime }) =>
+        ({ runtime }) =>
           Effect.gen(function* () {
             const machines = yield* Effect.forEach(["a", "b", "c"], (name) =>
               made(runtime, name)
             );
 
-            const owned = yield* markedAt(boat);
+            const observed = yield* runtime.observe(machines);
 
-            expect(owned.map(({ handle }) => handle).toSorted()).toStrictEqual(
-              machines.map(({ handle }) => handle).toSorted()
-            );
+            expect(Object.fromEntries(observed)).toStrictEqual({
+              a: "running",
+              b: "running",
+              c: "running",
+            });
           }),
         { pageSize: 1 }
       ),
@@ -975,22 +971,24 @@ describe("the boat runtime over fake boat", () => {
   );
 
   it.live(
-    "reads of a saved snapshot only its name and source, and fails a list on one it can't read only when the mark claims it",
+    "reads of a saved snapshot only its name and source, and fails a delete's prune on one it can't read only when the mark claims it",
     () =>
       onBoat(({ boat, runtime }) =>
         Effect.gen(function* () {
           const machine = yield* made(runtime, "dev");
+          const other = yield* made(runtime, "other");
           const elsewhere = `cbx-${instanceOf("elsewhere")}`;
           const broken = `cbx-${instanceOf("broken")}`;
 
           yield* boat.malformedSnapshot(elsewhere, "bx_other");
           yield* boat.malformedSnapshot("cbx-by-hand", 7);
-          expect(yield* markedAt(boat)).toHaveLength(1);
+          yield* runtime.delete(other, new Set());
 
           yield* boat.malformedSnapshot(broken, 7);
 
-          const failed = yield* Effect.flip(markedAt(boat));
+          const failed = yield* Effect.flip(runtime.delete(machine, new Set()));
 
+          expect(boat.sandboxes.has(other.handle)).toBe(false);
           expect(failed.message).toContain(broken);
           expect(boat.sandboxes.has(machine.handle)).toBe(true);
         })
@@ -1412,7 +1410,6 @@ describe("a boat request's bound", () => {
 interface Scripted {
   readonly runtime: Interface;
   readonly asked: readonly string[];
-  readonly listed: ReturnType<typeof marked>;
 }
 
 const boatLimits = {
@@ -1458,12 +1455,7 @@ const scriptedBoat = (
       { id: "boat", stateDir: dir, listen: { address: "127.0.0.1", port: 0 } }
     ).pipe(Effect.provideService(HttpClient.HttpClient, client));
 
-    const listed = Effect.flatMap(
-      BoatApi.make("https://boat.test/api/v1", Redacted.make("fake")),
-      (api) => marked(api, "boat")
-    ).pipe(Effect.provideService(HttpClient.HttpClient, client));
-
-    return { runtime, asked, listed };
+    return { runtime, asked };
   }).pipe(Effect.provide(NodeServices.layer), Effect.orDie);
 
 const sandboxIn = (state: string, type = "small") =>
@@ -1715,7 +1707,7 @@ describe("a boat saved-snapshot list holding a record the host can't read", () =
           const planted = "PLANTED-TOKEN-7f3a";
           const logged: string[] = [];
 
-          const { listed } = yield* scriptedBoat((route) => {
+          const { runtime } = yield* scriptedBoat((route) => {
             if (route === "GET /saved-snapshots") {
               return Response.json({
                 snapshots: [
@@ -1730,7 +1722,7 @@ describe("a boat saved-snapshot list holding a record the host can't read", () =
               : undefined;
           });
 
-          yield* listed.pipe(
+          yield* Effect.exit(runtime.delete(bx1, new Set())).pipe(
             Effect.provide(
               Logger.layer([
                 Logger.make(({ message }) => {

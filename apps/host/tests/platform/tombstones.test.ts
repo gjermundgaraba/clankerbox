@@ -1,163 +1,186 @@
-import { setTimeout as delay } from "node:timers/promises";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { Internal } from "@gjermundgaraba/clankerbox-sdk";
+import { Internal, RuntimeName } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { Effect, Exit, Scope } from "effect";
+import { Effect, Exit } from "effect";
 import { TestClock } from "effect/testing";
 import { expect } from "vite-plus/test";
 
-import * as Tombstones from "../../src/platform/tombstones.ts";
-import type { Marked } from "../../src/platform/tombstones.ts";
+import { tombstoned } from "../../src/platform/tombstones.ts";
+import type { MarkedMachine } from "../../src/platform/tombstones.ts";
 import { Handle } from "../../src/runtime.ts";
+import type { Target } from "../../src/runtime.ts";
 
 const instance = (n: number) => `${n}`.repeat(32);
 
-const machine = (n: number): Marked => ({
+const machine = (n: number): MarkedMachine => ({
   instance: instance(n),
   handle: Handle.make(`m-${n}`),
   checkpoints: [Handle.make(`c-${n}`)],
 });
 
-const account = (held: Marked[]) => {
-  const state = { lists: 0, failing: 0 };
-  const removed: Marked[] = [];
+const sizes = { cpu: 1, ramMib: 1024, diskGib: 8 };
+
+const identity = (n: number) => ({ name: `m${n}`, instance: instance(n) });
+
+const account = (held: MarkedMachine[]) => {
+  const state = { lists: 0, failing: 0, made: 0 };
+  const deleted: Array<{ handle: Handle; kept: Handle[] }> = [];
 
   return {
     state,
-    removed,
+    deleted,
     held,
     marked: Effect.sync(() => {
       state.lists += 1;
 
       return [...held];
     }),
-    remove: (target: Marked) =>
-      Effect.suspend(() => {
-        if (state.failing > 0) {
-          state.failing -= 1;
+    runtime: {
+      traits: { runtime: RuntimeName.make("fake") },
+      make: () =>
+        Effect.sync(() => {
+          state.made += 1;
 
-          return Effect.fail(new Internal({ message: "EBUSY" }));
-        }
+          return { handle: Handle.make("made"), sizes };
+        }),
+      delete: (
+        target: Target & { handle: Handle },
+        keep: ReadonlySet<Handle>
+      ) =>
+        Effect.suspend(() => {
+          if (state.failing > 0) {
+            state.failing -= 1;
 
-        removed.push(target);
-        held.splice(held.indexOf(target), 1);
+            return Effect.fail(new Internal({ message: "EBUSY" }));
+          }
 
-        return Effect.void;
-      }),
+          deleted.push({ handle: target.handle, kept: [...keep] });
+
+          const at = held.findIndex(({ handle }) => handle === target.handle);
+
+          if (at !== -1) {
+            held.splice(at, 1);
+          }
+
+          return Effect.void;
+        }),
+    },
   };
 };
 
-const realPause = Effect.promise(async () => {
-  await delay(10);
-});
-
-const sweptOnce = (lists: () => number) =>
-  Effect.gen(function* () {
-    const before = lists();
-
-    for (let tries = 0; lists() === before; tries += 1) {
-      if (tries === 100) {
-        return yield* Effect.die("no sweep listed the account");
-      }
-
-      yield* TestClock.adjust("30 seconds");
-      yield* realPause;
-    }
-
-    yield* realPause;
-  });
+const origin = { _tag: "image", image: "debian" } as const;
 
 layer(NodeServices.layer)((it) => {
   it.effect(
     "lists nothing while it keeps no tombstone, and then deletes only a buried instance, keeping every checkpoint it holds",
     () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const dir = yield* scratch;
-          const kept = machine(1);
-          const late = machine(2);
-          const provider = account([kept, late]);
+      Effect.gen(function* () {
+        const kept = machine(1);
+        const late = machine(2);
+        const provider = account([kept, late]);
 
-          const tombstones = yield* Tombstones.make({
-            dir,
-            provider: "the fake",
-            marked: provider.marked,
-            remove: provider.remove,
-          });
+        const { runtime, sweep } = yield* tombstoned(provider.runtime, {
+          dir: yield* scratch,
+          marked: provider.marked,
+        });
 
-          yield* TestClock.adjust("2 minutes");
+        yield* sweep;
 
-          const unburied = provider.state.lists;
+        const unburied = provider.state.lists;
 
-          yield* tombstones.bury(late.instance);
-          yield* sweptOnce(() => provider.state.lists);
+        yield* runtime.delete({ ...identity(2), handle: undefined }, new Set());
+        yield* sweep;
 
-          expect(unburied).toBe(0);
-          expect(provider.removed).toStrictEqual([late]);
-          expect(provider.held).toStrictEqual([kept]);
-        })
-      )
+        expect(unburied).toBe(0);
+        expect(provider.deleted).toStrictEqual([
+          { handle: late.handle, kept: late.checkpoints },
+        ]);
+        expect(provider.held).toStrictEqual([kept]);
+      })
   );
 
   it.effect(
-    "keeps a tombstone while its delete fails, and forgets it a day after the first sweep that left nothing of it",
+    "buries only once the inner delete has answered, and a second burial changes nothing",
     () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const dir = yield* scratch;
-          const late = machine(2);
-          const provider = account([late]);
+      Effect.gen(function* () {
+        const late = machine(2);
+        const provider = account([]);
 
-          provider.state.failing = 3;
+        const { runtime, sweep } = yield* tombstoned(provider.runtime, {
+          dir: yield* scratch,
+          marked: provider.marked,
+        });
 
-          const tombstones = yield* Tombstones.make({
-            dir,
-            provider: "the fake",
-            marked: provider.marked,
-            remove: provider.remove,
-          });
+        provider.state.failing = 1;
 
-          yield* tombstones.bury(late.instance);
+        const failed = yield* Effect.exit(
+          runtime.delete({ ...identity(2), handle: late.handle }, new Set())
+        );
 
-          while (provider.state.failing > 0) {
-            yield* sweptOnce(() => provider.state.lists);
-          }
+        const unburied = yield* Effect.exit(
+          runtime.make({ ...identity(2), ...sizes }, origin, 22)
+        );
 
-          const whileFailing = [...provider.held];
+        yield* runtime.delete({ ...identity(2), handle: undefined }, new Set());
+        yield* TestClock.adjust("23 hours");
+        yield* runtime.delete({ ...identity(2), handle: undefined }, new Set());
+        yield* TestClock.adjust("1 hour");
+        yield* sweep;
 
-          yield* sweptOnce(() => provider.state.lists);
-
-          const gone = [...provider.held];
-
-          yield* TestClock.adjust("23 hours");
-          yield* sweptOnce(() => provider.state.lists);
-
-          const withinTheDay = yield* Effect.exit(
-            tombstones.refuse({ name: "late", instance: late.instance })
-          );
-
-          yield* TestClock.adjust("1 hour");
-          yield* sweptOnce(() => provider.state.lists);
-
-          const listsOnceForgotten = provider.state.lists;
-
-          yield* TestClock.adjust("10 minutes");
-
-          expect(whileFailing).toStrictEqual([late]);
-          expect(gone).toStrictEqual([]);
-          expect(Exit.isFailure(withinTheDay)).toBe(true);
-          expect(provider.state.lists).toBe(listsOnceForgotten);
-          expect(
-            Exit.isSuccess(
-              yield* Effect.exit(
-                tombstones.refuse({ name: "late", instance: late.instance })
-              )
+        expect(Exit.isFailure(failed)).toBe(true);
+        expect(Exit.isSuccess(unburied)).toBe(true);
+        expect(
+          Exit.isSuccess(
+            yield* Effect.exit(
+              runtime.make({ ...identity(2), ...sizes }, origin, 22)
             )
-          ).toBe(true);
-        })
-      )
+          )
+        ).toBe(true);
+        expect(provider.state.made).toBe(2);
+      })
+  );
+
+  it.effect(
+    "keeps a tombstone past its day while the latest sweep still listed its machine, and forgets it at the first whose list finds nothing",
+    () =>
+      Effect.gen(function* () {
+        const late = machine(2);
+        const provider = account([]);
+
+        const { runtime, sweep } = yield* tombstoned(provider.runtime, {
+          dir: yield* scratch,
+          marked: provider.marked,
+        });
+
+        const made = (n: number) =>
+          Effect.exit(runtime.make({ ...identity(n), ...sizes }, origin, 22));
+
+        yield* runtime.delete({ ...identity(2), handle: undefined }, new Set());
+        yield* TestClock.adjust("25 hours");
+
+        provider.held.push(late);
+        provider.state.failing = 1;
+        yield* sweep;
+
+        const whileFailing = yield* made(2);
+
+        yield* sweep;
+
+        const onceDeleted = yield* made(2);
+
+        yield* sweep;
+
+        const listsOnceForgotten = provider.state.lists;
+
+        yield* sweep;
+
+        expect(Exit.isFailure(whileFailing)).toBe(true);
+        expect(Exit.isFailure(onceDeleted)).toBe(true);
+        expect(provider.held).toStrictEqual([]);
+        expect(Exit.isSuccess(yield* made(2))).toBe(true);
+        expect(provider.state.lists).toBe(listsOnceForgotten);
+      })
   );
 
   it.effect(
@@ -168,42 +191,31 @@ layer(NodeServices.layer)((it) => {
         const late = machine(2);
         const provider = account([]);
 
-        const options = {
+        const before = yield* tombstoned(provider.runtime, {
           dir,
-          provider: "the fake",
           marked: provider.marked,
-          remove: provider.remove,
-        };
+        });
 
-        const first = yield* Scope.make();
-
-        const before = yield* Tombstones.make(options).pipe(
-          Scope.provide(first)
+        yield* before.runtime.delete(
+          { ...identity(2), handle: undefined },
+          new Set()
         );
 
-        const fresh = yield* Effect.exit(
-          before.refuse({ name: "late", instance: late.instance })
+        const after = yield* tombstoned(provider.runtime, {
+          dir,
+          marked: provider.marked,
+        });
+
+        const remade = yield* Effect.exit(
+          after.runtime.make({ ...identity(2), ...sizes }, origin, 22)
         );
 
-        yield* before.bury(late.instance);
-        yield* Scope.close(first, Exit.void);
+        provider.held.push(late);
+        yield* after.sweep;
 
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const after = yield* Tombstones.make(options);
-
-            const remade = yield* Effect.exit(
-              after.refuse({ name: "late", instance: late.instance })
-            );
-
-            provider.held.push(late);
-            yield* sweptOnce(() => provider.state.lists);
-
-            expect(Exit.isSuccess(fresh)).toBe(true);
-            expect(Exit.isFailure(remade)).toBe(true);
-            expect(provider.removed).toStrictEqual([late]);
-          })
-        );
+        expect(Exit.isFailure(remade)).toBe(true);
+        expect(provider.state.made).toBe(0);
+        expect(provider.held).toStrictEqual([]);
       })
   );
 });

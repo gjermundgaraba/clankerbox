@@ -67,6 +67,11 @@ export interface Subject {
   readonly lacks?: Readonly<Partial<Record<Fault, string>>>;
   /** Why its guest runs no processes of the commands it is given, if it runs none. */
   readonly runsNoGuest?: string | undefined;
+  /**
+   * Why nothing of a machine lands after its call answered, where its machines lie on the host's
+   * own disk, so a provider holds no checkpoint through a machine and no tombstone is kept.
+   */
+  readonly ownDisk?: string | undefined;
   readonly fixture: Effect.Effect<Fixture, never, Scope.Scope>;
 }
 
@@ -140,6 +145,11 @@ export const runtimeContract = (subject: Subject): void => {
 
     return why === undefined ? title : `${title}, skipped: ${why}`;
   };
+
+  const rented = subject.ownDisk === undefined;
+
+  const ifRented = (title: string) =>
+    rented ? title : `${title}, skipped: ${subject.ownDisk}`;
 
   const sized = (name: string, instance = first) => ({
     name,
@@ -536,15 +546,13 @@ export const runtimeContract = (subject: Subject): void => {
         )
       );
 
-    it.live(
-      "deletes with a machine each checkpoint it holds that keep lacks, where it holds them through it",
+    it.live.skipIf(!rented)(
+      ifRented(
+        "deletes with a machine each checkpoint it holds that keep lacks"
+      ),
       () =>
-        withFixture(({ runtime, unmarked }) =>
+        withFixture(({ runtime }) =>
           Effect.gen(function* () {
-            if (unmarked === undefined) {
-              return;
-            }
-
             const machine = yield* made(runtime, "dev");
 
             yield* inCaptureState(runtime, machine);
@@ -582,15 +590,13 @@ export const runtimeContract = (subject: Subject): void => {
         )
     );
 
-    it.live(
-      "deletes once a start runs the machine each checkpoint it holds that keep lacks, where it holds them through it",
+    it.live.skipIf(!rented)(
+      ifRented(
+        "deletes once a start runs the machine each checkpoint it holds that keep lacks"
+      ),
       () =>
-        withFixture(({ runtime, unmarked }) =>
+        withFixture(({ runtime }) =>
           Effect.gen(function* () {
-            if (unmarked === undefined) {
-              return;
-            }
-
             const machine = yield* made(runtime, "dev");
 
             yield* inCaptureState(runtime, machine);
@@ -631,15 +637,14 @@ export const runtimeContract = (subject: Subject): void => {
         )
     );
 
-    it.live.skipIf(lacks("landLate"))(
-      needing(
-        "landLate",
+    it.live.skipIf(!rented)(
+      ifRented(
         "deletes what lands of an instance after its delete answered, refuses a make of it, and deletes nothing that lacks its mark"
       ),
       () =>
         withFixture(({ runtime, faults, unmarked }) =>
           Effect.gen(function* () {
-            const theirs = yield* unmarked ?? Effect.undefined;
+            const theirs = yield* yield* given(unmarked);
             const land = yield* yield* given(faults.landLate);
             const late = sized("late");
 
@@ -663,7 +668,7 @@ export const runtimeContract = (subject: Subject): void => {
             expect(swept._tag).toBe("Some");
             expect(remade._tag).toBe("Failure");
             expect(yield* runtime.find(late)).toBeUndefined();
-            expect(theirs === undefined ? true : yield* theirs).toBe(true);
+            expect(yield* theirs).toBe(true);
           })
         )
     );
@@ -734,9 +739,8 @@ export const runtimeContract = (subject: Subject): void => {
         )
     );
 
-    it.live.skipIf(lacks("landLate"))(
-      needing(
-        "landLate",
+    it.live.skipIf(!rented)(
+      ifRented(
         "finds a machine its make failed to answer once the provider makes it"
       ),
       () =>

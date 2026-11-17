@@ -11,11 +11,11 @@ import {
   Context,
   Duration,
   Effect,
-  FileSystem,
   Exit,
   Fiber,
   Layer,
   Logger,
+  Option,
   Redacted,
   Schedule,
   Schema,
@@ -129,11 +129,6 @@ runtimeContract({
   }).pipe(provided, Effect.orDie),
 });
 
-const markedAt = (fake: FakeSmolCloud) =>
-  Effect.flatMap(Api.make(fake.url, Redacted.make(key)), (api) =>
-    SmolCloud.marked(api, hostId)
-  ).pipe(Effect.provide(NodeHttpClient.layerNodeHttp));
-
 const onHost = (
   tailnet: Layer.Layer<Tailnet> | Layer.Layer<never> = Layer.empty
 ) =>
@@ -156,7 +151,8 @@ const onHost = (
       ).pipe(
         Layer.provide(tailnet),
         Layer.provide(NodeHttpClient.layerNodeHttp),
-        Layer.provide(NodeServices.layer)
+        Layer.provide(NodeServices.layer),
+        Layer.provide(Layer.succeed(SweepEvery, Duration.millis(100)))
       )
     );
 
@@ -364,7 +360,7 @@ describe("the smol cloud runtime on its host", () => {
   );
 
   it.live(
-    "a machine restored from a template's copy is found and listed by its name",
+    "a machine restored from a template's copy is found and swept by its name, and the copy kept",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -389,19 +385,19 @@ describe("the smol cloud runtime on its host", () => {
 
           const found = yield* runtime.find(fast);
 
-          const listed = yield* markedAt(fake);
+          yield* runtime.delete({ ...fast, handle: undefined }, new Set());
+
+          const left = yield* Effect.sync(() => [...fake.machines.keys()]).pipe(
+            Effect.repeat({
+              until: (handles) => handles.length === 1,
+              schedule: Schedule.spaced("50 millis"),
+            }),
+            Effect.timeout("20 seconds")
+          );
 
           expect(found).toBeDefined();
-          expect(
-            listed
-              .map(({ instance, handle }) => [instance, handle])
-              .toSorted(([a = ""], [b = ""]) => a.localeCompare(b))
-          ).toStrictEqual(
-            [
-              [builder.instance, builder.handle],
-              [fast.instance, found],
-            ].toSorted(([a = ""], [b = ""]) => a.localeCompare(b))
-          );
+          expect(left).toStrictEqual([builder.handle]);
+          expect(fake.checkpoints.has(copy)).toBe(true);
         })
       )
   );
@@ -804,23 +800,23 @@ describe("the smol cloud runtime over an account without a card", () => {
         Effect.gen(function* () {
           const { fake, runtime } = yield* onCloud;
           const lines: string[] = [];
-          const dev = yield* made(runtime, "dev");
+
+          const machines = [
+            yield* made(runtime, "dev"),
+            yield* made(runtime, "web"),
+          ];
 
           yield* fake.malformedMachine("someone-elses");
 
-          const api = yield* Api.make(fake.url, Redacted.make(key)).pipe(
-            Effect.provide(NodeHttpClient.layerNodeHttp)
-          );
+          const observed = yield* Effect.andThen(
+            runtime.observe(machines),
+            runtime.observe(machines)
+          ).pipe(Effect.provide(Logger.layer([capturing(lines)])));
 
-          const listedOnce = SmolCloud.marked(api, hostId);
-
-          const listed = yield* Effect.andThen(listedOnce, listedOnce).pipe(
-            Effect.provide(Logger.layer([capturing(lines)]))
-          );
-
-          expect(listed.map(({ handle }) => handle)).toStrictEqual([
-            dev.handle,
-          ]);
+          expect(Object.fromEntries(observed)).toStrictEqual({
+            dev: "running",
+            web: "running",
+          });
           expect(
             lines.filter((line) =>
               line.includes("couldn't be read and isn't this host's")
@@ -829,9 +825,9 @@ describe("the smol cloud runtime over an account without a card", () => {
 
           yield* fake.malformedMachine(`cbx-${hostId}-${"ab".repeat(16)}`);
 
-          expect((yield* Effect.flip(markedAt(fake))).message).toContain(
-            `cbx-${hostId}-${"ab".repeat(16)}`
-          );
+          expect(
+            (yield* Effect.flip(runtime.observe(machines))).message
+          ).toContain(`cbx-${hostId}-${"ab".repeat(16)}`);
         })
       )
   );
@@ -1386,14 +1382,7 @@ const scripted = (
   );
 };
 
-const unwritten = FileSystem.layerNoop({
-  exists: () => Effect.succeed(false),
-  makeDirectory: () => Effect.void,
-  writeFileString: () => Effect.void,
-  rename: () => Effect.void,
-});
-
-const scriptedRuntime = (client: HttpClient.HttpClient) =>
+const scriptedRuntime = (client: HttpClient.HttpClient, dir?: string) =>
   Effect.gen(function* () {
     const api = yield* Api.make("https://smol.test", Redacted.make(key)).pipe(
       Effect.provideService(HttpClient.HttpClient, client)
@@ -1401,13 +1390,17 @@ const scriptedRuntime = (client: HttpClient.HttpClient) =>
 
     return yield* SmolCloud.make(
       { apiKeyFile: "/unused" },
-      hostConfig("/unused", undefined, hostId),
+      hostConfig(
+        path.join(dir ?? (yield* scratch), "state"),
+        undefined,
+        hostId
+      ),
       api,
       () => {
         throw new Error("no tunnel in a scripted provider");
       }
     );
-  }).pipe(Effect.provide(unwritten));
+  }).pipe(provided);
 
 const scriptedMake = (busy: number, state = "starting") =>
   Effect.gen(function* () {
@@ -1415,6 +1408,23 @@ const scriptedMake = (busy: number, state = "starting") =>
 
     return yield* Effect.forkChild(
       runtime.make(machineOf("dev"), { _tag: "image", image }, 10_022)
+    );
+  });
+
+const endedWithin = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+  within: Duration.Input
+) =>
+  Effect.gen(function* () {
+    const running = yield* Effect.forkChild(effect);
+
+    yield* TestClock.adjust(within);
+
+    return Option.getOrUndefined(
+      yield* Fiber.await(running).pipe(
+        Effect.timeoutOption("2 seconds"),
+        TestClock.withLive
+      )
     );
   });
 
@@ -1443,17 +1453,15 @@ describe("a smol cloud host's start", () => {
     () =>
       Effect.gen(function* () {
         for (const answer of ["gateway", "unavailable"] as const) {
-          const starting = yield* Effect.forkChild(
+          const ended = yield* endedWithin(
             scriptedRuntime(
               scripted({ busy: 0 }, "started", undefined, {
                 account: { times: 2, answer },
-              })
-            )
+              }),
+              yield* scratch.pipe(provided)
+            ),
+            "1 minute"
           );
-
-          yield* TestClock.adjust("1 minute");
-
-          const ended = starting.pollUnsafe();
 
           expect(
             ended !== undefined && Exit.isSuccess(ended),
@@ -1607,7 +1615,7 @@ describe("a smol cloud delete", () => {
     Effect.gen(function* () {
       const runtime = yield* scriptedRuntime(scripted({ busy: 0 }, "deleted"));
 
-      const deleting = yield* Effect.forkChild(
+      const ended = yield* endedWithin(
         runtime.delete(
           {
             name: "dev",
@@ -1615,12 +1623,9 @@ describe("a smol cloud delete", () => {
             handle: Handle.make("mach-1"),
           },
           new Set()
-        )
+        ),
+        "1 minute"
       );
-
-      yield* TestClock.adjust("1 minute");
-
-      const ended = deleting.pollUnsafe();
 
       expect(
         ended !== undefined && Exit.isSuccess(ended),
@@ -1789,18 +1794,6 @@ const dev1 = {
   instance: machineOf("dev").instance,
   handle: Handle.make("mach-1"),
 };
-
-const endedWithin = <A, E>(
-  effect: Effect.Effect<A, E>,
-  within: Duration.Input
-) =>
-  Effect.gen(function* () {
-    const running = yield* Effect.forkChild(effect);
-
-    yield* TestClock.adjust(within);
-
-    return running.pollUnsafe();
-  });
 
 const failureOf = <A, E>(ended: Exit.Exit<A, E> | undefined) =>
   ended !== undefined && Exit.isFailure(ended)

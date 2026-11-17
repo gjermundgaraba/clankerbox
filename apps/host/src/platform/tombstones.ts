@@ -1,3 +1,4 @@
+import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Context,
@@ -11,31 +12,25 @@ import {
 } from "effect";
 import type { Scope } from "effect";
 
-import type { Handle, Identity } from "../runtime.ts";
+import type { Handle, Interface, RuntimeError, Target } from "../runtime.ts";
 
 /**
  * A machine carrying this host's mark at its provider, the instance the mark names, and the handle
  * of each checkpoint the provider holds through it.
  */
-export interface Marked {
+export interface MarkedMachine {
   readonly instance: string;
   readonly handle: Handle;
   readonly checkpoints: readonly Handle[];
 }
 
-/**
- * What a rented runtime keeps of each machine instance its delete answered for, so it keeps the
- * port's promise that anything of that instance which lands at the provider later is deleted.
- */
-export interface Tombstones {
-  /** Keeps a tombstone of `instance`, once its delete answered. */
-  readonly bury: (instance: string) => Effect.Effect<void, Internal>;
-  /**
-   * Refuses a make of an instance with a tombstone, which only a control plane restored from a
-   * backup sends: the machine would be swept as it lands.
-   */
-  readonly refuse: (machine: Identity) => Effect.Effect<void, Internal>;
-}
+/** A rented runtime as its adapter writes it: its `delete` takes a machine its search found. */
+export type Found = Omit<Interface, "delete"> & {
+  readonly delete: (
+    machine: Target,
+    keep: ReadonlySet<Handle>
+  ) => Effect.Effect<void, RuntimeError>;
+};
 
 /** How often a sweep runs while a tombstone is kept. */
 export const SweepEvery = Context.Reference<Duration.Duration>(
@@ -43,13 +38,13 @@ export const SweepEvery = Context.Reference<Duration.Duration>(
   { defaultValue: () => Duration.seconds(30) }
 );
 
-/** How long a tombstone lasts from the first sweep that left nothing of its instance. */
+/** How long a tombstone lasts from its burial, past which a sweep whose list finds nothing of it forgets it. */
 export const tombstoneLast = Duration.days(1);
 
 const Kept = Schema.Array(
   Schema.Struct({
     instance: Schema.String,
-    quietSince: Schema.NullOr(Schema.DateTimeUtcFromString),
+    buriedAt: Schema.DateTimeUtcFromString,
   })
 );
 
@@ -57,36 +52,41 @@ const decodeKept = Schema.decodeUnknownEffect(Schema.fromJsonString(Kept));
 
 const encodeKept = Schema.encodeEffect(Schema.fromJsonString(Kept));
 
-interface Stone {
-  readonly quietSince: DateTime.Utc | undefined;
+interface Options {
+  readonly dir: string;
+  readonly marked: Effect.Effect<readonly MarkedMachine[], RuntimeError>;
 }
 
 /**
- * The tombstones of a rented runtime, kept in a file in `dir`, under the host's state directory, so a host
- * that restarts keeps them, and a sweep in the scope that makes them. Every `SweepEvery`, while a
- * tombstone is kept, the sweep lists what carries this host's mark, and so a host with nothing to
- * delete pays for no list, and deletes each machine whose instance has a tombstone through
- * `remove`, keeping every checkpoint it holds, as a row may still want one. A tombstone lasts
- * `tombstoneLast` from the first sweep that left nothing of its instance, and one whose delete
- * failed waits for a sweep that deletes it. A tombstone only ever deletes, so a host with none, or
- * one that lost its file, keeps every machine a row wants.
+ * `runtime` with tombstones, kept in a file in `dir`, under the host's state directory, so a host
+ * that restarts keeps them, and its sweep, which the caller runs. Its `delete` buries the instance
+ * once the inner one has answered, or at once when the search found nothing, and its `make` refuses
+ * a buried instance, which only a control plane restored from a backup sends. The sweep lists what
+ * carries this host's mark while a tombstone is kept, so a host with nothing to delete pays for no
+ * list, and deletes each machine of a buried instance through the inner `delete`, keeping every
+ * checkpoint it holds, as a row may still want one. A tombstone older than `tombstoneLast` is
+ * forgotten by a sweep whose list succeeded and found nothing of it. A tombstone only ever
+ * deletes, so a host with none, or one that lost its file, keeps every machine a row wants. The
+ * wrapper keeps each getter of `runtime` a getter, so it still reads live.
  */
-export const make = (options: {
-  readonly dir: string;
-  readonly provider: string;
-  readonly marked: Effect.Effect<readonly Marked[], Internal>;
-  readonly remove: (machine: Marked) => Effect.Effect<void, Internal>;
-}): Effect.Effect<Tombstones, Internal, FileSystem.FileSystem | Scope.Scope> =>
+export const tombstoned = <
+  R extends Pick<Found, "make" | "delete"> & {
+    readonly traits: Pick<RuntimeTraits, "runtime">;
+  },
+>(
+  runtime: R,
+  { dir, marked }: Options
+) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const { provider } = options;
-    const file = `${options.dir}/tombstones.json`;
+    const file = `${dir}/tombstones.json`;
+    const provider = runtime.traits.runtime;
 
     const failed = (what: string) => (error: { readonly message: string }) =>
       new Internal({ message: `couldn't ${what} ${file}: ${error.message}` });
 
     const read = yield* fs
-      .makeDirectory(options.dir, { recursive: true, mode: 0o700 })
+      .makeDirectory(dir, { recursive: true, mode: 0o700 })
       .pipe(
         Effect.andThen(fs.exists(file)),
         Effect.flatMap((found) =>
@@ -96,11 +96,8 @@ export const make = (options: {
         Effect.mapError(failed("read the tombstones in"))
       );
 
-    const stones = new Map<string, Stone>(
-      read.map(({ instance, quietSince }) => [
-        instance,
-        { quietSince: quietSince ?? undefined },
-      ])
+    const buried = new Map(
+      read.map(({ instance, buriedAt }) => [instance, buriedAt])
     );
 
     const writing = yield* Semaphore.make(1);
@@ -108,10 +105,7 @@ export const make = (options: {
 
     const written = Effect.suspend(() =>
       encodeKept(
-        [...stones].map(([instance, { quietSince }]) => ({
-          instance,
-          quietSince: quietSince ?? null,
-        }))
+        [...buried].map(([instance, buriedAt]) => ({ instance, buriedAt }))
       )
     ).pipe(
       Effect.flatMap((text) =>
@@ -123,34 +117,41 @@ export const make = (options: {
       Effect.mapError(failed("write the tombstones to"))
     );
 
-    const bury: Tombstones["bury"] = (instance) =>
+    const bury = (instance: string) =>
       writing.withPermits(1)(
-        Effect.suspend(() => {
-          stones.set(instance, { quietSince: undefined });
+        Effect.gen(function* () {
+          if (buried.has(instance)) {
+            return;
+          }
 
-          return written;
+          buried.set(instance, yield* DateTime.now);
+          yield* written;
         })
       );
 
-    const swept = (machine: Marked): Effect.Effect<boolean> =>
+    const swept = (machine: MarkedMachine): Effect.Effect<void> =>
       Effect.suspend(() => {
-        const what = `machine ${machine.instance} (${machine.handle})`;
-        const again = undeleted.has(machine.instance);
+        const { instance, handle } = machine;
+        const what = `machine ${instance} (${handle})`;
+        const again = undeleted.has(instance);
 
-        return options.remove(machine).pipe(
-          Effect.tap(() =>
-            Effect.andThen(
-              Effect.sync(() => undeleted.delete(machine.instance)),
-              Effect.logInfo(
-                `sweep: deleted ${what}, which landed at ${provider} after its delete`
-              )
-            )
-          ),
-          Effect.as(true),
-          Effect.catch((error) =>
-            Effect.as(
+        return runtime
+          .delete(
+            { name: instance, instance, handle },
+            new Set(machine.checkpoints)
+          )
+          .pipe(
+            Effect.tap(() =>
               Effect.andThen(
-                Effect.sync(() => undeleted.add(machine.instance)),
+                Effect.sync(() => undeleted.delete(instance)),
+                Effect.logInfo(
+                  `sweep: deleted ${what}, which landed at ${provider} after its delete`
+                )
+              )
+            ),
+            Effect.catch((error) =>
+              Effect.andThen(
+                Effect.sync(() => undeleted.add(instance)),
                 again
                   ? Effect.logDebug(
                       `sweep: still couldn't delete ${what}: ${error.message}`
@@ -158,59 +159,46 @@ export const make = (options: {
                   : Effect.logWarning(
                       `sweep: couldn't delete ${what}, which landed at ${provider} after its delete, so each sweep tries again: ${error.message}`
                     )
-              ),
-              false
+              )
             )
-          )
-        );
+          );
       });
 
     const sweep = Effect.gen(function* () {
-      const before = new Map(stones);
-
-      if (before.size === 0) {
+      if (buried.size === 0) {
         return;
       }
 
-      const listed = yield* options.marked;
-
-      const left = new Set(
-        (yield* Effect.forEach(
-          listed.filter(({ instance }) => before.has(instance)),
-          (machine) =>
-            Effect.map(swept(machine), (deleted) =>
-              deleted ? [] : [machine.instance]
-            ),
-          { concurrency: "unbounded" }
-        )).flat()
+      const found = (yield* marked).filter(({ instance }) =>
+        buried.has(instance)
       );
 
-      const now = yield* DateTime.now;
-      const forgotten = DateTime.subtractDuration(now, tombstoneLast);
+      yield* Effect.forEach(found, swept, {
+        concurrency: "unbounded",
+        discard: true,
+      });
+
+      const left = new Set(found.map(({ instance }) => instance));
+
+      const before = DateTime.subtractDuration(
+        yield* DateTime.now,
+        tombstoneLast
+      );
 
       yield* writing.withPermits(1)(
         Effect.suspend(() => {
-          for (const [instance, stone] of before) {
-            if (stones.get(instance) !== stone) {
-              continue;
-            }
+          const old = [...buried].filter(
+            ([instance, buriedAt]) =>
+              !left.has(instance) &&
+              DateTime.isLessThanOrEqualTo(buriedAt, before)
+          );
 
-            const quietSince = left.has(instance)
-              ? undefined
-              : (stone.quietSince ?? now);
-
-            if (
-              quietSince !== undefined &&
-              DateTime.isLessThanOrEqualTo(quietSince, forgotten)
-            ) {
-              stones.delete(instance);
-              undeleted.delete(instance);
-            } else if (quietSince !== stone.quietSince) {
-              stones.set(instance, { quietSince });
-            }
+          for (const [instance] of old) {
+            buried.delete(instance);
+            undeleted.delete(instance);
           }
 
-          return written;
+          return old.length === 0 ? Effect.void : written;
         })
       );
     }).pipe(
@@ -221,19 +209,52 @@ export const make = (options: {
       )
     );
 
-    yield* Effect.forkScoped(
-      Effect.repeat(sweep, Schedule.spaced(yield* SweepEvery))
+    const refuse = (machine: {
+      readonly name: string;
+      readonly instance: string;
+    }) =>
+      buried.has(machine.instance)
+        ? Effect.fail(
+            new Internal({
+              message: `make ${machine.name}: this host deleted instance ${machine.instance} already, and makes no instance it deleted again`,
+            })
+          )
+        : Effect.void;
+
+    const make: Interface["make"] = (machine, origin, port) =>
+      Effect.andThen(refuse(machine), runtime.make(machine, origin, port));
+
+    const remove: Interface["delete"] = ({ handle, ...machine }, keep) =>
+      Effect.andThen(
+        handle === undefined
+          ? Effect.void
+          : runtime.delete({ ...machine, handle }, keep),
+        bury(machine.instance)
+      );
+
+    const wrapped = Object.defineProperties(
+      { ...runtime, make, delete: remove },
+      Object.fromEntries(
+        Object.entries(Object.getOwnPropertyDescriptors(runtime)).filter(
+          ([, property]) => property.get !== undefined
+        )
+      )
     );
 
-    return {
-      bury,
-      refuse: (machine) =>
-        stones.has(machine.instance)
-          ? Effect.fail(
-              new Internal({
-                message: `make ${machine.name}: this host deleted instance ${machine.instance} already, and makes no instance it deleted again`,
-              })
-            )
-          : Effect.void,
-    } satisfies Tombstones;
+    return { runtime: wrapped, sweep };
+  });
+
+/** `runtime` with its tombstones, swept every `SweepEvery` in the scope that makes it. */
+export const rented = (
+  runtime: Found,
+  options: Options
+): Effect.Effect<Interface, Internal, FileSystem.FileSystem | Scope.Scope> =>
+  Effect.gen(function* () {
+    const kept = yield* tombstoned(runtime, options);
+
+    yield* Effect.forkScoped(
+      Effect.repeat(kept.sweep, Schedule.spaced(yield* SweepEvery))
+    );
+
+    return kept.runtime;
   });
