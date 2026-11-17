@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { Hex } from "effect/encoding";
 
 const hostIdPattern = /^[a-z][a-z0-9-]{0,31}$/u;
 
@@ -47,10 +48,9 @@ const buildCopyPattern = new RegExp(
 
 /** A new name for a template build's copy, made on the build's host or fetched to another. */
 export const buildCopyName = (kind: keyof typeof copyPrefixes): string =>
-  `${copyPrefixes[kind]}${Array.from(
-    globalThis.crypto.getRandomValues(new Uint8Array(copyDigits / 2)),
-    (byte) => byte.toString(16).padStart(2, "0")
-  ).join("")}`;
+  `${copyPrefixes[kind]}${Hex.encode(
+    globalThis.crypto.getRandomValues(new Uint8Array(copyDigits / 2))
+  )}`;
 
 export const isBuildCopy = (name: string): boolean =>
   buildCopyPattern.test(name);

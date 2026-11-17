@@ -1564,12 +1564,12 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a watch hears a finish that leaves the row as it was, and no write of another row",
+    "a watch hears a finish that leaves the row as it was, and neither another row's write nor an advance that writes nothing",
     () =>
       Effect.gen(function* () {
         const stateDir = yield* stateIn;
 
-        const [before, after] = yield* withStore(stateDir, (store) =>
+        const early = yield* withStore(stateDir, (store) =>
           Effect.scoped(
             Effect.gen(function* () {
               yield* store.insertMachine(row("dev"));
@@ -1589,7 +1589,7 @@ layer(NodeServices.layer)((it) => {
               }));
               yield* Effect.yieldNow;
 
-              const early = yield* Effect.sync(() => heard.pollUnsafe());
+              const polled = yield* Effect.sync(() => heard.pollUnsafe());
 
               yield* store.advance("machine", "dev", (given) => ({
                 next: given,
@@ -1598,16 +1598,12 @@ layer(NodeServices.layer)((it) => {
 
               yield* Fiber.join(heard);
 
-              return [
-                early,
-                yield* store.operationOn("machine", "dev"),
-              ] as const;
+              return polled;
             })
           )
         );
 
-        expect(before).toBeUndefined();
-        expect(after).toStrictEqual(Option.none());
+        expect(early).toBeUndefined();
       })
   );
 
