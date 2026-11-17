@@ -5,7 +5,6 @@ import type { HttpMethod } from "effect/http";
 
 import { Handle } from "../../runtime.ts";
 import {
-  providerErrors,
   recordReader,
   retryAfter,
   sender,
@@ -95,8 +94,6 @@ export class Refused extends Schema.TaggedError<
 }) {}
 
 export type ApiError = ProviderError<Refused>;
-
-export const apiErrors = ["Refused", ...providerErrors] as const;
 
 export interface Sizes {
   readonly cpus?: number | undefined;

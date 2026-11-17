@@ -199,33 +199,21 @@ export const untilRest = <E extends { readonly _tag: string }>(
   bound: Duration.Duration,
   rests: Effect.Effect<boolean, E>
 ): Effect.Effect<void, E> =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const written = yield* store.watch(resource, name);
-
-      const look = rests.pipe(
-        Effect.retry({
-          while: ({ _tag }) => _tag === "Unavailable",
-          schedule: Schedule.spaced(unreachableWait).pipe(
-            Schedule.upTo({ duration: bound })
-          ),
-        })
-      );
-
-      const until = (rested: boolean): Effect.Effect<void, E> =>
-        rested
-          ? Effect.void
-          : Effect.flatMap(
-              Effect.andThen(
-                Effect.timeoutOption(written, unreachableWait),
-                look
-              ),
-              until
-            );
-
-      yield* Effect.flatMap(look, until);
-    })
-  );
+  readUntil(
+    store,
+    resource,
+    name,
+    rests.pipe(
+      Effect.retry({
+        while: ({ _tag }) => _tag === "Unavailable",
+        schedule: Schedule.spaced(unreachableWait).pipe(
+          Schedule.upTo({ duration: bound })
+        ),
+      })
+    ),
+    (rested) => rested,
+    unreachableWait
+  ).pipe(Effect.asVoid);
 
 /**
  * The loops of one resource, at most one per name, each moving its row a whole step at a time. The

@@ -20,11 +20,9 @@ import {
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import {
-  Context,
   Duration,
   Effect,
   Fiber,
-  Layer,
   Logger,
   Option,
   Schedule,
@@ -43,43 +41,7 @@ import {
 import type { Invocation } from "../src/exec.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { Execution } from "../src/runtime.ts";
-import { fakeRuntime } from "./fake-runtime.ts";
-import type { FakeRuntimeName } from "./fake-runtime.ts";
-import { image } from "./support.ts";
-
-const waitFor = (file: string, text: string) =>
-  Effect.orElseSucceed(readFile(file), () => "").pipe(
-    Effect.repeat({
-      until: (contents) => contents.includes(text),
-      schedule: Schedule.spaced(Duration.millis(10)),
-    })
-  );
-
-const dev = {
-  name: "dev",
-  instance: "0f3a9c1e",
-  cpu: 1,
-  ramMib: 512,
-  diskGib: 10,
-};
-
-const madeOn = (as: FakeRuntimeName) =>
-  Effect.gen(function* () {
-    const dir = yield* scratch;
-    const fake = fakeRuntime({ dir, as });
-    const runtime = Context.get(yield* Layer.build(fake.layer), Runtime);
-
-    const { handle } = yield* runtime.make(dev, { _tag: "image", image }, 2222);
-
-    return {
-      runtime,
-      fake,
-      bin: path.join(dir, "bin"),
-      machine: { ...dev, handle },
-    };
-  });
-
-const based = madeOn("smolvm");
+import { based, madeOn, waitFor } from "./support.ts";
 
 const guestShells = [
   { name: "dash", argv: ["dash"] },

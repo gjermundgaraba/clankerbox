@@ -90,11 +90,13 @@ export class Unreadable extends Schema.TaggedError<
   message: Schema.String,
 }) {}
 
-/** How a call to a provider's API fails, with the provider's own `Refused`. */
-export type ProviderError<Refused> = Refused | Unanswered | Busy | Unreadable;
+/** How a call to a provider's API fails besides the provider's own refusal. */
+export const providerErrors = [Unanswered, Busy, Unreadable] as const;
 
-/** The tags of a `ProviderError` but the provider's own refusal, for a `catchTag` of them all. */
-export const providerErrors = ["Unanswered", "Busy", "Unreadable"] as const;
+/** How a call to a provider's API fails, with the provider's own `Refused`. */
+export type ProviderError<Refused> =
+  | Refused
+  | InstanceType<(typeof providerErrors)[number]>;
 
 const lost =
   (call: string) =>

@@ -49,13 +49,13 @@ import {
   KeyedApiUrl,
   apiKey,
   bounded,
+  providerErrors,
   sentUntilHeld,
   stepWithin,
   triesAfterLoss,
   untilRest,
 } from "../provider-http.ts";
 import * as Api from "./api.ts";
-import { apiErrors } from "./api.ts";
 import type { ApiError, MachineRecord, Refused } from "./api.ts";
 import { traits as traitsOf } from "./traits.ts";
 import { tunnel } from "./tunnel.ts";
@@ -121,7 +121,8 @@ const transitional = new Set(["creating", "pausing", "starting", "stopping"]);
 const checkpointEnds = new Set(["available", "failed"]);
 
 const fromApi = (error: { readonly _tag: string }): error is ApiError =>
-  apiErrors.some((tag) => tag === error._tag);
+  error instanceof Api.Refused ||
+  providerErrors.some((type) => error instanceof type);
 
 const standingAfter = 3;
 
@@ -947,7 +948,7 @@ export const make = (
           yield* told([machine]);
 
           const account = yield* api.account.pipe(
-            Effect.catchTag(apiErrors, failed(`make ${machine.name}`))
+            Effect.catchIf(fromApi, failed(`make ${machine.name}`))
           );
 
           yield* planned(machine, account);
@@ -974,7 +975,7 @@ export const make = (
                   })
                 )
             ),
-            Effect.catchTag(apiErrors, failed(`make ${machine.name}`))
+            Effect.catchIf(fromApi, failed(`make ${machine.name}`))
           );
 
           yield* toward(targetOf(machine, handle), "running");
@@ -1059,7 +1060,7 @@ export const make = (
           memoryMb: to.ramMib,
           diskGb: to.diskGib,
         }).pipe(
-          Effect.catchTag(apiErrors, (error) =>
+          Effect.catchIf(fromApi, (error) =>
             Effect.fail(
               error._tag === "Refused" &&
                 (error.status === 400 || error.status === 422)

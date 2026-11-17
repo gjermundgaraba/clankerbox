@@ -627,28 +627,6 @@ export const open = (
       "INSERT INTO hosts (id, boot) VALUES (?, ?) ON CONFLICT (id) DO UPDATE SET boot = excluded.boot"
     );
 
-    const inserting = (
-      resource: Lease["resource"],
-      name: string,
-      run: () => void
-    ) =>
-      Effect.flatMap(
-        sql(`insert ${resource} ${name}`, () => {
-          try {
-            run();
-
-            return Result.void;
-          } catch (error) {
-            if (isSqliteError(error) && error.errcode === sqlitePrimaryKey) {
-              return Result.fail(taken(resource, name));
-            }
-
-            throw error;
-          }
-        }),
-        Effect.fromResult
-      );
-
     const holderOf = (wanted: readonly Lease[]): Operation | undefined =>
       selectOperations
         .all()
@@ -693,6 +671,28 @@ export const open = (
 
     const told = (resource: Lease["resource"], name: string) =>
       Effect.asVoid(PubSub.publish(written, { resource, name }));
+
+    const inserting = (
+      resource: Lease["resource"],
+      name: string,
+      run: () => void
+    ) =>
+      Effect.flatMap(
+        sql(`insert ${resource} ${name}`, () => {
+          try {
+            run();
+
+            return Result.void;
+          } catch (error) {
+            if (isSqliteError(error) && error.errcode === sqlitePrimaryKey) {
+              return Result.fail(taken(resource, name));
+            }
+
+            throw error;
+          }
+        }),
+        Effect.fromResult
+      ).pipe(Effect.andThen(told(resource, name)), Effect.uninterruptible);
 
     interface Wrote<R> {
       readonly answer: Advanced<R>;
@@ -814,10 +814,7 @@ export const open = (
         inserting("machine", row.name, () => {
           deleteUndone.run(row.name);
           insertMachine.run(machineColumns(row));
-        }).pipe(
-          Effect.andThen(told("machine", row.name)),
-          Effect.uninterruptible
-        )
+        })
       ),
       advance: (resource, name, decide) =>
         advanced(resource, tables[resource], name, decide).pipe(
@@ -872,10 +869,7 @@ export const open = (
         inserting("checkpoint", record.name, () => {
           deleteFailedCheckpoint.run(record.name);
           insertCheckpoint.run(checkpointColumns(record));
-        }).pipe(
-          Effect.andThen(told("checkpoint", record.name)),
-          Effect.uninterruptible
-        )
+        })
       ),
       templates: sql("list templates", () =>
         selectTemplates.all().map((raw) => templateOf(raw))

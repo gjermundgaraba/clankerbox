@@ -14,7 +14,14 @@ import {
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Conflict, Internal, Phase } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, Effect, Schema, SchemaGetter } from "effect";
-import type { Array as Arr, DateTime, Option, Result, Scope } from "effect";
+import type {
+  Array as Arr,
+  DateTime,
+  Option,
+  Result,
+  Scope,
+  Duration,
+} from "effect";
 
 import type { CheckpointRow } from "./checkpoint-chart.ts";
 import type { MachineRow } from "./machine-chart.ts";
@@ -330,22 +337,31 @@ export class Store extends Context.Service<Store, Interface>()(
   "@clankerbox/server/Store"
 ) {}
 
-/** Reads `read` until what it answers is `done`, again after each write of `resource`'s row `name`. */
+/**
+ * Reads `read` until what it answers is `done`, again after each write of `resource`'s row `name`,
+ * and, given `orEvery`, once that long passes with no write.
+ */
 export const readUntil = <A, E>(
   store: Pick<Interface, "watch">,
   resource: Lease["resource"],
   name: string,
   read: Effect.Effect<A, E>,
-  done: (found: A) => boolean
+  done: (found: A) => boolean,
+  orEvery?: Duration.Duration
 ): Effect.Effect<A, E> =>
   Effect.scoped(
     Effect.gen(function* () {
       const written = yield* store.watch(resource, name);
 
+      const wake =
+        orEvery === undefined
+          ? written
+          : Effect.timeoutOption(written, orEvery);
+
       const until = (found: A): Effect.Effect<A, E> =>
         done(found)
           ? Effect.succeed(found)
-          : Effect.flatMap(Effect.andThen(written, read), until);
+          : Effect.flatMap(Effect.andThen(wake, read), until);
 
       return yield* Effect.flatMap(read, until);
     })

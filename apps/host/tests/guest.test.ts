@@ -17,17 +17,7 @@ import {
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
-import {
-  Context,
-  Duration,
-  Effect,
-  Exit,
-  Fiber,
-  Layer,
-  Logger,
-  Redacted,
-  Schedule,
-} from "effect";
+import { Duration, Effect, Exit, Fiber, Logger, Redacted } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { expect } from "vite-plus/test";
 
@@ -52,15 +42,9 @@ import {
   unkey,
   unkeyScript,
 } from "../src/guest.ts";
-import { lastLines, Runtime } from "../src/runtime.ts";
-import {
-  fakeRuntime,
-  furnish,
-  writeStubs,
-  writeTailscaleStubs,
-} from "./fake-runtime.ts";
-import type { FakeRuntimeName } from "./fake-runtime.ts";
-import { image } from "./support.ts";
+import { Runtime } from "../src/runtime.ts";
+import { furnish, writeStubs, writeTailscaleStubs } from "./fake-runtime.ts";
+import { based, madeOn, waitFor } from "./support.ts";
 
 const seedOf = () => globalThis.crypto.getRandomValues(new Uint8Array(64));
 
@@ -133,14 +117,6 @@ const withHostKeys = (root: string) =>
 
 const isMissing = (file: string) =>
   Effect.map(Effect.exit(stat(file)), Exit.isFailure);
-
-const waitFor = (file: string, text: string) =>
-  Effect.orElseSucceed(readFile(file), () => "").pipe(
-    Effect.repeat({
-      until: (contents) => contents.includes(text),
-      schedule: Schedule.spaced(Duration.millis(10)),
-    })
-  );
 
 const listener = (root: string, comm: string) =>
   Effect.gen(function* () {
@@ -279,32 +255,6 @@ const joinedWithDns = (uname: string) =>
     return { where, node };
   });
 
-const dev = {
-  name: "dev",
-  instance: "0f3a9c1e",
-  cpu: 1,
-  ramMib: 512,
-  diskGib: 10,
-};
-
-const madeOn = (as: FakeRuntimeName) =>
-  Effect.gen(function* () {
-    const dir = yield* scratch;
-    const fake = fakeRuntime({ dir, as });
-    const runtime = Context.get(yield* Layer.build(fake.layer), Runtime);
-
-    const { handle } = yield* runtime.make(dev, { _tag: "image", image }, 2222);
-
-    return {
-      runtime,
-      fake,
-      bin: path.join(dir, "bin"),
-      machine: { ...dev, handle },
-    };
-  });
-
-const based = madeOn("smolvm");
-
 const preparedForSetup = Effect.tap(based, ({ runtime, machine }) =>
   prepareBase(runtime, machine, false)
 );
@@ -334,18 +284,6 @@ const packaged = (made: Effect.Success<typeof based>) =>
   });
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
-  it("an output's tail is its last 20 lines, at most 4000 characters, with no blank end", () => {
-    const lines = Array.from({ length: 30 }, (_, line) => `line ${line}`);
-
-    expect(lastLines(`${lines.join("\n")}\n\n`)).toBe(
-      lines.slice(10).join("\n")
-    );
-    expect(lastLines(`${"a".repeat(6000)}${"b".repeat(4000)}`)).toBe(
-      "b".repeat(4000)
-    );
-    expect(lastLines("short\n")).toBe("short");
-  });
-
   it.effect(
     "a setup that exits non-zero fails with its output's tail, never its text, and leaves no copy of it",
     () =>

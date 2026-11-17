@@ -96,7 +96,7 @@ const tailLines = 20;
 
 const tailCharacters = 4000;
 
-/** The end of a command's output, as an error or a log quotes it: its last 20 lines, at most 4000 characters. */
+/** The end of a command's output, as an error or a log quotes it. */
 export const lastLines = (text: string): string =>
   text
     .trimEnd()

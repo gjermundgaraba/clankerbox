@@ -5,7 +5,10 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import {
+  read as readFile,
+  scratch,
+} from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import {
   Context,
   Duration,
@@ -27,9 +30,9 @@ import { Operations } from "../src/operations.ts";
 import type { Interface as OperationsInterface } from "../src/operations.ts";
 import type { BuildsSettings } from "../src/platform/s3.ts";
 import type { TailnetSettings } from "../src/platform/tailscale.ts";
+import { Runtime } from "../src/runtime.ts";
 import type {
   Admission,
-  Runtime,
   Interface as RuntimeInterface,
 } from "../src/runtime.ts";
 import type { PortRange, HostSettings } from "../src/settings.ts";
@@ -395,3 +398,37 @@ export const emptyAnswer = (read: string) => {
 
   return whole ? read.slice(0, read.indexOf("\r\n")) : `not whole: ${read}`;
 };
+
+export const waitFor = (file: string, text: string) =>
+  Effect.orElseSucceed(readFile(file), () => "").pipe(
+    Effect.repeat({
+      until: (contents) => contents.includes(text),
+      schedule: Schedule.spaced(Duration.millis(10)),
+    })
+  );
+
+const dev = {
+  name: "dev",
+  instance: "0f3a9c1e",
+  cpu: 1,
+  ramMib: 512,
+  diskGib: 10,
+};
+
+export const madeOn = (as: FakeRuntimeName) =>
+  Effect.gen(function* () {
+    const dir = yield* scratch;
+    const fake = fakeRuntime({ dir, as });
+    const runtime = Context.get(yield* Layer.build(fake.layer), Runtime);
+
+    const { handle } = yield* runtime.make(dev, { _tag: "image", image }, 2222);
+
+    return {
+      runtime,
+      fake,
+      bin: path.join(dir, "bin"),
+      machine: { ...dev, handle },
+    };
+  });
+
+export const based = madeOn("smolvm");
