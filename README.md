@@ -180,6 +180,7 @@ The control plane exits 130 on SIGINT or SIGTERM and 1 when it fails. It stops a
 ### Upgrading from 0.41
 
 - A smolvm or Tart host's `builds` moves into its runtime's settings: `"builds": { ... }` beside `"runtime": { "smolvm": { "prefix": ... } }` becomes `"runtime": { "smolvm": { "prefix": ..., "builds": { ... } } }`, and the same under `tart`. A host whose config still has `builds` at the top refuses to start, `Invalid`, as it does a field it doesn't know. boat and smol cloud take no `builds`.
+- The control plane drops its record of the machines it removed at its first start, and a boat or smol cloud host keeps its own from then on, in `tombstones.json` under its `stateDir`. A boat or smol cloud make removed before the upgrade whose machine lands at the provider after it is left there, billed; Leftovers says how to find one.
 
 ### Upgrading from 0.40
 
