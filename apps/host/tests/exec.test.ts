@@ -1579,17 +1579,17 @@ const shellCases = (shell: readonly string[]) => {
           );
 
           const [took, ended] = yield* Effect.timed(
-            endUnder(shell, root, mark, 1)
+            endUnder(shell, root, mark, 2)
           );
 
           expect(ended.code).toBe(1);
           expect(ended.stderr).toContain(
-            "clankerbox: 2 processes of the command still ran at its last listing when its end's 1s ran out"
+            "clankerbox: 2 processes of the command still ran at its last listing when its end's 2s ran out"
           );
           expect(yield* goneWithin(tree, Duration.seconds(1))).toStrictEqual(
             []
           );
-          expect(Duration.toSeconds(took)).toBeLessThan(3);
+          expect(Duration.toSeconds(took)).toBeLessThan(4);
         }),
       endsTimeout(1, 1)
     );
