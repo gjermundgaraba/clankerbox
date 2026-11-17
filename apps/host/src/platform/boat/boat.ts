@@ -177,6 +177,27 @@ const endsAt =
   (held: Held): held is End<G> =>
     ends[goal].some((end: Held) => end === held);
 
+interface Restoring {
+  readonly held: Held;
+  readonly hydrated: boolean;
+}
+
+const restoringOf = (sandbox: Sandbox | undefined): Restoring => ({
+  held: heldOf(sandbox),
+  hydrated: sandbox?.hydrated !== false,
+});
+
+/**
+ * Ends where a make or start does, a running sandbox only once it is `hydrated`, as
+ * https://docs.boat.dev/openapi/boat-v1.yaml's `Sandbox.hydrated` defines it: boat copies a resumed
+ * or forked sandbox's files in while it runs, and moves them onto its disk under the programs
+ * started before that ends.
+ */
+const restored = (
+  found: Restoring
+): found is Restoring & { readonly held: End<"running"> } =>
+  endsAt("running")(found.held) && (found.held !== "running" || found.hydrated);
+
 const dropped = (machine: Pick<Target, "name">) =>
   new Missing({
     message: `boat dropped machine ${machine.name}'s disk after its long stop; delete it`,
@@ -360,7 +381,11 @@ export const make = (
 
     const ready = (machine: Target, what: "make" | "start") =>
       Effect.gen(function* () {
-        const held = yield* toward(machine, "running");
+        const { held } = yield* untilRest(
+          Effect.map(read(machine), restoringOf),
+          restored,
+          pollEvery
+        );
 
         switch (held) {
           case "running": {

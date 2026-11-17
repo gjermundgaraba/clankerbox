@@ -174,8 +174,9 @@ a box to one smolvm host in `one-per-box.ts`), `tart/` (the Tart home's VM
 directories in `home.ts`, a VM's lock read through macOS's Perl in `locks.ts`,
 `launchctl print` read in `launchd.ts`, the `tart run` processes `ps` shows in
 `runs.ts`), `smol-cloud/` (smol cloud's API in `api.ts`, the SSH tunnel in `tunnel.ts`) and
-`boat/` (boat's REST API with its retries and headers in `api.ts`, the guest
-channel in `ssh.ts`, OpenSSH from the host pinned to the host key boat answers),
+`boat/` (boat's REST API with its retries and headers in `api.ts`, the
+adapter in `boat.ts`, whose make and start end once boat reads the sandbox
+`hydrated`, the guest channel in `ssh.ts`, OpenSSH from the host pinned to the host key boat answers),
 each with its `RuntimeTraits` in its `traits.ts`, and what they share:
 `process.ts`, a child process's run, and `provider-http.ts`, what the smol
 cloud and boat clients keep with their provider's API: the URL it is sent to

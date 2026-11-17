@@ -288,7 +288,68 @@ const nodeWhose = (self: { readonly online: boolean }) =>
     return tailnetIn(stdout);
   }).pipe(Effect.scoped);
 
+const stuckDaemon = Effect.gen(function* () {
+  const dir = yield* scratch;
+  const root = path.join(dir, "root");
+  const bin = writeStubs(dir, "Linux");
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+
+  yield* mkdir(path.join(root, "dev"));
+  furnish(root, bin);
+  writeTailscaleStubs(bin);
+
+  const daemon = yield* spawner.spawn(
+    ChildProcess.make("/bin/sh", ["-c", "while :; do sleep 0.05; done"], {
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "ignore",
+      killSignal: "SIGKILL",
+    })
+  );
+
+  const pid = String(daemon.pid);
+  const state = path.join(root, "var", "lib", "clankerbox", "tailscale");
+
+  yield* mkdir(path.join(state, "state"));
+  yield* write(path.join(state, "tailscaled.pid"), `${pid}\n`);
+  yield* mkdir(path.join(root, "proc", pid));
+  yield* write(path.join(root, "proc", pid, "comm"), "tailscaled\n");
+
+  const { stdout } = yield* outputOf(
+    "/bin/sh",
+    ["-c", tailnetScript, "tailnet", "linux-dev", "user"],
+    {
+      env: { CLANKERBOX_ROOT: root, PATH: "/nowhere" },
+      extendEnv: true,
+      input: new TextEncoder().encode(""),
+    }
+  );
+
+  return {
+    tailnet: tailnetIn(stdout),
+    running: yield* daemon.isRunning,
+    started: (yield* read(path.join(root, "calls"))).includes("tailscaled "),
+  };
+}).pipe(Effect.scoped);
+
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
+  it.effect(
+    "a tailscaled that runs but doesn't answer is replaced by one that does",
+    () =>
+      Effect.gen(function* () {
+        expect(yield* stuckDaemon).toStrictEqual({
+          tailnet: {
+            state: "reported",
+            backend: "NeedsLogin",
+            name: undefined,
+          },
+          running: false,
+          started: true,
+        });
+      }),
+    30_000
+  );
+
   it.effect(
     "a node online now is reported as it is, whatever 404 its daemon logged before",
     () =>

@@ -66,6 +66,8 @@ export interface FakeSandbox {
   running: boolean;
   inPassing: "provisioning" | "archiving" | undefined;
   archivingFor: number;
+  hydratingFor: number;
+  answeredHydrated: boolean | undefined;
   dataExpired: boolean;
   failed: boolean;
   cancelled: boolean;
@@ -544,6 +546,7 @@ export const fakeBoat = (
     let listsLagging = 0;
     let failingNext = false;
     let cancellingNext = false;
+    let hydratingNext = 0;
     const gateways = new Set<BoatCall>();
 
     const malformed: Malformed[] = [];
@@ -591,13 +594,16 @@ export const fakeBoat = (
       labels: sandbox.labels,
       createdAt: sandbox.createdAt,
       dataExpiredAt: sandbox.dataExpired ? sandbox.createdAt : null,
+      hydrated: sandbox.hydratingFor === 0,
     });
 
     const sandboxJson = (sandbox: FakeSandbox) => {
       const json = answeredJson(sandbox);
 
+      sandbox.answeredHydrated = json.hydrated;
       sandbox.inPassing = undefined;
       sandbox.archivingFor = Math.max(0, sandbox.archivingFor - 1);
+      sandbox.hydratingFor = Math.max(0, sandbox.hydratingFor - 1);
 
       return json;
     };
@@ -660,6 +666,8 @@ export const fakeBoat = (
         running: true,
         inPassing: "provisioning",
         archivingFor: 0,
+        hydratingFor: hydratingNext,
+        answeredHydrated: undefined,
         dataExpired: false,
         failed: failingNext,
         cancelled: cancellingNext,
@@ -671,6 +679,7 @@ export const fakeBoat = (
       starts += 1;
       failingNext = false;
       cancellingNext = false;
+      hydratingNext = 0;
 
       return sandbox;
     };
@@ -874,6 +883,8 @@ export const fakeBoat = (
       sandbox.relay = await listen();
       sandbox.type = type;
       sandbox.inPassing = "provisioning";
+      sandbox.hydratingFor = hydratingNext;
+      hydratingNext = 0;
       await rekey(sandbox.root);
       starts += 1;
 
@@ -1577,6 +1588,10 @@ export const fakeBoat = (
       cancelNextSandbox: Effect.sync(() => {
         cancellingNext = true;
       }),
+      hydrateNext: (reads: number) =>
+        Effect.sync(() => {
+          hydratingNext = reads;
+        }),
       cancel: (id: string) =>
         Effect.sync(() => {
           const sandbox = sandboxes.get(id);
@@ -1652,6 +1667,8 @@ export interface FakeBoat {
   readonly failNextSandbox: Effect.Effect<void>;
   /** The next sandbox made reads `cancelled`, as one boat found no machine for, until a read of it by ID, which removes it. */
   readonly cancelNextSandbox: Effect.Effect<void>;
+  /** The next sandbox made, or resumed onto a new machine, reads `hydrated: false` for this many reads of it by ID, as one boat still copies its snapshot's files into. */
+  readonly hydrateNext: (reads: number) => Effect.Effect<void>;
   readonly cancel: (id: string) => Effect.Effect<void>;
   /** Removes a sandbox without a delete, so it reads 404 and lists nowhere. */
   readonly vanish: (id: string) => Effect.Effect<void>;
