@@ -494,6 +494,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           tailnet: true,
           setup: { script: tailnetSetup, timeoutSeconds: 30 },
         });
+        yield* eventually(store.machines, (rows) =>
+          rows.every(({ ephemeral }) => !ephemeral)
+        );
 
         const [host] = hosts;
 
