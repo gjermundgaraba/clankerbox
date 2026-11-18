@@ -2139,43 +2139,17 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 });
 
-const minting = (failures = 0) =>
-  Effect.gen(function* () {
-    const minted = yield* Ref.make(0);
-    const failing = yield* Ref.make(failures);
+const key = Redacted.make("tskey-auth-1");
 
-    const mintedBuild = yield* Ref.make(0);
+const buildKey = Redacted.make("tskey-auth-build-1");
 
-    const keyFrom = (counter: Ref.Ref<number>, prefix: string) =>
-      Effect.gen(function* () {
-        if ((yield* Ref.getAndUpdate(failing, (left) => left - 1)) > 0) {
-          return yield* new Internal({
-            message: "Tailscale refused the OAuth client",
-          });
-        }
-
-        const count = yield* Ref.updateAndGet(counter, (all) => all + 1);
-
-        return Redacted.make(`${prefix}-${count}`);
-      });
-
-    const tailnet = {
-      mint: keyFrom(minted, "tskey-auth"),
-      mintBuild: keyFrom(mintedBuild, "tskey-auth-build"),
-    };
-
-    return {
-      tailnet,
-      minted: Ref.get(minted),
-      mintedBuild: Ref.get(mintedBuild),
-    };
-  });
-
-const joining: Step = {
+const checking: Step = {
   _tag: "join",
   machine: ref("dev"),
   hostname: "linux-dev",
 };
+
+const joining: Step = { ...checking, key };
 
 const joinedAs = { state: "joined", name: "linux-dev.example.ts.net" };
 
@@ -2193,7 +2167,8 @@ const builderMake = (setupBody: string) =>
         "",
       ].join("\n"),
     },
-    join: { hostname: "cbx-building-1" },
+    tailnet: true,
+    join: { hostname: "cbx-building-1", key: buildKey },
   });
 
 const inBuilder = (host: Runner, file: string) =>
@@ -2320,8 +2295,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a start resets a copied identity, then runs its hook, and joins nothing",
     () =>
       Effect.gen(function* () {
-        const keys = yield* minting();
-        const host = yield* runner({ tailnet: keys.tailnet, tailscale: true });
+        const host = yield* runner({ tailscale: true });
 
         yield* finished(
           host,
@@ -2349,7 +2323,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(report.outcome.hostKey).toContain("ssh-ed25519");
         expect(yield* read(rootOf(host, "started"))).toBe("started\n");
         expect(yield* read(rootOf(host, "calls"))).not.toContain("tailscale");
-        expect(yield* keys.minted).toBe(0);
       })
   );
 
@@ -2753,11 +2726,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a machine that needs a login gets one minted key, and shows the DNS name it joined as",
+    "a machine that needs a login signs in with its join's key, and shows the DNS name it joined as",
     () =>
       Effect.gen(function* () {
-        const keys = yield* minting();
-        const host = yield* runner({ tailnet: keys.tailnet, tailscale: true });
+        const host = yield* runner({ tailscale: true });
 
         yield* finished(host, makes("dev"));
 
@@ -2765,7 +2737,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(report.status).toBe("done");
         expect(report.outcome.tailnet).toStrictEqual(joinedAs);
-        expect(yield* keys.minted).toBe(1);
         expect(yield* read(rootOf(host, "key-seen"))).toBe("tskey-auth-1");
         expect(
           (yield* read(rootOf(host, "tailscaled.env"))).split("\n")
@@ -2773,99 +2744,86 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
-  it.effect("a machine still signed in mints nothing", () =>
+  it.effect("a machine still signed in uses no key", () =>
     Effect.gen(function* () {
-      const keys = yield* minting();
-      const host = yield* runner({ tailnet: keys.tailnet, tailscale: true });
+      const host = yield* runner({ tailscale: true });
 
       yield* finished(host, makes("dev"));
       yield* finished(host, joining, 2);
 
-      const report = yield* finished(host, joining, 3);
+      const again = yield* finished(
+        host,
+        { ...checking, key: Redacted.make("tskey-auth-2") },
+        3
+      );
 
-      expect(report.outcome.tailnet).toStrictEqual(joinedAs);
-      expect(yield* keys.minted).toBe(1);
+      const keyless = yield* finished(host, checking, 4);
+
+      expect([again.outcome.tailnet, keyless.outcome.tailnet]).toStrictEqual([
+        joinedAs,
+        joinedAs,
+      ]);
+      expect(yield* read(rootOf(host, "key-seen"))).toBe("tskey-auth-1");
     })
   );
 
-  it.effect("a join that fails is done, and its status says why", () =>
-    Effect.gen(function* () {
-      const keys = yield* minting(1);
-      const host = yield* runner({ tailnet: keys.tailnet, tailscale: true });
+  it.effect(
+    "a node that needs a login fails a join with no key, saying the next brings one, and signs in with it",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner({ tailscale: true });
 
-      yield* finished(host, makes("dev"));
+        yield* finished(host, makes("dev"));
 
-      const report = yield* finished(host, joining, 2);
+        const keyless = yield* finished(host, checking, 2);
 
-      expect(report.status).toBe("done");
-      expect(report.outcome.tailnet).toStrictEqual({
-        state: "failed",
-        error: "Tailscale refused the OAuth client",
-      });
-    })
+        expect(keyless.status).toBe("done");
+        expect(keyless.outcome.tailnet).toStrictEqual({
+          state: "failed",
+          error:
+            "its node is signed out, and this check carried no key: the next one brings one",
+        });
+        expect(yield* exists(rootOf(host, "key-seen"))).toBe(false);
+
+        const keyed = yield* finished(host, joining, 3);
+
+        expect(keyed.outcome.tailnet).toStrictEqual(joinedAs);
+      })
   );
 
-  it.effect("a join that fails can run again and join", () =>
-    Effect.gen(function* () {
-      const keys = yield* minting(1);
-      const host = yield* runner({ tailnet: keys.tailnet, tailscale: true });
+  it.effect(
+    "a guest that can't sign in fails its join, saying why, and can run again",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner({ tailscale: "refuses" });
 
-      yield* finished(host, makes("dev"));
-      yield* finished(host, joining, 2);
+        yield* finished(host, makes("dev"));
 
-      const report = yield* finished(host, joining, 3);
+        const report = yield* finished(host, joining, 2);
 
-      expect(report.outcome.tailnet).toStrictEqual(joinedAs);
-      expect(yield* keys.minted).toBe(1);
-    })
+        expect(report.status).toBe("done");
+        expect(report.outcome.tailnet).toMatchObject({ state: "failed" });
+        expect(
+          report.outcome.tailnet?.state === "failed"
+            ? report.outcome.tailnet.error
+            : ""
+        ).toContain("invalid key");
+        expect(
+          (yield* finished(host, joining, 3)).outcome.tailnet
+        ).toMatchObject({ state: "failed" });
+      })
   );
 
-  it.effect("a join whose mint dies is a failed join", () =>
+  it.effect("a guest without tailscaled is missing, and uses no key", () =>
     Effect.gen(function* () {
-      const host = yield* runner({
-        tailnet: {
-          mint: Effect.die(new Error("the API client blew up")),
-          mintBuild: Effect.die(new Error("the API client blew up")),
-        },
-        tailscale: true,
-      });
-
-      yield* finished(host, makes("dev"));
-
-      const report = yield* finished(host, joining, 2);
-
-      expect(report.status).toBe("done");
-      expect(report.outcome.tailnet).toStrictEqual({
-        state: "failed",
-        error: "tailnet join dev died; the host log has why",
-      });
-    })
-  );
-
-  it.effect("a guest without tailscaled is missing, and no key is minted", () =>
-    Effect.gen(function* () {
-      const keys = yield* minting();
-      const host = yield* runner({ tailnet: keys.tailnet });
+      const host = yield* runner();
 
       yield* finished(host, makes("dev"));
 
       const report = yield* finished(host, joining, 2);
 
       expect(report.outcome.tailnet).toStrictEqual({ state: "missing" });
-      expect(yield* keys.minted).toBe(0);
-    })
-  );
-
-  it.effect("a host that joins no tailnet reports no status", () =>
-    Effect.gen(function* () {
-      const host = yield* runner({ tailscale: true });
-
-      yield* finished(host, makes("dev"));
-
-      const report = yield* finished(host, joining, 2);
-
-      expect(report.status).toBe("done");
-      expect(report.outcome.tailnet).toBeUndefined();
+      expect(yield* exists(rootOf(host, "key-seen"))).toBe(false);
     })
   );
 
@@ -2875,8 +2833,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const logged: string[] = [];
 
       return Effect.gen(function* () {
-        const keys = yield* minting();
-        const host = yield* runner({ tailnet: keys.tailnet, tailscale: true });
+        const host = yield* runner({ tailscale: true });
 
         const report = yield* finished(host, builderMake("echo done"));
 
@@ -2902,9 +2859,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             inBuilder(host, "var/lib/clankerbox/resolv.conf.before-join")
           )
         ).toBe(false);
-        expect([yield* keys.mintedBuild, yield* keys.minted]).toStrictEqual([
-          1, 0,
-        ]);
+        expect(yield* read(inBuilder(host, "key-seen"))).toBe(
+          "tskey-auth-build-1"
+        );
         expect(report.outcome.tailnet).toBeUndefined();
         expect(logged.join("\n")).toContain("so it is restored");
         expect(logged.join("\n")).not.toContain("tskey-");
@@ -2914,8 +2871,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
   it.effect("a builder whose setup fails is logged out all the same", () =>
     Effect.gen(function* () {
-      const keys = yield* minting();
-      const host = yield* runner({ tailnet: keys.tailnet, tailscale: true });
+      const host = yield* runner({ tailscale: true });
 
       const report = yield* finished(host, builderMake("exit 1"));
 
@@ -2937,24 +2893,27 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a builder that can't join fails before its setup, and leaves no node",
     () =>
       Effect.gen(function* () {
-        const keys = yield* minting(1);
-        const host = yield* runner({ tailnet: keys.tailnet, tailscale: true });
+        const host = yield* runner({ tailscale: "refuses" });
 
         const report = yield* finished(host, builderMake("echo done"));
 
         expect(errorOf(report)).toStrictEqual(["failed", "Internal"]);
         expect(report.error?.message).toContain(
-          "didn't join the tailnet for its setup: Tailscale refused the OAuth client"
+          "didn't join the tailnet for its setup:"
         );
-        expect(yield* tailnetSteps(host)).toStrictEqual(["set", "logout"]);
+        expect(report.error?.message).toContain("invalid key");
+        expect(yield* tailnetSteps(host)).toStrictEqual([
+          "set",
+          "up",
+          "logout",
+        ]);
         expect(yield* exists(inBuilder(host, tailnetDir))).toBe(false);
       })
   );
 
-  it.effect("a make that asks no join mints no key, even with a setup", () =>
+  it.effect("a make that asks no join joins nothing, even with a setup", () =>
     Effect.gen(function* () {
-      const keys = yield* minting();
-      const host = yield* runner({ tailnet: keys.tailnet, tailscale: true });
+      const host = yield* runner({ tailscale: true });
 
       const report = yield* finished(
         host,
@@ -2963,35 +2922,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       expect(report.status, report.error?.message).toBe("done");
       expect(yield* tailnetSteps(host)).toStrictEqual([]);
-      expect([yield* keys.mintedBuild, yield* keys.minted]).toStrictEqual([
-        0, 0,
-      ]);
     })
-  );
-
-  it.effect(
-    "a make that asks a join of a host with no tailnet runs its setup off the tailnet",
-    () => {
-      const logged: string[] = [];
-
-      return Effect.gen(function* () {
-        const host = yield* runner({ tailscale: true });
-
-        const report = yield* finished(host, builderMake("echo done"));
-
-        expect(report.status, report.error?.message).toBe("done");
-        expect(yield* tailnetSteps(host)).toStrictEqual(["setup"]);
-        expect(logged.join("\n")).toContain(
-          "make building-1: its step asks for a tailnet join, and host smolvm has no tailnet setting"
-        );
-      }).pipe(Effect.provide(Logger.layer([capturing(logged)])));
-    }
   );
 
   it.effect("a status longer than an error's tail still reads whole", () =>
     Effect.gen(function* () {
-      const keys = yield* minting();
-      const host = yield* runner({ tailnet: keys.tailnet, tailscale: true });
+      const host = yield* runner({ tailscale: true });
 
       yield* finished(host, makes("dev"));
       yield* finished(host, joining, 2);
@@ -3012,39 +2948,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 });
 
 layer(NodeServices.layer)((it) => {
-  it.effect("a join past its 3 minutes is done, and its status says so", () =>
-    Effect.gen(function* () {
-      const mintingKey = yield* Deferred.make<undefined>();
-
-      const host = yield* runner({
-        tailscale: true,
-        tailnet: {
-          mint: Effect.andThen(
-            Deferred.succeed(mintingKey, undefined),
-            Effect.never
-          ),
-          mintBuild: Effect.never,
-        },
-      });
-
-      yield* finished(host, makes("dev"));
-
-      const operation = delivery(joining, 2);
-
-      yield* deliver(host, operation);
-      yield* Deferred.await(mintingKey);
-      yield* TestClock.adjust("3 minutes");
-
-      const report = yield* host.operations.wait(operation.id);
-
-      expect(report.status).toBe("done");
-      expect(report.outcome.tailnet).toStrictEqual({
-        state: "failed",
-        error: "the join didn't finish within 3m",
-      });
-    })
-  );
-
   it.effect("wait answers a step still running after five seconds", () =>
     Effect.gen(function* () {
       const host = yield* runner();

@@ -97,11 +97,15 @@ the whole CLI span domains on purpose.
 - `hosts.ts`: the members, the one file that calls a host, and the log of a host
   that stops answering.
 - `placement.ts`: which hosts can take a create, in order.
-- `tailnet.ts`: when a join is due. `settings.ts`: what the server runs on.
+- `tailnet.ts`: the `Tailnet` port, which mints a join's key, provided only
+  when the config names a tailnet; when a join is due and whether it carries a
+  key; and `unserved`, which refuses a request for a tailnet the config lacks.
+  `settings.ts`: what the server runs on.
 - `store.ts`: the `Store` port, the rows, the operations and their leases, and
   `readUntil`, which reads again at each write of a row the store announces.
 
-`platform/sqlite.ts` is the `Store`, and loads each chart's `leaves` at runtime to
+`platform/tailscale.ts` is the `Tailnet`, over Tailscale's API, minting each
+key with the config's OAuth client. `platform/sqlite.ts` is the `Store`, and loads each chart's `leaves` at runtime to
 validate `state`. `composition/`: `config.ts` reads the config file, `routes.ts`
 serves the client contract, and `server.ts`, the package's entry, builds the
 server over a server Layer it is given, through the host contract's `journal`.
@@ -140,9 +144,7 @@ imports `platform/` or `composition/`.
   `PortProbe` (`machine-ports.ts`), for a `published` runtime's port, at a make's
   claim and at each boot its admission admits (`checkPort`), `Box` (`box.ts`), what the box tells a host
   beside its config: its uid, whether a process has ended, and its ephemeral
-  ports, `Relays` (`reach.ts`), `Tailnet`
-  (`tailnet.ts`), which mints a machine's tailnet key, provided only on a host
-  that joins a tailnet. Each `Runtime` method that acts on a machine or
+  ports and `Relays` (`reach.ts`). Each `Runtime` method that acts on a machine or
   checkpoint already made takes a `Target`, the runtime's own opaque `Handle`
   beside the name and instance. `find` answers the handle for a machine's
   instance while the runtime keeps anything of it, also of one a delete removed
@@ -162,7 +164,7 @@ imports `platform/` or `composition/`.
 Adapters live in `platform/`: `bind-probe.ts` (`PortProbe`), `box.ts` (`Box`,
 which reads Linux's `ip_local_port_range`), `relay.ts`
 (`Relays`, a TCP listener bound at the claim, which closes each connection until
-it carries them through the machine's dial), `tailscale.ts` (`Tailnet`, over Tailscale's API), `bucket/`, the `builds`
+it carries them through the machine's dial), `bucket/`, the `builds`
 smolvm and Tart share through a bucket their runtime's settings name (`publish`,
 `fetch` and `unpublish` of a checkpoint's files in `builds.ts`, objects by key
 and a manifest per build, written last, and its `Store` over S3, path-style and
@@ -198,8 +200,7 @@ accounts. A domain file never imports `platform/` or `composition/`.
 `composition/` assembles the host: `config.ts` reads the config file,
 `runtimes.ts` is the registry of runtimes, one entry each under the name a host
 config's `runtime` gives it, with its settings and its Layer, `routes.ts` serves the host contract, and `host.ts` builds the
-host over a runtime Layer and a server Layer it is given, with the config's
-tailnet, if any. Its `hostServer` is the Node server a host
+host over a runtime Layer and a server Layer it is given. Its `hostServer` is the Node server a host
 listens on, the entry's and the tests' alike, and answers 503 at once to a
 request no route takes, as one that comes while the host stops. It closes every
 connection it still holds as it closes, which the stop does once each request it
@@ -425,7 +426,8 @@ the run.
   types, and
   `fence/no-impure` keeps `Date`, `Math.random` and `crypto` out of
   them; `apps/server/src/hosts.ts` alone calls a host; the server's `composition/` and `main.ts` never load the
-  host package; the server's only adapter is the `Store`, and a host's adapters
+  host package; the server's adapters are the `Store` and, over `effect/http` alone, the
+  `Tailnet`, and a host's adapters
   can't import `node:sqlite`; a host adapter imports domain files, its own
   folder, `platform/`'s `process.ts` and the host contract's `./traits`, never
   its API, the boat and smol cloud clients

@@ -93,7 +93,7 @@ const incompatible = (id: string): Reached => ({
 
 const ids = (hosts: readonly HostInfo[]) => hosts.map(({ id }) => id);
 
-const asked = { sizes: small, host: undefined };
+const asked = { sizes: small, host: undefined, tailnet: false };
 
 const placed = (
   reached: readonly Reached[],
@@ -209,13 +209,17 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           const odd = { sizes: { cpu: 3, ramMib: 6144, diskGib: 40 } };
 
           expect(
-            placed(fleet, "ubuntu", { sizes: boatSmall, host: undefined })
+            placed(fleet, "ubuntu", {
+              sizes: boatSmall,
+              host: undefined,
+              tailnet: false,
+            })
           ).toStrictEqual(["smolvm-1", "smol-cloud-1", "boat-1"]);
           expect(
-            placed(fleet, "ubuntu", { ...odd, host: undefined })
+            placed(fleet, "ubuntu", { ...odd, host: undefined, tailnet: false })
           ).toStrictEqual(["smolvm-1", "smol-cloud-1"]);
           expect(
-            refusal(fleet, "ubuntu", { ...odd, host: "boat-1" })
+            refusal(fleet, "ubuntu", { ...odd, host: "boat-1", tailnet: false })
           ).toMatchObject({
             _tag: "Unsizable",
             message:
@@ -286,10 +290,18 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           const big = { cpu: 8, ramMib: 1024, diskGib: 10 };
 
           expect(
-            placed(fleet, "ubuntu", { sizes: big, host: undefined })
+            placed(fleet, "ubuntu", {
+              sizes: big,
+              host: undefined,
+              tailnet: false,
+            })
           ).toStrictEqual(["local"]);
           expect(
-            refusal(fleet, "ubuntu", { sizes: big, host: "cloud" })
+            refusal(fleet, "ubuntu", {
+              sizes: big,
+              host: "cloud",
+              tailnet: false,
+            })
           ).toMatchObject({
             _tag: "Unsizable",
             message:
@@ -369,6 +381,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           base: "ubuntu",
           pin: undefined,
           image: "image/ubuntu",
+          tailnet: ask.tailnet,
           ...small,
         },
         ask,

@@ -11,7 +11,7 @@ import { fakeRuntime } from "./fake-runtime.ts";
 import type { FakeRuntimeName } from "./fake-runtime.ts";
 import {
   fakeTailnet,
-  mintingAsSlowlyAsTailscale,
+  tailscaleRefuses,
   runServe,
   serveHost,
   taking,
@@ -89,14 +89,14 @@ runServe(
         const kept = path.join(run, "runtimes", id);
 
         if (fakeTailnet) {
-          writeTailscaleStubs(path.join(kept, "bin"));
+          writeTailscaleStubs(path.join(kept, "bin"), tailscaleRefuses);
         }
 
         const builds = yield* bucket;
 
         const host = yield* startHost(dir, {
           id,
-          ...(fakeTailnet ? { tailnet: mintingAsSlowlyAsTailscale } : {}),
+          tailnet: fakeTailnet,
           as: runtime,
           bases: new Map([[base, image]]),
           ...(port === undefined ? {} : { port }),

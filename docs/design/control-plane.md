@@ -151,7 +151,7 @@ Each duty has exactly one home. "Before" is the code at `adcacee`. "Deleted" is 
 | Name a host on an error | `located` in `client.ts:367`, `errors.ts:3` | Nowhere on a client error. The server's log names it. | `error.host` |
 | Read setup scripts and keys | `specRequest` (`profile.ts:111`), `packages/sdk/src/setup.ts` | Client: the request carries them | Nothing |
 | Allocate SSH ports | `pickPort` in `machines.ts:823` | Host: `host/reach.ts`, which claims it inside the step, and the step reports the port | Port uniqueness as a store rule |
-| Mint tailnet keys | `machines.ts:471` `join`, `tailnet.oauthClient` in host config | Host: the `join` step, over `Tailnet` | Nothing. When a join is due is `server/tailnet.ts`. |
+| Mint tailnet keys | `machines.ts:471` `join`, `tailnet.oauthClient` in host config | Server: `server/tailnet.ts` and `server/platform/tailscale.ts`, a key per join sent in the `join` step, never stored. The host only declares `joins`. | `tailnet` in the host config, which is now a boolean |
 | Move a machine toward what was asked | `lifecycle.ts`, `reconcile.ts`, `machines.ts:1071` | Server: `server/machine-chart.ts`, `server/driver.ts`, `server/machines.ts` | The host's actors, store, recheck and `lifecycle.ts` |
 | Hold leases | `packages/host/src/leases.ts`, in memory | Server: the `operations` table, `server/platform/sqlite.ts` `advance` | `leases.ts` |
 | Keep rows | `packages/host/src/store.ts`, `platform/sqlite.ts` | Server: `server/store.ts`, `server/platform/sqlite.ts` | The host's database |
@@ -335,7 +335,7 @@ The tailnet node name is `dev` under bare names, which can clash with other node
 
 Where secrets live, each as its own choice:
 
-- **`tailnet.oauthClient`.** Stay on each host, as now (`README.md:68`), or move to the control plane, which mints keys. Moving gives one secret to rotate, and joins stop working while it is down.
+- **`tailnet.oauthClient`.** Moved to the control plane, which mints a key for each join and sends it in the step, never storing it. One secret to rotate; joins stop while the control plane is down, which is when nothing else moves either. A host only declares `tailnet: true`, and a machine, template build or checkpoint stores whether it requests the tailnet. One tailnet, not several named ones: a host would have to declare which it serves and placement match on it, and nothing asks for that yet. A boolean becomes a name with a one-line migration.
 - **`authorizedKeys`.** Moved to the control plane's config after 0.35: one key set for everyone and no per-client keys. The host installs them after a setup and onto each clone of a build's copy, and a template's builder takes none, so a key change rebuilds nothing.
 - **Setup scripts.** Pass through in memory only, or get stored. Storing them breaks the rule that only the request holds them, and they may carry secrets.
 

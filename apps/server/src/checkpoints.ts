@@ -263,6 +263,7 @@ export const make = (settings: {
           expiresAt,
           build,
           published: undefined,
+          tailnet: machine.tailnet,
         };
 
         yield* store.insertCheckpoint(record);

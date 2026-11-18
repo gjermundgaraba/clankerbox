@@ -1,10 +1,9 @@
 import path from "node:path";
-import { inspect } from "node:util";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { Effect, Redacted } from "effect";
+import { Effect } from "effect";
 import type { Schema } from "effect";
 import { expect } from "vite-plus/test";
 
@@ -156,101 +155,23 @@ layer(NodeServices.layer)((it) => {
       })
   );
 
-  const clientSecret = "tskey-client-k1-that-never-prints";
-
-  const tailnet = {
-    oauthClient: { id: "k1", secret: clientSecret },
-    tags: ["tag:clankerbox-machine"],
-  };
-
   it.effect(
-    "a host config's tailnet holds its OAuth client, whose secret nothing that prints the config shows",
+    "a host config's tailnet says only that it takes machines that request one",
     () =>
       Effect.gen(function* () {
-        const { loaded } = yield* load({ ...config, tailnet });
-        const host = yield* loaded;
+        const { loaded } = yield* load({ ...config, tailnet: true });
 
-        expect(host.tailnet?.tags).toStrictEqual(["tag:clankerbox-machine"]);
-        expect(host.tailnet?.oauthClient.id).toBe("k1");
-        expect(
-          host.tailnet === undefined
-            ? undefined
-            : Redacted.value(host.tailnet.oauthClient.secret)
-        ).toBe(clientSecret);
+        expect((yield* loaded).tailnet).toBe(true);
 
-        for (const printed of [
-          JSON.stringify(host),
-          inspect(host, { depth: 10 }),
-        ]) {
-          expect(printed).not.toContain(clientSecret);
-        }
-      })
-  );
-
-  it.effect(
-    "a tailnet needs a client and at least one tag, and a refused one doesn't print its secret",
-    () =>
-      Effect.gen(function* () {
-        const refused: Schema.Json[] = [
-          { ...config, tailnet: { ...tailnet, tags: [] } },
-          { ...config, tailnet: { ...tailnet, tags: ["clankerbox-machine"] } },
-          { ...config, tailnet: { ...tailnet, tags: ["tag:1st"] } },
-          { ...config, tailnet: { ...tailnet, tags: ["tag:-machine"] } },
-          {
-            ...config,
-            tailnet: { ...tailnet, tags: ["tag:clankerbox_machine"] },
-          },
-          {
-            ...config,
-            tailnet: { ...tailnet, oauthClient: { id: "k1", secret: "" } },
-          },
-          { ...config, tailnet: { tags: tailnet.tags } },
-          { ...config, tailnet: { ...tailnet, authKey: clientSecret } },
-          { ...config, tailnet: { ...tailnet, buildTags: [] } },
-          {
-            ...config,
-            tailnet: { ...tailnet, buildTags: ["clankerbox-build"] },
-          },
-        ];
-
-        for (const contents of refused) {
-          const { loaded } = yield* load(contents);
-          const error = yield* Effect.flip(loaded);
-
-          expect(error._tag).toBe("Invalid");
-          expect(error.message).not.toContain(clientSecret);
-        }
-      })
-  );
-
-  it.effect("a tailnet's buildTags are tags for a template's builder", () =>
-    Effect.gen(function* () {
-      const { loaded } = yield* load({
-        ...config,
-        tailnet: { ...tailnet, buildTags: ["tag:clankerbox-build"] },
-      });
-
-      const host = yield* loaded;
-
-      expect([host.tailnet?.tags, host.tailnet?.buildTags]).toStrictEqual([
-        ["tag:clankerbox-machine"],
-        ["tag:clankerbox-build"],
-      ]);
-    })
-  );
-
-  it.effect(
-    "a tag takes what Tailscale's own check takes, capitals included",
-    () =>
-      Effect.gen(function* () {
-        const tags = ["tag:Dev", "tag:a", "tag:clankerbox-machine-2"];
-
-        const { loaded } = yield* load({
+        const { loaded: owning } = yield* load({
           ...config,
-          tailnet: { ...tailnet, tags },
+          tailnet: {
+            oauthClient: { id: "k1", secret: "tskey-client-k1" },
+            tags: ["tag:clankerbox-machine"],
+          },
         });
 
-        expect((yield* loaded).tailnet?.tags).toStrictEqual(tags);
+        expect((yield* Effect.flip(owning))._tag).toBe("Invalid");
       })
   );
 

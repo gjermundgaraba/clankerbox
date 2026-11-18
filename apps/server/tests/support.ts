@@ -59,6 +59,7 @@ import type {
   Facts,
   Interface as StoreInterface,
 } from "../src/store.ts";
+import { Tailnet } from "../src/tailnet.ts";
 import * as Templates from "../src/templates.ts";
 
 export {
@@ -169,7 +170,8 @@ export interface Plane {
 const started = (
   settings: ServerSettings,
   port: number,
-  logger: Logger.Logger<unknown, unknown> | undefined
+  logger: Logger.Logger<unknown, unknown> | undefined,
+  tailnet: Tailnet["Service"] | undefined
 ) =>
   Effect.gen(function* () {
     const scope = yield* Scope.make();
@@ -177,7 +179,8 @@ const started = (
     const context = yield* Layer.buildWithScope(
       serverLayer(
         settings,
-        controlPlaneServer({ listen: { address: "127.0.0.1", port } })
+        controlPlaneServer({ listen: { address: "127.0.0.1", port } }),
+        tailnet === undefined ? Layer.empty : Layer.succeed(Tailnet, tailnet)
       ).pipe(
         Layer.provideMerge(Logger.layer(logger === undefined ? [] : [logger])),
         Layer.provide(NodeHttpClient.layerNodeHttp),
@@ -304,8 +307,13 @@ export const plane = (options?: {
   readonly failedRowsLast?: Duration.Duration;
   readonly hookTimeoutSeconds?: number;
   readonly runtime?: Parameters<typeof startHost>[1];
-  /** Gives every guest tailscaled and tailscale, so a host's tailnet check finds them. */
-  readonly tailscaled?: boolean;
+  /**
+   * Gives every guest tailscaled and tailscale, so a host's tailnet check finds them, and with
+   * `refuses` a `tailscale up` that signs in with no key.
+   */
+  readonly tailscaled?: boolean | "refuses";
+  /** The control plane's tailnet, which mints its keys. */
+  readonly tailnet?: Tailnet["Service"];
   /** Hears the control plane's log, which goes nowhere without one. */
   readonly logger?: Logger.Logger<unknown, unknown>;
   /** Members beside the test hosts, such as one served by a stub. */
@@ -317,8 +325,11 @@ export const plane = (options?: {
 
     const hosts = yield* Effect.forEach(members, ({ id, as, options: own }) =>
       Effect.suspend(() => {
-        if (options?.tailscaled === true) {
-          writeTailscaleStubs(path.join(dir, id, "bin"));
+        if (options?.tailscaled !== undefined && options.tailscaled !== false) {
+          writeTailscaleStubs(
+            path.join(dir, id, "bin"),
+            options.tailscaled === "refuses"
+          );
         }
 
         return startHost(path.join(dir, id), {
@@ -360,7 +371,8 @@ export const plane = (options?: {
       stateDir,
       hosts,
       settings,
-      start: (port = 0) => started(settings, port, options?.logger),
+      start: (port = 0) =>
+        started(settings, port, options?.logger, options?.tailnet),
     };
 
     return plan;

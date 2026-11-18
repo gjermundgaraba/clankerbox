@@ -9,6 +9,7 @@ import {
 import { Address } from "@gjermundgaraba/clankerbox-sdk/node";
 import { Effect, FileSystem, Path, Schema } from "effect";
 
+import { TailnetSettings } from "../platform/tailscale.ts";
 import {
   defaultFailedRowsLast,
   defaultHookTimeoutSeconds,
@@ -21,6 +22,7 @@ const ServerConfigFile = Schema.Struct({
   stateDir: Schema.String,
   authorizedKeys: Schema.String,
   hookTimeout: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
+  tailnet: Schema.optionalKey(TailnetSettings),
   hosts: Schema.Array(
     Schema.Struct({
       id: HostId,
@@ -41,9 +43,13 @@ const decodeConfig = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ServerConfigFile)
 );
 
+export interface ServerConfig extends ServerSettings {
+  readonly tailnet?: TailnetSettings | undefined;
+}
+
 export const loadConfig = (
   file: string
-): Effect.Effect<ServerSettings, Invalid, FileSystem.FileSystem | Path.Path> =>
+): Effect.Effect<ServerConfig, Invalid, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -89,5 +95,6 @@ export const loadConfig = (
         relative(decoded.authorizedKeys)
       ),
       hookTimeoutSeconds: decoded.hookTimeout ?? defaultHookTimeoutSeconds,
+      ...(decoded.tailnet === undefined ? {} : { tailnet: decoded.tailnet }),
     };
   });

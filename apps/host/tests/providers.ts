@@ -9,7 +9,7 @@ import { fakeBoat, fakeBoatSsh, traits as boatTraits } from "./fake-boat.ts";
 import type { FakeBoat } from "./fake-boat.ts";
 import { fakeSmolCloud, traits as smolCloudTraits } from "./fake-smol-cloud.ts";
 import type { FakeSmolCloud } from "./fake-smol-cloud.ts";
-import { fakeTailnet } from "./serving.ts";
+import { fakeTailnet, tailscaleRefuses } from "./serving.ts";
 import type { Provider } from "./serving.ts";
 import { image, writeTailscaleStubs } from "./support.ts";
 
@@ -30,7 +30,7 @@ export const smolCloud = (guestPath?: string): Provider<FakeSmolCloud> => ({
       }),
       (fake) => {
         if (fakeTailnet) {
-          writeTailscaleStubs(path.join(dir, "bin"));
+          writeTailscaleStubs(path.join(dir, "bin"), tailscaleRefuses);
         }
 
         return {

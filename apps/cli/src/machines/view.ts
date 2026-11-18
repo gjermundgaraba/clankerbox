@@ -58,6 +58,10 @@ const tailnetLabel = ({ tailnet }: Machine): string => {
     case "missing": {
       return "missing: the guest has no tailscaled";
     }
+
+    case "pending": {
+      return "pending: it joins once it runs and its host checks it";
+    }
   }
 };
 

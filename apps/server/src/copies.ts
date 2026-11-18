@@ -21,11 +21,13 @@ import type { MachineRow } from "./machine-chart.ts";
 import { notFound } from "./store.ts";
 import type { Interface as Store } from "./store.ts";
 
+/** What a machine is made as: its base, its sizes, and whether it requests the tailnet, which a copy inherits. */
 export interface Spec {
   readonly base: string;
   readonly cpu: number;
   readonly ramMib: number;
   readonly diskGib: number;
+  readonly tailnet: boolean;
 }
 
 export const copied = (
@@ -34,7 +36,12 @@ export const copied = (
   sizing: Sizing | undefined,
   traits: RuntimeTraits
 ): Effect.Effect<Spec, Unsizable> => {
-  const spec = { base: from.base, ...sizedBy(from, sizing) };
+  const spec = {
+    base: from.base,
+    tailnet: from.tailnet,
+    ...sizedBy(from, sizing),
+  };
+
   const refusal = copyRefusal(traits, name, from, spec);
 
   return refusal === undefined ? Effect.succeed(spec) : Effect.fail(refusal);
@@ -86,7 +93,7 @@ export const cloned = (
   sizing: Sizing,
   traits: RuntimeTraits
 ): Effect.Effect<Spec, Unsizable> => {
-  const spec = { base: from.base, ...sizedBy(from, sizing) };
+  const spec = sizedBy(from, sizing);
 
   return spec.cpu < from.cpu ||
     spec.ramMib < from.ramMib ||

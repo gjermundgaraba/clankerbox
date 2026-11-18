@@ -141,6 +141,8 @@ export const Facts = Schema.Struct({
   /** The resize still owed. One that runs is on its operation. */
   resize: UndefinedFromNull(Schema.fromJsonString(Sizing)),
   ephemeral: Schema.BooleanFromBit,
+  /** Whether the machine requests the tailnet, which a copy of it inherits. */
+  tailnet: Schema.BooleanFromBit,
   source: Schema.fromJsonString(Source),
   template: UndefinedFromNull(Schema.String),
   hostKey: UndefinedFromNull(Schema.String),
@@ -167,6 +169,8 @@ export const CheckpointFacts = Schema.Struct({
    * own name, and a copy on another host is fetched from it.
    */
   published: UndefinedFromNull(Schema.String),
+  /** Whether its machine requested the tailnet, which a restore of it inherits. */
+  tailnet: Schema.BooleanFromBit,
 });
 
 export type CheckpointFacts = typeof CheckpointFacts.Type;
@@ -184,6 +188,8 @@ export const BuildRow = Schema.Struct({
   ramMib: Schema.Int,
   diskGib: Schema.Int,
   setupTimeoutSeconds: UndefinedFromNull(Schema.Int),
+  /** Whether its setup runs on the tailnet, and each clone of it joins it. */
+  tailnet: Schema.BooleanFromBit,
 });
 
 export type BuildRow = typeof BuildRow.Type;

@@ -1,10 +1,11 @@
 import path from "node:path";
+import { inspect } from "node:util";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
-import { Effect } from "effect";
+import { Effect, Redacted } from "effect";
 import type { Schema } from "effect";
 import { expect } from "vite-plus/test";
 
@@ -55,6 +56,92 @@ layer(NodeServices.layer)((it) => {
           authorizedKeys: `${operatorKey}\n`,
           hookTimeoutSeconds: 120,
         });
+      })
+  );
+
+  const clientSecret = "tskey-client-k1-that-never-prints";
+
+  const tailnet = {
+    oauthClient: { id: "k1", secret: clientSecret },
+    tags: ["tag:clankerbox-machine"],
+  };
+
+  it.effect(
+    "a server config's tailnet holds its OAuth client, whose secret nothing that prints the config shows",
+    () =>
+      Effect.gen(function* () {
+        const { loaded } = yield* load({ ...config, tailnet });
+        const server = yield* loaded;
+
+        expect(server.tailnet?.tags).toStrictEqual(["tag:clankerbox-machine"]);
+        expect(server.tailnet?.oauthClient.id).toBe("k1");
+        expect(
+          server.tailnet === undefined
+            ? undefined
+            : Redacted.value(server.tailnet.oauthClient.secret)
+        ).toBe(clientSecret);
+
+        for (const printed of [
+          JSON.stringify(server),
+          inspect(server, { depth: 10 }),
+        ]) {
+          expect(printed).not.toContain(clientSecret);
+        }
+      })
+  );
+
+  it.effect(
+    "a tailnet needs a client and at least one tag, and a refused one doesn't print its secret",
+    () =>
+      Effect.gen(function* () {
+        const refused: Schema.Json[] = [
+          { ...config, tailnet: { ...tailnet, tags: [] } },
+          { ...config, tailnet: { ...tailnet, tags: ["clankerbox-machine"] } },
+          { ...config, tailnet: { ...tailnet, tags: ["tag:1st"] } },
+          { ...config, tailnet: { ...tailnet, tags: ["tag:-machine"] } },
+          {
+            ...config,
+            tailnet: { ...tailnet, tags: ["tag:clankerbox_machine"] },
+          },
+          {
+            ...config,
+            tailnet: { ...tailnet, oauthClient: { id: "k1", secret: "" } },
+          },
+          { ...config, tailnet: { tags: tailnet.tags } },
+          { ...config, tailnet: { ...tailnet, authKey: clientSecret } },
+          { ...config, tailnet: { ...tailnet, buildTags: [] } },
+          {
+            ...config,
+            tailnet: { ...tailnet, buildTags: ["clankerbox-build"] },
+          },
+        ];
+
+        for (const contents of refused) {
+          const { loaded } = yield* load(contents);
+          const error = yield* Effect.flip(loaded);
+
+          expect(error._tag).toBe("Invalid");
+          expect(error.message).not.toContain(clientSecret);
+        }
+      })
+  );
+
+  it.effect(
+    "a tailnet's buildTags are tags for a template's builder, and a tag takes what Tailscale's own check takes, capitals included",
+    () =>
+      Effect.gen(function* () {
+        const tags = ["tag:Dev", "tag:a", "tag:clankerbox-machine-2"];
+
+        const { loaded } = yield* load({
+          ...config,
+          tailnet: { ...tailnet, tags, buildTags: ["tag:clankerbox-build"] },
+        });
+
+        const server = yield* loaded;
+
+        expect([server.tailnet?.tags, server.tailnet?.buildTags]).toStrictEqual(
+          [tags, ["tag:clankerbox-build"]]
+        );
       })
   );
 

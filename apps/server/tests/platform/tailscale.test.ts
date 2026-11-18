@@ -1,10 +1,11 @@
 import { it } from "@effect/vitest";
-import { Effect, Layer, Redacted, Schema } from "effect";
+import { Duration, Effect, Fiber, Layer, Redacted, Schema } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import type { HttpClientRequest } from "effect/http";
+import { TestClock } from "effect/testing";
 import { expect } from "vite-plus/test";
 
-import { make } from "../../src/platform/tailscale.ts";
+import { make, mintWithin } from "../../src/platform/tailscale.ts";
 import type { TailnetSettings } from "../../src/platform/tailscale.ts";
 
 const secret = "tskey-client-k1-that-never-prints";
@@ -78,7 +79,7 @@ const working = (sent: Sent) =>
       };
 
 it.effect(
-  "a mint asks for a single-use, ephemeral, preauthorized key for the host's tags, expiring in minutes",
+  "a mint asks for a single-use, ephemeral, preauthorized key for the tailnet's tags, expiring in an hour",
   () =>
     Effect.gen(function* () {
       const tailscale = fakeTailscale(working);
@@ -117,7 +118,43 @@ it.effect(
             },
           },
         },
-        expirySeconds: 600,
+        expirySeconds: 3600,
+      });
+    })
+);
+
+const tagsOfBuildKey = (tailnet: TailnetSettings) =>
+  Effect.gen(function* () {
+    const tailscale = fakeTailscale(working);
+
+    yield* Effect.flatMap(
+      make(tailnet, url).pipe(Effect.provide(tailscale.layer)),
+      ({ mintBuild }) => mintBuild
+    );
+
+    return decodeJson(tailscale.sent[1]?.text);
+  });
+
+it.effect(
+  "a builder's key carries the tailnet's buildTags, or its tags without them",
+  () =>
+    Effect.gen(function* () {
+      const tagged = yield* tagsOfBuildKey({
+        ...settings,
+        buildTags: ["tag:clankerbox-build"],
+      });
+
+      const untagged = yield* tagsOfBuildKey(settings);
+
+      expect(tagged).toMatchObject({
+        capabilities: {
+          devices: { create: { tags: ["tag:clankerbox-build"] } },
+        },
+      });
+      expect(untagged).toMatchObject({
+        capabilities: {
+          devices: { create: { tags: ["tag:clankerbox-machine"] } },
+        },
       });
     })
 );
@@ -172,5 +209,27 @@ it.effect("a key Tailscale won't mint fails the mint", () =>
     const refused = yield* Effect.flip(tailnet.mint);
 
     expect(refused.message).toContain("Tailscale didn't mint a key");
+  })
+);
+
+it.effect("a mint Tailscale doesn't answer fails once its time is up", () =>
+  Effect.gen(function* () {
+    const silent = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make(() => Effect.never)
+    );
+
+    const tailnet = yield* make(settings, url).pipe(Effect.provide(silent));
+    const minting = yield* Effect.forkChild(Effect.flip(tailnet.mint));
+
+    yield* TestClock.adjust(Duration.subtract(mintWithin, Duration.seconds(1)));
+
+    expect(minting.pollUnsafe()).toBeUndefined();
+
+    yield* TestClock.adjust(Duration.seconds(1));
+
+    const refused = yield* Fiber.join(minting);
+
+    expect(refused.message).toBe("Tailscale didn't mint a key within 30s");
   })
 );

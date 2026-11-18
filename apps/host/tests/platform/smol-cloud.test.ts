@@ -33,7 +33,6 @@ import * as SmolCloud from "../../src/platform/smol-cloud/smol-cloud.ts";
 import { SweepEvery } from "../../src/platform/tombstones.ts";
 import { Handle, Runtime } from "../../src/runtime.ts";
 import type { Interface, Target } from "../../src/runtime.ts";
-import { Tailnet } from "../../src/tailnet.ts";
 import { fakeSmolCloud } from "../fake-smol-cloud.ts";
 import type { FakeSmolCloud } from "../fake-smol-cloud.ts";
 import {
@@ -129,9 +128,7 @@ runtimeContract({
   }).pipe(provided, Effect.orDie),
 });
 
-const onHost = (
-  tailnet: Layer.Layer<Tailnet> | Layer.Layer<never> = Layer.empty
-) =>
+const onHost = (tailnet = false) =>
   Effect.gen(function* () {
     const { dir, fake, settings } = yield* provider;
 
@@ -145,11 +142,10 @@ const onHost = (
 
     const context = yield* Layer.build(
       hostLayer(
-        config,
+        { ...config, tailnet },
         SmolCloud.layer(settings, config),
         loopbackServer()
       ).pipe(
-        Layer.provide(tailnet),
         Layer.provide(NodeHttpClient.layerNodeHttp),
         Layer.provide(NodeServices.layer),
         Layer.provide(Layer.succeed(SweepEvery, Duration.millis(100)))
@@ -250,18 +246,13 @@ const untilStaged = (fake: FakeSmolCloud, machine: Target) =>
     { until: (count) => count > 0, schedule: Schedule.spaced("5 millis") }
   );
 
-const minting = Layer.succeed(Tailnet, {
-  mint: Effect.succeed(Redacted.make("tskey-auth-fake")),
-  mintBuild: Effect.succeed(Redacted.make("tskey-auth-fake")),
-});
-
 describe("the smol cloud runtime on its host", () => {
   it.live(
     "makes a machine from a base, prepares it, and joins it to the tailnet",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const { operations, fake } = yield* onHost(minting);
+          const { operations, fake } = yield* onHost(true);
           const dev = machineOf("dev");
 
           yield* operations.run({
@@ -273,6 +264,7 @@ describe("the smol cloud runtime on its host", () => {
               _tag: "make",
               machine: dev,
               source: { _tag: "base", base: "ubuntu" },
+              tailnet: true,
               taken: [],
               machines: [],
             },
@@ -287,7 +279,12 @@ describe("the smol cloud runtime on its host", () => {
             boot: operations.boot,
             scope: { resource: "machine", name: "dev" },
             sequence: 2,
-            step: { _tag: "join", machine: dev, hostname: "linux-dev" },
+            step: {
+              _tag: "join",
+              machine: dev,
+              hostname: "linux-dev",
+              key: Redacted.make("tskey-auth-fake"),
+            },
           });
 
           const joined = yield* operations.wait("join");

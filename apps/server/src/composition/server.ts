@@ -20,6 +20,7 @@ import * as Machines from "../machines.ts";
 import * as Sqlite from "../platform/sqlite.ts";
 import type { ServerSettings } from "../settings.ts";
 import type { CannotStart, Store } from "../store.ts";
+import type { Tailnet } from "../tailnet.ts";
 import * as Templates from "../templates.ts";
 import { routes } from "./routes.ts";
 
@@ -63,9 +64,13 @@ export const controlPlaneServer = ({
     disablePreemptiveShutdown: true,
   });
 
+/** The control plane, over `tailnet` when its config names one: without it, no machine joins one. */
 export const serverLayer = (
   config: ServerSettings,
-  server: ServerLayer
+  server: ServerLayer,
+  tailnet:
+    | Layer.Layer<Tailnet, never, HttpClient.HttpClient>
+    | Layer.Layer<never>
 ): Layer.Layer<
   | HttpServer.HttpServer
   | Machines.Machines
@@ -95,5 +100,6 @@ export const serverLayer = (
     Layer.provideMerge(Checkpoints.layer(config)),
     Layer.provideMerge(Machines.layer(config)),
     Layer.provideMerge(Hosts.layer(config.hosts)),
-    Layer.provideMerge(Sqlite.layer(config))
+    Layer.provideMerge(Sqlite.layer(config)),
+    Layer.provide(tailnet)
   );

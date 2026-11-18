@@ -114,10 +114,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(text.stdout.split("\n")).toStrictEqual(
           expect.arrayContaining([
             expect.stringMatching(
-              /^BUILD\s+CPU\s+RAM\s+DISK\s+SETUP_TIMEOUT$/u
+              /^BUILD\s+CPU\s+RAM\s+DISK\s+SETUP_TIMEOUT\s+TAILNET$/u
             ),
-            expect.stringMatching(/^web@1\s+1\s+1G\s+10G\s+1m30s$/u),
-            expect.stringMatching(/^web@2\s+2\s+1G\s+10G\s+1m30s$/u),
+            expect.stringMatching(/^web@1\s+1\s+1G\s+10G\s+1m30s\s+-$/u),
+            expect.stringMatching(/^web@2\s+2\s+1G\s+10G\s+1m30s\s+-$/u),
           ])
         );
       })

@@ -26,7 +26,9 @@ export type TailnetSettings = typeof TailnetSettings.Type;
 
 const apiUrl = "https://api.tailscale.com/api/v2";
 
-const keyLifetime = Duration.minutes(10);
+const keyLifetime = Duration.hours(1);
+
+export const mintWithin = Duration.seconds(30);
 
 const Token = Schema.Struct({ access_token: Schema.String });
 
@@ -88,7 +90,17 @@ export const make = (
           );
 
         return Redacted.make(minted.key);
-      });
+      }).pipe(
+        Effect.timeoutOrElse({
+          duration: mintWithin,
+          orElse: () =>
+            Effect.fail(
+              new Internal({
+                message: `Tailscale didn't mint a key within ${Duration.format(mintWithin)}`,
+              })
+            ),
+        })
+      );
 
     return {
       mint: keyFor(settings.tags),

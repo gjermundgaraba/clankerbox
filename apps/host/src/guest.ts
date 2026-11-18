@@ -91,7 +91,7 @@ const baseTimeout = Duration.minutes(10);
 /**
  * Makes a base what a setup starts on, by the guest's script: on Debian, the login user with
  * passwordless `sudo` and sshd that refuses root; on macOS, the guest's DNS servers and clock; on
- * both, `tailscale` where the host joins its machines to the tailnet.
+ * both, `tailscale` where the machine requests the tailnet.
  */
 export const prepareBase = (
   runtime: Runtime,

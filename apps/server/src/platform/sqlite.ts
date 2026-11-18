@@ -228,6 +228,9 @@ export const migrations: readonly string[] = [
     PRIMARY KEY (host, instance)
   ) STRICT`,
   "DROP TABLE retired",
+  `ALTER TABLE machines ADD COLUMN tailnet INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE checkpoints ADD COLUMN tailnet INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE builds ADD COLUMN tailnet INTEGER NOT NULL DEFAULT 0`,
 ];
 
 const isSqliteError = (

@@ -2,14 +2,13 @@ import { HostHttp } from "@clankerbox/host-contract";
 import { version, versionCheck } from "@gjermundgaraba/clankerbox-sdk";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
-import { Effect, Layer, Option } from "effect";
+import { Effect, Layer } from "effect";
 
 import { Operations } from "../operations.ts";
 import { Runtime, stateIn } from "../runtime.ts";
 import type { HostSettings } from "../settings.ts";
-import { Tailnet } from "../tailnet.ts";
 
-type Served = Pick<HostSettings, "id" | "bases">;
+type Served = Pick<HostSettings, "id" | "bases" | "tailnet">;
 
 const app = (config: Served) =>
   Action.implement(
@@ -17,7 +16,6 @@ const app = (config: Served) =>
     Effect.gen(function* () {
       const operations = yield* Operations;
       const runtime = yield* Runtime;
-      const tailnet = yield* Effect.serviceOption(Tailnet);
 
       return {
         readHost: () =>
@@ -30,7 +28,7 @@ const app = (config: Served) =>
             images: Object.fromEntries(config.bases),
             boot: operations.boot,
             ...(runtime.pin === undefined ? {} : { pin: runtime.pin }),
-            joins: Option.isSome(tailnet),
+            joins: config.tailnet === true,
             builds: runtime.builds.shared,
           }),
         readMachines: ({ machines }) =>

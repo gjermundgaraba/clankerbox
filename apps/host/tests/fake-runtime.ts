@@ -222,6 +222,11 @@ export const furnish = (root: string, stubs: string): void => {
   mkdirSync(path.join(root, "dev", "shm"), { recursive: true });
   mkdirSync(path.join(root, "var", "tmp"), { recursive: true });
   mkdirSync(bin, { recursive: true });
+  mkdirSync(path.join(root, "etc"), { recursive: true });
+  writeFileSync(
+    path.join(root, "etc", "os-release"),
+    "ID=debian\nVERSION_CODENAME=bookworm\n"
+  );
   symlinkSync(stubs, path.join(root, "usr", "local", "bin"));
   symlinkSync(bin, path.join(root, "bin"));
 
@@ -271,6 +276,16 @@ export const writeStubs = (dir: string, uname = "Linux"): string => {
     ["perl", `echo "perl $3" >>"$CLANKERBOX_ROOT/calls"`],
     ["apt-get", `echo "apt-get $*" >>"$CLANKERBOX_ROOT/calls"`],
     [
+      "curl",
+      [
+        `echo "curl $*" >>"$CLANKERBOX_ROOT/calls"`,
+        'while [ "$#" -gt 0 ]; do',
+        '  if [ "$1" = -o ]; then mkdir -p "${2%/*}" && : >"$2"; fi',
+        "  shift",
+        "done",
+      ].join("\n"),
+    ],
+    [
       "useradd",
       [
         `echo "useradd $*" >>"$CLANKERBOX_ROOT/calls"`,
@@ -313,7 +328,11 @@ export const baseResolver = "192.168.64.1";
 
 export const tailnetResolver = "100.100.100.100";
 
-export const writeTailscaleStubs = (bin: string): void => {
+/**
+ * Gives a guest `tailscaled` and `tailscale`, whose `up` signs in with any key, or, where it
+ * `refuses`, signs in with none, as a guest that can't reach Tailscale's control.
+ */
+export const writeTailscaleStubs = (bin: string, refuses = false): void => {
   mkdirSync(bin, { recursive: true });
 
   const running = String.raw`{\n  "BackendState": "Running",\n  "Self": {\n    "ID": "n2",\n    "DNSName": "linux-dev.example.ts.net.",\n    "Online": true\n  }\n}\n`;
@@ -346,6 +365,12 @@ export const writeTailscaleStubs = (bin: string): void => {
         "          ;;",
         "      esac",
         "    done",
+        ...(refuses
+          ? [
+              `    echo 'backend error: invalid key: unable to validate API key' >&2`,
+              "    exit 1",
+            ]
+          : []),
         `    printf '${running}' >"$CLANKERBOX_ROOT/status.json"`,
         '    rm -f "$CLANKERBOX_ROOT/node-removed"',
         '    mkdir -p "$CLANKERBOX_ROOT/etc"',

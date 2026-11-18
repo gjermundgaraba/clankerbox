@@ -128,6 +128,16 @@ layer(NodeServices.layer)((it) => {
           yaml({ ...fields, setupTimeout: "setupTimeout: 15m" })
         );
 
+        const { file: joining } = yield* written(
+          "gg-linux-dev.yaml",
+          yaml({ ...fields, tailnet: "tailnet: true" })
+        );
+
+        const { file: notJoining } = yield* written(
+          "gg-linux-dev.yaml",
+          yaml({ ...fields, tailnet: "tailnet: false" })
+        );
+
         expect(yield* readTemplateFile(file)).toStrictEqual({
           template: "gg-linux-dev",
           base: "ubuntu",
@@ -139,6 +149,8 @@ layer(NodeServices.layer)((it) => {
             timeoutSeconds: 900,
           },
         });
+        expect((yield* readTemplateFile(joining)).tailnet).toBe(true);
+        expect("tailnet" in (yield* readTemplateFile(notJoining))).toBe(false);
       })
   );
 

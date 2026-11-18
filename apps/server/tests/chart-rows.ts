@@ -30,6 +30,7 @@ export const facts = (fields?: Partial<Facts>): Facts => ({
   error: undefined,
   resize: undefined,
   ephemeral: false,
+  tailnet: false,
   source: { kind: "base" },
   template: undefined,
   hostKey: undefined,
@@ -80,5 +81,6 @@ export const checkpointFacts = (
   expiresAt: undefined,
   build: undefined,
   published: undefined,
+  tailnet: false,
   ...fields,
 });

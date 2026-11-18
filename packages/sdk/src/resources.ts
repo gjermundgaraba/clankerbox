@@ -132,11 +132,9 @@ export const SshLogin = Schema.Struct({
 export type SshLogin = typeof SshLogin.Type;
 
 /**
- * A running machine's place on the tailnet, as the host last checked it: `joined` once
- * `tailscaled` runs signed in, with the MagicDNS name Tailscale gave it, if any; `failed` with
- * why; or `missing` when the guest has no `tailscaled`. Kept in the host's memory only: each start
- * checks again, a joined machine is checked again every half hour or so, and a failed one sooner,
- * waiting longer after each failure.
+ * A running machine's place on the tailnet, as its host checked it: `joined` once `tailscaled` runs
+ * signed in, with the MagicDNS name Tailscale gave it, if any; `failed` with why; or `missing` when
+ * the guest has no `tailscaled`.
  */
 export const TailnetStatus = Schema.Union([
   Schema.Struct({
@@ -148,6 +146,19 @@ export const TailnetStatus = Schema.Union([
 ]).annotate({ identifier: "TailnetStatus" });
 
 export type TailnetStatus = typeof TailnetStatus.Type;
+
+/**
+ * The place on the tailnet of a machine that requests one: its `TailnetStatus` as its host last
+ * checked it while it runs, or `pending` while it doesn't, or hasn't been checked since it last
+ * started. Kept in the control plane's memory only: each start checks again, a joined machine is
+ * checked again every half hour or so, and a failed one sooner, waiting longer after each failure.
+ */
+export const MachineTailnet = Schema.Union([
+  ...TailnetStatus.members,
+  Schema.Struct({ state: Schema.Literal("pending") }),
+]).annotate({ identifier: "MachineTailnet" });
+
+export type MachineTailnet = typeof MachineTailnet.Type;
 
 const buildNumber = /^[1-9][0-9]*$/u;
 
@@ -194,8 +205,9 @@ export const templateRef = (
  * `<type> <base64>`, is on a machine once preparation has read one from its sshd, which a machine
  * made from a base its host doesn't prepare may lack. `ssh` is the login sshd answers: it is only
  * on a machine with a `hostKey` and an endpoint, while it runs, or while its host can't be read
- * (`state` `unknown`) and it was last read running and is asked to run still. `tailnet` is on a running machine of a host that
- * joins its machines to a tailnet, once the host has checked it.
+ * (`state` `unknown`) and it was last read running and is asked to run still. `tailnet` is on a
+ * machine that requests the tailnet, as a create from a base asks, its template's build asked, or
+ * the source of its fork or restore asked.
  */
 export const Machine = Schema.Struct({
   id: Name,
@@ -217,7 +229,7 @@ export const Machine = Schema.Struct({
   error: Schema.optionalKey(HostError),
   ssh: Schema.optionalKey(SshLogin),
   hostKey: Schema.optionalKey(Schema.String),
-  tailnet: Schema.optionalKey(TailnetStatus),
+  tailnet: Schema.optionalKey(MachineTailnet),
 }).annotate({ identifier: "Machine" });
 
 export type Machine = typeof Machine.Type;
@@ -272,11 +284,18 @@ const BuildPhase = Schema.Literals(["building", "ready", "failed"]);
  * build: the copy is `fetching` until it holds it, then `ready` for a create, or `failed` with its
  * error, which the next recheck fetches again. It is `outdated`, and takes no create, while its host
  * runs another runtime pin or names another image for the base than the build was made under, as
- * `reason` says.
+ * `reason` says. It is `excluded`, and takes no create, while its host joins no machine to the
+ * tailnet and the build requests it, as `reason` says.
  */
 export const BuildCopy = Schema.Struct({
   host: Schema.String,
-  phase: Schema.Literals(["fetching", "ready", "failed", "outdated"]),
+  phase: Schema.Literals([
+    "fetching",
+    "ready",
+    "failed",
+    "outdated",
+    "excluded",
+  ]),
   reason: Schema.optionalKey(Schema.String),
   error: Schema.optionalKey(HostError),
 }).annotate({ identifier: "BuildCopy" });
@@ -285,8 +304,9 @@ export type BuildCopy = typeof BuildCopy.Type;
 
 /**
  * One build of a template: a machine made from `base` on `host` at the sizes given, its setup run
- * within `setupTimeoutSeconds`, captured under the runtime `pin`, and deleted. `image` is what the
- * base named on that host. A create clones a build only `ready`, at its sizes, or at larger ones
+ * within `setupTimeoutSeconds`, on the tailnet with `tailnet`, captured under the runtime `pin`, and
+ * deleted. `image` is what the base named on that host. With `tailnet`, each machine cloned from it
+ * joins the tailnet too. A create clones a build only `ready`, at its sizes, or at larger ones
  * where its host's runtime gives a copy other sizes than its source's, and a ready build never
  * changes. A failed one, also one a restart of the control plane ended, keeps
  * its `error` until a later build ends. `copies` are where it is, by
@@ -303,6 +323,7 @@ export const Build = Schema.Struct({
   base: Schema.String,
   ...Sizes.fields,
   setupTimeoutSeconds: Schema.optionalKey(Size),
+  tailnet: Schema.optionalKey(Schema.Literal(true)),
   copies: Schema.Array(BuildCopy),
 }).annotate({ identifier: "Build" });
 
@@ -479,12 +500,17 @@ const fromBase = {
   base: Schema.String,
   ...Sizes.fields,
   ...placed,
+  tailnet: Schema.optionalKey(Schema.Literal(true)),
 };
 
 /** A template's build, at its sizes or the larger ones given, with no setup run. */
 export const TemplateSpec = Schema.Struct(fromTemplate);
 
-/** A base, at the sizes given, with no setup run: only a template's build runs one. */
+/**
+ * A base, at the sizes given, with no setup run: only a template's build runs one. With `tailnet`,
+ * the machine joins the control plane's tailnet, and only a host that joins machines to it takes
+ * it.
+ */
 export const BaseSpec = Schema.Struct(fromBase);
 
 /**
@@ -662,7 +688,8 @@ export type ResizeRequest = typeof ResizeRequest.Type;
 
 /**
  * A build of `template` from `base` at its sizes, with `setup`, on `host` if one is named. Each
- * build gives them all, and a setup without a timeout takes the host's.
+ * build gives them all, and a setup without a timeout takes the host's. With `tailnet`, its setup
+ * runs on the control plane's tailnet and each machine cloned from it joins it.
  */
 export const BuildRequest = Schema.Struct({
   template: Name,

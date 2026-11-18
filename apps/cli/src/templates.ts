@@ -67,7 +67,7 @@ const templateText = (template: Template, now: DateTime.Utc) =>
     ]),
     "",
     table([
-      ["BUILD", "CPU", "RAM", "DISK", "SETUP_TIMEOUT"],
+      ["BUILD", "CPU", "RAM", "DISK", "SETUP_TIMEOUT", "TAILNET"],
       ...template.builds.map((build) => [
         build.id,
         String(build.cpu),
@@ -76,6 +76,7 @@ const templateText = (template: Template, now: DateTime.Utc) =>
         build.setupTimeoutSeconds === undefined
           ? "-"
           : formatSeconds(build.setupTimeoutSeconds),
+        build.tailnet === true ? "joins" : "-",
       ]),
     ]),
     "",
@@ -98,7 +99,7 @@ export const buildTemplate = Command.make(
     ...mutationFlags,
     file: Argument.String("file").pipe(
       Argument.withDescription(
-        "A template file, such as web.yaml, which builds the template web: its base, cpu, ram and disk, its setup, a script or a recipe directory holding setup.sh, against the file's directory, and an optional setupTimeout. The server runs the setup once, on a machine it copies and then deletes, and never keeps it."
+        "A template file, such as web.yaml, which builds the template web: its base, cpu, ram and disk, its setup, a script or a recipe directory holding setup.sh, against the file's directory, an optional setupTimeout, and tailnet: true, which runs the setup on the control plane's tailnet and joins each clone to it. The server runs the setup once, on a machine it copies and then deletes, and never keeps it."
       )
     ),
     ...hostArgument,

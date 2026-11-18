@@ -67,6 +67,8 @@ export const MachineState = Machine.fields.state;
 
 export type MachineState = typeof MachineState.Type;
 
+const TailnetKey = Schema.RedactedFromValue(Schema.String);
+
 const pinned = { pin: Schema.optionalKey(Schema.String) };
 
 export const Source = Schema.Union([
@@ -96,9 +98,13 @@ const hooked = {
  * instance made. A step
  * that acts by what its VM is doing reads it from the runtime as it begins. A make's
  * `authorizedKeys` go to the login user once the machine is made, after its setup if it has one,
- * beside the keys already there. A make's `join` puts the machine on the tailnet as `hostname` for
- * its setup, and logs it out after, so its copies carry no node. A copy's make then prepares it, as
- * a start does. A `publish` copies a checkpoint's files to the build store under its name, and a
+ * beside the keys already there. A make's `tailnet` says its machine requests the tailnet, so a base
+ * it prepares gets `tailscale`, and later `join` steps put it on the tailnet. A make's `join` puts
+ * the machine on the tailnet as `hostname` with `key` for its setup, and logs it out after, so its
+ * copies carry no node. A copy's make then prepares it, as a start does. A `join` step checks the
+ * machine's node as `hostname`, starting its `tailscaled` if it isn't running, and signs it in with
+ * `key` where it needs a login; without `key`, such a node is reported failed. A key, which the
+ * control plane mints for the one join, is never kept or logged. A `publish` copies a checkpoint's files to the build store under its name, and a
  * `fetch` makes a checkpoint from what was published as `from`, of template build `build`,
  * downloading only what this host doesn't hold. A delete that will `unpublish` also removes the
  * checkpoint from the build store, with every key no other published checkpoint holds. A stop, pause
@@ -113,7 +119,10 @@ export const Step = Schema.Union([
     machine: MachineRef,
     source: Source,
     authorizedKeys: Schema.optionalKey(PublicKeys),
-    join: Schema.optionalKey(Schema.Struct({ hostname: Schema.String })),
+    tailnet: Schema.optionalKey(Schema.Literal(true)),
+    join: Schema.optionalKey(
+      Schema.Struct({ hostname: Schema.String, key: TailnetKey })
+    ),
     taken: Schema.Array(Port),
     ...others,
   }),
@@ -152,6 +161,7 @@ export const Step = Schema.Union([
   Schema.TaggedStruct("join", {
     machine: MachineRef,
     hostname: Schema.String,
+    key: Schema.optionalKey(TailnetKey),
   }),
   Schema.TaggedStruct("publish", { checkpoint: CheckpointRef }),
   Schema.TaggedStruct("fetch", {
@@ -225,7 +235,7 @@ export type Report = typeof Report.Type;
 
 /**
  * What the control plane needs to know of a host. `traits` are its runtime's, which the control
- * plane reads as the host answers before each decision about what the host will do, `images` is the image each of `bases` names there, `boot` is new each time its process starts, and `builds` tells a host that copies template
+ * plane reads as the host answers before each decision about what the host will do, `images` is the image each of `bases` names there, `boot` is new each time its process starts, `joins` tells a host that takes machines that request the tailnet, and `builds` tells a host that copies template
  * builds through the build store.
  */
 export const HostInfo = Schema.Struct({

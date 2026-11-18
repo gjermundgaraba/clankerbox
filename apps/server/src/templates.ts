@@ -41,10 +41,17 @@ import { apart } from "./driver.ts";
 import { Hosts } from "./hosts.ts";
 import type { Reached } from "./hosts.ts";
 import { Machines } from "./machines.ts";
-import { builtUnder, imageOf, outdated, placing } from "./placement.ts";
+import {
+  builtUnder,
+  imageOf,
+  outdated,
+  placing,
+  unjoined,
+} from "./placement.ts";
 import type { BuiltUnder } from "./placement.ts";
 import { Store } from "./store.ts";
 import type { BuildRow, TemplateRow } from "./store.ts";
+import { Tailnet, unserved } from "./tailnet.ts";
 
 export interface Interface {
   readonly list: Effect.Effect<readonly Template[], Internal>;
@@ -78,10 +85,19 @@ const copyOf = (
 ): BuildCopy | undefined => {
   if (state === "ready") {
     const why = info === undefined ? undefined : outdated(info, made);
+    const off = info === undefined ? undefined : unjoined(info, made);
 
-    return why === undefined
+    if (why !== undefined) {
+      return { host, phase: "outdated", reason: `${host} ${why}` };
+    }
+
+    return off === undefined
       ? { host, phase: "ready" }
-      : { host, phase: "outdated", reason: `${host} ${why}` };
+      : {
+          host,
+          phase: "excluded",
+          reason: `${host} ${off.why}, and ${made.id} requests it`,
+        };
   }
 
   if (state === "failed" || stageOf(state) === "discarding") {
@@ -139,6 +155,7 @@ const shownBuild = (
     ...(row.setupTimeoutSeconds === undefined
       ? {}
       : { setupTimeoutSeconds: row.setupTimeoutSeconds }),
+    ...(row.tailnet ? { tailnet: true } : {}),
     copies: [
       ...records.flatMap((record) => {
         const copy = copyOf(
@@ -156,7 +173,7 @@ const shownBuild = (
 
 type Facts = Pick<
   BuildRow,
-  "base" | "cpu" | "ramMib" | "diskGib" | "setupTimeoutSeconds"
+  "base" | "cpu" | "ramMib" | "diskGib" | "setupTimeoutSeconds" | "tailnet"
 >;
 
 const shown = (row: TemplateRow, seen: Seen): Template => {
@@ -252,8 +269,9 @@ const holds = ({ state }: CheckpointRow) =>
 
 /**
  * The fetches due: of each ready build that was published, to each host its copy is fetchable to
- * that copies builds, offers its base, runs its pin, names its image and holds no copy of it, each
- * with the copies that failed there, to clear first.
+ * that copies builds, offers its base, runs its pin, names its image, joins machines to the tailnet
+ * where the build's clones join it, and holds no copy of it, each with the copies that failed
+ * there, to clear first.
  */
 export const fetchesDue = (
   templates: readonly TemplateRow[],
@@ -277,6 +295,7 @@ export const fetchesDue = (
               info.builds &&
               fetchable(source.runtime, info.traits) &&
               offers(info, made.base) &&
+              unjoined(info, made) === undefined &&
               outdated(info, made) === undefined &&
               !here.some(holds)
               ? [{ source, host: info.id, failed: here }]
@@ -299,6 +318,7 @@ export const make = (settings: {
     const checkpoints = yield* Checkpoints;
     const scope = yield* Effect.scope;
     const copying = yield* Semaphore.make(1);
+    const tailnet = yield* Effect.serviceOption(Tailnet);
 
     const seen = Effect.all({
       records: store.checkpoints,
@@ -478,18 +498,26 @@ export const make = (settings: {
           host: on,
         } = request;
 
+        const refused = unserved(request.tailnet, tailnet);
+
+        if (refused !== undefined) {
+          return yield* refused;
+        }
+
         const asked = {
           base,
           cpu,
           ramMib,
           diskGib,
           setupTimeoutSeconds: request.setup.timeoutSeconds,
+          tailnet: request.tailnet === true,
         };
 
         const placed = yield* Effect.fromResult(
           placing(yield* hosts.reachAll, base, {
             sizes: { cpu, ramMib, diskGib },
             host: on,
+            tailnet: asked.tailnet,
           })
         );
 

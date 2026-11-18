@@ -28,14 +28,12 @@ import { hostLayer, hostServer } from "../src/composition/host.ts";
 import { Operations } from "../src/operations.ts";
 import type { Interface as OperationsInterface } from "../src/operations.ts";
 import type { Store } from "../src/platform/bucket/builds.ts";
-import type { TailnetSettings } from "../src/platform/tailscale.ts";
 import { Runtime } from "../src/runtime.ts";
 import type {
   Admission,
   Interface as RuntimeInterface,
 } from "../src/runtime.ts";
 import type { PortRange, HostSettings } from "../src/settings.ts";
-import type { Tailnet } from "../src/tailnet.ts";
 import { fakeRuntime } from "./fake-runtime.ts";
 import type {
   FakeOptions,
@@ -75,8 +73,8 @@ export interface HostOptions {
   readonly bases?: ReadonlyMap<string, string>;
   readonly logger?: Logger.Logger<unknown, unknown>;
   readonly ports?: PortRange;
-  readonly tailnet?: Layer.Layer<Tailnet>;
-  readonly tailnetSettings?: TailnetSettings;
+  /** Whether the host takes machines that request the tailnet. */
+  readonly tailnet?: boolean;
   readonly http?: Layer.Layer<HttpClient.HttpClient>;
 }
 
@@ -131,12 +129,11 @@ export const startHostOver = <E>(
       hostLayer(
         {
           ...settings,
-          tailnet: options?.tailnetSettings,
+          tailnet: options?.tailnet,
         },
         runtime(settings),
         loopbackServer(options?.port)
       ).pipe(
-        Layer.provide(options?.tailnet ?? Layer.empty),
         Layer.provide(options?.http ?? noHttp),
         Layer.provideMerge(
           Logger.layer(options?.logger === undefined ? [] : [options.logger])

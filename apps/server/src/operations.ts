@@ -1,6 +1,6 @@
 import type { Report, Step } from "@clankerbox/host-contract";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect } from "effect";
+import { Data, Effect } from "effect";
 
 import type { Interface as Hosts } from "./hosts.ts";
 import type { Operation } from "./store.ts";
@@ -15,6 +15,11 @@ export type Polled =
   | { readonly at: "lost"; readonly why: string }
   | { readonly at: "unreachable" };
 
+/** Why a step its host never had can't be sent, as `why` says, such as a source that went. */
+export class Unsendable extends Data.TaggedError("Unsendable")<{
+  readonly why: string;
+}> {}
+
 export const cutShort = ({ kind, name }: Operation) =>
   new Internal({ message: `the ${kind} of ${name} ended on its host` });
 
@@ -26,8 +31,9 @@ export const unreported = ({ kind, resource, name }: Operation, why: string) =>
 
 /**
  * One look at an operation: sends it when its host hasn't had it, and asks for `cancel` first when
- * `cut`. `step` builds the step afresh, or answers undefined when it can't be sent again, as a
- * setup that only a process's memory held. `absent` under another boot means the host restarted
+ * `cut`. A step `cut` before its host had it is lost, never built or sent, so a later request never
+ * waits on building it, as on minting a join's key. `step` builds the step afresh, or fails
+ * `Unsendable`, saying why it can't be sent. `absent` under another boot means the host restarted
  * and took the step with it, and a host that refuses the step, as one that has seen a later step
  * of its resource or is another process, never runs it. A host that refuses the request itself, as
  * one of another version does, is unreachable until it takes it.
@@ -40,7 +46,7 @@ export const poll = (
     step,
   }: {
     readonly cut: boolean;
-    readonly step: Effect.Effect<Step | undefined, Internal>;
+    readonly step: Effect.Effect<Step, Internal | Unsendable>;
   }
 ): Effect.Effect<Polled, Internal> =>
   Effect.gen(function* () {
@@ -66,14 +72,14 @@ export const poll = (
       return { at: "lost", why: "its host restarted" } as const;
     }
 
-    const built = yield* step;
-
-    if (built === undefined) {
+    if (cut) {
       return {
         at: "lost",
-        why: "its host never had it, and it can't be sent again: its setup left with a restart of the control plane, or its source went",
+        why: "a later request cut it short before its host had it",
       } as const;
     }
+
+    const built = yield* step;
 
     return yield* hosts
       .call(op.host, (api) =>
@@ -95,6 +101,12 @@ export const poll = (
         )
       );
   }).pipe(
+    Effect.catchTag("Unsendable", ({ why }) =>
+      Effect.succeed<Polled>({
+        at: "lost",
+        why: `its host never had it, and it can't be sent: ${why}`,
+      })
+    ),
     Effect.catchTag(["Invalid", "Unanswered", "Incompatible", "Unsent"], () =>
       Effect.succeed<Polled>({ at: "unreachable" })
     )

@@ -6,11 +6,13 @@ import type {
 } from "@clankerbox/host-contract";
 import type { Internal, Setup } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Option } from "effect";
+import type { Redacted } from "effect";
 
 import { isPublished } from "./checkpoint-chart.ts";
 import type { CheckpointRow } from "./checkpoint-chart.ts";
 import { stageOf } from "./machine-chart.ts";
 import type { MachineRow } from "./machine-chart.ts";
+import { Unsendable } from "./operations.ts";
 import type { Endpoint, Operation, Interface as Store } from "./store.ts";
 
 export const identityOf = ({
@@ -87,7 +89,9 @@ const sourceStep = (store: Store, found: MachineRow, held: Setup | undefined) =>
       }
 
       return held === undefined
-        ? undefined
+        ? yield* new Unsendable({
+            why: "its setup left with a restart of the control plane",
+          })
         : ({ _tag: "base", base: found.base, setup: held } as const);
     }
 
@@ -95,7 +99,7 @@ const sourceStep = (store: Store, found: MachineRow, held: Setup | undefined) =>
       const from = copyOf(yield* store.findMachine(source.name));
 
       return from === undefined
-        ? undefined
+        ? yield* new Unsendable({ why: `its source ${source.name} went` })
         : ({ _tag: "machine", ...from } as const);
     }
 
@@ -107,14 +111,24 @@ const sourceStep = (store: Store, found: MachineRow, held: Setup | undefined) =>
           checkpoint: checkpointRefOf(from.value),
           ...pinned(from.value.pin),
         } as const)
-      : undefined;
+      : yield* new Unsendable({ why: `its checkpoint ${source.name} went` });
   });
+
+/** How a machine's step reaches the tailnet: `mint` makes a key for one join, `mintBuild` a builder's. */
+export interface Joining {
+  readonly mint: Effect.Effect<Redacted.Redacted, Unsendable>;
+  readonly mintBuild: Effect.Effect<Redacted.Redacted, Unsendable>;
+  /** Whether a join carries a key, which a node that needs a login takes. */
+  readonly keyed: boolean;
+}
 
 /**
  * What a host is sent for a machine's operation, built afresh from the rows at each delivery, or
- * undefined when it can't be sent: its source went, or the setup `held` in memory for a template's
- * builder did. The keys go to a builder, so its build holds them, and to a clone of a build, which adds
- * any it lacks. A builder on a host that `joins` joins the tailnet for its setup. A stop, a pause and
+ * `Unsendable` when it can't be sent: its source went, the setup `held` in memory for a template's
+ * builder did, or its tailnet key couldn't be minted. The keys go to a builder, so its build holds them, and to a clone of a build, which adds
+ * any it lacks. A make tells the host whether its machine requests the tailnet, and a builder that
+ * requests it joins it for its setup, with a key minted as the step is built, so no key outlives the
+ * process that sent it. A stop, a pause and
  * every remove ask the host to run the guest's hook first, for at most `hookTimeoutSeconds`, but a
  * builder's: a build may stop its builder before the copy, so a stop hook's effects would land in
  * every clone, and a builder's delete has no user work to finish.
@@ -125,9 +139,9 @@ export const machineStep = (
   op: Operation,
   held: Setup | undefined,
   authorizedKeys: string,
-  joins: boolean,
+  joining: Joining,
   hookTimeoutSeconds: number
-): Effect.Effect<Step | undefined, Internal> =>
+): Effect.Effect<Step, Internal | Unsendable> =>
   Effect.gen(function* () {
     const ref = refOf(found);
     const { name } = found;
@@ -148,21 +162,20 @@ export const machineStep = (
     }
 
     if (op.kind === "make") {
-      const source = yield* sourceStep(store, found, held);
-
-      return source === undefined
-        ? undefined
-        : {
-            _tag: "make",
-            machine: ref,
-            source,
-            ...(found.ephemeral || found.template !== undefined
-              ? { authorizedKeys }
-              : {}),
-            ...(found.ephemeral && joins ? { join: { hostname } } : {}),
-            taken,
-            machines,
-          };
+      return {
+        _tag: "make",
+        machine: ref,
+        source: yield* sourceStep(store, found, held),
+        ...(found.ephemeral || found.template !== undefined
+          ? { authorizedKeys }
+          : {}),
+        ...(found.tailnet ? { tailnet: true } : {}),
+        ...(found.ephemeral && found.tailnet
+          ? { join: { hostname, key: yield* joining.mintBuild } }
+          : {}),
+        taken,
+        machines,
+      };
     }
 
     switch (op.kind) {
@@ -200,27 +213,34 @@ export const machineStep = (
       }
 
       case "join": {
-        return { _tag: "join", machine: ref, hostname };
+        return {
+          _tag: "join",
+          machine: ref,
+          hostname,
+          ...(joining.keyed ? { key: yield* joining.mint } : {}),
+        };
       }
 
       case "capture":
       case "deleteCheckpoint":
       case "publish":
       case "fetch": {
-        return undefined;
+        return yield* new Unsendable({
+          why: `a machine takes no ${op.kind} step`,
+        });
       }
     }
   });
 
 /**
- * What a host is sent for a checkpoint's operation, or undefined when its machine went. A delete of
+ * What a host is sent for a checkpoint's operation, or `Unsendable` when its machine went. A delete of
  * the copy a build was published from also removes it from the build store.
  */
 export const checkpointStep = (
   store: Store,
   record: CheckpointRow,
   op: Operation
-): Effect.Effect<Step | undefined, Internal> =>
+): Effect.Effect<Step, Internal | Unsendable> =>
   Effect.gen(function* () {
     const checkpoint = checkpointRefOf(record);
     const { published, build } = record;
@@ -239,13 +259,13 @@ export const checkpointStep = (
 
     if (op.kind === "fetch") {
       return published === undefined || build === undefined
-        ? undefined
+        ? yield* new Unsendable({ why: "it names no published build" })
         : { _tag: "fetch", checkpoint, from: published, build };
     }
 
     const from = copyOf(yield* store.findMachine(record.machine));
 
     return from === undefined
-      ? undefined
+      ? yield* new Unsendable({ why: `its machine ${record.machine} went` })
       : { _tag: "capture", checkpoint, ...from };
   });

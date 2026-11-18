@@ -39,7 +39,7 @@ import {
   References,
   Semaphore,
 } from "effect";
-import type { Scope } from "effect";
+import type { Redacted, Scope } from "effect";
 import { Hex } from "effect/encoding";
 
 import { runCommand } from "./exec.ts";
@@ -79,7 +79,6 @@ import type {
   Target,
 } from "./runtime.ts";
 import type { HostSettings } from "./settings.ts";
-import { Tailnet } from "./tailnet.ts";
 
 export interface Interface {
   readonly boot: string;
@@ -301,7 +300,6 @@ export const make = (
   Effect.gen(function* () {
     const runtime = yield* Runtime;
     const { traits } = runtime;
-    const tailnet = yield* Effect.serviceOption(Tailnet);
 
     const pauseOrStop = (machine: Target, pin: string | undefined) => {
       if (traits.pause === "stops") {
@@ -563,9 +561,9 @@ export const make = (
       });
 
     const joined = (
-      mint: Tailnet["Service"]["mint"],
       machine: Target,
-      hostname: string
+      hostname: string,
+      key: Redacted.Redacted | undefined
     ) =>
       surviving(
         `tailnet join ${machine.name}`,
@@ -574,14 +572,25 @@ export const make = (
 
           const lost = report?.state === "lost";
 
+          if (
+            !lost &&
+            (report?.state !== "reported" || report.backend !== "NeedsLogin")
+          ) {
+            return statusOf(report);
+          }
+
+          if (key === undefined) {
+            return {
+              state: "failed",
+              error: `its node ${lost ? "is gone from the tailnet" : "is signed out"}, and this check carried no key: the next one brings one`,
+            } satisfies TailnetStatus;
+          }
+
           return statusOf(
-            lost ||
-              (report?.state === "reported" && report.backend === "NeedsLogin")
-              ? yield* checkTailnet(runtime, machine, hostname, {
-                  key: yield* mint,
-                  rejoin: lost,
-                })
-              : report
+            yield* checkTailnet(runtime, machine, hostname, {
+              key,
+              rejoin: lost,
+            })
           );
         })
       ).pipe(
@@ -687,40 +696,30 @@ export const make = (
         return setup;
       }
 
-      return Option.match(tailnet, {
-        onNone: () =>
-          Effect.andThen(
-            Effect.logWarning(
-              `make ${machine.name}: its step asks for a tailnet join, and host ${config.id} has no tailnet setting, so its setup runs off the tailnet`
-            ),
-            setup
-          ),
-        onSome: ({ mintBuild }) =>
-          Effect.gen(function* () {
-            yield* rememberDns(runtime, machine);
+      return Effect.gen(function* () {
+        yield* rememberDns(runtime, machine);
 
-            const status = yield* joined(mintBuild, machine, join.hostname);
+        const status = yield* joined(machine, join.hostname, join.key);
 
-            if (status.state !== "joined") {
-              return yield* new Internal({
-                message: `builder ${machine.name} didn't join the tailnet for its setup: ${status.state === "failed" ? status.error : "its guest has no tailscaled"}`,
-              });
-            }
+        if (status.state !== "joined") {
+          return yield* new Internal({
+            message: `builder ${machine.name} didn't join the tailnet for its setup: ${status.state === "failed" ? status.error : "its guest has no tailscaled"}`,
+          });
+        }
 
-            yield* setup;
-          }).pipe(
-            Effect.onError(() =>
-              scrubbed(machine).pipe(
-                Effect.catch((error) =>
-                  Effect.logWarning(
-                    `tailnet scrub ${machine.name} failed: ${error.message}`
-                  )
-                )
+        yield* setup;
+      }).pipe(
+        Effect.onError(() =>
+          scrubbed(machine).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning(
+                `tailnet scrub ${machine.name} failed: ${error.message}`
               )
-            ),
-            Effect.andThen(scrubbed(machine))
-          ),
-      });
+            )
+          )
+        ),
+        Effect.andThen(scrubbed(machine))
+      );
     };
 
     const relayed = (
@@ -774,9 +773,11 @@ export const make = (
 
         if (
           source._tag === "base" &&
-          (source.setup !== undefined || runtime.prepares === "always")
+          (source.setup !== undefined ||
+            runtime.prepares === "always" ||
+            step.tailnet === true)
         ) {
-          yield* prepareBase(runtime, ref, Option.isSome(tailnet));
+          yield* prepareBase(runtime, ref, step.tailnet === true);
         }
 
         if (source._tag === "base" && source.setup !== undefined) {
@@ -976,17 +977,13 @@ export const make = (
         }
 
         case "join": {
-          return Option.match(tailnet, {
-            onNone: () => Effect.void,
-            onSome: (joining) =>
-              Effect.gen(function* () {
-                const machine = yield* machineTarget(step.machine);
+          return Effect.gen(function* () {
+            const machine = yield* machineTarget(step.machine);
 
-                progress.outcome = {
-                  ...progress.outcome,
-                  tailnet: yield* joined(joining.mint, machine, step.hostname),
-                };
-              }),
+            progress.outcome = {
+              ...progress.outcome,
+              tailnet: yield* joined(machine, step.hostname, step.key),
+            };
           });
         }
 

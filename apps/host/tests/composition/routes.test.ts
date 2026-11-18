@@ -1,9 +1,5 @@
 import { Handle, HostHttp, HostInfo, Report } from "@clankerbox/host-contract";
-import type {
-  HostAction,
-  Operation,
-  hostActionsByName,
-} from "@clankerbox/host-contract";
+import type { HostAction, hostActionsByName } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import {
@@ -71,7 +67,7 @@ const bootOf = (url: string) =>
 
 const deliver = (
   url: string,
-  operation: Omit<Operation, "boot">,
+  operation: Omit<Body<"runOperation">, "boot">,
   headers?: Record<string, string>
 ) =>
   Effect.flatMap(bootOf(url), (boot) =>
@@ -86,7 +82,10 @@ const dev = {
   diskGib: 10,
 };
 
-const made = (id: string, sequence = 1): Omit<Operation, "boot"> => ({
+const made = (
+  id: string,
+  sequence = 1
+): Omit<Body<"runOperation">, "boot"> => ({
   id,
   scope: { resource: "machine", name: "dev" },
   sequence,
@@ -102,7 +101,7 @@ const made = (id: string, sequence = 1): Omit<Operation, "boot"> => ({
 const removed = (
   id: string,
   { name, instance }: { readonly name: string; readonly instance: string }
-): Omit<Operation, "boot"> => ({
+): Omit<Body<"runOperation">, "boot"> => ({
   id,
   scope: { resource: "machine", name },
   sequence: 1,
@@ -657,8 +656,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 const onDev = (
   id: string,
   sequence: number,
-  step: Operation["step"]
-): Omit<Operation, "boot"> => ({
+  step: Body<"runOperation">["step"]
+): Omit<Body<"runOperation">, "boot"> => ({
   id,
   scope: { resource: "machine", name: "dev" },
   sequence,

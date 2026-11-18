@@ -9,7 +9,7 @@ import { Duration, Effect, Fiber, Layer, Logger, Schedule } from "effect";
 import { expect } from "vite-plus/test";
 
 import { hostLayer } from "../../src/composition/host.ts";
-import type { HostLayerConfig } from "../../src/composition/host.ts";
+import type { HostSettings } from "../../src/settings.ts";
 import { fakeRuntime } from "../fake-runtime.ts";
 import type { FakeRuntimeName } from "../fake-runtime.ts";
 import {
@@ -18,14 +18,13 @@ import {
   hostConfig,
   hostOn,
   loopbackServer,
-  noHttp,
   suitePorts,
 } from "../support.ts";
 
 const started = hostOn(suitePorts.host);
 
 const refused = (
-  settings: HostLayerConfig,
+  settings: HostSettings,
   dir: string,
   as?: FakeRuntimeName,
   calls: string[] = []
@@ -42,7 +41,7 @@ const refused = (
           },
         }).layer,
         loopbackServer(settings.listen.port)
-      ).pipe(Layer.provide(noHttp))
+      )
     )
   ).pipe(Effect.scoped, Effect.provide(Logger.layer([])));
 

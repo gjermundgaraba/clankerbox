@@ -10,7 +10,6 @@ import type { FileSystem, Path } from "effect";
 import { HttpRouter } from "effect/http";
 import type {
   Etag,
-  HttpClient,
   HttpPlatform,
   HttpServer,
   HttpServerError,
@@ -20,7 +19,6 @@ import type { PortProbe } from "../machine-ports.ts";
 import * as Operations from "../operations.ts";
 import * as BindProbe from "../platform/bind-probe.ts";
 import * as Relay from "../platform/relay.ts";
-import * as Tailscale from "../platform/tailscale.ts";
 import * as Reach from "../reach.ts";
 import { Runtime } from "../runtime.ts";
 import type { CannotStart } from "../runtime.ts";
@@ -83,25 +81,18 @@ export const hostServer = ({ listen }: Pick<HostSettings, "listen">) =>
     }
   );
 
-export interface HostLayerConfig extends HostSettings {
-  readonly tailnet?: Tailscale.TailnetSettings | undefined;
-}
-
 const startedUp = Layer.effectDiscard(
   Effect.flatMap(Runtime, ({ startup }) => startup)
 );
 
 export const hostLayer = <E, R>(
-  config: HostLayerConfig,
+  config: HostSettings,
   runtime: Layer.Layer<Runtime, E, R>,
   server: ServerLayer
 ): Layer.Layer<
   HttpServer.HttpServer | Operations.Operations | Reach.Reaches | Runtime,
   HostError | CannotStart | E,
-  | Exclude<R, PortProbe>
-  | FileSystem.FileSystem
-  | Path.Path
-  | HttpClient.HttpClient
+  Exclude<R, PortProbe> | FileSystem.FileSystem | Path.Path
 > =>
   HttpRouter.serve(routes(config), {
     disableLogger: true,
@@ -121,10 +112,5 @@ export const hostLayer = <E, R>(
     Layer.provideMerge(Operations.layer(config)),
     Layer.provideMerge(Reach.layer(config.machinePorts)),
     Layer.provide(Layer.mergeAll(BindProbe.layer, Relay.layer, startedUp)),
-    Layer.provideMerge(Layer.provide(runtime, BindProbe.layer)),
-    Layer.provide(
-      config.tailnet === undefined
-        ? Layer.empty
-        : Tailscale.layer(config.tailnet)
-    )
+    Layer.provideMerge(Layer.provide(runtime, BindProbe.layer))
   );

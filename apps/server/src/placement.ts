@@ -38,7 +38,7 @@ const unsized = (info: HostInfo, sizes: Sizes): Miss => ({
 
 const sifted = <K, A>(
   reached: readonly Reached[],
-  beforeReply: (host: string) => Result.Result<K, Miss>,
+  beforeReply: (host: Reached) => Result.Result<K, Miss>,
   take: (info: HostInfo, known: K) => Result.Result<A, Miss>
 ) => {
   const taken: A[] = [];
@@ -51,10 +51,12 @@ const sifted = <K, A>(
     cures.add(miss.cure);
   };
 
-  for (const { member, info, problem } of reached) {
+  for (const each of reached) {
+    const { member, info, problem } = each;
+
     const known = member.draining
       ? Result.fail(missed("is draining"))
-      : beforeReply(member.id);
+      : beforeReply(each);
 
     if (Result.isFailure(known)) {
       passed(member.id, known.failure);
@@ -80,7 +82,39 @@ const sifted = <K, A>(
 export interface Ask {
   readonly sizes: Sizes;
   readonly host: string | undefined;
+  /** Whether the machine requests the tailnet, which only a host that joins machines to it takes. */
+  readonly tailnet: boolean;
 }
+
+/** Why a host that joins no machine to the tailnet can't take one that requests it. */
+export const unjoined = (
+  info: HostInfo,
+  { tailnet }: Pick<Ask, "tailnet">
+): Miss | undefined =>
+  tailnet && !info.joins
+    ? missed("joins no machine to the tailnet")
+    : undefined;
+
+/**
+ * Why a fork or restore, which lands on its source's host, can't: its source requests the tailnet,
+ * as the copy will, and that host joins no machine to it.
+ */
+export const unjoinedCopy = (
+  info: HostInfo,
+  from: { readonly base: string; readonly tailnet: boolean },
+  source: string
+): NotOffered | undefined => {
+  const miss = unjoined(info, from);
+
+  return miss === undefined
+    ? undefined
+    : new NotOffered({
+        message: `${source} requests the tailnet, as its copy would, and its host ${info.id} ${miss.why}`,
+        base: from.base,
+      });
+};
+
+const onTailnet = ({ tailnet }: Ask) => (tailnet ? " on the tailnet" : "");
 
 const among = (
   reached: readonly Reached[],
@@ -98,8 +132,9 @@ const among = (
 };
 
 /**
- * The hosts that can take a create of `base` at the sizes asked, in config order, to try in turn: a
- * later one only after a definite `Capacity`. With none, a host not draining that gave no reply
+ * The hosts that can take a create of `base` at the sizes asked, and that join machines to the
+ * tailnet where it asks for one, in config order, to try in turn: a later one only after a definite
+ * `Capacity`. With none, a host not draining that gave no reply
  * might have taken it, so that is `Unavailable`; a host that offers the base at other sizes makes it
  * `Unsizable`; and `NotOffered` is the rest, each saying why each host was passed over. An ask that
  * names a host is placed as if that host were the only one, and one the control plane doesn't know
@@ -127,6 +162,12 @@ export const placing = (
         return Result.fail(missed(`offers ${offered(info)}`));
       }
 
+      const off = unjoined(info, ask);
+
+      if (off !== undefined) {
+        return Result.fail(off);
+      }
+
       return fitted(info.traits, ask.sizes)
         ? Result.succeed(info)
         : Result.fail(unsized(info, ask.sizes));
@@ -140,7 +181,7 @@ export const placing = (
   if (noReply) {
     return Result.fail(
       new Unavailable({
-        message: `no host answered that can take base ${base}: ${reasons}`,
+        message: `no host answered that can take base ${base}${onTailnet(ask)}: ${reasons}`,
         readOnly: true,
       })
     );
@@ -149,10 +190,10 @@ export const placing = (
   return Result.fail(
     cures.has("sizes")
       ? new Unsizable({
-          message: `no host that offers base ${base} gives the sizes asked: ${reasons}`,
+          message: `no host that offers base ${base}${onTailnet(ask)} gives the sizes asked: ${reasons}`,
         })
       : new NotOffered({
-          message: `no host offers base ${base}: ${reasons}`,
+          message: `no host offers base ${base}${onTailnet(ask)}: ${reasons}`,
           base,
         })
   );
@@ -160,19 +201,20 @@ export const placing = (
 
 export interface BuiltUnder extends Pick<
   BuildRow,
-  "base" | "pin" | "image" | keyof Sizes
+  "base" | "pin" | "image" | "tailnet" | keyof Sizes
 > {
   readonly id: string;
 }
 
 export const builtUnder = (
   template: string,
-  { number, base, pin, image, cpu, ramMib, diskGib }: BuildRow
+  { number, base, pin, image, tailnet, cpu, ramMib, diskGib }: BuildRow
 ): BuiltUnder => ({
   id: buildId(template, number),
   base,
   pin,
   image,
+  tailnet,
   cpu,
   ramMib,
   diskGib,
@@ -210,7 +252,7 @@ const unreadyCopy = (
 
 /**
  * The hosts that hold one of `copies`, of `build` of `template`, by host, and can take a clone of
- * it at the sizes asked, in config order, each with its copy, to try in turn as `placing`'s are. An
+ * it at the sizes asked, and join machines to the tailnet where it asks for one, in config order, each with its copy, to try in turn as `placing`'s are. An
  * outdated copy is passed over, as is a host whose copy is one of `unready`, saying it isn't ready
  * yet or failed. With none, a holder not draining that gave no reply is `Unavailable`, and
  * `NotBuilt` otherwise, saying why each host was passed over, and to build the template again
@@ -239,9 +281,14 @@ export const holding = <A>(
 
   const { taken, reasons, noReply, cures } = sifted(
     named.success,
-    (host) => {
-      const copy = copies.get(host);
-      const other = unready.get(host);
+    ({ member, info }) => {
+      const copy = copies.get(member.id);
+      const other = unready.get(member.id);
+      const off = info === undefined ? undefined : unjoined(info, ask);
+
+      if (off !== undefined) {
+        return Result.fail(off);
+      }
 
       if (copy !== undefined) {
         return Result.succeed(copy);
@@ -276,7 +323,7 @@ export const holding = <A>(
   if (noReply) {
     return Result.fail(
       new Unavailable({
-        message: `no host answered that can take a clone of build ${made.id}: ${reasons}`,
+        message: `no host answered that can take a clone of build ${made.id}${onTailnet(ask)}: ${reasons}`,
         readOnly: true,
       })
     );
@@ -289,10 +336,10 @@ export const holding = <A>(
   return Result.fail(
     cures.has("sizes")
       ? new Unsizable({
-          message: `no host that holds a current copy of build ${made.id} gives the sizes asked: ${reasons}${advice}`,
+          message: `no host that holds a current copy of build ${made.id}${onTailnet(ask)} gives the sizes asked: ${reasons}${advice}`,
         })
       : new NotBuilt({
-          message: `no host can take a clone of build ${made.id}: ${reasons}${advice}`,
+          message: `no host can take a clone of build ${made.id}${onTailnet(ask)}: ${reasons}${advice}`,
           template,
         })
   );

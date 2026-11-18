@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
@@ -8,7 +8,15 @@ import { hostKeySetup } from "@gjermundgaraba/clankerbox-host/testing";
 import { readAuthorizedKeys } from "@gjermundgaraba/clankerbox-sdk";
 import { mkdir, write } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
-import { Console, Duration, Effect, FileSystem, Layer, Logger } from "effect";
+import {
+  Console,
+  Duration,
+  Effect,
+  FileSystem,
+  Layer,
+  Logger,
+  Redacted,
+} from "effect";
 import { HttpServer } from "effect/http";
 
 import { controlPlaneServer, serverLayer } from "../src/composition/server.ts";
@@ -16,6 +24,7 @@ import {
   defaultFailedRowsLast,
   defaultHookTimeoutSeconds,
 } from "../src/settings.ts";
+import { Tailnet } from "../src/tailnet.ts";
 
 const usage =
   "usage: serve.ts <run-dir>, with hosts in <run-dir>/hosts, each draining while <run-dir>/hosts/<id>.draining exists";
@@ -90,6 +99,38 @@ const clientFiles = (run: string, url: string) =>
     yield* write(path.join(run, "home"), `${home}\n`);
   });
 
+const fakeTailnet = (run: string) => {
+  let minted = 0;
+
+  const mintingAsSlowlyAsTailscale = Effect.sleep(Duration.seconds(1));
+
+  const mint = (kind: "machine" | "build") =>
+    Effect.andThen(
+      mintingAsSlowlyAsTailscale,
+      Effect.sync(() => {
+        minted += 1;
+
+        const key = `tskey-auth-fake-${minted}`;
+
+        appendFileSync(
+          path.join(run, "evidence", "tailnet-mints.txt"),
+          `${kind} ${key}\n`
+        );
+
+        return Redacted.make(key);
+      })
+    );
+
+  const setting = process.env["CLANKERBOX_FAKE_TAILNET"];
+
+  return setting !== "1" && setting !== "refuses"
+    ? Layer.empty
+    : Layer.succeed(Tailnet, {
+        mint: mint("machine"),
+        mintBuild: mint("build"),
+      });
+};
+
 const serve = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const run = yield* Effect.try(parsed);
@@ -136,7 +177,9 @@ const serve = Effect.gen(function* () {
         );
       })
     ).pipe(
-      Layer.provideMerge(serverLayer(settings, controlPlaneServer(settings))),
+      Layer.provideMerge(
+        serverLayer(settings, controlPlaneServer(settings), fakeTailnet(run))
+      ),
       Layer.provide(NodeHttpClient.layerNodeHttp),
       Layer.provide(Logger.layer([Logger.consolePretty({ colors: false })]))
     )

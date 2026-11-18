@@ -81,9 +81,14 @@ a provider, its fake API and the faults it takes, with the fake and the adapter'
 layer `apps/host/tests/providers.ts` defines for each provider.
 
 Each serve program reads its settings from the environment `launch.sh` and
-`fault.sh start-host` run it in. `CLANKERBOX_FAKE_TAILNET=1` has every host join
-its machines to a fake tailnet; set it for `start-host` too, or the restarted
-host joins nothing. A fake runtime's host also reads `CLANKERBOX_FAKE_PIN`, the
+`fault.sh start-host` run it in. `CLANKERBOX_FAKE_TAILNET=1` gives the control
+plane a fake tailnet, whose every key it mints it appends to
+`evidence/tailnet-mints.txt` as `machine <key>` or `build <key>`, and has each
+host declare `tailnet: true` and give its guests a fake `tailscale`;
+`CLANKERBOX_FAKE_TAILNET=refuses` does the same with a `tailscale up` that
+refuses every key, as a host that declares joins it can't deliver. A host
+started without it declares none, so `fault.sh start-host` without it gives a
+host that takes no machine requesting the tailnet. A fake runtime's host also reads `CLANKERBOX_FAKE_PIN`, the
 runtime pin its fake runs, `CLANKERBOX_FAKE_UBUNTU_IMAGE`, the image smolvm's
 `ubuntu` names, and `CLANKERBOX_FAKE_BUILDS`, a JSON file of a smolvm or Tart
 runtime's `builds` setting, for a build store.

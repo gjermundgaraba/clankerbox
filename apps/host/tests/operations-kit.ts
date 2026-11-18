@@ -19,7 +19,6 @@ import type { Store } from "../src/platform/bucket/builds.ts";
 import * as Relay from "../src/platform/relay.ts";
 import * as Reach from "../src/reach.ts";
 import { Handle, Runtime } from "../src/runtime.ts";
-import { Tailnet } from "../src/tailnet.ts";
 import { fakeRuntime, writeTailscaleStubs } from "./fake-runtime.ts";
 import type { FakeRuntime, FakeRuntimeName } from "./fake-runtime.ts";
 import { image, pause, suitePorts } from "./support.ts";
@@ -45,8 +44,8 @@ export interface RunnerOptions {
   readonly probe?: Probe;
   readonly relayed?: boolean;
   readonly runtime?: (fake: Runtime["Service"]) => Runtime["Service"];
-  readonly tailnet?: Tailnet["Service"];
-  readonly tailscale?: boolean;
+  /** Gives every guest `tailscale`, whose `up` signs in, or with `refuses` signs in with no key. */
+  readonly tailscale?: boolean | "refuses";
 }
 
 export const runner = (options?: RunnerOptions) =>
@@ -67,8 +66,11 @@ export const runner = (options?: RunnerOptions) =>
 
     const first = options?.relayed === true ? relayPorts : firstPort;
 
-    if (options?.tailscale === true) {
-      writeTailscaleStubs(path.join(dir, "bin"));
+    if (options?.tailscale !== undefined && options.tailscale !== false) {
+      writeTailscaleStubs(
+        path.join(dir, "bin"),
+        options.tailscale === "refuses"
+      );
     }
 
     const operations = yield* Layer.build(
@@ -91,11 +93,6 @@ export const runner = (options?: RunnerOptions) =>
             Layer.succeed(PortProbe, options?.probe ?? allFree),
             Relay.layer
           )
-        ),
-        Layer.provide(
-          options?.tailnet === undefined
-            ? Layer.empty
-            : Layer.succeed(Tailnet, options.tailnet)
         )
       )
     ).pipe(Effect.map(Context.get(Operations.Operations)));
@@ -153,7 +150,8 @@ export const makes = (
     readonly source?: Source;
     readonly setup?: Setup;
     readonly authorizedKeys?: string;
-    readonly join?: { readonly hostname: string };
+    readonly tailnet?: true;
+    readonly join?: Extract<Step, { readonly _tag: "make" }>["join"];
     readonly taken?: readonly number[];
     readonly machines?: readonly MachineRef[];
   }
@@ -168,6 +166,7 @@ export const makes = (
   ...(fields?.authorizedKeys === undefined
     ? {}
     : { authorizedKeys: fields.authorizedKeys }),
+  ...(fields?.tailnet === undefined ? {} : { tailnet: fields.tailnet }),
   ...(fields?.join === undefined ? {} : { join: fields.join }),
   taken: fields?.taken ?? [],
   machines: fields?.machines ?? [],

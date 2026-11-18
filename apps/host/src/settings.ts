@@ -16,4 +16,6 @@ export interface HostSettings {
   readonly stateDir: string;
   readonly bases: ReadonlyMap<string, string>;
   readonly machinePorts: PortRange;
+  /** Whether the host takes machines that request the tailnet. */
+  readonly tailnet?: boolean | undefined;
 }

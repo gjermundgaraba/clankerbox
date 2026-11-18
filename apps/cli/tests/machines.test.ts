@@ -431,6 +431,7 @@ describe("machines", () => {
             yield* run(["--cpu", "2"]),
             yield* run(["--template", "web", "--cpu", "0"]),
             yield* run(["--template", "web@x"]),
+            yield* run(["--template", "web", "--tailnet"]),
           ];
 
           expect(
@@ -457,6 +458,11 @@ describe("machines", () => {
             ],
             [1, "Invalid", "create: --cpu: Expected a value greater than 0"],
             [1, "Invalid", expect.stringContaining("create: --template: ")],
+            [
+              1,
+              "Invalid",
+              "create: a template's build says whether its clones join the tailnet, so --template takes no --tailnet: build it with tailnet: true",
+            ],
           ]);
           expect(stub.calls).toStrictEqual([]);
         })

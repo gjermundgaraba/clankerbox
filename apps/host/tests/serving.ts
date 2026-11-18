@@ -21,7 +21,6 @@ import {
   Layer,
   Logger,
   Queue,
-  Redacted,
   Schedule,
   Schema,
   Stream,
@@ -40,7 +39,6 @@ import type { ChildProcessSpawner } from "effect/process";
 import { hostLayer } from "../src/composition/host.ts";
 import type { CannotStart, Runtime } from "../src/runtime.ts";
 import type { HostSettings } from "../src/settings.ts";
-import { Tailnet } from "../src/tailnet.ts";
 import type { Faults } from "./runtime-contract.ts";
 import { hostConfig, loopbackServer } from "./support.ts";
 
@@ -66,17 +64,14 @@ export type Answer = typeof Answer.Type;
 
 const refused = (said: string): Answer => ({ took: false, said });
 
-export const fakeTailnet = process.env["CLANKERBOX_FAKE_TAILNET"] === "1";
+const fakeTailnetSetting = process.env["CLANKERBOX_FAKE_TAILNET"];
 
-const slowKey = Effect.as(
-  Effect.sleep(Duration.seconds(1)),
-  Redacted.make("tskey-auth-fake")
-);
+/** Whether the host takes machines that request the tailnet, and gives its guests a fake `tailscale`. */
+export const fakeTailnet =
+  fakeTailnetSetting === "1" || fakeTailnetSetting === "refuses";
 
-export const mintingAsSlowlyAsTailscale = Layer.succeed(Tailnet, {
-  mint: slowKey,
-  mintBuild: slowKey,
-});
+/** Whether its guests' `tailscale up` refuses every key, as a guest that can't reach Tailscale's control. */
+export const tailscaleRefuses = fakeTailnetSetting === "refuses";
 
 const landsLateBy = Duration.seconds(5);
 
@@ -436,11 +431,10 @@ const providerHost = (
 
       const context = yield* Layer.build(
         hostLayer(
-          config,
+          { ...config, tailnet: fakeTailnet },
           provider.layer(api, config),
           loopbackServer(port)
         ).pipe(
-          Layer.provide(fakeTailnet ? mintingAsSlowlyAsTailscale : Layer.empty),
           Layer.provideMerge(NodeHttpClient.layerNodeHttp),
           Layer.provideMerge(
             Logger.layer([Logger.consolePretty({ colors: false })])

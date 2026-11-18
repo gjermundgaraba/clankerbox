@@ -187,17 +187,17 @@ export const Http = ActionHttp.make(
     }),
     Action.make("forkMachine", {
       ...write,
-      error: [...making, WrongState, PinMismatch] as const,
+      error: [...making, WrongState, PinMismatch, NotOffered] as const,
       description:
-        "Copy a machine to a new name, with its sizes or the ones given. A machine is copied only in the one state its runtime captures a machine in, as a capture is, and only when its VM booted under the runtime pin its host runs. A machine at rest that its host reads in another state is refused with WrongState, and one whose VM booted under another pin with PinMismatch, before anything is recorded. A fork takes its host's runtime and its source's sizes as the host answers now, so one whose host can't be read is Unavailable, recording nothing; one still moving is recorded, and its host decides. Its copy's vCPUs and RAM follow its runtime: the source's or larger ones, grown live once the copy runs, as far as the runtime grows a running machine; any; or only the source's sizes, its disk's included. A disk otherwise only grows. A copy that fails deletes the new VM and keeps its row, failed, to say why.",
+        "Copy a machine to a new name, with its sizes or the ones given. A machine is copied only in the one state its runtime captures a machine in, as a capture is, and only when its VM booted under the runtime pin its host runs. A machine at rest that its host reads in another state is refused with WrongState, and one whose VM booted under another pin with PinMismatch, before anything is recorded. A copy lands on its source's host and requests the tailnet as its source does, so a fork of one that requests it, on a host that joins no machine to the tailnet, is NotOffered, recording nothing. A fork takes its host's runtime and its source's sizes as the host answers now, so one whose host can't be read is Unavailable, recording nothing; one still moving is recorded, and its host decides. Its copy's vCPUs and RAM follow its runtime: the source's or larger ones, grown live once the copy runs, as far as the runtime grows a running machine; any; or only the source's sizes, its disk's included. A disk otherwise only grows. A copy that fails deletes the new VM and keeps its row, failed, to say why.",
       input: Schema.Struct({ ...ForkRequest.fields, ...Sizing.fields }),
       success: Machine,
     }),
     Action.make("restoreMachine", {
       ...write,
-      error: [...making, PinMismatch] as const,
+      error: [...making, PinMismatch, NotOffered] as const,
       description:
-        "Create a machine from a checkpoint, with its sizes or the ones given. Only a ready checkpoint is restored: one whose capture still runs is NotMade, and one whose capture failed, or that is being deleted, NotFound, saying so and, of a failed one, why. A checkpoint is restored only under the runtime pin it was captured under, and one captured under another is refused with PinMismatch before anything is recorded. A restore's vCPUs and RAM follow its runtime, as a fork's do. A disk otherwise only grows. A restore that fails deletes the new VM and keeps its row, failed, to say why.",
+        "Create a machine from a checkpoint, with its sizes or the ones given. Only a ready checkpoint is restored: one whose capture still runs is NotMade, and one whose capture failed, or that is being deleted, NotFound, saying so and, of a failed one, why. A checkpoint is restored only under the runtime pin it was captured under, and one captured under another is refused with PinMismatch before anything is recorded. A restore of a checkpoint that requests the tailnet, on a host that joins no machine to it, is NotOffered, recording nothing. A restore's vCPUs and RAM follow its runtime, as a fork's do. A disk otherwise only grows. A restore that fails deletes the new VM and keeps its row, failed, to say why.",
       input: Schema.Struct({ ...RestoreRequest.fields, ...Sizing.fields }),
       success: Machine,
     }),

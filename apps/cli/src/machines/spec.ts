@@ -62,6 +62,12 @@ export const specArguments = {
     ),
     Flag.optional
   ),
+  tailnet: Flag.Boolean("tailnet").pipe(
+    Flag.withDescription(
+      "With --base, join the machine to the control plane's tailnet, placing it only on a host that joins machines to it. A template's build says whether its clones join, and a fork or restore joins as its source does."
+    ),
+    Flag.withDefault(false)
+  ),
   ...sizeArguments,
   ...hostArgument,
 };
@@ -101,6 +107,12 @@ export const flagsSpec = (command: string, flags: SpecFlags) =>
         });
       }
 
+      if (flags.tailnet) {
+        return yield* new Invalid({
+          message: `${command}: a template's build says whether its clones join the tailnet, so --template takes no --tailnet: build it with tailnet: true`,
+        });
+      }
+
       return yield* decodeTemplateSpec(
         defined({ template: flags.template.value, ...sizes, host }),
         strictly
@@ -114,7 +126,12 @@ export const flagsSpec = (command: string, flags: SpecFlags) =>
     }
 
     return yield* decodeBaseSpec(
-      defined({ base: flags.base.value, ...sizes, host }),
+      defined({
+        base: flags.base.value,
+        ...sizes,
+        host,
+        tailnet: flags.tailnet ? true : undefined,
+      }),
       strictly
     ).pipe(Effect.mapError(refused(command)));
   });

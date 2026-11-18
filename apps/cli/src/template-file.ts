@@ -19,6 +19,7 @@ const TemplateFile = Schema.Struct({
   disk: Schema.String,
   setupTimeout: Schema.optionalKey(Schema.String),
   setup: Schema.String,
+  tailnet: Schema.optionalKey(Schema.Boolean),
 });
 
 const decodeTemplateFile = Schema.decodeUnknownEffect(TemplateFile);
@@ -29,7 +30,8 @@ const extensions = new Set([".yaml", ".yml"]);
 
 /**
  * The build a template file asks for: the template is the file's stem, and `setup` is read from
- * its path against the file's directory.
+ * its path against the file's directory. With `tailnet: true`, its setup runs on the control plane's
+ * tailnet and each clone of the build joins it.
  */
 export const readTemplateFile = (
   file: string
@@ -90,5 +92,6 @@ export const readTemplateFile = (
       diskGib,
       setup:
         timeoutSeconds === undefined ? { script } : { script, timeoutSeconds },
+      ...(fields.tailnet === true ? { tailnet: true } : {}),
     };
   });

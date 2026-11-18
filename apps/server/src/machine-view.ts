@@ -100,6 +100,8 @@ export const machineOf = (
     ...(found.error === undefined ? {} : { error: found.error }),
     ...(ssh === undefined ? {} : { ssh }),
     ...(found.hostKey === undefined ? {} : { hostKey: found.hostKey }),
-    ...(running && tailnet !== undefined ? { tailnet } : {}),
+    ...(found.tailnet
+      ? { tailnet: (running ? tailnet : undefined) ?? { state: "pending" } }
+      : {}),
   };
 };

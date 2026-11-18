@@ -81,8 +81,14 @@ import {
   stateIn,
   stateOf,
 } from "./machine-view.ts";
-import { collect, cutShort, poll, unreported } from "./operations.ts";
-import { builtUnder, holding, placing } from "./placement.ts";
+import {
+  collect,
+  cutShort,
+  poll,
+  unreported,
+  Unsendable,
+} from "./operations.ts";
+import { builtUnder, holding, placing, unjoinedCopy } from "./placement.ts";
 import type { BuiltUnder, Candidate } from "./placement.ts";
 import { machineStep, refOf } from "./steps.ts";
 import { madeOn, notFound, readUntil, Store } from "./store.ts";
@@ -91,7 +97,16 @@ import type {
   Operation,
   TemplateRow,
 } from "./store.ts";
-import { checked, due, firstCheck, ticked, unchecked } from "./tailnet.ts";
+import {
+  checked,
+  due,
+  firstCheck,
+  started,
+  Tailnet,
+  ticked,
+  unchecked,
+  unserved,
+} from "./tailnet.ts";
 import type { TailnetCheck } from "./tailnet.ts";
 
 export interface Settings {
@@ -352,6 +367,31 @@ export const make = (
 
     const creates = new Map<string, CreateHeldInMemory>();
     const tailnets = new Map<string, TailnetCheck>();
+    const tailnet = yield* Effect.serviceOption(Tailnet);
+
+    const minting = (
+      key: (minter: Tailnet["Service"]) => Tailnet["Service"]["mint"]
+    ) =>
+      Option.match(tailnet, {
+        onNone: () =>
+          Effect.fail(
+            new Unsendable({
+              why: "the control plane has no tailnet in its config",
+            })
+          ),
+        onSome: (minter) =>
+          key(minter).pipe(
+            Effect.mapError(
+              ({ message }) =>
+                new Unsendable({
+                  why: `the control plane couldn't mint a tailnet key: ${message}`,
+                })
+            )
+          ),
+      });
+
+    const mint = minting((minter) => minter.mint);
+    const mintBuild = minting((minter) => minter.mintBuild);
 
     const row = (name: string) =>
       Effect.flatMap(store.findMachine(name), (found) =>
@@ -498,8 +538,8 @@ export const make = (
               yield* sourceLost(found.host, report.error, at);
             }
 
-            if (written && op.kind === "start") {
-              tailnets.delete(name);
+            if (written && (op.kind === "start" || op.kind === "make")) {
+              tailnets.set(name, started);
             }
 
             if (written && op.kind === "join") {
@@ -524,6 +564,16 @@ export const make = (
 
             if (written && op.kind === "resize") {
               yield* sizesRead(found);
+            }
+
+            if (written && op.kind === "join") {
+              tailnets.set(
+                name,
+                checked(tailnets.get(name) ?? unchecked, {
+                  state: "failed",
+                  error: heard.why,
+                })
+              );
             }
 
             return yield* collect(hosts, op);
@@ -570,7 +620,10 @@ export const make = (
           pin: info.pin,
           id: newId(),
           joins:
-            seen === "running" && !found.ephemeral && due(check) && info.joins,
+            seen === "running" &&
+            found.tailnet &&
+            !found.ephemeral &&
+            due(check),
           awaiting:
             found.desired === "paused" &&
             found.after !== undefined &&
@@ -607,7 +660,11 @@ export const make = (
             op,
             creates.get(found.name)?.setup,
             settings.authorizedKeys,
-            hosts.known(found.host)?.joins === true,
+            {
+              mint,
+              mintBuild,
+              keyed: (tailnets.get(found.name) ?? firstCheck).keyed,
+            },
             settings.hookTimeoutSeconds
           ),
         }),
@@ -654,6 +711,7 @@ export const make = (
           error: undefined,
           resize: undefined,
           ephemeral: ephemeral === true,
+          tailnet: spec.tailnet,
           source: placed.source,
           template,
           hostKey: undefined,
@@ -691,11 +749,23 @@ export const make = (
 
     const fromBase = (request: BaseCreate) =>
       Effect.gen(function* () {
-        const { id: name, labels, host, ...spec } = request;
+        const { id: name, labels, host, tailnet: asks, ...sizes } = request;
+
+        const refused = unserved(asks, tailnet);
+
+        if (refused !== undefined) {
+          return yield* refused;
+        }
 
         const [first, ...rest] = yield* Effect.fromResult(
-          placing(yield* hosts.reachAll, spec.base, { sizes: spec, host })
+          placing(yield* hosts.reachAll, sizes.base, {
+            sizes,
+            host,
+            tailnet: asks === true,
+          })
         );
+
+        const spec = { ...sizes, tailnet: asks === true };
 
         return yield* born(name, { spec, labels }, onBase(first), first, {
           setup: undefined,
@@ -736,7 +806,7 @@ export const make = (
             byHost(true),
             template,
             made,
-            { sizes: sizedBy(made, sizing), host },
+            { sizes: sizedBy(made, sizing), host, tailnet: made.tailnet },
             byHost(false)
           )
         );
@@ -786,6 +856,7 @@ export const make = (
         const spec = yield* copied(name, from, sizing, info.traits);
 
         const refusal =
+          unjoinedCopy(info, from, `machine ${id}`) ??
           uncopiable(from, yield* stateOf(hosts, from), info.traits, "fork") ??
           pinRefusal({ copy: id }, from.pin, info.pin);
 
@@ -812,11 +883,9 @@ export const make = (
 
         const info = yield* answering(hosts, record.host);
 
-        const refusal = pinRefusal(
-          { restore: checkpoint },
-          record.pin,
-          info.pin
-        );
+        const refusal =
+          unjoinedCopy(info, record, `checkpoint ${checkpoint}`) ??
+          pinRefusal({ restore: checkpoint }, record.pin, info.pin);
 
         if (refusal !== undefined) {
           return yield* refusal;

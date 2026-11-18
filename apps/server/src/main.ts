@@ -8,12 +8,21 @@ import { Command, Flag } from "effect/cli";
 
 import { loadConfig } from "./composition/config.ts";
 import { controlPlaneServer, serverLayer } from "./composition/server.ts";
+import * as Tailscale from "./platform/tailscale.ts";
 
 const run = (file: string) =>
   Effect.gen(function* () {
     const config = yield* loadConfig(file);
 
-    return yield* Layer.launch(serverLayer(config, controlPlaneServer(config)));
+    return yield* Layer.launch(
+      serverLayer(
+        config,
+        controlPlaneServer(config),
+        config.tailnet === undefined
+          ? Layer.empty
+          : Tailscale.layer(config.tailnet)
+      )
+    );
   });
 
 const server = Command.make(
@@ -21,7 +30,7 @@ const server = Command.make(
   {
     config: Flag.String("config").pipe(
       Flag.withDescription(
-        "The control plane's config file: its address, state dir and hosts."
+        "The control plane's config file: its address, state dir, hosts and tailnet."
       )
     ),
   },

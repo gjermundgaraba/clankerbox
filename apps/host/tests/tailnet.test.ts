@@ -10,14 +10,11 @@ import {
   scratch,
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { Effect, Layer, Redacted, Schema } from "effect";
-import type { HttpBody } from "effect/http";
-import { HttpClient, HttpClientResponse } from "effect/http";
+import { Effect, Redacted } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { expect } from "vite-plus/test";
 
 import { tailnetIn, tailnetScript } from "../src/guest.ts";
-import type { TailnetSettings } from "../src/platform/tailscale.ts";
 import { furnish, writeStubs, writeTailscaleStubs } from "./fake-runtime.ts";
 import { hostOn, suitePorts } from "./support.ts";
 
@@ -32,46 +29,6 @@ const joinsTailnet = Effect.gen(function* () {
 
   return dir;
 });
-
-const KeyRequest = Schema.fromJsonString(
-  Schema.Struct({
-    capabilities: Schema.Struct({
-      devices: Schema.Struct({
-        create: Schema.Struct({ tags: Schema.Array(Schema.String) }),
-      }),
-    }),
-  })
-);
-
-const tagsOf = (body: HttpBody.HttpBody) =>
-  body._tag === "Uint8Array"
-    ? Schema.decodeUnknownSync(KeyRequest)(body.text).capabilities.devices
-        .create.tags
-    : [];
-
-const tailscaleApi = (
-  minted: string[],
-  tagged: Array<readonly string[]> = []
-) =>
-  Layer.succeed(
-    HttpClient.HttpClient,
-    HttpClient.make((sent, url) =>
-      Effect.sync(() => {
-        const key = `tskey-auth-api-${minted.length + 1}`;
-        const token = url.pathname.endsWith("/oauth/token");
-
-        if (!token) {
-          minted.push(key);
-          tagged.push(tagsOf(sent.body));
-        }
-
-        return HttpClientResponse.fromWeb(
-          sent,
-          Response.json(token ? { access_token: "access-1" } : { id: "k", key })
-        );
-      })
-    )
-  );
 
 const instance = "0123456789abcdef0123456789abcdef";
 
@@ -90,38 +47,17 @@ const make: Omit<Operation, "boot"> = {
   },
 };
 
-const join: Omit<Operation, "boot"> = {
-  id: "join",
+const joinedAgain = (sequence: number): Omit<Operation, "boot"> => ({
+  id: `join-${sequence}`,
   scope: { resource: "machine", name: "dev" },
-  sequence: 2,
+  sequence,
   step: {
     _tag: "join",
     machine: { name: "dev", instance, ...sizes },
     hostname: "linux-dev",
+    key: Redacted.make(`tskey-auth-${sequence}`),
   },
-};
-
-const build: Omit<Operation, "boot"> = {
-  id: "build",
-  scope: { resource: "machine", name: "building-1" },
-  sequence: 1,
-  step: {
-    _tag: "make",
-    machine: {
-      name: "building-1",
-      instance: `b${instance.slice(1)}`,
-      ...sizes,
-    },
-    source: {
-      _tag: "base",
-      base: "ubuntu",
-      setup: { script: "#!/bin/sh\necho set up\n" },
-    },
-    join: { hostname: "cbx-building-1" },
-    taken: [],
-    machines: [],
-  },
-};
+});
 
 const starting = (sequence: number): Omit<Operation, "boot"> => ({
   id: `start-${sequence}`,
@@ -146,41 +82,6 @@ const stopping = (sequence: number): Omit<Operation, "boot"> => ({
   },
 });
 
-const joinedAgain = (sequence: number): Omit<Operation, "boot"> => ({
-  ...join,
-  id: `join-${sequence}`,
-  sequence,
-});
-
-const client = {
-  oauthClient: { id: "k1", secret: Redacted.make("tskey-client-k1") },
-  tags: ["tag:clankerbox-machine"] as const,
-};
-
-const keysOf = (tailnetSettings: TailnetSettings) =>
-  Effect.gen(function* () {
-    const tagged: Array<readonly string[]> = [];
-
-    const { operations } = yield* host({
-      dir: yield* joinsTailnet,
-      tailnetSettings,
-      http: tailscaleApi([], tagged),
-    });
-
-    yield* operations.run({ ...build, boot: operations.boot });
-
-    const built = yield* operations.wait("build");
-
-    expect(built.status, built.error?.message).toBe("done");
-
-    yield* operations.run({ ...make, boot: operations.boot });
-    yield* operations.wait("make");
-    yield* operations.run({ ...join, boot: operations.boot });
-    yield* operations.wait("join");
-
-    return tagged;
-  });
-
 const nodeState = path.join(
   "var",
   "lib",
@@ -192,13 +93,7 @@ const nodeState = path.join(
 
 const restartedAfter = (fault: "node-removed" | "control-unreachable") =>
   Effect.gen(function* () {
-    const minted: string[] = [];
-
-    const { fake, operations } = yield* host({
-      dir: yield* joinsTailnet,
-      tailnetSettings: client,
-      http: tailscaleApi(minted),
-    });
+    const { fake, operations } = yield* host({ dir: yield* joinsTailnet });
 
     const run = (operation: Omit<Operation, "boot">) =>
       Effect.andThen(
@@ -230,7 +125,6 @@ const restartedAfter = (fault: "node-removed" | "control-unreachable") =>
     const rejoined = yield* done(joinedAgain(6));
 
     return {
-      minted,
       root,
       tailnet: rejoined.outcome.tailnet,
       again: done(joinedAgain(7)),
@@ -370,17 +264,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a machine whose node was removed ends joined under a new node after its next start",
     () =>
       Effect.gen(function* () {
-        const { minted, root, tailnet, again } =
-          yield* restartedAfter("node-removed");
+        const { root, tailnet, again } = yield* restartedAfter("node-removed");
 
         expect(tailnet).toStrictEqual({
           state: "joined",
           name: "linux-dev.example.ts.net",
         });
-        expect(minted).toStrictEqual(["tskey-auth-api-1", "tskey-auth-api-2"]);
-        expect(yield* read(path.join(root, "key-seen"))).toBe(
-          "tskey-auth-api-2"
-        );
+        expect(yield* read(path.join(root, "key-seen"))).toBe("tskey-auth-6");
         expect(
           yield* Effect.exit(read(path.join(root, nodeState)))
         ).toMatchObject({ _tag: "Failure" });
@@ -388,7 +278,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const next = yield* again;
 
         expect(next.outcome.tailnet).toMatchObject({ state: "joined" });
-        expect(minted).toHaveLength(2);
+        expect(yield* read(path.join(root, "key-seen"))).toBe("tskey-auth-6");
       })
   );
 
@@ -396,74 +286,17 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a machine whose control server is unreachable keeps its node",
     () =>
       Effect.gen(function* () {
-        const { minted, root, tailnet } = yield* restartedAfter(
-          "control-unreachable"
-        );
+        const { root, tailnet } = yield* restartedAfter("control-unreachable");
 
         expect(tailnet).toStrictEqual({
           state: "joined",
           name: "linux-dev.example.ts.net",
         });
-        expect(minted).toStrictEqual(["tskey-auth-api-1"]);
+        expect(yield* read(path.join(root, "key-seen"))).toBe("tskey-auth-3");
         expect(yield* read(path.join(root, nodeState))).toBe(
           "the first node\n"
         );
       }),
     30_000
-  );
-
-  it.effect(
-    "a host whose config has a tailnet mints through Tailscale's API, and joins",
-    () =>
-      Effect.gen(function* () {
-        const minted: string[] = [];
-
-        const { fake, operations } = yield* host({
-          dir: yield* joinsTailnet,
-          tailnetSettings: {
-            oauthClient: { id: "k1", secret: Redacted.make("tskey-client-k1") },
-            tags: ["tag:clankerbox-machine"],
-          },
-          http: tailscaleApi(minted),
-        });
-
-        yield* operations.run({ ...make, boot: operations.boot });
-        yield* operations.wait("make");
-        yield* operations.run({ ...join, boot: operations.boot });
-
-        const report = yield* operations.wait("join");
-
-        expect(report.outcome.tailnet).toStrictEqual({
-          state: "joined",
-          name: "linux-dev.example.ts.net",
-        });
-        expect(minted).toStrictEqual(["tskey-auth-api-1"]);
-        expect(
-          yield* read(
-            path.join(fake.machines.get("dev")?.root ?? "", "key-seen")
-          )
-        ).toBe("tskey-auth-api-1");
-      })
-  );
-
-  it.effect(
-    "a builder's key carries the tailnet's buildTags, and a machine's its tags",
-    () =>
-      Effect.gen(function* () {
-        expect(
-          yield* keysOf({ ...client, buildTags: ["tag:clankerbox-build"] })
-        ).toStrictEqual([["tag:clankerbox-build"], ["tag:clankerbox-machine"]]);
-      })
-  );
-
-  it.effect(
-    "a builder's key carries the tags when there are no buildTags",
-    () =>
-      Effect.gen(function* () {
-        expect(yield* keysOf(client)).toStrictEqual([
-          ["tag:clankerbox-machine"],
-          ["tag:clankerbox-machine"],
-        ]);
-      })
   );
 });

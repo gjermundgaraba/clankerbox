@@ -27,7 +27,6 @@ import { Operations } from "../../src/operations.ts";
 import * as SmolCloud from "../../src/platform/smol-cloud/smol-cloud.ts";
 import { Runtime } from "../../src/runtime.ts";
 import type { Handle, Target } from "../../src/runtime.ts";
-import { Tailnet } from "../../src/tailnet.ts";
 import { hostConfig, loopbackServer, suitePorts } from "../support.ts";
 import { ended, endsACutCommand } from "./cut.ts";
 import { liveHostId, liveMark, runOfName } from "./marks.ts";
@@ -799,15 +798,7 @@ const refOf = (name: string, handle?: Handle) => ({
   ...(handle === undefined ? {} : { handle }),
 });
 
-let mints = 0;
-
-const authKey = Effect.sync(() => {
-  mints += 1;
-
-  return Redacted.make(process.env["TAILSCALE_AUTHKEY"] ?? "");
-});
-
-const minting = Layer.succeed(Tailnet, { mint: authKey, mintBuild: authKey });
+const authKey = Redacted.make(process.env["TAILSCALE_AUTHKEY"] ?? "");
 
 const loggedOut = Effect.gen(function* () {
   const running = (yield* machines).filter(
@@ -865,11 +856,10 @@ const onHost = Effect.gen(function* () {
 
   const context = yield* Layer.build(
     hostLayer(
-      config,
+      { ...config, tailnet: true },
       SmolCloud.layer({ apiKeyFile: file, ttlSeconds: 3600 }, config),
       loopbackServer()
     ).pipe(
-      Layer.provide(minting),
       Layer.provide(NodeHttpClient.layerNodeHttp),
       Layer.provide(NodeServices.layer)
     )
@@ -976,12 +966,14 @@ describe.runIf(live)("the smol cloud runtime on a host, live", () => {
             _tag: "join",
             machine: refOf(name, handle),
             hostname: `cbx-${hostId}-${name}`,
+            key: authKey,
           });
 
         const dev = yield* made("dev", {
           _tag: "make",
           machine: refOf("dev"),
           source: { _tag: "base", base: "ubuntu" },
+          tailnet: true,
           taken: [],
           machines: [],
         });
@@ -1105,16 +1097,13 @@ describe.runIf(live)("the smol cloud runtime on a host, live", () => {
           ].join("\n")
         );
 
-        const mintsBefore = mints;
         const rejoined = yield* joining("copy", copy.handle);
 
         answered("a logged out node with its old state put back, rejoined", {
           control: removed.trim(),
           state: rejoined.outcome.tailnet?.state,
-          keysMinted: mints - mintsBefore,
         });
         expect(rejoined.outcome.tailnet?.state).toBe("joined");
-        expect(mints - mintsBefore).toBe(1);
 
         for (const [name, handle] of [
           ["copy", copy.handle],

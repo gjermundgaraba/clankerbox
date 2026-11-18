@@ -134,6 +134,7 @@ export default config({
       },
     },
     {
+      excludeFiles: ["apps/server/src/platform/tailscale.ts"],
       files: ["apps/server/src/platform/*.ts"],
       rules: {
         "fence/allowed-imports": [
@@ -148,6 +149,24 @@ export default config({
             ],
             because:
               "the server's adapter is its Store, which is the one place state lives",
+          },
+        ],
+      },
+    },
+    {
+      files: ["apps/server/src/platform/tailscale.ts"],
+      rules: {
+        "fence/allowed-imports": [
+          "error",
+          {
+            allow: [
+              "^\\.\\./[a-z-]+\\.ts$",
+              "^@gjermundgaraba/clankerbox-sdk$",
+              "^effect$",
+              "^effect/http$",
+            ],
+            because:
+              "the Tailnet adapter only calls Tailscale's API, which mints the control plane's tailnet keys",
           },
         ],
       },

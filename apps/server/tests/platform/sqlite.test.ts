@@ -252,6 +252,7 @@ const row = (name: string, fields?: Partial<MachineRow>): MachineRow => ({
   error: undefined,
   resize: undefined,
   ephemeral: false,
+  tailnet: false,
   source: { kind: "base" },
   template: undefined,
   hostKey: undefined,
@@ -286,6 +287,7 @@ const checkpoint = (
   expiresAt: undefined,
   build: undefined,
   published: undefined,
+  tailnet: false,
   ...fields,
 });
 
@@ -590,16 +592,23 @@ layer(NodeServices.layer)((it) => {
         expect(after.user_version).toBe(migrations.length);
         expect(
           after.machines.map(
-            without("runtime", "captures", "handle", "endpoint")
+            without("runtime", "captures", "handle", "endpoint", "tailnet")
           )
         ).toStrictEqual(before.machines.map(without("kind", "port")));
         expect(after.machines.map(({ endpoint }) => endpoint)).toStrictEqual(
           portsOf(before.machines)
         );
         expect(
-          after.checkpoints.map(without("runtime", "kind", "handle"))
+          after.checkpoints.map(without("runtime", "kind", "handle", "tailnet"))
         ).toStrictEqual(before.checkpoints.map(without("kind", "port")));
-        expect(after.rest).toStrictEqual({ ...before.rest, hosts: [] });
+        expect({
+          ...after.rest,
+          builds: after.rest["builds"]?.map(without("tailnet")),
+        }).toStrictEqual({
+          ...before.rest,
+          builds: before.rest["builds"]?.map(without("tailnet")),
+          hosts: [],
+        });
         expect(dumped(stateDir)).toStrictEqual(once);
       })
   );
@@ -910,7 +919,7 @@ layer(NodeServices.layer)((it) => {
     "a state dir that kept retired instances opens with them dropped, as each host keeps its own",
     () =>
       Effect.gen(function* () {
-        const shipped = migrations.length - 1;
+        const shipped = migrations.indexOf("DROP TABLE retired");
 
         const stateDir = yield* stateDirAt(shipped, (db) => {
           for (const migration of migrations.slice(0, shipped)) {
@@ -1992,6 +2001,7 @@ layer(NodeServices.layer)((it) => {
           ramMib: 4096,
           diskGib: 20,
           setupTimeoutSeconds: 600,
+          tailnet: true,
         };
 
         const failed: BuildRow = {
@@ -2007,6 +2017,7 @@ layer(NodeServices.layer)((it) => {
           ramMib: 1024,
           diskGib: 10,
           setupTimeoutSeconds: undefined,
+          tailnet: false,
         };
 
         const web: TemplateRow = {
@@ -2091,6 +2102,7 @@ layer(NodeServices.layer)((it) => {
           ramMib: 4096,
           diskGib: 20,
           setupTimeoutSeconds: 600,
+          tailnet: false,
         };
 
         expect(read).toStrictEqual([

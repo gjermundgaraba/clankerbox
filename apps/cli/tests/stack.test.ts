@@ -15,7 +15,16 @@ import {
   hostKeySetup,
   running,
 } from "@gjermundgaraba/clankerbox-server/testing";
-import { Effect, Fiber, Schedule, Schema, Sink, Stdio, Stream } from "effect";
+import {
+  Effect,
+  Fiber,
+  Redacted,
+  Schedule,
+  Schema,
+  Sink,
+  Stdio,
+  Stream,
+} from "effect";
 import { expect, vi } from "vite-plus/test";
 
 import { ErrorDocument } from "../src/command.ts";
@@ -191,6 +200,33 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           stderr: "clankerbox: no machines to list",
         });
         expect(hosts[0]?.fake.machines.size).toBe(0);
+      })
+  );
+
+  it.effect(
+    "create --tailnet places the machine on a host that joins, and get shows its tailnet",
+    () =>
+      Effect.gen(function* () {
+        const { run } = yield* setUp({
+          tailscaled: true,
+          tailnet: {
+            mint: Effect.succeed(Redacted.make("tskey-auth-cli")),
+            mintBuild: Effect.succeed(Redacted.make("tskey-auth-cli")),
+          },
+          hosts: [{ id: "alpha" }, { id: "beta", options: { tailnet: true } }],
+        });
+
+        const created = yield* run(["create", "dev", ...sizes, "--tailnet"]);
+
+        const joined = yield* Effect.repeat(run(["get", "dev"]), {
+          until: ({ stdout }) => stdout.includes("linux-dev.example.ts.net"),
+          schedule: Schedule.spaced("50 millis"),
+        }).pipe(Effect.timeout("20 seconds"));
+
+        expect(created).toMatchObject({ code: 0, stdout: "dev" });
+        expect(fieldsOf(joined.stdout)).toStrictEqual(
+          expect.arrayContaining([["TAILNET", "linux-dev.example.ts.net"]])
+        );
       })
   );
 
