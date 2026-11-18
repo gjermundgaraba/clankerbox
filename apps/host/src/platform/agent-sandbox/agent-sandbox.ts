@@ -1288,8 +1288,17 @@ export const make = (
         ),
       checkpointHandle: (checkpoint) =>
         Handle.make(checkpointName(checkpoint.instance)),
-      observe: (machines) =>
-        sandboxes.list(mark).pipe(
+      observe: (machines) => {
+        const [only] = machines;
+
+        if (machines.length === 1 && only !== undefined) {
+          return Effect.map(
+            read(only),
+            (found): Observed => new Map([[only.name, readAs[heldOf(found)]]])
+          );
+        }
+
+        return sandboxes.list(mark).pipe(
           Effect.map((found): Observed => {
             const byName = new Map(
               found.map((each) => [each.metadata.name, each])
@@ -1305,7 +1314,8 @@ export const make = (
             );
           }),
           Effect.mapError(internal("couldn't list this host's machines"))
-        ),
+        );
+      },
       capacity: () =>
         quotas
           .list({})

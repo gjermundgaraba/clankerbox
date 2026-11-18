@@ -1,17 +1,18 @@
-import type { Adopted } from "@clankerbox/host-contract";
+import type { Adopted, MachineState } from "@clankerbox/host-contract";
 import type {
   Internal,
   Unreported,
   Usage,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Cause, DateTime, Effect, Option } from "effect";
+import { Array as Arr, Cause, DateTime, Effect, Option } from "effect";
 import type { Duration } from "effect";
 
 import { applied } from "./chart.ts";
 import { unread } from "./hosts.ts";
-import type { Interface as Hosts } from "./hosts.ts";
+import type { Fresh, Interface as Hosts } from "./hosts.ts";
 import { machineChart, stageOf } from "./machine-chart.ts";
-import { mayHoldVm, refOf } from "./steps.ts";
+import type { MachineRow } from "./machine-chart.ts";
+import { identityOf, mayHoldVm, refOf } from "./steps.ts";
 import type { Interface as Store } from "./store.ts";
 
 export interface CapacityRead {
@@ -158,4 +159,70 @@ export const recheckHosts = (
     Effect.catchCause((cause) =>
       Effect.logError(`the recheck failed:\n${Cause.pretty(cause)}`)
     )
+  );
+
+/** What a sweep saw of a row: its host, and its VM where the row is made. */
+export interface Swept {
+  readonly host: string;
+  readonly info: Fresh;
+  readonly seen: MachineState | undefined;
+}
+
+/** At most this many machines in one read of a host, which bounds the whole read by `readTimeout`. */
+export const sweepBatch = 100;
+
+/**
+ * Reads each host of `rows` once, and the VMs of its made rows a batch at a time, telling `each`
+ * what it saw of each row as its host answers. The hosts are read at once. A host that doesn't
+ * answer, or a batch it fails, tells nothing of those rows.
+ */
+export const sweep = (
+  hosts: Hosts,
+  rows: readonly MachineRow[],
+  each: (found: MachineRow, swept: Swept) => Effect.Effect<void>
+): Effect.Effect<void> =>
+  Effect.forEach(
+    Map.groupBy(rows, ({ host }) => host),
+    ([host, onHost]) =>
+      Effect.gen(function* () {
+        const info = yield* hosts.read(host);
+        const made = onHost.filter(({ state }) => stageOf(state) === "made");
+        const unmade = onHost.filter(({ state }) => stageOf(state) !== "made");
+
+        yield* Effect.forEach(
+          unmade,
+          (found) => each(found, { host, info, seen: undefined }),
+          { discard: true }
+        );
+
+        yield* Effect.forEach(
+          Arr.chunksOf(made, sweepBatch),
+          (batch) =>
+            hosts
+              .call(host, (api) =>
+                api.readMachines({ machines: batch.map(identityOf) })
+              )
+              .pipe(
+                Effect.flatMap((answers) => {
+                  const states = new Map(
+                    answers.map(({ name, state }) => [name, state])
+                  );
+
+                  return Effect.forEach(
+                    batch,
+                    (found) =>
+                      each(found, {
+                        host,
+                        info,
+                        seen: states.get(found.name) ?? "unknown",
+                      }),
+                    { discard: true }
+                  );
+                }),
+                Effect.ignore
+              ),
+          { discard: true }
+        );
+      }).pipe(Effect.ignore),
+    { concurrency: "unbounded", discard: true }
   );

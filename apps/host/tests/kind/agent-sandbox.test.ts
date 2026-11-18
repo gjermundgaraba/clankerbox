@@ -247,7 +247,7 @@ const hosted = Effect.gen(function* () {
     );
   }).pipe(Effect.as(stillTheirs), Effect.orDie);
 
-  return { cluster, id, runtime, faults, unmarked };
+  return { cluster, id, runtime, faults, unmarked, requests: http.requests };
 }).pipe(Effect.provide(NodeServices.layer), Effect.orDie);
 
 const fixture = Effect.map(
@@ -349,7 +349,41 @@ const keyed = Effect.gen(function* () {
   };
 });
 
+const ghost = (name: string) => {
+  const instance = hex(16);
+
+  return { name, instance, handle: Handle.make(`cbx-m-${instance}`) };
+};
+
 describe.runIf(dir !== "")("agent-sandbox, on kind", () => {
+  it.live(
+    "reads one machine by its name, and lists the host's Sandboxes only for several",
+    () =>
+      Effect.gen(function* () {
+        const { runtime, requests } = yield* hosted;
+
+        const [a, b] = [ghost("a"), ghost("b")];
+        const before = requests.length;
+        const one = yield* runtime.observe([a]);
+        const single = requests.slice(before);
+        const middle = requests.length;
+        const both = yield* runtime.observe([a, b]);
+
+        expect(Object.fromEntries(one)).toStrictEqual({ a: "missing" });
+        expect(Object.fromEntries(both)).toStrictEqual({
+          a: "missing",
+          b: "missing",
+        });
+        expect(single).toHaveLength(1);
+        expect(single[0]).toMatch(
+          new RegExp(`^GET .*/sandboxes/${a.handle}$`, "u")
+        );
+        expect(requests.slice(middle)).toHaveLength(1);
+        expect(requests[middle]).toMatch(/^GET .*\/sandboxes$/u);
+      }),
+    60_000
+  );
+
   it.live(
     "prepares a base a client then reaches over SSH, again after a stop and start, and gives a fork its own host key",
     () =>

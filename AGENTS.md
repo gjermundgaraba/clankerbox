@@ -72,7 +72,9 @@ the whole CLI span domains on purpose.
 - `machine-chart.ts`, `checkpoint-chart.ts`: the xstate charts. Each leaf's `meta`
   holds its `phase`, its `step` and the `activity` its loop runs there.
 - `driver.ts`: `driver`, the loops of one resource, at most one per name, with
-  the activity of a row's leaf picking each turn; `untilRest`, a build's wait;
+  the activity of a row's leaf picking each turn, and a machine's resting loop
+  told its rechecks by the sweep, using a reading only when it began after the
+  loop rested; `untilRest`, a build's wait;
   `apart`, which logs a loop or a build as its own, not as the request that
   began it.
 - `machines.ts`, `checkpoints.ts`: the `Machines` and `Checkpoints` services,
@@ -90,7 +92,10 @@ the whole CLI span domains on purpose.
 - `copies.ts`: a copy's spec, and why its source refuses it.
 - `fleet.ts`: capacity, and what a recheck does beyond each loop: tells a
   restarted host its machines, again until it finds each, and stores the handle
-  and endpoint it answers in each row; and ends old failures.
+  and endpoint it answers in each row; ends old failures; and `sweep`, which
+  reads each host of the resting machines once, and their VMs in batches, for
+  their loops, as a one-machine read lists a whole host on boat and
+  agent-sandbox.
 - `machine-view.ts`: what a client reads of a machine, and `waiting`, which a
   read tells.
 - `operations.ts`: plain functions of a step on its host. `poll` sends it when

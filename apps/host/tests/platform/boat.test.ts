@@ -943,6 +943,34 @@ describe("the boat runtime over fake boat", () => {
   );
 
   it.live(
+    "reads one machine by its ID, and lists the host's sandboxes only for several",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          const a = yield* made(runtime, "a");
+          const b = yield* made(runtime, "b");
+
+          const asked = () =>
+            boat.requests.map(({ method, path: at }) =>
+              `${method} ${at}`.replace(/\?.*/u, "?")
+            );
+
+          const before = boat.requests.length;
+          const one = yield* runtime.observe([a]);
+          const single = asked().slice(before);
+          const middle = boat.requests.length;
+
+          yield* runtime.observe([a, b]);
+
+          expect(Object.fromEntries(one)).toStrictEqual({ a: "running" });
+          expect(single).toStrictEqual([`GET /sandboxes/${a.handle}`]);
+          expect(asked().slice(middle)).toStrictEqual(["GET /sandboxes?"]);
+        })
+      ),
+    30_000
+  );
+
+  it.live(
     "spares a snapshot named cbx- by hand, and asks for saved snapshots by name prefix alone",
     () =>
       onBoat(({ boat, runtime }) =>

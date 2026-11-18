@@ -694,8 +694,19 @@ export const make = (
           Effect.mapError(internal(`couldn't search for ${machine.name}`))
         ),
       checkpointHandle: (checkpoint) => Handle.make(snapshotName(checkpoint)),
-      observe: (machines) =>
-        api.sandboxes(mark).pipe(
+      observe: (machines) => {
+        const [only] = machines;
+
+        if (machines.length === 1 && only !== undefined) {
+          return api.sandbox(only.handle).pipe(
+            Effect.map(
+              (sandbox): Observed => new Map([[only.name, stateOf(sandbox)]])
+            ),
+            Effect.mapError(internal(`couldn't read ${only.name}`))
+          );
+        }
+
+        return api.sandboxes(mark).pipe(
           Effect.map((sandboxes): Observed => {
             const byId = new Map(
               sandboxes.map((sandbox) => [sandbox.id, sandbox])
@@ -709,7 +720,9 @@ export const make = (
             );
           }),
           Effect.mapError(internal("couldn't list this host's machines"))
-        ),
+        );
+      },
+
       capacity: () =>
         api.limits.pipe(
           Effect.map((now) => [

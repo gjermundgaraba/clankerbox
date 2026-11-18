@@ -32,13 +32,14 @@ interface Landing {
  * `base`, each request a call the contract's faults reach: `stall` holds one, as `stallingHttp`
  * does, `dropAnswer` sends the next create or delete of a Sandbox and loses its answer, and
  * `landLate` loses unsent every create of a claim, a make's first, until the effect it answers
- * sends the first of them.
+ * sends the first of them. `requests` holds the method and path of each request sent.
  */
 export const faultyHttp = <E, R>(
   base: Layer.Layer<HttpClient.HttpClient, E, R>
 ) => {
   const stalling = stallingHttp(base);
   const dropping = new Set<Dropped>();
+  const requests: string[] = [];
 
   let landing: Landing | undefined;
 
@@ -47,6 +48,8 @@ export const faultyHttp = <E, R>(
     Effect.map(HttpClient.HttpClient, (client) =>
       HttpClient.transform(client, (response, request) =>
         Effect.suspend(() => {
+          requests.push(`${request.method} ${new URL(request.url).pathname}`);
+
           if (landing !== undefined && claimCreate(request)) {
             landing.pending ??= response;
 
@@ -69,6 +72,7 @@ export const faultyHttp = <E, R>(
 
   return {
     layer,
+    requests,
     stall: stalling.stall,
     dropAnswer: (dropped: Dropped) =>
       Effect.sync(() => {

@@ -66,11 +66,12 @@ interface Hooks {
   noOperation?: boolean;
 }
 
-const harness = (start: Row | undefined) =>
+const harness = (start: Row | undefined, swept = false) =>
   Effect.gen(function* () {
     const counts = {
       reads: 0,
       looks: 0,
+      rested: [] as Array<number | undefined>,
       polls: 0,
       heard: [] as Array<Heard["at"]>,
     };
@@ -79,56 +80,66 @@ const harness = (start: Row | undefined) =>
     const hooks: Hooks = {};
     const writes = yield* PubSub.unbounded<"written">();
 
-    const drive = yield* driver<Row>(recheck, {
-      kind: "machine",
-      find: () =>
-        Effect.gen(function* () {
-          const seen = held.row;
+    const { drive, reading, rechecking } = yield* driver<Row>(
+      recheck,
+      {
+        kind: "machine",
+        find: () =>
+          Effect.gen(function* () {
+            const seen = held.row;
 
-          counts.reads += 1;
-          yield* hooks.afterRead ?? Effect.void;
+            counts.reads += 1;
+            yield* hooks.afterRead ?? Effect.void;
 
-          return Option.fromUndefinedOr(seen);
-        }),
-      store: {
-        operationOn: (resource, name) =>
-          hooks.operationOn?.(resource, name) ??
-          Effect.succeed(
-            hooks.noOperation === true
-              ? Option.none()
-              : Option.some(flight("stop"))
-          ),
-        watch: () =>
-          Effect.map(PubSub.subscribe(writes), (subscription) =>
-            Effect.asVoid(PubSub.take(subscription))
-          ),
+            return Option.fromUndefinedOr(seen);
+          }),
+        store: {
+          operationOn: (resource, name) =>
+            hooks.operationOn?.(resource, name) ??
+            Effect.succeed(
+              hooks.noOperation === true
+                ? Option.none()
+                : Option.some(flight("stop"))
+            ),
+          watch: () =>
+            Effect.map(PubSub.subscribe(writes), (subscription) =>
+              Effect.asVoid(PubSub.take(subscription))
+            ),
+        },
+        activityOf: (state) => activities[state],
+        looking: (row, rested) =>
+          Effect.suspend(() => {
+            counts.looks += 1;
+            counts.rested.push(rested);
+
+            return (
+              hooks.looking?.(row, rested) ??
+              Effect.succeed(written(row, false))
+            );
+          }),
+        polling: (row, op) =>
+          Effect.suspend(() => {
+            counts.polls += 1;
+
+            return hooks.polling?.(row, op) ?? Effect.succeed(running);
+          }),
+        following: (row, op, heard) =>
+          Effect.suspend(() => {
+            counts.heard.push(heard.at);
+
+            return hooks.following?.(row, op, heard) ?? Effect.void;
+          }),
       },
-      activityOf: (state) => activities[state],
-      looking: (row) =>
-        Effect.suspend(() => {
-          counts.looks += 1;
-
-          return hooks.looking?.(row) ?? Effect.succeed(written(row, false));
-        }),
-      polling: (row, op) =>
-        Effect.suspend(() => {
-          counts.polls += 1;
-
-          return hooks.polling?.(row, op) ?? Effect.succeed(running);
-        }),
-      following: (row, op, heard) =>
-        Effect.suspend(() => {
-          counts.heard.push(heard.at);
-
-          return hooks.following?.(row, op, heard) ?? Effect.void;
-        }),
-    });
+      swept
+    );
 
     return {
       counts,
       held,
       hooks,
       drive,
+      reading,
+      rechecking,
       wrote: Effect.asVoid(PubSub.publish(writes, "written")),
     };
   });
@@ -207,6 +218,94 @@ describe("a wake", () => {
 
         expect(counts.looks).toBe(1);
       })
+  );
+});
+
+describe("a swept loop", () => {
+  it.effect(
+    "rests until told of a reading begun after it rested, and looks with when it rested",
+    () =>
+      Effect.gen(function* () {
+        const { counts, drive, reading, rechecking } = yield* harness(
+          { state: "rechecking" },
+          true
+        );
+
+        yield* drive("dev");
+        yield* settled;
+
+        expect(counts).toMatchObject({ reads: 1, looks: 0 });
+
+        const taken = yield* reading;
+
+        yield* rechecking("dev", taken);
+        yield* settled;
+
+        expect(counts).toMatchObject({ reads: 2, looks: 1, rested: [0] });
+      })
+  );
+
+  it.effect(
+    "isn't told of a reading begun before it rested, which may have seen its VM before the step that ended",
+    () =>
+      Effect.gen(function* () {
+        const { counts, held, hooks, drive, reading, rechecking } =
+          yield* harness({ state: "following" }, true);
+
+        let before = 0;
+
+        hooks.following = () =>
+          Effect.gen(function* () {
+            before = yield* reading;
+            held.row = { state: "rechecking" };
+          });
+
+        yield* drive("dev");
+        yield* settled;
+        yield* rechecking("dev", before);
+        yield* settled;
+
+        expect(counts.looks).toBe(0);
+
+        yield* rechecking("dev", yield* reading);
+        yield* settled;
+
+        expect(counts).toMatchObject({ looks: 1, rested: [before] });
+      })
+  );
+
+  it.effect(
+    "looks on its own once three rechecks pass with no reading, as the sweep may fail",
+    () =>
+      Effect.gen(function* () {
+        const { counts, drive } = yield* harness({ state: "rechecking" }, true);
+
+        yield* drive("dev");
+        yield* settled;
+        yield* TestClock.adjust(Duration.minutes(179));
+        yield* settled;
+
+        expect(counts.looks).toBe(0);
+
+        yield* TestClock.adjust(Duration.minutes(1));
+        yield* settled;
+
+        expect(counts).toMatchObject({ looks: 1, rested: [0] });
+      })
+  );
+
+  it.effect("isn't started by a reading", () =>
+    Effect.gen(function* () {
+      const { counts, rechecking, reading } = yield* harness(
+        { state: "rechecking" },
+        true
+      );
+
+      yield* rechecking("dev", yield* reading);
+      yield* settled;
+
+      expect(counts.reads).toBe(0);
+    })
   );
 });
 

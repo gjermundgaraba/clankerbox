@@ -187,7 +187,7 @@ export const make = (settings: {
         yield* collect(hosts, op);
       });
 
-    const drive = yield* driver(settings.recheck, {
+    const { drive } = yield* driver(settings.recheck, {
       kind: "checkpoint",
       find: store.findCheckpoint,
       store,

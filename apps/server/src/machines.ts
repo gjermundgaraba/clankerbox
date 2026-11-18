@@ -34,6 +34,7 @@ import type {
   Internal,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
+  Cause,
   Context,
   DateTime,
   Duration,
@@ -61,8 +62,8 @@ import {
 import type { Spec } from "./copies.ts";
 import { driver, untilRest } from "./driver.ts";
 import type { Heard } from "./driver.ts";
-import { capacity, recheckHosts } from "./fleet.ts";
-import type { CapacityRead } from "./fleet.ts";
+import { capacity, recheckHosts, sweep } from "./fleet.ts";
+import type { CapacityRead, Swept } from "./fleet.ts";
 import { answering, Hosts } from "./hosts.ts";
 import {
   activityOf,
@@ -366,6 +367,7 @@ export const make = (
     const scope = yield* Effect.scope;
 
     const creates = new Map<string, CreateHeldInMemory>();
+    const readings = new Map<string, Swept & { readonly taken: number }>();
     const tailnets = new Map<string, TailnetCheck>();
     const tailnet = yield* Effect.serviceOption(Tailnet);
 
@@ -592,10 +594,22 @@ export const make = (
         );
       });
 
-    const looking = (found: MachineRow) =>
+    const sweptSince = (found: MachineRow, rested: number | undefined) => {
+      const swept = rested === undefined ? undefined : readings.get(found.name);
+
+      return swept !== undefined &&
+        rested !== undefined &&
+        swept.taken > rested &&
+        swept.host === found.host
+        ? swept
+        : undefined;
+    };
+
+    const looking = (found: MachineRow, rested: number | undefined) =>
       Effect.gen(function* () {
         const { name } = found;
-        const info = yield* hosts.read(found.host);
+        const swept = sweptSince(found, rested);
+        const info = swept?.info ?? (yield* hosts.read(found.host));
 
         const refused =
           found.state === "making.due"
@@ -608,7 +622,7 @@ export const make = (
 
         const seen =
           stageOf(found.state) === "made"
-            ? yield* stateOf(hosts, found)
+            ? (swept?.seen ?? (yield* stateOf(hosts, found)))
             : "unknown";
 
         const check = tailnets.get(name) ?? firstCheck;
@@ -645,31 +659,35 @@ export const make = (
         return answer;
       });
 
-    const drive = yield* driver(settings.recheck, {
-      kind: "machine",
-      find: store.findMachine,
-      store,
-      activityOf,
-      looking,
-      polling: (found, op) =>
-        poll(hosts, op, {
-          cut: !wants(op.kind, desiredOf(found)),
-          step: machineStep(
-            store,
-            found,
-            op,
-            creates.get(found.name)?.setup,
-            settings.authorizedKeys,
-            {
-              mint,
-              mintBuild,
-              keyed: (tailnets.get(found.name) ?? firstCheck).keyed,
-            },
-            settings.hookTimeoutSeconds
-          ),
-        }),
-      following,
-    });
+    const { drive, reading, rechecking } = yield* driver(
+      settings.recheck,
+      {
+        kind: "machine",
+        find: store.findMachine,
+        store,
+        activityOf,
+        looking,
+        polling: (found, op) =>
+          poll(hosts, op, {
+            cut: !wants(op.kind, desiredOf(found)),
+            step: machineStep(
+              store,
+              found,
+              op,
+              creates.get(found.name)?.setup,
+              settings.authorizedKeys,
+              {
+                mint,
+                mintBuild,
+                keyed: (tailnets.get(found.name) ?? firstCheck).keyed,
+              },
+              settings.hookTimeoutSeconds
+            ),
+          }),
+        following,
+      },
+      true
+    );
 
     const recorded = (name: string, event: MachineEvent) =>
       Effect.gen(function* () {
@@ -1060,6 +1078,31 @@ export const make = (
 
     const tick = recheckHosts(store, hosts, settings.failedRowsLast);
 
+    const sweeping = Effect.gen(function* () {
+      const taken = yield* reading;
+
+      const resting = (yield* store.machines).filter(
+        ({ state }) => activityOf(state) === "recheck"
+      );
+
+      yield* sweep(hosts, resting, (found, swept) =>
+        Effect.andThen(
+          Effect.sync(() => readings.set(found.name, { ...swept, taken })),
+          rechecking(found.name, taken)
+        )
+      );
+
+      for (const [name, swept] of readings) {
+        if (swept.taken < taken) {
+          readings.delete(name);
+        }
+      }
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logError(`the sweep failed:\n${Cause.pretty(cause)}`)
+      )
+    );
+
     yield* tick;
 
     for (const found of yield* store.machines) {
@@ -1071,7 +1114,12 @@ export const make = (
     }
 
     yield* Effect.forkIn(
-      Effect.forever(Effect.andThen(Effect.sleep(settings.recheck), tick)),
+      Effect.forever(
+        Effect.andThen(
+          sweeping,
+          Effect.andThen(Effect.sleep(settings.recheck), tick)
+        )
+      ),
       scope
     );
 

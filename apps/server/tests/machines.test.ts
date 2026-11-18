@@ -2296,6 +2296,60 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "machines at rest are read together, once a recheck for their host, not each on its own",
+    () =>
+      Effect.gen(function* () {
+        const { client, fake } = yield* served({
+          recheck: Duration.millis(100),
+        });
+
+        for (const name of ["a", "b", "c"]) {
+          yield* client.create(name, request(name));
+        }
+
+        fake.observed.length = 0;
+        yield* Effect.sleep(Duration.millis(500));
+
+        const reads = fake.observed.map((names) => names.toSorted().join(","));
+
+        expect(reads.length).toBeGreaterThan(1);
+        expect(new Set(reads)).toStrictEqual(new Set(["a,b,c"]));
+      })
+  );
+
+  it.effect(
+    "a sweep's reading begun before a stop ended isn't acted on once the machine rests stopped",
+    () =>
+      Effect.gen(function* () {
+        const { client, fake, machine } = yield* served({
+          recheck: Duration.millis(200),
+        });
+
+        yield* client.create("dev", request("dev"));
+        yield* client.create("other", request("other"));
+
+        const { entered, release } = fake.holdNextObserve();
+
+        yield* entered;
+
+        const sweep = fake.observed.at(-1)?.toSorted();
+
+        yield* client.stopMachine({ id: "dev" });
+        fake.calls.length = 0;
+        yield* release;
+        yield* Effect.sleep(Duration.millis(300));
+
+        expect(sweep).toStrictEqual(["dev", "other"]);
+        expect(fake.calls).toStrictEqual([]);
+        expect(at(yield* machine("dev"))).toStrictEqual([
+          "stopped",
+          "stopped",
+          "settled",
+        ]);
+      })
+  );
+
+  it.effect(
     "a reading of a machine that a request changed while it read is dropped, not acted on",
     () =>
       Effect.gen(function* () {
