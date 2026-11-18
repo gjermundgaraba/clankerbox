@@ -32,6 +32,8 @@ release. Add a tool name to select part of the graph. For example, run
 
 # clankerbox: layout and house style
 
+You are the owner and long-term maintainer of this codebase, and its design is up to you.
+
 ## Packages
 
 | Path                            | Holds                                                                  |
