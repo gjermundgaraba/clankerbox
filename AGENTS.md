@@ -140,7 +140,9 @@ imports `platform/` or `composition/`.
 - Ports: `Runtime` (`runtime.ts`), with its `traits`, its `guest` (`debian` or
   `macos`, which picks the base `guest.ts` prepares), its `reach` (`published` or `relayed`)
   its `prepares` (`always` where its images lack the login user, else
-  `with-setup`), its `builds`, how it shares template builds with the other hosts
+  `with-setup`), its `kernel` (`own`, or `shared` where its guests are
+  containers on their node's kernel, which `guest.ts` reseeds no CRNG of), its
+  `builds`, how it shares template builds with the other hosts
   of its runtime, which it keeps itself, as `unshared` where it shares none, and
   the facet `admission`, present or absent as a whole,
   `PortProbe` (`machine-ports.ts`), for a `published` runtime's port, at a make's
@@ -160,8 +162,9 @@ imports `platform/` or `composition/`.
   the suite each runtime passes over its own fake provider: the fake runtime's
   three presets, `smolvm`, `tart` and `fixed`, which is neither and has size
   classes, a pause that stops, machines that stop on their own and the
-  tombstones a rented runtime keeps, and the four adapters over `tests/smolvm-model.ts`,
-  `tests/scripted-mac.ts`, `tests/fake-smol-cloud.ts` and `tests/fake-boat.ts`.
+  tombstones a rented runtime keeps, the four adapters over `tests/smolvm-model.ts`,
+  `tests/scripted-mac.ts`, `tests/fake-smol-cloud.ts` and `tests/fake-boat.ts`,
+  and agent-sandbox's over a real kind cluster, in `tests/kind/`.
 
 Adapters live in `platform/`: `bind-probe.ts` (`PortProbe`), `box.ts` (`Box`,
 which reads Linux's `ip_local_port_range`), `relay.ts`
@@ -178,11 +181,16 @@ directories in `home.ts`, a VM's lock read through macOS's Perl in `locks.ts`,
 `boat/` (boat's REST API with its retries and headers in `api.ts`, the
 adapter in `boat.ts`, whose make and start end once boat reads the sandbox
 `hydrated`, the guest channel in `ssh.ts`, OpenSSH from the host pinned to the host key boat answers),
+`agent-sandbox/` (the Kubernetes API's routes in `api.ts`, `pods/exec` and
+`pods/portforward` over WebSocket in `channels.ts`, and the adapter in
+`agent-sandbox.ts`: a Sandbox whose pod mounts a disk claim the adapter makes,
+seeded from the base's image and copied for a fork or checkpoint by a pod of its own),
 each with its `RuntimeTraits` in its `traits.ts`, and what they share:
 `process.ts`, a child process's run, and `provider-http.ts`, what the smol
-cloud and boat clients keep with their provider's API: the URL it is sent to
+cloud, boat and agent-sandbox clients keep with their provider's API: the URL it is sent to
 (`KeyedApiUrl`), how its refusals are read (`sender`), the key, read from its
-file, which a host that can't read refuses to start, each request sent with it,
+file, which a host that can't read refuses to start, each request sent with it
+as read afresh, which agent-sandbox's rotating token needs,
 each request's bound by
 what it asks, a gateway's 5xx and an unanswered request as a lost answer, a
 refusal that asks to be waited out waited as `Retry-After` says, in seconds or
@@ -197,7 +205,11 @@ provider's API over loopback, for its adapter's tests and for the verify skill,
 and `tests/live/smol-cloud.test.ts` and `tests/live/boat.test.ts`, run by
 `vp run test:live` in `apps/host` with `SMOL_MACHINES_API_KEY` or
 `BOAT_API_KEY`, and `TAILSCALE_AUTHKEY`, set and never in CI, check the real
-accounts. A domain file never imports `platform/` or `composition/`.
+accounts. `tests/kind/`, run by `vp run test:kind` in `apps/host` and in CI,
+makes a kind cluster with the agent-sandbox controller through `cluster.sh`,
+and runs the runtime contract and a guest's SSH there, with the faults a fake
+provider would give injected at the adapter's HTTP client. A domain file never
+imports `platform/` or `composition/`.
 
 `composition/` assembles the host: `config.ts` reads the config file,
 `runtimes.ts` is the registry of runtimes, one entry each under the name a host
@@ -350,7 +362,7 @@ the run.
   has answered for an instance, anything of that instance that appears later is
   deleted, and the control plane never makes that instance again. A `remove`
   calls it even when its search found nothing. smolvm and Tart keep that with
-  nothing more; smol cloud and boat keep a tombstone of each instance in their
+  nothing more; smol cloud, boat and agent-sandbox keep a tombstone of each instance in their
   `stateDir` (`platform/tombstones.ts`), sweep what lands of it in their own
   scope, keeping every checkpoint it holds, and refuse a make of it. A
   checkpoint's instance gets no tombstone: a `start` and a `remove` carry
@@ -383,7 +395,7 @@ the run.
   under the semaphore that accepts steps, so a capture of the machine and a
   fork from it, scoped to the checkpoint and the new machine, run beside one, and the step's cut answers it `WrongState`.
   README's `exec` bullet states the rest. Smolvm's agent
-  ends a cut command too; a Tart guest, boat and smol cloud leave it running,
+  ends a cut command too; a Tart guest, boat, smol cloud and agent-sandbox leave it running,
   measured on each, and the fake runtime's `cut` models each.
 - **Setup scripts stay in memory, on both sides, but for a macOS guest's
   disk.** They may carry secrets, and are never stored or logged. A make that
@@ -432,7 +444,7 @@ the run.
   `Tailnet`, and a host's adapters
   can't import `node:sqlite`; a host adapter imports domain files, its own
   folder, `platform/`'s `process.ts` and the host contract's `./traits`, never
-  its API, the boat and smol cloud clients
+  its API, the boat, smol cloud and agent-sandbox clients
   `provider-http.ts` too, and smolvm and Tart `bucket/`; the host contract
   imports `effect`, the SDK and effect-actions, but for `journal.ts`, which
   imports `effect` and its `http` alone, and the server's `composition/` takes

@@ -5,6 +5,7 @@ import type { ChildProcessSpawner } from "effect/process";
 
 import type { Box } from "../box.ts";
 import type { PortProbe } from "../machine-ports.ts";
+import * as AgentSandbox from "../platform/agent-sandbox/agent-sandbox.ts";
 import * as Boat from "../platform/boat/boat.ts";
 import * as SmolCloud from "../platform/smol-cloud/smol-cloud.ts";
 import * as Smolvm from "../platform/smolvm/smolvm.ts";
@@ -24,6 +25,10 @@ type RuntimeLayer = Layer.Layer<
 >;
 
 export const runtimes = {
+  "agent-sandbox": {
+    settings: AgentSandbox.AgentSandboxSettings,
+    layer: AgentSandbox.layer,
+  },
   boat: { settings: Boat.BoatSettings, layer: Boat.layer },
   smolvm: { settings: Smolvm.SmolvmSettings, layer: Smolvm.layer },
   tart: { settings: Tart.TartSettings, layer: Tart.layer },

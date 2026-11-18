@@ -18,6 +18,10 @@ export default defineConfig({
         command: "CLANKERBOX_LIVE=1 vp test tests/live",
         cache: false,
       },
+      "test:kind": {
+        command: "tests/kind/cluster.sh vp test run tests/kind",
+        cache: false,
+      },
     },
   },
 });

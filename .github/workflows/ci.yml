@@ -53,3 +53,26 @@ jobs:
       - name: Stop the installed host with an exec running
         working-directory: apps/host
         run: CLANKERBOX_HOST_PROGRAM="$RUNNER_TEMP/host-prefix/bin/clankerbox-host" vp test run tests/program.test.ts
+
+  kind:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
+        with:
+          node-version-file: .node-version
+          cache: true
+          cache-toolchain: true
+          run-install: false
+      - run: vp install --frozen-lockfile
+      - name: Install kind v0.33.0
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/kind" https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
+          echo "aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  $RUNNER_TEMP/kind" | sha256sum -c -
+          sudo install "$RUNNER_TEMP/kind" /usr/local/bin/kind
+      - name: Run the agent-sandbox runtime against a kind cluster
+        working-directory: apps/host
+        run: vp run test:kind

@@ -27,6 +27,7 @@ const rivetNodeFiles = [
 ];
 
 const providerClients = [
+  "apps/host/src/platform/agent-sandbox/*.ts",
   "apps/host/src/platform/boat/*.ts",
   "apps/host/src/platform/smol-cloud/*.ts",
 ];
