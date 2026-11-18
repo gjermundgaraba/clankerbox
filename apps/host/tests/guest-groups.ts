@@ -130,5 +130,3 @@ export const guestGroups = () => {
     },
   };
 };
-
-export type GuestGroups = ReturnType<typeof guestGroups>;
