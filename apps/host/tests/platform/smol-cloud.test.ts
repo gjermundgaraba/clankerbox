@@ -107,7 +107,7 @@ runtimeContract({
   sizes: { cpu: 1, ramMib: 1024, diskGib: 10 },
   fixture: Effect.gen(function* () {
     const { dir, fake, settings } = yield* provider;
-    const http = stallingHttp();
+    const http = stallingHttp(NodeHttpClient.layerNodeHttp);
 
     const context = yield* Layer.build(
       SmolCloud.layer(

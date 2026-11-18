@@ -233,11 +233,15 @@ export const unshared = (runtime: RuntimeName): Builds => {
  * An answer that leaves the outcome unknown, such as a dropped connection, never ends a step: the
  * adapter reads the resource by its instance before it answers. `prepares` is `always` where the
  * runtime's images lack the login user, so every machine made from a base is prepared, and
- * `with-setup` where only a machine with a setup is.
+ * `with-setup` where only a machine with a setup is. `kernel` is `own` where each machine boots its
+ * own kernel, whose random generator a copy of its RAM would share with its source, so a new
+ * identity reseeds it, and `shared` where machines are containers on their node's kernel, which
+ * refuses a guest that reseed.
  */
 export interface Interface {
   readonly traits: RuntimeTraits;
   readonly guest: "debian" | "macos";
+  readonly kernel: "own" | "shared";
   readonly version: string;
   readonly pin: string | undefined;
   readonly reach: Reach;
@@ -271,12 +275,14 @@ export interface Interface {
    * Makes the machine, from an image or a copy. `port` is the host's port its sshd is reached at,
    * which a published runtime forwards to the guest's port 22 and a relayed one leaves to the relay.
    * A name the runtime can't give a VM is `Invalid`, and a checkpoint it no longer holds is
-   * `Missing`, naming the checkpoint, with nothing made.
+   * `Missing`, naming the checkpoint, with nothing made. `tailnet` is whether the machine requests
+   * the tailnet, for a runtime whose guest must be made able to join it, as with a TUN device.
    */
   readonly make: (
     machine: Identity & Sizes,
     origin: Origin,
-    port: number
+    port: number,
+    tailnet?: boolean
   ) => Effect.Effect<Made, RoomError | StateError | Unsizable | Invalid>;
   /**
    * Starts a stopped machine, or resumes a paused one. A runtime that holds checkpoints through its

@@ -1405,6 +1405,7 @@ export const make = (
           : yield* throughBucket(settings.bucket, local),
       traits,
       guest: "debian",
+      kernel: "own",
       startup: Effect.gen(function* () {
         yield* removeAll(paths.forks);
 

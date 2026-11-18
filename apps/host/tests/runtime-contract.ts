@@ -72,6 +72,8 @@ export interface Subject {
    * own disk, so a provider holds no checkpoint through a machine and no tombstone is kept.
    */
   readonly ownDisk?: string | undefined;
+  /** How long, in milliseconds, a case that cuts each provider call of a step short may run. */
+  readonly stallTimeout?: number | undefined;
   readonly fixture: Effect.Effect<Fixture, never, Scope.Scope>;
 }
 
@@ -476,13 +478,13 @@ export const runtimeContract = (subject: Subject): void => {
                     argv: [
                       "/bin/sh",
                       "-c",
-                      `echo $$ >>"$CLANKERBOX_ROOT/${file}"; sleep 300 & echo $! >>"$CLANKERBOX_ROOT/${file}"; wait`,
+                      `echo $$ >>"\${CLANKERBOX_ROOT-}/var/tmp/${file}"; sleep 300 & echo $! >>"\${CLANKERBOX_ROOT-}/var/tmp/${file}"; wait`,
                     ],
                   })
                 );
 
                 const pids = yield* inGuest(
-                  `cat "$CLANKERBOX_ROOT/${file}" 2>/dev/null`
+                  `cat "\${CLANKERBOX_ROOT-}/var/tmp/${file}" 2>/dev/null`
                 ).pipe(
                   Effect.repeat({
                     until: (found) => found.length >= count,
@@ -816,7 +818,7 @@ export const runtimeContract = (subject: Subject): void => {
             }
           })
         ),
-      stallCaseTimeout
+      subject.stallTimeout ?? stallCaseTimeout
     );
 
     it.live.skipIf(lacks("stall"))(
@@ -854,7 +856,7 @@ export const runtimeContract = (subject: Subject): void => {
             }
           })
         ),
-      stallCaseTimeout
+      subject.stallTimeout ?? stallCaseTimeout
     );
 
     it.live.skipIf(lacks("stall"))(
@@ -899,7 +901,7 @@ export const runtimeContract = (subject: Subject): void => {
             }
           })
         ),
-      stallCaseTimeout
+      subject.stallTimeout ?? stallCaseTimeout
     );
   });
 };

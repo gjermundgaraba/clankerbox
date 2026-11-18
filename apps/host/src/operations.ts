@@ -761,7 +761,7 @@ export const make = (
         const { handle, sizes } = yield* Effect.scoped(
           Effect.andThen(
             admitted(booted[source._tag], machine, machines),
-            runtime.make(machine, origin, port)
+            runtime.make(machine, origin, port, step.tailnet === true)
           )
         );
 

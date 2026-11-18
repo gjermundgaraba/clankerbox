@@ -91,7 +91,7 @@ runtimeContract({
   image,
   sizes: types.small,
   fixture: Effect.suspend(() => {
-    const http = stallingHttp();
+    const http = stallingHttp(NodeHttpClient.layerNodeHttp);
 
     return Effect.map(onFakeBoatOver({}, http.layer), ({ boat, runtime }) => ({
       runtime,

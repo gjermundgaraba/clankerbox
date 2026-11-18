@@ -184,26 +184,26 @@ export const apiKey = (
 const exchanged = <A, E>(
   http: HttpClient.HttpClient,
   url: string,
-  key: Redacted.Redacted,
+  key: Effect.Effect<Redacted.Redacted, Unanswered>,
   request: HttpClientRequest.HttpClientRequest,
   asked: Asked,
   read: (response: HttpClientResponse.HttpClientResponse) => Effect.Effect<A, E>
 ): Effect.Effect<A, E | Unanswered> => {
   const call = `${request.method} ${request.url}`;
 
-  return http
-    .execute(
+  return Effect.flatMap(key, (bearer) =>
+    http.execute(
       request.pipe(
         HttpClientRequest.prependUrl(url),
-        HttpClientRequest.bearerToken(key),
+        HttpClientRequest.bearerToken(bearer),
         HttpClientRequest.acceptJson
       )
     )
-    .pipe(
-      Effect.mapError(lost(call)),
-      Effect.flatMap(read),
-      within(asked, call)
-    );
+  ).pipe(
+    Effect.mapError(lost(call)),
+    Effect.flatMap(read),
+    within(asked, call)
+  );
 };
 
 const triesPerCall = 6;
@@ -255,7 +255,8 @@ export interface Refusal<Refused> {
 }
 
 /**
- * The calls to a provider's API at `url` with the account's `key`. A call sends its request asking
+ * The calls to a provider's API at `url` with the account's `key`, read afresh for each request,
+ * whose read failing is a lost answer. A call sends its request asking
  * JSON, within the bound of what it `asked`, and answers what `answered` reads of a response under
  * 400; no answer, or one that couldn't be received, is a lost answer. Of any other response,
  * `refusal` reads the provider's own answer: a 5xx whose body is none is a gateway's, whatever that
@@ -266,7 +267,7 @@ export const sender =
   <Refused>(
     http: HttpClient.HttpClient,
     url: string,
-    key: Redacted.Redacted,
+    key: Effect.Effect<Redacted.Redacted, Unanswered>,
     refusal: (
       response: HttpClientResponse.HttpClientResponse,
       asked: Asked,

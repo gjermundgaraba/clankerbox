@@ -69,7 +69,14 @@ const prepare = (
   Effect.map(
     outputOf(
       "/bin/sh",
-      ["-c", `${identityScript}\n${startScript}`, "prepare", instance, "dev"],
+      [
+        "-c",
+        `${identityScript}\n${startScript}`,
+        "prepare",
+        instance,
+        "dev",
+        "own",
+      ],
       {
         env: { CLANKERBOX_ROOT: where.root, PATH: "/nowhere" },
         extendEnv: true,
@@ -771,7 +778,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const identity = yield* outputOf(
           "/bin/sh",
-          ["-c", identityScript, "identity", "aaaa1111", "dev"],
+          ["-c", identityScript, "identity", "aaaa1111", "dev", "own"],
           {
             env: { CLANKERBOX_ROOT: where.root },
             extendEnv: true,

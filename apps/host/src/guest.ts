@@ -485,12 +485,13 @@ export const identityScript = [
   "set -eu",
   "instance=$1",
   "id=$2",
+  "kernel=$3",
   "root=${CLANKERBOX_ROOT-}",
   guestPath,
   `state=${stateDir}`,
   `if [ "$(cat "$state/instance" 2>/dev/null || true)" != "$instance" ]; then`,
   `  cat >"$root/dev/random"`,
-  `  if [ "$(uname -s)" = Linux ]; then`,
+  `  if [ "$kernel" = own ] && [ "$(uname -s)" = Linux ]; then`,
   "    if ! command -v perl >/dev/null 2>&1; then",
   `      echo "preparation needs perl, for RNDRESEEDCRNG" >&2`,
   "      exit 1",
@@ -573,6 +574,7 @@ export const identify = (
           "clankerbox-identity",
           machine.instance,
           machine.name,
+          runtime.kernel,
         ],
         stdin: Hex.encode(
           globalThis.crypto.getRandomValues(new Uint8Array(seedBytes))

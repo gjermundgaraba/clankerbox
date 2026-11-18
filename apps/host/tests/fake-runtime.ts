@@ -1029,6 +1029,7 @@ export const fakeRuntime = (options: FakeOptions) => {
             : yield* throughBucket(options.builds, files),
         traits,
         guest: preset.guest,
+        kernel: "own",
         sizable: (machine, from, to, live) => {
           sized.push([machine.name, sizesOf(from), sizesOf(to), live]);
 

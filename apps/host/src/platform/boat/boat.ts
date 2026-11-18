@@ -672,6 +672,7 @@ export const make = (
     const runtime: Found = {
       traits,
       guest: "debian",
+      kernel: "own",
       version: "api v1",
       pin: undefined,
       prepares: "always",

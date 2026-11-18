@@ -220,8 +220,11 @@ export const tombstoned = <
           )
         : Effect.void;
 
-    const make: Interface["make"] = (machine, origin, port) =>
-      Effect.andThen(refuse(machine), runtime.make(machine, origin, port));
+    const make: Interface["make"] = (machine, origin, port, tailnet) =>
+      Effect.andThen(
+        refuse(machine),
+        runtime.make(machine, origin, port, tailnet)
+      );
 
     const remove: Interface["delete"] = ({ handle, ...machine }, keep) =>
       Effect.andThen(

@@ -221,7 +221,7 @@ export const make = (url: string, key: Redacted.Redacted) =>
     const http = yield* HttpClient.HttpClient;
     const readRecords = recordReader();
 
-    const sent = sender(http, url, key, refusal);
+    const sent = sender(http, url, Effect.succeed(key), refusal);
 
     const send = <A>(
       method: HttpMethod.HttpMethod,

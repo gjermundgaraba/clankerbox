@@ -219,7 +219,7 @@ export const make = (url: string, key: Redacted.Redacted) =>
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient;
 
-    const sent = sender(http, url, key, refusal);
+    const sent = sender(http, url, Effect.succeed(key), refusal);
 
     const call = <A>(
       request: HttpClientRequest.HttpClientRequest,

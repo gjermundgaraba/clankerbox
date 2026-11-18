@@ -979,6 +979,7 @@ export const make = (
           : yield* throughBucket(settings.bucket, local),
       traits,
       guest: "macos",
+      kernel: "own",
       startup: Effect.andThen(
         files(
           `couldn't create ${jobs}`,
