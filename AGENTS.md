@@ -208,8 +208,10 @@ and `tests/live/smol-cloud.test.ts` and `tests/live/boat.test.ts`, run by
 accounts. `tests/kind/`, run by `vp run test:kind` in `apps/host` and in CI,
 makes a kind cluster with the agent-sandbox controller through `cluster.sh`,
 and runs the runtime contract and a guest's SSH there, with the faults a fake
-provider would give injected at the adapter's HTTP client. A domain file never
-imports `platform/` or `composition/`.
+provider would give injected at the adapter's HTTP client. Its
+`teardown-error.md` holds the hunt for an uncaught `ClientDestroyedError` that
+once ended a passing run with exit 1, and what to try if it returns. A domain
+file never imports `platform/` or `composition/`.
 
 `composition/` assembles the host: `config.ts` reads the config file,
 `runtimes.ts` is the registry of runtimes, one entry each under the name a host

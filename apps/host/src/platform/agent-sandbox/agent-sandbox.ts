@@ -1561,10 +1561,17 @@ export const make = (
     });
   });
 
+/**
+ * The API server's client, over HTTP/1.1. Over HTTP/2, which undici offers by default, the Agent's
+ * destroy as its scope closes sometimes threw an uncaught `ClientDestroyedError` after the kind
+ * suite's stall cases. That was never caught in the act, so HTTP/1.1 is a reasoned fix, not a proven
+ * one: it leaves out the path where Node hands that error to every stream an HTTP/2 session still
+ * tracks. `tests/kind/teardown-error.md` holds the hunt.
+ */
 export const httpLayer = (settings: AgentSandboxSettings) =>
   Layer.unwrap(
     Effect.map(caOf(settings), (ca) =>
-      NodeHttpClient.layerUndiciOptions({ connect: { ca } })
+      NodeHttpClient.layerUndiciOptions({ allowH2: false, connect: { ca } })
     )
   );
 
