@@ -488,23 +488,21 @@ const drained = <C extends Cut>(
         let finished = false;
 
         yield* Effect.addFinalizer((exit) =>
-          Effect.andThen(
-            finished
-              ? Effect.void
-              : ended(runtime, machine, mark).pipe(
-                  Effect.catch((error) =>
-                    Effect.andThen(
-                      Effect.logWarning(
-                        `couldn't end in ${machine.name} the command of an exec ${endedBy(exit, cutBy)}, which may still run there: ${error.message}`
-                      ),
-                      Effect.sync(() => {
-                        unended = error;
-                      })
-                    )
+          (finished
+            ? Effect.void
+            : ended(runtime, machine, mark).pipe(
+                Effect.catch((error) =>
+                  Effect.andThen(
+                    Effect.logWarning(
+                      `couldn't end in ${machine.name} the command of an exec ${endedBy(exit, cutBy)}, which may still run there: ${error.message}`
+                    ),
+                    Effect.sync(() => {
+                      unended = error;
+                    })
                   )
-                ),
-            Scope.close(held, exit)
-          )
+                )
+              )
+          ).pipe(Effect.ensuring(Scope.close(held, exit)))
         );
 
         const exited = Effect.flatMap(

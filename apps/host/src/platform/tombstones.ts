@@ -60,13 +60,15 @@ interface Options {
 /**
  * `runtime` with tombstones, kept in a file in `dir`, under the host's state directory, so a host
  * that restarts keeps them, and its sweep, which the caller runs. Its `delete` buries the instance
- * once the inner one has answered, or at once when the search found nothing, and its `make` refuses
- * a buried instance, which only a control plane restored from a backup sends. The sweep lists what
- * carries this host's mark while a tombstone is kept, so a host with nothing to delete pays for no
- * list, and deletes each machine of a buried instance through the inner `delete`, keeping every
- * checkpoint it holds, as a row may still want one. A tombstone older than `tombstoneLast` is
- * forgotten by a sweep whose list succeeded and found nothing of it. A tombstone only ever
- * deletes, so a host with none, or one that lost its file, keeps every machine a row wants.
+ * once the inner one has answered, or at once when the search found nothing, and answers only once
+ * the file holds the tombstone, so a delete tried again after a write that failed writes it again.
+ * Its `make` refuses a buried instance, which only a control plane restored from a backup sends.
+ * The sweep lists what carries this host's mark while a tombstone is kept, so a host with nothing
+ * to delete pays for no list, and deletes each machine of a buried instance through the inner
+ * `delete`, keeping every checkpoint it holds, as a row may still want one. A tombstone older than
+ * `tombstoneLast` is forgotten by a sweep whose list succeeded and found nothing of it. A sweep
+ * that fails or dies logs it, and the next sweep tries again. A tombstone only ever deletes, so a
+ * host with none, or one that lost its file, keeps every machine a row wants.
  */
 export const tombstoned = <
   R extends Pick<Found, "make" | "delete"> & {
@@ -102,19 +104,18 @@ export const tombstoned = <
     const writing = yield* Semaphore.make(1);
     const undeleted = new Set<string>();
 
-    const written = Effect.suspend(() =>
+    const written = (next: ReadonlyMap<string, DateTime.Utc>) =>
       encodeKept(
-        [...buried].map(([instance, buriedAt]) => ({ instance, buriedAt }))
-      )
-    ).pipe(
-      Effect.flatMap((text) =>
-        Effect.andThen(
-          fs.writeFileString(`${file}.next`, text),
-          fs.rename(`${file}.next`, file)
-        )
-      ),
-      Effect.mapError(failed("write the tombstones to"))
-    );
+        [...next].map(([instance, buriedAt]) => ({ instance, buriedAt }))
+      ).pipe(
+        Effect.flatMap((text) =>
+          Effect.andThen(
+            fs.writeFileString(`${file}.next`, text),
+            fs.rename(`${file}.next`, file)
+          )
+        ),
+        Effect.mapError(failed("write the tombstones to"))
+      );
 
     const bury = (instance: string) =>
       writing.withPermits(1)(
@@ -123,8 +124,10 @@ export const tombstoned = <
             return;
           }
 
-          buried.set(instance, yield* DateTime.now);
-          yield* written;
+          const buriedAt = yield* DateTime.now;
+
+          yield* written(new Map(buried).set(instance, buriedAt));
+          buried.set(instance, buriedAt);
         })
       );
 
@@ -192,18 +195,37 @@ export const tombstoned = <
               DateTime.isLessThanOrEqualTo(buriedAt, before)
           );
 
-          for (const [instance] of old) {
-            buried.delete(instance);
-            undeleted.delete(instance);
+          if (old.length === 0) {
+            return Effect.void;
           }
 
-          return old.length === 0 ? Effect.void : written;
+          const next = new Map(buried);
+
+          for (const [instance] of old) {
+            next.delete(instance);
+          }
+
+          return Effect.andThen(
+            written(next),
+            Effect.sync(() => {
+              for (const [instance] of old) {
+                buried.delete(instance);
+                undeleted.delete(instance);
+              }
+            })
+          );
         })
       );
     }).pipe(
       Effect.catch((error) =>
         Effect.logWarning(
           `sweep: couldn't sweep what landed at ${provider} after its delete, so the next sweep tries again: ${error.message}`
+        )
+      ),
+      Effect.catchDefect((defect) =>
+        Effect.logError(
+          `sweep: a sweep of what landed at ${provider} after its delete died, so the next sweep tries again`,
+          defect
         )
       )
     );

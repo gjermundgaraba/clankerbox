@@ -175,7 +175,11 @@ export interface Interface extends Calls {
    * is deleted and the make tried once more, and a make whose reply or wait was cut reads the
    * machine and decides again, once. Every failure after that make names the machine it may have
    * made, and one whose second look sent nothing, as a spent timeout leaves it, answers as the cut
-   * make did.
+   * make did. Run no two ensures, or an ensure and a create, of one name at once: the `Conflict`
+   * one of them meets may be the other's new machine, which it then deletes by name. Reading the
+   * machine again at that `Conflict`, deleting only a row `isUndone` holds and starting any other,
+   * would narrow that to the time between that read and the delete; closing it takes a delete on
+   * the server of that one failed instance, not of the name.
    */
   readonly ensure: (
     name: string,
@@ -517,7 +521,7 @@ const builtAt =
   };
 
 interface MutationDeadline {
-  readonly atMillis: number;
+  readonly at: Duration.Duration;
   readonly timeout: Duration.Duration;
 }
 
@@ -533,10 +537,10 @@ const timeLeft = Effect.gen(function* () {
     return undefined;
   }
 
-  const now = yield* Clock.currentTimeMillis;
+  const now = Duration.nanos(yield* Clock.monotonicTimeNanos);
 
   return {
-    left: Duration.millis(Math.max(0, deadline.atMillis - now)),
+    left: Duration.max(Duration.zero, Duration.subtract(deadline.at, now)),
     timeout: deadline.timeout,
   };
 });
@@ -623,9 +627,9 @@ export const make = (
         ? mutation
         : Effect.flatMap(mutationDeadline, (set) =>
             set === undefined
-              ? Effect.flatMap(Clock.currentTimeMillis, (now) =>
+              ? Effect.flatMap(Clock.monotonicTimeNanos, (now) =>
                   Effect.provideService(mutation, mutationDeadline, {
-                    atMillis: now + Duration.toMillis(timeout),
+                    at: Duration.sum(Duration.nanos(now), timeout),
                     timeout,
                   })
                 )

@@ -2,7 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { Internal, RuntimeName } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
-import { Effect, Exit } from "effect";
+import { Effect, Exit, FileSystem } from "effect";
 import { TestClock } from "effect/testing";
 import { expect } from "vite-plus/test";
 
@@ -181,6 +181,79 @@ layer(NodeServices.layer)((it) => {
         expect(Exit.isSuccess(yield* made(2))).toBe(true);
         expect(provider.state.lists).toBe(listsOnceForgotten);
       })
+  );
+
+  it.effect(
+    "answers a delete only once its tombstone is written, so a retry after a failed write writes it again",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* scratch;
+        const provider = account([]);
+
+        const before = yield* tombstoned(provider.runtime, {
+          dir,
+          marked: provider.marked,
+        });
+
+        const deleted = () =>
+          Effect.exit(
+            before.runtime.delete(
+              { ...identity(2), handle: undefined },
+              new Set()
+            )
+          );
+
+        yield* fs.makeDirectory(`${dir}/tombstones.json.next`);
+
+        const unwritten = yield* deleted();
+
+        yield* fs.remove(`${dir}/tombstones.json.next`, { recursive: true });
+
+        const retried = yield* deleted();
+
+        const after = yield* tombstoned(provider.runtime, {
+          dir,
+          marked: provider.marked,
+        });
+
+        expect(Exit.isFailure(unwritten)).toBe(true);
+        expect(Exit.isSuccess(retried)).toBe(true);
+        expect(
+          Exit.isFailure(
+            yield* Effect.exit(
+              after.runtime.make({ ...identity(2), ...sizes }, origin, 22)
+            )
+          )
+        ).toBe(true);
+        expect(provider.state.made).toBe(0);
+      })
+  );
+
+  it.effect("a sweep that dies is logged, and the next sweep runs", () =>
+    Effect.gen(function* () {
+      const late = machine(2);
+      const provider = account([late]);
+      let lists = 0;
+
+      const { runtime, sweep } = yield* tombstoned(provider.runtime, {
+        dir: yield* scratch,
+        marked: Effect.suspend(() => {
+          lists += 1;
+
+          return lists === 1 ? Effect.die("bug") : provider.marked;
+        }),
+      });
+
+      yield* runtime.delete({ ...identity(2), handle: undefined }, new Set());
+
+      const died = yield* Effect.exit(sweep);
+
+      yield* sweep;
+
+      expect(Exit.isSuccess(died)).toBe(true);
+      expect(provider.held).toStrictEqual([]);
+    })
   );
 
   it.effect(
