@@ -104,6 +104,7 @@ export const machine = (id: string, fields?: Partial<Machine>): Machine => ({
   state: "running",
   desired: "running",
   phase: "settled",
+  boots: 1,
   ...fields,
 });
 

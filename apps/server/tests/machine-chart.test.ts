@@ -7,6 +7,7 @@ import type { Report } from "@clankerbox/host-contract";
 import { describe, expect, it } from "@effect/vitest";
 import { presets } from "@gjermundgaraba/clankerbox-host/testing";
 import { Desired, Internal } from "@gjermundgaraba/clankerbox-sdk";
+import { DateTime } from "effect";
 import { setup, transition, types } from "xstate";
 import type { SnapshotFrom } from "xstate";
 import { adjacencyMapToArray, getAdjacencyMap } from "xstate/graph";
@@ -47,6 +48,8 @@ const flags: readonly boolean[] = [false, true];
 const seens = MachineState.literals;
 
 const earlier = new Internal({ message: "an earlier failure" });
+
+const stoppedUnasked = new Internal({ message: "stopped unasked" });
 
 const cut = new Internal({ message: "the make of dev ended on its host" });
 
@@ -116,6 +119,8 @@ const read = (
   id: "new",
   joins,
   awaiting: false,
+  at,
+  stoppedUnasked,
 });
 
 const reported = (
@@ -279,6 +284,14 @@ const decidedBy = (from: Leaf, input: Input, joins: boolean): Leaf => {
 
   if (seen === "missing") {
     return "made.lost";
+  }
+
+  if (
+    from === "made.settled" &&
+    seen === "stopped" &&
+    input.desired === "running"
+  ) {
+    return "made.failed";
   }
 
   if (owing) {
@@ -1006,13 +1019,120 @@ const factsWritten: readonly Write[] = [
     "a make done tells its handle and endpoint, and its machine is still to prepare",
     rowAt("making.sent", prepared),
     report("done", reach),
-    { state: "made.observing", prepared: false, ...reach },
+    { state: "made.observing", prepared: false, boots: 1, ...reach },
   ],
   [
     "a make done prepared tells its host key, and its machine needs no start",
     rowAt("making.sent"),
     report("done", { ...reach, hostKey: "key", prepared: true }),
-    { state: "made.observing", prepared: true, ...reach, hostKey: "key" },
+    {
+      state: "made.observing",
+      prepared: true,
+      boots: 1,
+      ...reach,
+      hostKey: "key",
+    },
+  ],
+  [
+    "a start done that booted a machine read stopped counts the boot",
+    rowAt("made.stepping.starting", { booting: true, boots: 2 }),
+    done,
+    { state: "made.observing", prepared: true, booting: false, boots: 3 },
+  ],
+  [
+    "a start that fails counts no boot",
+    rowAt("made.stepping.starting", { booting: true, boots: 2 }),
+    failed,
+    { state: "made.failed", error, booting: false },
+  ],
+  [
+    "a machine at rest running that its runtime stopped unasked rests failed saying so, and isn't started again",
+    rowAt("made.settled", { ...prepared, boots: 2 }),
+    read("stopped"),
+    {
+      state: "made.failed",
+      error: stoppedUnasked,
+      unasked: { what: "stopped", at },
+    },
+  ],
+  [
+    "the cause a runtime gives for a stop it made unasked is recorded with it",
+    rowAt("made.settled", { ...prepared, boots: 2 }),
+    { ...read("stopped"), why: "out of memory" },
+    {
+      state: "made.failed",
+      error: stoppedUnasked,
+      unasked: { what: "stopped", at, why: "out of memory" },
+    },
+  ],
+  [
+    "a cause a runtime gives for a machine that runs is no change",
+    rowAt("made.settled", { ...prepared, boots: 2 }),
+    { ...read("running"), why: "out of memory" },
+    {},
+  ],
+  [
+    "a paused machine read stopped is what was asked, and no change unasked",
+    rowAt("made.settled", { desired: "paused", boots: 2 }),
+    read("stopped"),
+    {},
+  ],
+  [
+    "a pause's stop read once it is done settles, and is no change unasked",
+    rowAt("made.observing", { desired: "paused", boots: 2 }),
+    read("stopped"),
+    { state: "made.settled" },
+  ],
+  [
+    "a start asked of a machine its runtime stopped unasked boots it",
+    rowAt("made.observing", {
+      boots: 2,
+      unasked: { what: "stopped", at },
+    }),
+    read("stopped"),
+    { state: "made.stepping.starting", pin: "new pin", booting: true },
+  ],
+  [
+    "a machine at rest stopped that runs unasked is recorded so, with its boot, and stopped again",
+    rowAt("made.settled", { desired: "stopped", boots: 2 }),
+    read("running"),
+    {
+      state: "made.stepping.stopping",
+      boots: 3,
+      unasked: { what: "started", at },
+    },
+  ],
+  [
+    "a machine its runtime no longer has is recorded lost unasked",
+    rowAt("made.settled", { ...prepared, boots: 2 }),
+    read("missing"),
+    { state: "made.lost", unasked: { what: "lost", at } },
+  ],
+  [
+    "a lost machine read lost again keeps when it was first found lost",
+    rowAt("made.lost", {
+      boots: 2,
+      unasked: { what: "lost", at: DateTime.makeUnsafe(1) },
+    }),
+    read("missing"),
+    {},
+  ],
+  [
+    "a reboot in place its runtime marks anew counts a boot, recorded unasked",
+    rowAt("made.settled", { ...prepared, boots: 2, reboot: "first" }),
+    { ...read("running"), reboot: "second" },
+    {
+      state: "made.settled",
+      boots: 3,
+      reboot: "second",
+      unasked: { what: "rebooted", at },
+    },
+  ],
+  [
+    "the first reboot mark a runtime gives counts no boot",
+    rowAt("made.settled", { ...prepared, boots: 2 }),
+    { ...read("running"), reboot: "first" },
+    { state: "made.settled", reboot: "first" },
   ],
   [
     "a start done prepares its machine and tells its host key",
@@ -1157,10 +1277,10 @@ const factsWritten: readonly Write[] = [
     { state: "undoing.due", error },
   ],
   [
-    "a read of a stopped machine that starts it takes the host's pin",
+    "a read of a stopped machine that starts it takes the host's pin, and boots it, which a read after a request records no change unasked",
     rowAt("made.observing"),
     read("stopped"),
-    { state: "made.stepping.starting", pin: "new pin" },
+    { state: "made.stepping.starting", pin: "new pin", booting: true },
   ],
 ];
 
@@ -1399,6 +1519,8 @@ describe("the chart", () => {
     const adjacency = getAdjacencyMap(machine, {
       input: facts(),
       events: [...representatives],
+      serializeState: ({ value, context }) =>
+        JSON.stringify({ value, context: { ...context, boots: "unbounded" } }),
     });
 
     const reached = adjacencyMapToArray(adjacency).map(

@@ -91,7 +91,8 @@ export const labelledWith = (
 
 /**
  * What the control plane is doing about a machine. A client waits for a rest:
- * `settled`, at rest with what was asked; `failed`, after a step failed, until the next request;
+ * `settled`, at rest with what was asked; `failed`, after a step failed, or after its runtime
+ * stopped a machine asked to run (`Machine.unasked`), until the next request, as nothing is retried;
  * and `lost`, one the runtime no longer has, which can only be deleted. `waiting` is no rest: the
  * control plane can't read the machine's host, so it tells nothing of a request, which stays saved
  * and acts when it can, and a wait reads on through it as through an outage. `creating` makes or
@@ -202,6 +203,28 @@ export const templateRef = (
 };
 
 /**
+ * A change to a machine that no request asked for, as a read of its runtime found it. A pause or a
+ * stop is asked for, so neither is one.
+ * - `stopped`: a machine asked to run that its runtime stopped, its memory and processes gone. The
+ *   control plane doesn't start it again: it rests `failed`, its `error` a `WrongState` saying so,
+ *   until a request asks it to run, and a start boots it cold.
+ * - `started`: one asked to stay stopped or paused that runs, which the control plane stops again.
+ * - `rebooted`: one its runtime reports booted again in place while it ran.
+ * - `lost`: one its runtime no longer has, which can only be deleted.
+ *
+ * `at` is the read that found it, so the change came at or before it. `why` is the cause in the
+ * runtime's own words, on a `stopped` or `lost` machine whose runtime names one, such as an idle
+ * stop or an out-of-memory kill; without it the runtime didn't say.
+ */
+export const Unasked = Schema.Struct({
+  what: Schema.Literals(["stopped", "started", "rebooted", "lost"]),
+  at: Schema.DateTimeUtcFromString,
+  why: Schema.optionalKey(Schema.String),
+}).annotate({ identifier: "Unasked" });
+
+export type Unasked = typeof Unasked.Type;
+
+/**
  * `state` is what the runtime reports: `paused` while it holds the machine's saved execution,
  * `missing` when it doesn't have the machine, and `unknown` when it couldn't be read. `desired` is
  * what the last request asked for, `phase` what the control plane is doing about it, and `error`
@@ -213,7 +236,12 @@ export const templateRef = (
  * on a machine with a `hostKey` and an endpoint, while it runs, or while its host can't be read
  * (`state` `unknown`) and it was last read running and is asked to run still. `tailnet` is on a
  * machine that requests the tailnet, as a create from a base asks, its template's build asked, or
- * the source of its fork or restore asked.
+ * the source of its fork or restore asked. `boots` counts the cold boots the machine ran in that the
+ * control plane knows of: its first, each start that booted it from stopped, and each reboot in
+ * place its runtime reported. While it holds, its memory and processes are those of one boot; a
+ * boot a host makes inside another step that leaves the machine stopped, as a fork may, counts
+ * none, as nothing ran in it for the machine's owner. A copy counts its own from its first.
+ * `unasked` is the last change no request asked for, kept until another replaces it.
  */
 export const Machine = Schema.Struct({
   id: Name,
@@ -233,6 +261,8 @@ export const Machine = Schema.Struct({
   desired: Desired,
   phase: Phase,
   error: Schema.optionalKey(HostError),
+  boots: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  unasked: Schema.optionalKey(Unasked),
   ssh: Schema.optionalKey(SshLogin),
   hostKey: Schema.optionalKey(Schema.String),
   tailnet: Schema.optionalKey(MachineTailnet),

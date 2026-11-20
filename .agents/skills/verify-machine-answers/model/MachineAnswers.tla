@@ -467,7 +467,7 @@ WantsRunning ==
 RunsWhenWanted ==
   WantsRunning
     ~> \/ vm = "running" \/ ~WantsRunning \/ Phase(row) = "lost"
-       \/ Phase(row) = "failed" /\ faults > 0
+       \/ Phase(row) = "failed" /\ (faults > 0 \/ drift # "none")
 
 OnceOnly == \A i \in 1..MaxOps : applied[i] <= 1
 

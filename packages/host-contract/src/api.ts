@@ -295,9 +295,16 @@ export const HostHttp = ActionHttp.make(
       ...read,
       error: [Invalid, Internal] as const,
       description:
-        "Read each machine's state from the runtime. A machine it couldn't read is unknown.",
+        "Read each machine's state from the runtime. A machine it couldn't read is unknown. `reboot` is on a machine whose runtime reports when it last booted again in place, while it ran: a mark that changes at each such reboot and at no other time. `why` is on a machine stopped or missing whose runtime says why, in its own words.",
       input: Schema.Struct({ machines: Schema.Array(Ref) }),
-      success: Schema.Array(Schema.Struct({ name: Name, state: MachineState })),
+      success: Schema.Array(
+        Schema.Struct({
+          name: Name,
+          state: MachineState,
+          reboot: Schema.optionalKey(Schema.String),
+          why: Schema.optionalKey(Schema.String),
+        })
+      ),
     }),
     Action.make("readSizes", {
       ...read,

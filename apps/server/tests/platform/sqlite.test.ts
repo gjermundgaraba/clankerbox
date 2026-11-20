@@ -260,6 +260,10 @@ const row = (name: string, fields?: Partial<MachineRow>): MachineRow => ({
   undoneAt: undefined,
   labels: undefined,
   after: undefined,
+  boots: 0,
+  booting: false,
+  reboot: undefined,
+  unasked: undefined,
   ...fields,
 });
 
@@ -592,9 +596,27 @@ layer(NodeServices.layer)((it) => {
         expect(after.user_version).toBe(migrations.length);
         expect(
           after.machines.map(
-            without("runtime", "captures", "handle", "endpoint", "tailnet")
+            without(
+              "runtime",
+              "captures",
+              "handle",
+              "endpoint",
+              "tailnet",
+              "boots",
+              "booting",
+              "reboot",
+              "unasked"
+            )
           )
         ).toStrictEqual(before.machines.map(without("kind", "port")));
+        expect(
+          after.machines.map(({ state, boots }) => ({ state, boots }))
+        ).toStrictEqual(
+          before.machines.map(({ state }) => ({
+            state,
+            boots: String(state).startsWith("made.") ? 1 : 0,
+          }))
+        );
         expect(after.machines.map(({ endpoint }) => endpoint)).toStrictEqual(
           portsOf(before.machines)
         );
@@ -846,6 +868,7 @@ layer(NodeServices.layer)((it) => {
           source: { kind: "checkpoint", name: "snap" },
           hostKey: "ssh-ed25519 AAAA",
           pin: "smolvm 0.0.0-test linux-x64",
+          boots: 1,
         });
 
         const gone = row("gone", {

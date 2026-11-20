@@ -53,7 +53,7 @@ TLC checks these invariants on every reachable state:
 | `OpIsState`          | An operation is in flight exactly while the row's leaf has a step                                    |
 | `AllAnswered`        | (temporal, in `MachineAnswers.cfg` and `Drifting.cfg`) every request is answered, given fair scheduling |
 | `EventuallyNoOrphan` | (temporal, in `Drifting.cfg`) a VM whose row went or rests undone is deleted, by the runtime's sweep |
-| `RunsWhenWanted`     | (temporal, in `Drifting.cfg`) a machine wanted running runs, unless its row rests `lost`, or `failed` once a runtime call failed |
+| `RunsWhenWanted`     | (temporal, in `Drifting.cfg`) a machine wanted running runs, unless its row rests `lost`, or `failed` once a runtime call failed or its VM stopped by itself, which waits for a request to start it |
 
 Only `Drifting.cfg` sets `Drifts` and `LandsLate`. Elsewhere no VM drifts or
 lands late, so `RestTrue` and `NoOrphan` keep their whole strength there. Under

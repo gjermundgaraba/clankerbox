@@ -38,6 +38,10 @@ export const facts = (fields?: Partial<Facts>): Facts => ({
   undoneAt: undefined,
   labels: undefined,
   after: undefined,
+  boots: 0,
+  booting: false,
+  reboot: undefined,
+  unasked: undefined,
   ...fields,
 });
 

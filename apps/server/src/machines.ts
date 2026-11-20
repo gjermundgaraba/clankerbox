@@ -16,6 +16,7 @@ import {
   templateRef,
   Unavailable,
   sizedBy,
+  WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   CreateRequest,
@@ -78,10 +79,12 @@ import type { MachineEvent, MachineRow, Move, Wish } from "./machine-chart.ts";
 import {
   machineOf,
   phaseShown,
+  seenOf,
   readStates,
   stateIn,
   stateOf,
 } from "./machine-view.ts";
+import type { Seen } from "./machine-view.ts";
 import {
   collect,
   cutShort,
@@ -183,6 +186,17 @@ export interface Interface {
 export class Machines extends Context.Service<Machines, Interface>()(
   "@clankerbox/server/Machines"
 ) {}
+
+/**
+ * What a machine asked to run rests failed with once its runtime stopped it unasked: the caller
+ * must start it, as nothing else will, and its runtime's cause where it named one.
+ */
+export const stoppedUnasked = (machine: string, why: string | undefined) =>
+  new WrongState({
+    message: `${machine} was stopped by its runtime, not by a request${why === undefined ? ", and the runtime gave no cause" : `: ${why}`}. Its memory and processes are gone, and nothing will start it again: start it to boot it cold`,
+    machine,
+    state: "stopped",
+  });
 
 const movesOn = (error: MachineRow["error"]): boolean =>
   error?._tag === "Capacity" ||
@@ -620,10 +634,17 @@ export const make = (
           return yield* applying(name, { type: "refused", error: refused });
         }
 
-        const seen =
+        const sweptSeen: Seen | undefined =
+          swept?.seen === undefined
+            ? undefined
+            : { seen: swept.seen, reboot: swept.reboot, why: swept.why };
+
+        const heard: Seen =
           stageOf(found.state) === "made"
-            ? (swept?.seen ?? (yield* stateOf(hosts, found)))
-            : "unknown";
+            ? (sweptSeen ?? (yield* seenOf(hosts, found)))
+            : { seen: "unknown" };
+
+        const { seen } = heard;
 
         const check = tailnets.get(name) ?? firstCheck;
 
@@ -642,6 +663,10 @@ export const make = (
             found.desired === "paused" &&
             found.after !== undefined &&
             (yield* unbegun(found.after)),
+          at: yield* DateTime.now,
+          reboot: heard.reboot,
+          why: heard.why,
+          stoppedUnasked: stoppedUnasked(name, heard.why),
         });
 
         if (answer.at === "written" && answer.next !== "removed") {
@@ -736,6 +761,10 @@ export const make = (
           pin: info.pin,
           undoneAt: undefined,
           after: undefined,
+          boots: 0,
+          booting: false,
+          reboot: undefined,
+          unasked: undefined,
         };
 
         yield* store.insertMachine(created);

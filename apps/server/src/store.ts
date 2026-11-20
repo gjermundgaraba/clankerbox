@@ -10,6 +10,7 @@ import {
   Port,
   RuntimeName,
   Sizing,
+  Unasked,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Conflict, Internal, Phase } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, Effect, Schema, SchemaGetter } from "effect";
@@ -150,6 +151,13 @@ export const Facts = Schema.Struct({
   undoneAt: UndefinedFromNull(Schema.DateTimeUtcFromString),
   /** The checkpoint whose capture a pause lets begin before it does. */
   after: UndefinedFromNull(Schema.String),
+  /** The cold boots of the machine the control plane knows of, as `Machine.boots` tells them. */
+  boots: Schema.Int,
+  /** Whether the start under way boots a machine last read stopped, which `boots` counts once it is done. */
+  booting: Schema.BooleanFromBit,
+  /** The runtime's mark of the machine's last reboot in place, as its last read answered it. */
+  reboot: UndefinedFromNull(Schema.String),
+  unasked: UndefinedFromNull(Schema.fromJsonString(Unasked)),
 });
 
 export type Facts = typeof Facts.Type;

@@ -2185,43 +2185,66 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
-  it.effect("the next recheck starts machines that stopped under them", () =>
-    Effect.gen(function* () {
-      const { client, fake } = yield* served({
-        recheck: Duration.millis(200),
-      });
-
-      yield* client.create("dev", request("dev"));
-      yield* client.create("other", request("other"));
-      fake.calls.length = 0;
-
-      for (const held of fake.machines.values()) {
-        held.state = "stopped";
-      }
-
-      yield* eventually(
-        Effect.sync(() => [...fake.calls]),
-        (calls) => calls.length >= 8
-      );
-
-      expect(fake.calls.toSorted()).toStrictEqual([
-        "admit dev",
-        "admit other",
-        "exec dev",
-        "exec dev",
-        "exec other",
-        "exec other",
-        "start dev",
-        "start other",
-      ]);
-    })
-  );
-
   it.effect(
-    "a machine its runtime stopped unasked is started again, where machines stop on their own",
+    "a machine its runtime stopped unasked rests failed saying so, is never started again by a recheck, and boots once a request starts it",
     () =>
       Effect.gen(function* () {
         const { client, fake, machine } = yield* served({
+          recheck: Duration.millis(200),
+        });
+
+        yield* client.create("dev", request("dev"));
+        yield* client.create("other", request("other"));
+        fake.calls.length = 0;
+
+        for (const held of fake.machines.values()) {
+          held.state = "stopped";
+        }
+
+        const rested = yield* Effect.forEach(["dev", "other"], (name) =>
+          eventually(machine(name), ({ phase }) => phase === "failed")
+        );
+
+        yield* Effect.sleep(Duration.millis(600));
+
+        const still = yield* machine("dev");
+        const started = yield* client.startMachine({ id: "dev" });
+
+        expect(
+          rested.map(({ state, desired, phase, error, unasked, boots }) => ({
+            at: [state, desired, phase],
+            error: error?._tag,
+            stopped: error?._tag === "WrongState" ? error.state : undefined,
+            unasked: unasked?.what,
+            boots,
+          }))
+        ).toStrictEqual(
+          ["dev", "other"].map(() => ({
+            at: ["stopped", "running", "failed"],
+            error: "WrongState",
+            stopped: "stopped",
+            unasked: "stopped",
+            boots: 1,
+          }))
+        );
+        expect(rested[0]?.error?.message).toContain(
+          "nothing will start it again"
+        );
+        expect(at(still)).toStrictEqual(["stopped", "running", "failed"]);
+        expect(at(started)).toStrictEqual(["running", "running", "settled"]);
+        expect(started.boots).toBe(2);
+        expect(started.error).toBeUndefined();
+        expect(
+          fake.calls.filter((call) => call.startsWith("start"))
+        ).toStrictEqual(["start dev"]);
+      })
+  );
+
+  it.effect(
+    "a pause is asked for, so the stop it makes records no change unasked",
+    () =>
+      Effect.gen(function* () {
+        const { client, machine } = yield* served({
           hosts: [{ id: "fixed", as: "fixed" }],
           recheck: Duration.millis(200),
         });
@@ -2230,22 +2253,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "dev",
           request("dev", { runtime: runtimes.fixed })
         );
+        yield* client.pauseMachine({ id: "dev" });
+        yield* Effect.sleep(Duration.millis(600));
 
-        fake.calls.length = 0;
-        yield* fake.faults.drift(fake.machines.get("dev")?.instance ?? "");
+        const paused = yield* machine("dev");
 
-        const back = yield* eventually(
-          machine("dev"),
-          ({ state, phase }) =>
-            fake.calls.includes("start dev") &&
-            state === "running" &&
-            phase === "settled"
-        );
-
-        expect(at(back)).toStrictEqual(["running", "running", "settled"]);
-        expect(
-          fake.calls.filter((call) => call.startsWith("start"))
-        ).toStrictEqual(["start dev"]);
+        expect(paused.phase).toBe("settled");
+        expect(paused.unasked).toBeUndefined();
+        expect(paused.error).toBeUndefined();
       })
   );
 

@@ -71,6 +71,8 @@ const events: ReadonlyArray<readonly [string, MachineEvent]> = [
           id: "",
           joins: false,
           awaiting: false,
+          at: when,
+          stoppedUnasked: error,
         },
       ] as const
   ),

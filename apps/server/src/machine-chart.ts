@@ -32,6 +32,8 @@ type Handle = NonNullable<Facts["handle"]>;
 
 type Endpoint = NonNullable<Facts["endpoint"]>;
 
+type Unasked = NonNullable<Facts["unasked"]>;
+
 /** What a step leaves that only its host can tell. */
 export interface Outcome {
   readonly handle?: Handle;
@@ -58,6 +60,14 @@ export interface Read extends Begins {
   readonly joins: boolean;
   /** Whether the capture a pause comes `after` is recorded but not yet begun. */
   readonly awaiting: boolean;
+  /** When the read was taken. */
+  readonly at: Unasked["at"];
+  /** The runtime's mark of the machine's last reboot in place, where its runtime keeps one. */
+  readonly reboot?: string | undefined;
+  /** Why the runtime says the machine is stopped, where it says. */
+  readonly why?: string | undefined;
+  /** The error a machine asked to run rests failed with, should the read find its runtime stopped it unasked. */
+  readonly stoppedUnasked: HostError;
 }
 
 export interface Done {
@@ -208,7 +218,7 @@ const decided = ({ context, event }: On<"read">) => {
     return seen === "stopped"
       ? ({
           target: "#machine.made.stepping.starting",
-          context: { pin },
+          context: { pin, booting: true },
         } as const)
       : ({ target: "#machine.made.stepping.starting" } as const);
   }
@@ -216,6 +226,79 @@ const decided = ({ context, event }: On<"read">) => {
   return joins
     ? ({ target: "#machine.made.stepping.joining" } as const)
     : ({ target: "#machine.made.settled" } as const);
+};
+
+const noticed = (atRest: boolean) => (args: On<"read">) => {
+  const { context, event } = args;
+  const { seen, at } = event;
+  const next = decided(args);
+  const reboot = event.reboot ?? context.reboot;
+
+  const rebooted =
+    seen === "running" &&
+    event.reboot !== undefined &&
+    context.reboot !== undefined &&
+    event.reboot !== context.reboot;
+
+  const started = atRest && seen === "running" && context.desired !== "running";
+
+  const what: Unasked["what"] | undefined = (() => {
+    if (next?.target === "#machine.made.lost") {
+      return "lost";
+    }
+
+    if (rebooted) {
+      return "rebooted";
+    }
+
+    if (!atRest) {
+      return undefined;
+    }
+
+    if (seen === "stopped" && context.desired === "running") {
+      return "stopped";
+    }
+
+    return started ? "started" : undefined;
+  })();
+
+  const why = what === "stopped" || what === "lost" ? event.why : undefined;
+
+  const facts = {
+    ...(next !== undefined && "context" in next ? next.context : {}),
+    reboot,
+    ...(rebooted || started ? { boots: context.boots + 1 } : {}),
+    ...(what === undefined
+      ? {}
+      : { unasked: { what, at, ...(why === undefined ? {} : { why }) } }),
+  };
+
+  if (what === "stopped") {
+    return {
+      target: "#machine.made.failed",
+      context: {
+        reboot,
+        unasked: facts.unasked,
+        error: event.stoppedUnasked,
+      },
+    } as const;
+  }
+
+  if (next !== undefined) {
+    return { target: next.target, context: facts };
+  }
+
+  return reboot === context.reboot && what === undefined
+    ? undefined
+    : { context: facts };
+};
+
+const fromLost = (args: On<"read">) => {
+  const next = noticed(false)(args);
+
+  return next?.target === "#machine.made.lost"
+    ? { target: next.target, context: { reboot: next.context.reboot } }
+    : next;
 };
 
 export const machine = setup({
@@ -274,6 +357,7 @@ export const machine = setup({
                     context: {
                       ...told(context, event),
                       prepared: event.outcome.prepared === true,
+                      boots: 1,
                     },
                   }
                 : {
@@ -305,15 +389,15 @@ export const machine = setup({
       states: {
         observing: {
           meta: { phase: "observing", activity: "read" },
-          on: { read: decided },
+          on: { read: noticed(false) },
         },
         settled: {
           meta: { phase: "settled", activity: "recheck" },
-          on: { read: decided },
+          on: { read: noticed(true) },
         },
         lost: {
           meta: { phase: "lost", activity: "recheck" },
-          on: { read: decided },
+          on: { read: fromLost },
         },
         failed: { meta: { phase: "failed", activity: "none" } },
         stepping: {
@@ -327,7 +411,22 @@ export const machine = setup({
           states: {
             starting: {
               meta: { phase: "starting", step: "start", activity: "follow" },
-              on: { reported: ended("start", { prepared: true }) },
+              on: {
+                reported: (args) => {
+                  const { context, event } = args;
+                  const next = ended("start", { prepared: true })(args);
+                  const booted = context.booting && event.status === "done";
+
+                  return {
+                    ...next,
+                    context: {
+                      ...next.context,
+                      booting: false,
+                      boots: context.boots + (booted ? 1 : 0),
+                    },
+                  };
+                },
+              },
             },
             stopping: {
               meta: { phase: "stopping", step: "stop", activity: "follow" },

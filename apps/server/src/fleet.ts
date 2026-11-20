@@ -166,6 +166,10 @@ export interface Swept {
   readonly host: string;
   readonly info: Fresh;
   readonly seen: MachineState | undefined;
+  /** The runtime's mark of the VM's last reboot in place, where its runtime keeps one. */
+  readonly reboot?: string | undefined;
+  /** Why the runtime says the VM is stopped or missing, where it says. */
+  readonly why?: string | undefined;
 }
 
 /** At most this many machines in one read of a host, which bounds the whole read by `readTimeout`. */
@@ -204,8 +208,8 @@ export const sweep = (
               )
               .pipe(
                 Effect.flatMap((answers) => {
-                  const states = new Map(
-                    answers.map(({ name, state }) => [name, state])
+                  const read = new Map(
+                    answers.map((answer) => [answer.name, answer])
                   );
 
                   return Effect.forEach(
@@ -214,7 +218,9 @@ export const sweep = (
                       each(found, {
                         host,
                         info,
-                        seen: states.get(found.name) ?? "unknown",
+                        seen: read.get(found.name)?.state ?? "unknown",
+                        reboot: read.get(found.name)?.reboot,
+                        why: read.get(found.name)?.why,
                       }),
                     { discard: true }
                   );
