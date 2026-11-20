@@ -73,6 +73,24 @@ export const Claim = Schema.Struct({
 
 export type Claim = typeof Claim.Type;
 
+/**
+ * A snapshot of a claim's volume, which its CSI driver takes and a claim's `dataSource` restores:
+ * https://kubernetes.io/docs/concepts/storage/volume-snapshots/
+ */
+export const Snapshot = Schema.Struct({
+  metadata: Meta,
+  status: Schema.optionalKey(
+    Schema.Struct({
+      readyToUse: Schema.optionalKey(Schema.Boolean),
+      error: Schema.optionalKey(
+        Schema.Struct({ message: Schema.optionalKey(Schema.String) })
+      ),
+    })
+  ),
+});
+
+export type Snapshot = typeof Snapshot.Type;
+
 const ContainerState = Schema.Struct({
   waiting: Schema.optionalKey(
     Schema.Struct({
@@ -348,6 +366,7 @@ export const make = (
 export const paths = (namespace: string) => ({
   sandboxes: `/apis/agents.x-k8s.io/v1beta1/namespaces/${namespace}/sandboxes`,
   claims: `/api/v1/namespaces/${namespace}/persistentvolumeclaims`,
+  snapshots: `/apis/snapshot.storage.k8s.io/v1/namespaces/${namespace}/volumesnapshots`,
   pods: `/api/v1/namespaces/${namespace}/pods`,
   quotas: `/api/v1/namespaces/${namespace}/resourcequotas`,
 });

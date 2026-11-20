@@ -60,6 +60,7 @@ const settingsOf = () => ({
   api: fromCluster("api"),
   tokenFile: path.join(dir, "host-token"),
   caFile: path.join(dir, "ca.crt"),
+  storageClass: fromCluster("storage-class"),
 });
 
 const tester = Effect.gen(function* () {
@@ -78,6 +79,7 @@ const tester = Effect.gen(function* () {
     sandboxes: api.resource(paths.sandboxes, Api.Sandbox),
     claims: api.resource(paths.claims, Api.Claim),
     pods: api.resource(paths.pods, Api.Pod),
+    snapshots: api.resource(paths.snapshots, Api.Snapshot),
     quotas: api.resource(paths.quotas, Api.Quota),
     addresses: api.resource(
       paths.pods,
@@ -97,7 +99,12 @@ const sweptAfter = (cluster: Tester, id: string) =>
     Effect.gen(function* () {
       const selector = { "cbx-host": id };
 
-      for (const kind of [cluster.sandboxes, cluster.pods, cluster.claims]) {
+      for (const kind of [
+        cluster.sandboxes,
+        cluster.pods,
+        cluster.snapshots,
+        cluster.claims,
+      ]) {
         const found = yield* kind.list(selector);
 
         yield* Effect.forEach(
@@ -669,6 +676,41 @@ describe.runIf(dir !== "")("agent-sandbox, on kind", () => {
           asked: "1Gi",
           deleting: [undefined, undefined, undefined],
         });
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  );
+
+  it.live(
+    "refuses a base that isn't usr-merged Invalid, saying why, and leaves no pod of it",
+    () =>
+      Effect.gen(function* () {
+        const { cluster, id, runtime } = yield* hosted;
+        const machine = { name: "unmerged", instance: hex(16), ...sizes };
+
+        const made = yield* Effect.exit(
+          runtime.make(machine, { _tag: "image", image: probeImage }, 0)
+        );
+
+        const refused = Exit.isFailure(made)
+          ? Option.getOrUndefined(Exit.findErrorOption(made))
+          : undefined;
+
+        const left = yield* cluster.pods.get(
+          `cbx-${id}-${machine.instance}-fill`
+        );
+
+        yield* runtime.delete(
+          {
+            ...machine,
+            handle: Handle.make(`cbx-${id}-${machine.instance}`),
+          },
+          new Set()
+        );
+
+        expect({
+          tag: refused?._tag,
+          says: refused?.message.includes("is a directory, not a link"),
+          left,
+        }).toStrictEqual({ tag: "Invalid", says: true, left: undefined });
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   );
 

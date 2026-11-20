@@ -5,7 +5,7 @@ export const traits: RuntimeTraits = {
   runtime: RuntimeName.make("agent-sandbox"),
   images: "references",
   checkpoint: "disk",
-  captureFrom: "stopped",
+  captureFrom: "either",
   pause: "stops",
   stop: "discards",
   copies: "any",
