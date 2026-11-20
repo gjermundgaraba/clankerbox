@@ -9,7 +9,13 @@ import {
 } from "effect";
 
 import { Desired, HostError } from "./errors.ts";
-import { CheckpointName, HostId, Name, RuntimeName } from "./ids.ts";
+import {
+  CheckpointName,
+  HostId,
+  MachineName,
+  Name,
+  RuntimeName,
+} from "./ids.ts";
 import { Size, Sizes } from "./sizes.ts";
 
 /** What a checkpoint holds: a running machine's memory and disk, or its disk alone. */
@@ -522,12 +528,16 @@ export const MachineSpec = Schema.Union([TemplateSpec, BaseSpec]);
 export type MachineSpec = typeof MachineSpec.Type;
 
 const TemplateCreate = Schema.Struct({
-  id: Name,
+  id: MachineName,
   ...fromTemplate,
   ...labelled,
 });
 
-const BaseCreate = Schema.Struct({ id: Name, ...fromBase, ...labelled });
+const BaseCreate = Schema.Struct({
+  id: MachineName,
+  ...fromBase,
+  ...labelled,
+});
 
 type Create = typeof TemplateCreate.Type | typeof BaseCreate.Type;
 
@@ -574,7 +584,7 @@ export type CreateRequest = typeof CreateRequest.Type;
 /** A copy of a machine, `machine`, to a new `name`, with the sizes given or its source's. */
 export const ForkRequest = Schema.Struct({
   machine: Name,
-  name: Name,
+  name: MachineName,
   ...labelled,
 });
 
@@ -583,7 +593,7 @@ export type ForkRequest = typeof ForkRequest.Type;
 /** A machine `name` made from a checkpoint, with the sizes given or the checkpoint's. */
 export const RestoreRequest = Schema.Struct({
   checkpoint: Name,
-  name: Name,
+  name: MachineName,
   ...labelled,
 });
 

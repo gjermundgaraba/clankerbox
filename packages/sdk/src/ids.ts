@@ -55,6 +55,23 @@ export const buildCopyName = (kind: keyof typeof copyPrefixes): string =>
 export const isBuildCopy = (name: string): boolean =>
   buildCopyPattern.test(name);
 
+// smolvm takes a VM whose name begins so for a builder of its own, and a smolvm host names a
+// machine's VM `<name>-<instance>`, so the bare word is taken too. Every runtime refuses them, so
+// such a name is refused before its row is recorded and a name means the same on every host:
+// https://github.com/smol-machines/smolvm/blob/v1.34.1/src/image_seed.rs#L1263-L1277
+const builderWords = ["image-seed", "init-bake"];
+
+/** A name a client gives a new machine, which is never smolvm's builders'. */
+export const MachineName = Name.check(
+  Schema.makeFilter(
+    (name: string) =>
+      !builderWords.some(
+        (word) => name === word || name.startsWith(`${word}-`)
+      ) ||
+      `a machine's name isn't ${builderWords.join(" or ")} and doesn't begin ${builderWords.map((word) => `${word}-`).join(" or ")}, which smolvm takes for its own builders`
+  )
+);
+
 /** A name a client gives a checkpoint, which never begins as a build's copy does. */
 export const CheckpointName = Name.check(
   Schema.makeFilter(

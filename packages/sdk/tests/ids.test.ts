@@ -2,7 +2,13 @@ import { it } from "@effect/vitest";
 import { Schema } from "effect";
 import { describe, expect } from "vite-plus/test";
 
-import { CheckpointName, HostId, isBuildCopy, Name } from "../src/index.ts";
+import {
+  CheckpointName,
+  HostId,
+  isBuildCopy,
+  MachineName,
+  Name,
+} from "../src/index.ts";
 
 // https://github.com/smol-machines/smolvm/blob/v1.34.1/src/data/mod.rs#L58
 const smolvmAccepts = (name: string): boolean =>
@@ -77,6 +83,30 @@ describe("ids", () => {
       expect(isCheckpointName(name), name).toBe(false);
       expect(isBuildCopy(name), name).toBe(true);
       expect(isBuildCopy(`${name}-0f3a9c1e`), name).toBe(false);
+    }
+  });
+
+  it("a new machine's name is never smolvm's builders', bare or as a prefix, and only a whole word counts", () => {
+    const isMachineName = Schema.is(MachineName);
+
+    for (const name of [
+      "dev",
+      "image",
+      "image-seeds",
+      "init-baker-1",
+      "my-image-seed",
+    ]) {
+      expect(isMachineName(name), name).toBe(true);
+    }
+
+    for (const name of [
+      "image-seed",
+      "image-seed-x",
+      "init-bake",
+      "init-bake-0f3a",
+    ]) {
+      expect(isMachineName(name), name).toBe(false);
+      expect(Schema.is(Name)(name), name).toBe(true);
     }
   });
 

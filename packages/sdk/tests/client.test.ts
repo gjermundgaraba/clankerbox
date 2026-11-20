@@ -671,6 +671,42 @@ describe("client", () => {
     );
 
     it.effect(
+      "a new machine named as smolvm's builders are is Invalid and sends nothing, on any runtime",
+      () =>
+        Effect.gen(function* () {
+          const stub = server({ machines: [machine("dev")] });
+
+          const errors = yield* withClient(stub, (client) =>
+            Effect.all([
+              Effect.flip(client.create("image-seed", spec)),
+              Effect.flip(
+                client.forkMachine({ machine: "dev", name: "init-bake-x" })
+              ),
+              Effect.flip(
+                client.restoreMachine({
+                  checkpoint: "snap",
+                  name: "image-seed-x",
+                })
+              ),
+            ])
+          );
+
+          expect(errors.map(({ _tag }) => _tag)).toStrictEqual([
+            "Invalid",
+            "Invalid",
+            "Invalid",
+          ]);
+          expect(errors.map(({ action }) => action)).toStrictEqual([
+            "createMachine",
+            "forkMachine",
+            "restoreMachine",
+          ]);
+          expect(errors[0]?.message).toContain("smolvm takes for its own");
+          expect(stub.calls).toStrictEqual([]);
+        })
+    );
+
+    it.effect(
       "a checkpoint named as a build's copy is Invalid and sends nothing",
       () =>
         Effect.gen(function* () {

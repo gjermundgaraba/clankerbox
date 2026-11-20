@@ -272,15 +272,18 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a raw create whose ID is too long is InvalidInput, and makes nothing",
+    "a raw create whose ID is too long, or smolvm's builders', is InvalidInput, and makes nothing",
     () =>
       Effect.gen(function* () {
         const { url, hosts, store } = yield* running();
         const calls = [...hosts[0]!.fake.calls];
         const tooLong = yield* createRaw(url, "a".repeat(64));
+        const builders = yield* createRaw(url, "image-seed-x");
 
         expect(tooLong.status).toBe(400);
         expect(tooLong.body).toContain('"_tag":"InvalidInput"');
+        expect(builders.status).toBe(400);
+        expect(builders.body).toContain("smolvm takes for its own builders");
         expect(yield* store.machines).toStrictEqual([]);
         expect(hosts[0]!.fake.calls).toStrictEqual(calls);
       })
