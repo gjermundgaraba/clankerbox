@@ -5,6 +5,7 @@ import { layer } from "@effect/vitest";
 import { hostKeySetup } from "@gjermundgaraba/clankerbox-host/testing";
 import { startRentedHost } from "@gjermundgaraba/clankerbox-host/testing/rented";
 import type { RentedRuntime } from "@gjermundgaraba/clankerbox-host/testing/rented";
+import { RuntimeName } from "@gjermundgaraba/clankerbox-sdk";
 import type { Sizes } from "@gjermundgaraba/clankerbox-sdk";
 import * as NodeClient from "@gjermundgaraba/clankerbox-sdk/node";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
@@ -41,6 +42,7 @@ const agentOn = (runtime: RentedRuntime) =>
     yield* client.buildTemplate({
       template: "agent",
       base: "ubuntu",
+      runtime: RuntimeName.make(runtime),
       ...sizes,
       setup: { script: `#!/bin/sh\n${hostKeySetup}` },
     });

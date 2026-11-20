@@ -177,6 +177,8 @@ export const decodeJsonError = (text: string) =>
 export const sizes = [
   "--base",
   "ubuntu",
+  "--runtime",
+  "smolvm",
   "--cpu",
   "2",
   "--ram",

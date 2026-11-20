@@ -55,7 +55,7 @@ const home = (dir: string, name: string, url: string) =>
   });
 
 const webFile = (cpu: number) =>
-  `base: ubuntu\ncpu: ${cpu}\nram: 1G\ndisk: 10G\nsetupTimeout: 90s\nsetup: ../recipes/web\n`;
+  `base: ubuntu\nruntime: smolvm\ncpu: ${cpu}\nram: 1G\ndisk: 10G\nsetupTimeout: 90s\nsetup: ../recipes/web\n`;
 
 const writeTemplate = (dir: string, contents: string) =>
   Effect.gen(function* () {
@@ -132,7 +132,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const file = yield* writeTemplate(
           dir,
-          "base: ubuntu\ncpu: 1\nram: 1G\nsetup: ../recipes/web\n"
+          "base: ubuntu\nruntime: smolvm\ncpu: 1\nram: 1G\nsetup: ../recipes/web\n"
         );
 
         const missing = yield* run(["template", "build", file, "--json"]);

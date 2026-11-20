@@ -9,15 +9,22 @@ import {
   NotFound,
   version,
   versionHeader,
+  RuntimeName,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { MachineSpec } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Exit, Fiber, Layer, Schema } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { expect } from "vite-plus/test";
 
-import { saving, clientOf, eventually, running } from "../support.ts";
+import { saving, clientOf, eventually, running, runtimes } from "../support.ts";
 
-const spec: MachineSpec = { base: "ubuntu", cpu: 1, ramMib: 1024, diskGib: 10 };
+const spec: MachineSpec = {
+  base: "ubuntu",
+  runtime: RuntimeName.make("smolvm"),
+  cpu: 1,
+  ramMib: 1024,
+  diskGib: 10,
+};
 
 const versioned = (sent: string) => ({ [versionHeader]: sent });
 
@@ -224,7 +231,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { url, store } = yield* running(saving);
         const client = yield* clientOf(url);
 
-        yield* client.create("dev", spec);
+        yield* client.create("dev", { ...spec, runtime: runtimes.saving });
 
         const copy = yield* client.forkMachine({
           machine: "dev",

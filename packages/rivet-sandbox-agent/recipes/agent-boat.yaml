@@ -1,4 +1,5 @@
 base: ubuntu
+runtime: boat
 cpu: 2
 ram: 4G
 disk: 80G

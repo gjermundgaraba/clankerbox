@@ -43,6 +43,7 @@ const image = "registry.example/amp/orb:latest";
 
 interface Written {
   readonly server: string;
+  readonly runtime: string;
   readonly sizes: Readonly<
     Record<string, { cpu: number; ramMib: number; diskGib: number }>
   >;
@@ -53,6 +54,7 @@ const large = { cpu: 8, ramMib: 16_384, diskGib: 80 };
 
 const settings: Written = {
   server: serverUrl,
+  runtime: "smolvm",
   sizes: {
     default: { cpu: 4, ramMib: 8192, diskGib: 40 },
     large,
@@ -145,6 +147,7 @@ layer(NodeServices.layer)((it) => {
             {
               id: "amp-T-123",
               base: image,
+              runtime: "smolvm",
               cpu: 8,
               ramMib: 16_384,
               diskGib: 80,
@@ -430,6 +433,7 @@ layer(NodeServices.layer)((it) => {
       Effect.gen(function* () {
         const result = yield* dispatched(spawnEnv, server(), {
           server: serverUrl,
+          runtime: "smolvm",
           sizes: { large },
         });
 

@@ -2,6 +2,7 @@ import { cpSync, rmSync } from "node:fs";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
+import { RuntimeName } from "@gjermundgaraba/clankerbox-sdk";
 import type { BuildRequest } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Fiber } from "effect";
 import { expect } from "vite-plus/test";
@@ -14,6 +15,7 @@ import {
   plane,
   request,
   running,
+  runtimes,
 } from "./support.ts";
 import type { Started } from "./support.ts";
 
@@ -52,6 +54,7 @@ const handleOf = (served: Pick<Started, "store">, name: string) =>
 const web: BuildRequest = {
   template: "web",
   base: "ubuntu",
+  runtime: RuntimeName.make("fixed"),
   cpu: 1,
   ramMib: 1024,
   diskGib: 10,
@@ -64,7 +67,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const served = yield* onFixed();
 
       for (const name of ["one", "two"]) {
-        yield* served.client.create(name, request(name));
+        yield* served.client.create(
+          name,
+          request(name, { runtime: runtimes.fixed })
+        );
         yield* served.client.stopMachine({ id: name });
         yield* served.client.captureCheckpoint({
           machine: name,
@@ -96,7 +102,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const served = yield* onFixed();
 
       for (const name of ["one", "two"]) {
-        yield* served.client.create(name, request(name));
+        yield* served.client.create(
+          name,
+          request(name, { runtime: runtimes.fixed })
+        );
         yield* served.client.stopMachine({ id: name });
         yield* served.client.captureCheckpoint({
           machine: name,
@@ -144,11 +153,18 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const land = yield* served.host.fake.faults.landLate;
 
         const failed = yield* Effect.exit(
-          served.client.create("dev", request("dev"))
+          served.client.create(
+            "dev",
+            request("dev", { runtime: runtimes.fixed })
+          )
         );
 
         const [undone] = yield* served.store.machines;
-        const replaced = yield* served.client.create("dev", request("dev"));
+
+        const replaced = yield* served.client.create(
+          "dev",
+          request("dev", { runtime: runtimes.fixed })
+        );
 
         yield* land;
 
@@ -173,9 +189,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const served = yield* onFixed();
 
-        yield* served.client.create("old", request("old"));
+        yield* served.client.create(
+          "old",
+          request("old", { runtime: runtimes.fixed })
+        );
         yield* served.client.deleteMachine({ id: "old" });
-        yield* served.client.create("dev", request("dev"));
+        yield* served.client.create(
+          "dev",
+          request("dev", { runtime: runtimes.fixed })
+        );
         yield* served.client.stopMachine({ id: "dev" });
         yield* served.client.captureCheckpoint({
           machine: "dev",
@@ -204,7 +226,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const served = yield* onFixed();
 
-        yield* served.client.create("dev", request("dev"));
+        yield* served.client.create(
+          "dev",
+          request("dev", { runtime: runtimes.fixed })
+        );
         yield* served.client.stopMachine({ id: "dev" });
 
         const held = served.host.fake.holdNext("capture");
@@ -254,7 +279,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const first = yield* planned.start();
         const client = yield* clientOf(first.url);
 
-        yield* client.create("dev", request("dev"));
+        yield* client.create(
+          "dev",
+          request("dev", { runtime: runtimes.fixed })
+        );
         yield* client.stopMachine({ id: "dev" });
         yield* client.captureCheckpoint({ machine: "dev", name: "snap" });
         yield* first.crash;
@@ -265,7 +293,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const other = yield* clientOf(second.url);
 
         yield* Effect.addFinalizer(() => second.crash);
-        yield* other.create("its-own", request("its-own"));
+        yield* other.create(
+          "its-own",
+          request("its-own", { runtime: runtimes.fixed })
+        );
         yield* other.deleteMachine({ id: "its-own" });
         yield* Effect.sleep(Duration.seconds(1));
 
@@ -285,7 +316,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const aside = `${planned.dir}/first-store`;
         const first = yield* planned.start();
 
-        yield* (yield* clientOf(first.url)).create("dev", request("dev"));
+        yield* (yield* clientOf(first.url)).create(
+          "dev",
+          request("dev", { runtime: runtimes.fixed })
+        );
         yield* first.crash;
 
         cpSync(planned.stateDir, aside, { recursive: true });
@@ -294,7 +328,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const other = yield* planned.start();
         const otherClient = yield* clientOf(other.url);
 
-        yield* otherClient.create("its-own", request("its-own"));
+        yield* otherClient.create(
+          "its-own",
+          request("its-own", { runtime: runtimes.fixed })
+        );
         yield* otherClient.deleteMachine({ id: "its-own" });
         yield* Effect.sleep(Duration.seconds(1));
         yield* other.crash;
@@ -325,14 +362,20 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const backup = `${planned.dir}/backup`;
         const first = yield* planned.start();
 
-        yield* (yield* clientOf(first.url)).create("old", request("old"));
+        yield* (yield* clientOf(first.url)).create(
+          "old",
+          request("old", { runtime: runtimes.fixed })
+        );
         yield* first.crash;
 
         cpSync(planned.stateDir, backup, { recursive: true });
 
         const second = yield* planned.start();
 
-        yield* (yield* clientOf(second.url)).create("new", request("new"));
+        yield* (yield* clientOf(second.url)).create(
+          "new",
+          request("new", { runtime: runtimes.fixed })
+        );
         yield* second.crash;
 
         rmSync(planned.stateDir, { recursive: true, force: true });
@@ -342,7 +385,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const client = yield* clientOf(restored.url);
 
         yield* Effect.addFinalizer(() => restored.crash);
-        yield* client.create("gone", request("gone"));
+        yield* client.create(
+          "gone",
+          request("gone", { runtime: runtimes.fixed })
+        );
         yield* client.deleteMachine({ id: "gone" });
         yield* Effect.sleep(Duration.seconds(1));
 

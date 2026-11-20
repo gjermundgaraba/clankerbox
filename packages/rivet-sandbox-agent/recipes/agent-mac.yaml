@@ -1,4 +1,5 @@
 base: macos
+runtime: tart
 cpu: 4
 ram: 8G
 disk: 150G

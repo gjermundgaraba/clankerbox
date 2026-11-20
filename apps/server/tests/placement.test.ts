@@ -4,7 +4,11 @@ import { describe, expect, layer } from "@effect/vitest";
 import { presets } from "@gjermundgaraba/clankerbox-host/testing";
 import { traits as boat } from "@gjermundgaraba/clankerbox-host/testing/boat";
 import { traits as smolCloud } from "@gjermundgaraba/clankerbox-host/testing/smol-cloud";
-import { Capacity, Internal } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  Capacity,
+  Internal,
+  RuntimeName,
+} from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Option, Result } from "effect";
 
 import { Incompatible, Unanswered } from "../src/hosts.ts";
@@ -95,14 +99,21 @@ const ids = (hosts: readonly HostInfo[]) => hosts.map(({ id }) => id);
 
 const asked = { sizes: small, host: undefined, tailnet: false };
 
+const smolvm = RuntimeName.make("smolvm");
+
 const placed = (
   reached: readonly Reached[],
   base = "ubuntu",
-  ask: Ask = asked
-) => ids(Result.getOrThrow(placing(reached, base, ask)));
+  ask: Ask = asked,
+  runtime: RuntimeName = smolvm
+) => ids(Result.getOrThrow(placing(reached, base, runtime, ask)));
 
-const refusal = (reached: readonly Reached[], base: string, ask: Ask = asked) =>
-  Result.getOrThrow(Result.flip(placing(reached, base, ask)));
+const refusal = (
+  reached: readonly Reached[],
+  base: string,
+  ask: Ask = asked,
+  runtime: RuntimeName = smolvm
+) => Result.getOrThrow(Result.flip(placing(reached, base, runtime, ask)));
 
 const hostOf = (
   served: {
@@ -144,7 +155,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ]) {
             expect(refusal([drained], "ubuntu")).toMatchObject({
               _tag: "NotOffered",
-              message: "no host offers base ubuntu: a is draining",
+              message: "no smolvm host offers base ubuntu: a is draining",
             });
           }
         })
@@ -162,7 +173,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           expect(refusal([classed("a", larger)], "ubuntu")).toMatchObject({
             _tag: "Unsizable",
             message:
-              "no host that offers base ubuntu gives the sizes asked: a has no size class of 1 vCPU, 1G of RAM and 10G of disk, and gives only its size classes c0 (2 vCPUs, 1G of RAM, 10G of disk)",
+              "no smolvm host that offers base ubuntu gives the sizes asked: a has no size class of 1 vCPU, 1G of RAM and 10G of disk, and gives only its size classes c0 (2 vCPUs, 1G of RAM, 10G of disk)",
           });
         })
     );
@@ -185,18 +196,19 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
                 },
               ],
               "ubuntu",
-              { ...asked, sizes: { cpu: 3, ramMib: 6144, diskGib: 40 } }
+              { ...asked, sizes: { cpu: 3, ramMib: 6144, diskGib: 40 } },
+              presets.fixed.traits.runtime
             )
           ).toMatchObject({
             _tag: "Unsizable",
             message:
-              "no host that offers base ubuntu gives the sizes asked: fixed-1 has no size class of 3 vCPUs, 6G of RAM and 40G of disk, and gives only its size classes small (1 vCPU, 1G of RAM, 10G of disk), default (2 vCPUs, 4G of RAM, 20G of disk), large (4 vCPUs, 8G of RAM, 40G of disk)",
+              "no fixed host that offers base ubuntu gives the sizes asked: fixed-1 has no size class of 3 vCPUs, 6G of RAM and 40G of disk, and gives only its size classes small (1 vCPU, 1G of RAM, 10G of disk), default (2 vCPUs, 4G of RAM, 20G of disk), large (4 vCPUs, 8G of RAM, 40G of disk)",
           });
         })
     );
 
     it.effect(
-      "a fleet of smolvm, smol cloud and boat hosts takes one of boat's types on all three, other sizes off boat, and refuses them on boat by its types",
+      "a fleet of smolvm, smol cloud and boat hosts places an ask only on hosts of its runtime, saying of each other host the runtime it runs, and refuses sizes on boat by its types",
       () =>
         Effect.sync(() => {
           const fleet = [
@@ -205,25 +217,31 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             withTraits(up("boat-1"), boat),
           ];
 
-          const boatSmall = { cpu: 2, ramMib: 4096, diskGib: 80 };
-          const odd = { sizes: { cpu: 3, ramMib: 6144, diskGib: 40 } };
+          const boatSmall = {
+            ...asked,
+            sizes: { cpu: 2, ramMib: 4096, diskGib: 80 },
+          };
+
+          const odd = {
+            ...asked,
+            sizes: { cpu: 3, ramMib: 6144, diskGib: 40 },
+          };
 
           expect(
-            placed(fleet, "ubuntu", {
-              sizes: boatSmall,
-              host: undefined,
-              tailnet: false,
-            })
-          ).toStrictEqual(["smolvm-1", "smol-cloud-1", "boat-1"]);
-          expect(
-            placed(fleet, "ubuntu", { ...odd, host: undefined, tailnet: false })
-          ).toStrictEqual(["smolvm-1", "smol-cloud-1"]);
-          expect(
-            refusal(fleet, "ubuntu", { ...odd, host: "boat-1", tailnet: false })
-          ).toMatchObject({
+            [smolvm, smolCloud.runtime, boat.runtime].map((runtime) =>
+              placed(fleet, "ubuntu", boatSmall, runtime)
+            )
+          ).toStrictEqual([["smolvm-1"], ["smol-cloud-1"], ["boat-1"]]);
+          expect(refusal(fleet, "ubuntu", odd, boat.runtime)).toMatchObject({
             _tag: "Unsizable",
             message:
-              "no host that offers base ubuntu gives the sizes asked: boat-1 has no size class of 3 vCPUs, 6G of RAM and 40G of disk, and gives only its size classes small (2 vCPUs, 4G of RAM, 80G of disk), default (4 vCPUs, 8G of RAM, 80G of disk), large (8 vCPUs, 16G of RAM, 149G of disk)",
+              "no boat host that offers base ubuntu gives the sizes asked: smolvm-1 runs smolvm; smol-cloud-1 runs smol-cloud; boat-1 has no size class of 3 vCPUs, 6G of RAM and 40G of disk, and gives only its size classes small (2 vCPUs, 4G of RAM, 80G of disk), default (4 vCPUs, 8G of RAM, 80G of disk), large (8 vCPUs, 16G of RAM, 149G of disk)",
+          });
+          expect(
+            refusal(fleet, "ubuntu", { ...boatSmall, host: "boat-1" })
+          ).toMatchObject({
+            _tag: "NotOffered",
+            message: "no smolvm host offers base ubuntu: boat-1 runs boat",
           });
         })
     );
@@ -261,51 +279,51 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     );
 
     it.effect(
-      "a fleet of a smolvm host and a smol cloud host offers both in config order, for a base, an image reference and any sizes",
+      "a fleet of a smolvm host and a smol cloud host, which both take a base and an image reference at any sizes, places each runtime's ask on its own host alone",
       () =>
         Effect.sync(() => {
           const fleet = [up("local"), withTraits(up("cloud"), smolCloud)];
+          const reference = "docker.io/library/ubuntu:24.04";
 
-          expect(placed(fleet)).toStrictEqual(["local", "cloud"]);
-          expect(placed(fleet, "docker.io/library/ubuntu:24.04")).toStrictEqual(
-            ["local", "cloud"]
-          );
+          const sized = {
+            ...asked,
+            sizes: { cpu: 3, ramMib: 3000, diskGib: 33 },
+          };
+
+          for (const base of ["ubuntu", reference]) {
+            expect(placed(fleet, base, sized)).toStrictEqual(["local"]);
+            expect(placed(fleet, base, sized, smolCloud.runtime)).toStrictEqual(
+              ["cloud"]
+            );
+          }
+
           expect(
-            placed(fleet, "ubuntu", {
-              ...asked,
-              sizes: { cpu: 3, ramMib: 3000, diskGib: 33 },
-            })
-          ).toStrictEqual(["local", "cloud"]);
-          expect(
-            placed(fleet, "ubuntu", { ...asked, host: "cloud" })
-          ).toStrictEqual(["cloud"]);
+            refusal(fleet, "ubuntu", { ...asked, host: "cloud" })
+          ).toMatchObject({
+            _tag: "NotOffered",
+            message: "no smolvm host offers base ubuntu: cloud runs smol-cloud",
+          });
         })
     );
 
     it.effect(
-      "a smol cloud host whose plan gives a machine at most 4 vCPUs, 16G of RAM and 200G of disk is passed over past them, and alone refuses them Unsizable, naming them",
+      "a smol cloud host whose plan gives a machine at most 4 vCPUs, 16G of RAM and 200G of disk refuses a smol cloud ask past them Unsizable, naming them, though a smolvm host would take it",
       () =>
         Effect.sync(() => {
           const fleet = [up("local"), withTraits(up("cloud"), smolCloud)];
-          const big = { cpu: 8, ramMib: 1024, diskGib: 10 };
 
+          const big = {
+            ...asked,
+            sizes: { cpu: 8, ramMib: 1024, diskGib: 10 },
+          };
+
+          expect(placed(fleet, "ubuntu", big)).toStrictEqual(["local"]);
           expect(
-            placed(fleet, "ubuntu", {
-              sizes: big,
-              host: undefined,
-              tailnet: false,
-            })
-          ).toStrictEqual(["local"]);
-          expect(
-            refusal(fleet, "ubuntu", {
-              sizes: big,
-              host: "cloud",
-              tailnet: false,
-            })
+            refusal(fleet, "ubuntu", big, smolCloud.runtime)
           ).toMatchObject({
             _tag: "Unsizable",
             message:
-              "no host that offers base ubuntu gives the sizes asked: cloud gives any sizes up to 4 vCPUs, 16G of RAM and 200G of disk, not 8 vCPUs, 1G of RAM and 10G of disk",
+              "no smol-cloud host that offers base ubuntu gives the sizes asked: local runs smolvm; cloud gives any sizes up to 4 vCPUs, 16G of RAM and 200G of disk, not 8 vCPUs, 1G of RAM and 10G of disk",
           });
         })
     );
@@ -333,7 +351,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             _tag: "Unavailable",
             readOnly: true,
           });
-          expect(noReply.message).toContain("no host answered");
+          expect(noReply.message).toContain("no smolvm host answered");
           expect(noReply.message).toContain("b failed: connection refused");
         })
     );
@@ -733,25 +751,36 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a create moved to the next host takes that host's traits, and is made there",
+    "a create a full host refuses moves on to the next host of its runtime, passing over a host of another, and fails Capacity where none is left",
     () =>
       Effect.gen(function* () {
         const served = yield* running({
-          hosts: [{ id: "a" }, { id: "b", as: "tart" }],
+          hosts: [{ id: "a" }, { id: "mac", as: "tart" }, { id: "c" }],
         });
 
         const client = yield* clientOf(served.url);
-        const [first, second] = served.hosts;
+        const [first, mac, third] = served.hosts;
 
         first?.fake.failNext("admit", new Capacity({ message: "no room" }));
 
-        const machine = yield* client.create("dev", request("dev"));
+        const moved = yield* client.create("dev", request("dev"));
 
-        const found = Option.getOrThrow(yield* served.store.findMachine("dev"));
+        first?.fake.failNext("admit", new Capacity({ message: "no room" }));
+        third?.fake.failNext("admit", new Capacity({ message: "still none" }));
 
-        expect(machine.runtime).toBe("tart");
-        expect(found.pin).toBeUndefined();
-        expect(second?.fake.calls).toContain("create dev");
+        const full = yield* Effect.flip(client.create("big", request("big")));
+
+        expect([moved.runtime, yield* hostOf(served, "dev")]).toStrictEqual([
+          "smolvm",
+          Option.some("c"),
+        ]);
+        expect([full._tag, full.message]).toStrictEqual([
+          "Capacity",
+          "still none",
+        ]);
+        expect(
+          mac?.fake.calls.filter((call) => call !== "startup")
+        ).toStrictEqual([]);
       })
   );
 

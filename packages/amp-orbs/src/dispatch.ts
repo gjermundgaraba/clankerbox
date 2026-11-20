@@ -85,7 +85,7 @@ const spawn = Effect.fn("spawn")(function* (
   };
 
   const machine = yield* client.ensure(name, {
-    spec: { base: image, ...sizes },
+    spec: { base: image, runtime: settings.runtime, ...sizes },
     checkpoint: Option.getOrUndefined(Option.map(job.snapshot, nameFor)),
     labels,
   });

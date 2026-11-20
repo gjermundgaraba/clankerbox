@@ -76,9 +76,23 @@ it.effect(
     Effect.gen(function* () {
       const said = yield* Effect.forEach(
         [
-          { id: "dev", base: "ubuntu", cpu: 0, ramMib: 1024, diskGib: 10 },
+          {
+            id: "dev",
+            base: "ubuntu",
+            runtime: "smolvm",
+            cpu: 0,
+            ramMib: 1024,
+            diskGib: 10,
+          },
           { id: "dev", template: "web", cpu: 0 },
-          { id: "2dev", base: "ubuntu", cpu: 1, ramMib: 1024, diskGib: 10 },
+          {
+            id: "2dev",
+            base: "ubuntu",
+            runtime: "smolvm",
+            cpu: 1,
+            ramMib: 1024,
+            diskGib: 10,
+          },
           { id: "dev" },
         ],
         (input) =>
@@ -111,9 +125,15 @@ it.effect(
       const said = yield* Effect.forEach(
         [
           { id: "dev", template: "web", base: "ubuntu", ...sizes },
-          { id: "dev", base: "ubuntu", ...sizes, extra: 1 },
-          { id: 5, base: "ubuntu", ...sizes },
-          { id: "dev", base: "ubuntu", cpu: 1, ramMib: 1024 },
+          { id: "dev", base: "ubuntu", runtime: "smolvm", ...sizes, extra: 1 },
+          { id: 5, base: "ubuntu", runtime: "smolvm", ...sizes },
+          {
+            id: "dev",
+            base: "ubuntu",
+            runtime: "smolvm",
+            cpu: 1,
+            ramMib: 1024,
+          },
           { id: 5 },
         ],
         (input) =>

@@ -1,4 +1,9 @@
-import { describeIssues, Invalid, Sizes } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  describeIssues,
+  Invalid,
+  RuntimeName,
+  Sizes,
+} from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, FileSystem, Schema } from "effect";
 
 /** The orb type a thread gets when it picks none, and whose sizes an unknown type gets too. */
@@ -9,9 +14,14 @@ export const defaultUser = "user";
 
 export const defaultSnapshotExpiry = Duration.days(14);
 
-/** The dispatch program's settings file. `snapshotExpiry` is a duration such as `"14 days"`. */
+/**
+ * The dispatch program's settings file. `runtime` is the one every orb's machine is created on,
+ * such as `smolvm`, of those that take an image reference. `snapshotExpiry` is a duration such as
+ * `"14 days"`.
+ */
 export const Settings = Schema.Struct({
   server: Schema.String,
+  runtime: RuntimeName,
   sizes: Schema.Record(Schema.String, Sizes),
   user: Schema.optionalKey(Schema.NonEmptyString),
   snapshotExpiry: Schema.optionalKey(Schema.DurationFromString),
@@ -19,6 +29,7 @@ export const Settings = Schema.Struct({
 
 export interface Loaded {
   readonly server: string;
+  readonly runtime: RuntimeName;
   readonly sizes: Readonly<Record<string, Sizes>>;
   readonly fallback: Sizes;
   readonly user: string;
@@ -58,6 +69,7 @@ export const loadSettings = Effect.fn("loadSettings")(function* (
 
   return {
     server: settings.server,
+    runtime: settings.runtime,
     sizes: settings.sizes,
     fallback,
     user: settings.user ?? defaultUser,

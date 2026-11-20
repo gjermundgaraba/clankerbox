@@ -23,6 +23,7 @@ import {
   restartedHost,
   running,
   stageOf,
+  runtimes,
 } from "./support.ts";
 import type { Started } from "./support.ts";
 
@@ -501,7 +502,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const [host] = planned.hosts;
 
-        yield* client.create("dev", request("dev"));
+        yield* client.create(
+          "dev",
+          request("dev", { runtime: runtimes.saving })
+        );
         yield* client.captureCheckpoint({ machine: "dev", name: "snap" });
         fake.calls.length = 0;
 

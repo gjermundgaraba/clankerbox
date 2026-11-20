@@ -55,6 +55,8 @@ const twoHosts = { hosts: [{ id: "alpha" }, { id: "beta" }] };
 const sizes = [
   "--base",
   "ubuntu",
+  "--runtime",
+  "smolvm",
   "--cpu",
   "1",
   "--ram",
@@ -87,7 +89,7 @@ ${hostKeySetup}echo ran >>"${path.join(dir, "setup-runs")}"
     );
     yield* write(
       file,
-      "base: ubuntu\ncpu: 1\nram: 1G\ndisk: 10G\nsetup: web-setup.sh\n"
+      "base: ubuntu\nruntime: smolvm\ncpu: 1\nram: 1G\ndisk: 10G\nsetup: web-setup.sh\n"
     );
 
     return file;
@@ -277,7 +279,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const big = yield* run([
           "create",
           "big",
-          ...sizes.slice(0, 4),
+          ...sizes.slice(0, 6),
           "--ram",
           "2G",
           "--disk",
@@ -593,7 +595,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* write(script, setupScript);
         yield* write(
           file,
-          "base: ubuntu\ncpu: 1\nram: 1G\ndisk: 10G\nsetup: setup.sh\n"
+          "base: ubuntu\nruntime: smolvm\ncpu: 1\nram: 1G\ndisk: 10G\nsetup: setup.sh\n"
         );
         yield* run(["template", "build", file]);
 
@@ -808,7 +810,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const first = yield* run([
           "create",
           "big",
-          ...sizes.slice(0, 4),
+          ...sizes.slice(0, 6),
           "--ram",
           "2G",
           "--disk",

@@ -84,6 +84,8 @@ layer(NodeServices.layer)((it) => {
               name,
               "--base",
               "ubuntu",
+              "--runtime",
+              "smolvm",
               "--cpu",
               "1",
               "--ram",

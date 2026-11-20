@@ -504,16 +504,21 @@ const fromTemplate = { template: TemplateRef, ...Sizing.fields, ...placed };
 
 const fromBase = {
   base: Schema.String,
+  runtime: RuntimeName,
   ...Sizes.fields,
   ...placed,
   tailnet: Schema.optionalKey(Schema.Literal(true)),
 };
 
-/** A template's build, at its sizes or the larger ones given, with no setup run. */
+/**
+ * A template's build, at its sizes or the larger ones given, with no setup run. Its clone runs on
+ * the build's runtime, as only hosts of that runtime hold a copy of the build.
+ */
 export const TemplateSpec = Schema.Struct(fromTemplate);
 
 /**
- * A base, at the sizes given, with no setup run: only a template's build runs one. With `tailnet`,
+ * A base on `runtime`, at the sizes given, with no setup run: only a template's build runs one.
+ * Only a host of that runtime takes it, a host a full one moves it on to included. With `tailnet`,
  * the machine joins the control plane's tailnet, and only a host that joins machines to it takes
  * it.
  */
@@ -697,8 +702,9 @@ export const ResizeRequest = Schema.Struct({
 export type ResizeRequest = typeof ResizeRequest.Type;
 
 /**
- * A build of `template` from `base` at its sizes, with `setup`, on `host` if one is named. Each
- * build gives them all, and a setup without a timeout takes the host's. With `tailnet`, its setup
+ * A build of `template` from `base` on `runtime` at its sizes, with `setup`, on `host` if one is
+ * named. Each build gives them all, and a setup without a timeout takes the host's. Only a host of
+ * that runtime takes the build, so each of its clones runs on it too. With `tailnet`, its setup
  * runs on the control plane's tailnet and each machine cloned from it joins it.
  */
 export const BuildRequest = Schema.Struct({

@@ -767,7 +767,14 @@ export const make = (
 
     const fromBase = (request: BaseCreate) =>
       Effect.gen(function* () {
-        const { id: name, labels, host, tailnet: asks, ...sizes } = request;
+        const {
+          id: name,
+          labels,
+          host,
+          runtime,
+          tailnet: asks,
+          ...sizes
+        } = request;
 
         const refused = unserved(asks, tailnet);
 
@@ -776,7 +783,7 @@ export const make = (
         }
 
         const [first, ...rest] = yield* Effect.fromResult(
-          placing(yield* hosts.reachAll, sizes.base, {
+          placing(yield* hosts.reachAll, sizes.base, runtime, {
             sizes,
             host,
             tailnet: asks === true,

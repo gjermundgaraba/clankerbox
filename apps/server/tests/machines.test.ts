@@ -32,6 +32,7 @@ import {
   restartedHost,
   running,
   stageOf,
+  runtimes,
 } from "./support.ts";
 
 const theirs =
@@ -182,7 +183,12 @@ const built = (options?: Parameters<typeof served>[0]) =>
 
     yield* plane.client.buildTemplate({
       template: "web",
-      ...request("unused", { cpu: 2, ramMib: 2048, diskGib: 20 }),
+      ...request("unused", {
+        runtime: runtimes[options?.hosts?.[0]?.as ?? "smolvm"],
+        cpu: 2,
+        ramMib: 2048,
+        diskGib: 20,
+      }),
       setup: countsRuns(plane.dir),
     });
     yield* eventually(plane.store.machines, (rows) =>
@@ -204,7 +210,9 @@ const servedWithBuildOf = (
 
     yield* plane.client.buildTemplate({
       template: "web",
-      ...request("unused"),
+      ...request("unused", {
+        runtime: runtimes[options?.hosts?.[0]?.as ?? "smolvm"],
+      }),
       setup,
     });
     yield* eventually(plane.store.machines, (rows) =>
@@ -354,7 +362,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         hosts: [{ id: "tart", as: "tart" }],
       });
 
-      const made = yield* client.create("dev", request("dev"));
+      const made = yield* client.create(
+        "dev",
+        request("dev", { runtime: runtimes.tart })
+      );
 
       expect(made).toMatchObject({ id: "dev", runtime: "tart" });
     })
@@ -1394,7 +1405,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     Effect.gen(function* () {
       const { asking, client, fake } = yield* served(saving);
 
-      yield* client.create("dev", request("dev"));
+      yield* client.create("dev", request("dev", { runtime: runtimes.saving }));
       fake.calls.length = 0;
 
       const pausing = fake.holdNext("pause");
@@ -1421,7 +1432,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const { client, fake, pins } = yield* served(saving);
 
-        yield* client.create("dev", request("dev"));
+        yield* client.create(
+          "dev",
+          request("dev", { runtime: runtimes.saving })
+        );
         fake.calls.length = 0;
 
         const booted = yield* pins;
@@ -1512,7 +1526,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const { bootedUnder, client, fake, pins } = yield* served(saving);
 
-        yield* client.create("dev", request("dev"));
+        yield* client.create(
+          "dev",
+          request("dev", { runtime: runtimes.saving })
+        );
         yield* client.pauseMachine({ id: "dev" });
         yield* bootedUnder("dev", "fake 0");
         fake.calls.length = 0;
@@ -1615,7 +1632,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { client, fake, machine, machines, store } =
           yield* served(saving);
 
-        yield* client.create("dev", request("dev"));
+        yield* client.create(
+          "dev",
+          request("dev", { runtime: runtimes.saving })
+        );
         yield* client.pauseMachine({ id: "dev" });
         fake.calls.length = 0;
 
@@ -2200,7 +2220,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           recheck: Duration.millis(200),
         });
 
-        yield* client.create("dev", request("dev"));
+        yield* client.create(
+          "dev",
+          request("dev", { runtime: runtimes.fixed })
+        );
 
         fake.calls.length = 0;
         yield* fake.faults.drift(fake.machines.get("dev")?.instance ?? "");
@@ -2227,7 +2250,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       });
 
       const odd = { cpu: 3, ramMib: 6144, diskGib: 40 };
-      yield* client.create("dev", request("dev"));
+      yield* client.create("dev", request("dev", { runtime: runtimes.fixed }));
       yield* client.stopMachine({ id: "dev" });
       yield* client.captureCheckpoint({ machine: "dev", name: "snap" });
 
@@ -2260,7 +2283,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const odd = { cpu: 3, ramMib: 6144, diskGib: 40 };
 
-        yield* client.create("dev", request("dev"));
+        yield* client.create(
+          "dev",
+          request("dev", { runtime: runtimes.fixed })
+        );
         yield* client.stopMachine({ id: "dev" });
         yield* client.captureCheckpoint({ machine: "dev", name: "snap" });
         fake.calls.length = 0;
@@ -3401,7 +3427,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     Effect.gen(function* () {
       const { asking, client, fake, machine, row } = yield* served(saving);
 
-      yield* client.create("dev", request("dev"));
+      yield* client.create("dev", request("dev", { runtime: runtimes.saving }));
       yield* client.pauseMachine({ id: "dev" });
 
       const resuming = fake.holdNext("admit");
@@ -3501,9 +3527,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           hosts: [{ id: "tart", as: "tart" }],
         });
 
-        yield* linux.client.create("dev", request("dev", { cpu: 2 }));
+        yield* linux.client.create(
+          "dev",
+          request("dev", { runtime: runtimes.saving, cpu: 2 })
+        );
         yield* linux.client.captureCheckpoint({ machine: "dev", name: "snap" });
-        yield* mac.client.create("dev", request("dev"));
+        yield* mac.client.create(
+          "dev",
+          request("dev", { runtime: runtimes.tart })
+        );
         yield* mac.client.stopMachine({ id: "dev" });
         linux.fake.calls.length = 0;
         mac.fake.calls.length = 0;
@@ -3556,7 +3588,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const { client, fake, machine, rows, store } = yield* served(saving);
 
-        yield* client.create("dev", request("dev"));
+        yield* client.create(
+          "dev",
+          request("dev", { runtime: runtimes.saving })
+        );
         yield* client.stopMachine({ id: "dev" });
         fake.failNext("start", new Internal({ message: "start refused" }));
         yield* Effect.flip(client.startMachine({ id: "dev" }));
@@ -3599,8 +3634,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const mac = yield* served({ hosts: [{ id: "fixed", as: "fixed" }] });
         const linux = yield* served(saving);
 
-        yield* mac.client.create("dev", request("dev"));
-        yield* linux.client.create("dev", request("dev"));
+        yield* mac.client.create(
+          "dev",
+          request("dev", { runtime: runtimes.fixed })
+        );
+        yield* linux.client.create(
+          "dev",
+          request("dev", { runtime: runtimes.saving })
+        );
         yield* linux.client.stopMachine({ id: "dev" });
         mac.fake.calls.length = 0;
         linux.fake.calls.length = 0;
@@ -3671,7 +3712,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const mac = yield* served({ hosts: [{ id: "tart", as: "tart" }] });
 
-        yield* mac.client.create("dev", request("dev"));
+        yield* mac.client.create(
+          "dev",
+          request("dev", { runtime: runtimes.tart })
+        );
 
         const stopping = mac.fake.holdNext("stop");
 
@@ -3727,7 +3771,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const { asking, client, fake, machine } = yield* served(saving);
 
-        yield* client.create("dev", request("dev"));
+        yield* client.create(
+          "dev",
+          request("dev", { runtime: runtimes.saving })
+        );
 
         const { release, entered } = fake.holdNext("resize");
 
@@ -3765,7 +3812,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           hosts: [{ id: "tart", as: "tart" }],
         });
 
-        yield* client.create("dev", request("dev", { cpu: 4, ramMib: 8192 }));
+        yield* client.create(
+          "dev",
+          request("dev", { runtime: runtimes.tart, cpu: 4, ramMib: 8192 })
+        );
         yield* client.stopMachine({ id: "dev" });
 
         const { release, entered } = fake.holdNext("resize");
@@ -3790,7 +3840,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         hosts: [{ id: "tart", as: "tart" }],
       });
 
-      yield* client.create("dev", request("dev", { cpu: 4, ramMib: 8192 }));
+      yield* client.create(
+        "dev",
+        request("dev", { runtime: runtimes.tart, cpu: 4, ramMib: 8192 })
+      );
       yield* client.stopMachine({ id: "dev" });
 
       const forked = yield* client.forkMachine({

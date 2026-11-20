@@ -82,6 +82,8 @@ describe("commands", () => {
               "dev",
               "--base",
               "fedora",
+              "--runtime",
+              "smolvm",
               "--cpu",
               "1",
               "--ram",

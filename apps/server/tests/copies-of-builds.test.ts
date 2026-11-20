@@ -6,7 +6,11 @@ import type {
   startHost,
   TestHost,
 } from "@gjermundgaraba/clankerbox-host/testing";
-import { Internal, isBuildCopy } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  Internal,
+  isBuildCopy,
+  RuntimeName,
+} from "@gjermundgaraba/clankerbox-sdk";
 import type { BuildRequest } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Option } from "effect";
 import { expect } from "vite-plus/test";
@@ -17,6 +21,7 @@ import type { Started } from "./support.ts";
 const web: BuildRequest = {
   template: "web",
   base: "ubuntu",
+  runtime: RuntimeName.make("smolvm"),
   cpu: 1,
   ramMib: 1024,
   diskGib: 10,

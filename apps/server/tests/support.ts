@@ -15,7 +15,7 @@ import type {
   TestHost,
 } from "@gjermundgaraba/clankerbox-host/testing";
 import { planeRange } from "@gjermundgaraba/clankerbox-host/testing/port-slot";
-import { Client, version } from "@gjermundgaraba/clankerbox-sdk";
+import { Client, RuntimeName, version } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   CreateRequest,
   Internal,
@@ -86,6 +86,14 @@ export const restartedHost = (
 
 export const quiet = Duration.hours(1);
 
+/** The runtime of each fake host a test plane runs, for the create or build it places there. */
+export const runtimes = {
+  smolvm: RuntimeName.make("smolvm"),
+  saving: RuntimeName.make("saving"),
+  tart: RuntimeName.make("tart"),
+  fixed: RuntimeName.make("fixed"),
+};
+
 type BaseRequest = Extract<CreateRequest, { readonly base: string }>;
 
 export const request = (
@@ -94,6 +102,7 @@ export const request = (
 ): BaseRequest => ({
   id: name,
   base: "ubuntu",
+  runtime: runtimes.smolvm,
   cpu: 1,
   ramMib: 1024,
   diskGib: 10,

@@ -13,7 +13,7 @@ import {
   Unavailable,
   Unsizable,
 } from "@gjermundgaraba/clankerbox-sdk";
-import type { Sizes } from "@gjermundgaraba/clankerbox-sdk";
+import type { RuntimeName, Sizes } from "@gjermundgaraba/clankerbox-sdk";
 import { Array as Arr, Result } from "effect";
 
 import { phaseOf as copyPhaseOf } from "./checkpoint-chart.ts";
@@ -132,17 +132,19 @@ const among = (
 };
 
 /**
- * The hosts that can take a create of `base` at the sizes asked, and that join machines to the
- * tailnet where it asks for one, in config order, to try in turn: a later one only after a definite
- * `Capacity`. With none, a host not draining that gave no reply
- * might have taken it, so that is `Unavailable`; a host that offers the base at other sizes makes it
- * `Unsizable`; and `NotOffered` is the rest, each saying why each host was passed over. An ask that
+ * The hosts of `runtime` that can take a create of `base` at the sizes asked, and that join
+ * machines to the tailnet where it asks for one, in config order, to try in turn: a later one only
+ * after a definite `Capacity`, so a create never moves to another runtime. With none, a host not
+ * draining that gave no reply might have taken it, as its runtime is unknown, so that is
+ * `Unavailable`; a host that offers the base at other sizes makes it `Unsizable`; and
+ * `NotOffered` is the rest, each saying why each host was passed over. An ask that
  * names a host is placed as if that host were the only one, and one the control plane doesn't know
  * is `NotOffered`.
  */
 export const placing = (
   reached: readonly Reached[],
   base: string,
+  runtime: RuntimeName,
   ask: Ask
 ): Result.Result<
   Arr.NonEmptyReadonlyArray<HostInfo>,
@@ -158,6 +160,10 @@ export const placing = (
     named.success,
     () => Result.void,
     (info) => {
+      if (info.traits.runtime !== runtime) {
+        return Result.fail(missed(`runs ${info.traits.runtime}`));
+      }
+
       if (!offers(info, base)) {
         return Result.fail(missed(`offers ${offered(info)}`));
       }
@@ -181,7 +187,7 @@ export const placing = (
   if (noReply) {
     return Result.fail(
       new Unavailable({
-        message: `no host answered that can take base ${base}${onTailnet(ask)}: ${reasons}`,
+        message: `no ${runtime} host answered that can take base ${base}${onTailnet(ask)}: ${reasons}`,
         readOnly: true,
       })
     );
@@ -190,10 +196,10 @@ export const placing = (
   return Result.fail(
     cures.has("sizes")
       ? new Unsizable({
-          message: `no host that offers base ${base}${onTailnet(ask)} gives the sizes asked: ${reasons}`,
+          message: `no ${runtime} host that offers base ${base}${onTailnet(ask)} gives the sizes asked: ${reasons}`,
         })
       : new NotOffered({
-          message: `no host offers base ${base}${onTailnet(ask)}: ${reasons}`,
+          message: `no ${runtime} host offers base ${base}${onTailnet(ask)}: ${reasons}`,
           base,
         })
   );

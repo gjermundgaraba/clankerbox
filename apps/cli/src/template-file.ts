@@ -5,6 +5,7 @@ import {
   Invalid,
   Name,
   readSetup,
+  RuntimeName,
   Size,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, FileSystem, Path, Predicate, Schema } from "effect";
@@ -14,6 +15,7 @@ import { parseGib, parseMib, parseSeconds } from "./units.ts";
 
 const TemplateFile = Schema.Struct({
   base: Schema.String,
+  runtime: RuntimeName,
   cpu: Size,
   ram: Schema.String,
   disk: Schema.String,
@@ -29,9 +31,9 @@ const decodeName = Schema.decodeUnknownEffect(Name);
 const extensions = new Set([".yaml", ".yml"]);
 
 /**
- * The build a template file asks for: the template is the file's stem, and `setup` is read from
- * its path against the file's directory. With `tailnet: true`, its setup runs on the control plane's
- * tailnet and each clone of the build joins it.
+ * The build a template file asks for, from `base` on `runtime`: the template is the file's stem,
+ * and `setup` is read from its path against the file's directory. With `tailnet: true`, its setup
+ * runs on the control plane's tailnet and each clone of the build joins it.
  */
 export const readTemplateFile = (
   file: string
@@ -87,6 +89,7 @@ export const readTemplateFile = (
     return {
       template,
       base: fields.base,
+      runtime: fields.runtime,
       cpu: fields.cpu,
       ramMib,
       diskGib,

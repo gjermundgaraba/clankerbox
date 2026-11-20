@@ -449,12 +449,12 @@ describe("machines", () => {
             [
               1,
               "Invalid",
-              "create: --cpu: missing; --ram: missing; --disk: missing",
+              "create: --runtime: missing; --cpu: missing; --ram: missing; --disk: missing",
             ],
             [
               1,
               "Invalid",
-              "create: give --template, or --base with --cpu, --ram and --disk",
+              "create: give --template, or --base with --runtime, --cpu, --ram and --disk",
             ],
             [1, "Invalid", "create: --cpu: Expected a value greater than 0"],
             [1, "Invalid", expect.stringContaining("create: --template: ")],

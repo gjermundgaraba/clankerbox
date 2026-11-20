@@ -62,6 +62,12 @@ export const specArguments = {
     ),
     Flag.optional
   ),
+  runtime: Flag.String("runtime").pipe(
+    Flag.withDescription(
+      "With --base, the runtime to create it on, such as smolvm, as clankerbox hosts lists each host's: only a host of that runtime takes it. A template's build has its runtime."
+    ),
+    Flag.optional
+  ),
   tailnet: Flag.Boolean("tailnet").pipe(
     Flag.withDescription(
       "With --base, join the machine to the control plane's tailnet, placing it only on a host that joins machines to it. A template's build says whether its clones join, and a fork or restore joins as its source does."
@@ -77,6 +83,7 @@ export type SpecFlags = Command.Command.Config.Infer<typeof specArguments>;
 const specNames = new Map<PropertyKey, string>([
   ["template", "--template"],
   ["base", "--base"],
+  ["runtime", "--runtime"],
   ["cpu", "--cpu"],
   ["ramMib", "--ram"],
   ["diskGib", "--disk"],
@@ -107,6 +114,12 @@ export const flagsSpec = (command: string, flags: SpecFlags) =>
         });
       }
 
+      if (Option.isSome(flags.runtime)) {
+        return yield* new Invalid({
+          message: `${command}: a template's build has its runtime, so --template takes no --runtime`,
+        });
+      }
+
       if (flags.tailnet) {
         return yield* new Invalid({
           message: `${command}: a template's build says whether its clones join the tailnet, so --template takes no --tailnet: build it with tailnet: true`,
@@ -121,13 +134,14 @@ export const flagsSpec = (command: string, flags: SpecFlags) =>
 
     if (Option.isNone(flags.base)) {
       return yield* new Invalid({
-        message: `${command}: give --template, or --base with --cpu, --ram and --disk`,
+        message: `${command}: give --template, or --base with --runtime, --cpu, --ram and --disk`,
       });
     }
 
     return yield* decodeBaseSpec(
       defined({
         base: flags.base.value,
+        runtime: Option.getOrUndefined(flags.runtime),
         ...sizes,
         host,
         tailnet: flags.tailnet ? true : undefined,

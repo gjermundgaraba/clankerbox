@@ -7,7 +7,7 @@ import { Effect, Layer, Schema } from "effect";
 import { HttpRouter, HttpServer } from "effect/http";
 import { afterEach, describe, expect } from "vite-plus/test";
 
-import { Client, retryable } from "../src/index.ts";
+import { Client, retryable, RuntimeName } from "../src/index.ts";
 import type { MachineSpec } from "../src/index.ts";
 import * as NodeClient from "../src/node.ts";
 import { stubServer } from "./stub-server.ts";
@@ -66,6 +66,7 @@ const calling = <A, E>(
 
 const spec: MachineSpec = {
   base: "ubuntu",
+  runtime: RuntimeName.make("smolvm"),
   cpu: 1,
   ramMib: 1024,
   diskGib: 10,

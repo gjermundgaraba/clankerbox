@@ -17,6 +17,7 @@ const script = "#!/bin/sh\necho set up\n";
 
 const fields = {
   base: "base: ubuntu",
+  runtime: "runtime: smolvm",
   cpu: "cpu: 8",
   ram: "ram: 16G",
   disk: "disk: 100G",
@@ -141,6 +142,7 @@ layer(NodeServices.layer)((it) => {
         expect(yield* readTemplateFile(file)).toStrictEqual({
           template: "gg-linux-dev",
           base: "ubuntu",
+          runtime: "smolvm",
           cpu: 8,
           ramMib: 16_384,
           diskGib: 100,
@@ -169,6 +171,7 @@ layer(NodeServices.layer)((it) => {
         expect(yield* readTemplateFile(file)).toStrictEqual({
           template: "web",
           base: "ubuntu",
+          runtime: "smolvm",
           cpu: 8,
           ramMib: 16_384,
           diskGib: 100,

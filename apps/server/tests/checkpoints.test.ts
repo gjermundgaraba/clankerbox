@@ -37,6 +37,7 @@ import {
   services,
   stageOf,
   withClient,
+  runtimes,
 } from "./support.ts";
 import type { Plane, Started, running } from "./support.ts";
 
@@ -62,7 +63,9 @@ const withSource = (options?: Parameters<typeof running>[0]) =>
 
     yield* served.client.buildTemplate({
       template: "keyed",
-      ...request("unused"),
+      ...request("unused", {
+        runtime: runtimes[options?.hosts?.[0]?.as ?? "smolvm"],
+      }),
       setup: keyed,
     });
     yield* served.client.create("dev", { template: "keyed" });
@@ -122,7 +125,10 @@ const madeOn = (as: FakeRuntimeName) =>
     const first = yield* planned.start();
     const host = firstHost(planned);
 
-    yield* (yield* clientOf(first.url)).create("dev", request("dev"));
+    yield* (yield* clientOf(first.url)).create(
+      "dev",
+      request("dev", { runtime: runtimes[as] })
+    );
     yield* first.crash;
     host.fake.calls.length = 0;
 
@@ -869,7 +875,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           recheck: Duration.seconds(2),
         });
 
-        yield* client.create("dev", request("dev"));
+        yield* client.create(
+          "dev",
+          request("dev", { runtime: runtimes.saving })
+        );
 
         const resizing = host.fake.holdNext("resize");
 
@@ -912,7 +921,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           hosts: [{ id: "fixed", as: "fixed" }],
         });
 
-        yield* client.create("dev", request("dev"));
+        yield* client.create(
+          "dev",
+          request("dev", { runtime: runtimes.fixed })
+        );
         host.fake.calls.length = 0;
 
         const paused = yield* client.pauseMachine({
@@ -955,7 +967,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ],
         });
 
-        yield* client.create("dev", request("dev"));
+        yield* client.create("dev", request("dev", { runtime: runtimes.tart }));
         host.fake.calls.length = 0;
 
         const refused = yield* Effect.flip(
@@ -1044,7 +1056,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const client = yield* clientOf(first.url);
         const asking = yield* clientOf(first.url, { noWait: true });
 
-        yield* client.create("dev", request("dev"));
+        yield* client.create(
+          "dev",
+          request("dev", { runtime: runtimes.saving })
+        );
         host.fake.calls.length = 0;
 
         const { entered, release } = host.fake.holdNext("capture");
@@ -1319,7 +1334,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           recheck: Duration.seconds(2),
         });
 
-        yield* client.create("dev", request("dev"));
+        yield* client.create(
+          "dev",
+          request("dev", { runtime: runtimes.saving })
+        );
 
         const resizing = host.fake.holdNext("resize");
 
@@ -1374,7 +1392,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const { client, host, store } = served;
 
-        yield* client.create("dev", request("dev"));
+        yield* client.create(
+          "dev",
+          request("dev", { runtime: runtimes.saving })
+        );
 
         const resizing = host.fake.holdNext("resize");
 
@@ -1498,8 +1519,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           const made = yield* planned.start();
           const client = yield* clientOf(made.url);
 
-          yield* client.create("dev", request("dev"));
-          yield* client.create("other", request("other"));
+          yield* client.create(
+            "dev",
+            request("dev", { runtime: runtimes[as] })
+          );
+          yield* client.create(
+            "other",
+            request("other", { runtime: runtimes[as] })
+          );
 
           if (captureFrom === "stopped") {
             yield* client.stopMachine({ id: "other" });

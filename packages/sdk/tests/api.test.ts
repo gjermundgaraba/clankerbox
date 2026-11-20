@@ -38,6 +38,7 @@ const post = async (path: string, body: Schema.Json) => {
 const create = {
   id: "dev",
   base: "ubuntu",
+  runtime: "smolvm",
   cpu: 1,
   ramMib: 1024,
   diskGib: 10,

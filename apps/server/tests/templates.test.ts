@@ -13,6 +13,7 @@ import {
   Conflict,
   Internal,
   isBuildCopy,
+  RuntimeName,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { BuildRequest } from "@gjermundgaraba/clankerbox-sdk";
 import {
@@ -36,6 +37,7 @@ import {
   running,
   templatesOver,
   withClient,
+  runtimes,
 } from "./support.ts";
 import type { Plane, Started } from "./support.ts";
 
@@ -47,6 +49,7 @@ const setup = {
 const web = (fields?: Partial<BuildRequest>): BuildRequest => ({
   template: "web",
   base: "ubuntu",
+  runtime: RuntimeName.make("smolvm"),
   cpu: 1,
   ramMib: 1024,
   diskGib: 10,
@@ -572,7 +575,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(refused._tag).toBe("NotOffered");
         expect(unread._tag).toBe("Unavailable");
-        expect(unread.message).toContain("no host answered");
+        expect(unread.message).toContain("no smolvm host answered");
       })
   );
 
@@ -779,7 +782,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const { client, host } = yield* withClient(on("tart"));
 
-        yield* client.buildTemplate(web());
+        yield* client.buildTemplate(web({ runtime: runtimes.tart }));
 
         const ops = opsOf(host);
 

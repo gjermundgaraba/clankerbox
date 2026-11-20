@@ -156,6 +156,7 @@ const orbsOn = Effect.fn("orbsOn")(function* (
     config,
     JSON.stringify({
       server: plane.url,
+      runtime,
       sizes: { default: { cpu: 2, ramMib: 2048, diskGib: 10 } },
       user: login,
     })
@@ -301,7 +302,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const spawned = yield* dispatched(spawnEnv);
 
         expect(spawned.code).toBe(1);
-        expect(spawned.stderr).toContain(`no host offers base ${image}`);
+        expect(spawned.stderr).toContain(`no boat host offers base ${image}`);
         expect(yield* client.listMachines()).toStrictEqual([]);
       })
   );

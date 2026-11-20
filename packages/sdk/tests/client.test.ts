@@ -25,6 +25,7 @@ import {
   ScriptFailed,
   Unavailable,
   version,
+  RuntimeName,
 } from "../src/index.ts";
 import type { ExecRequest, MachineSpec } from "../src/index.ts";
 import { elapsing, ticking } from "./clock.ts";
@@ -75,6 +76,7 @@ const clocked = <A, E>(wait: Effect.Effect<A, E>) =>
 
 const spec: MachineSpec = {
   base: "ubuntu",
+  runtime: RuntimeName.make("smolvm"),
   cpu: 1,
   ramMib: 1024,
   diskGib: 10,

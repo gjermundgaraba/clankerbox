@@ -496,6 +496,7 @@ export const make = (settings: {
           ramMib,
           diskGib,
           host: on,
+          runtime,
         } = request;
 
         const refused = unserved(request.tailnet, tailnet);
@@ -514,7 +515,7 @@ export const make = (settings: {
         };
 
         const placed = yield* Effect.fromResult(
-          placing(yield* hosts.reachAll, base, {
+          placing(yield* hosts.reachAll, base, runtime, {
             sizes: { cpu, ramMib, diskGib },
             host: on,
             tailnet: asked.tailnet,
