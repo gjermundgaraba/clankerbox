@@ -180,7 +180,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const after = yield* run(["machines"]);
 
         expect(created).toMatchObject({ code: 0, stdout: "dev" });
-        expect(paused).toMatchObject({ code: 0, stdout: "dev paused" });
+        expect(paused).toMatchObject({ code: 0, stdout: "dev stopped" });
         expect(stopped).toMatchObject({ code: 0, stdout: "dev stopped" });
         expect(started).toMatchObject({ code: 0, stdout: "dev running" });
         expect(listed.stdout).toContain("dev");
@@ -521,7 +521,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(forked).toMatchObject({ code: 0, stdout: "copy" });
         expect(captured).toMatchObject({ code: 0, stdout: "snap" });
-        expect(listed.stdout).toMatch(/^snap\s+ready\s+ram\s+dev\s/mu);
+        expect(listed.stdout).toMatch(/^snap\s+ready\s+disk\s+dev\s/mu);
         expect(
           yield* decodeJson(
             Schema.Struct({
@@ -535,7 +535,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         ).toStrictEqual({
           id: "snap",
           machine: "dev",
-          kind: "ram",
+          kind: "disk",
           phase: "ready",
         });
         expect(fieldsOf(fields.stdout)).toStrictEqual(
@@ -1005,7 +1005,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "pause --capture holds the VM as it ran in a labelled checkpoint, which machines and checkpoint list find by label",
+    "pause --capture stops the VM and then captures its disk in a labelled checkpoint, which machines and checkpoint list find by label",
     () =>
       Effect.gen(function* () {
         const { hosts, run } = yield* setUp();
@@ -1029,19 +1029,18 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const listed = yield* run(["checkpoint", "list", "--label", "app=web"]);
         const got = yield* run(["get", "dev"]);
 
-        expect(paused).toMatchObject({ code: 0, stdout: "dev paused" });
+        expect(paused).toMatchObject({ code: 0, stdout: "dev stopped" });
         expect(hosts[0]?.fake.calls).toStrictEqual([
           "exec dev",
+          "stop dev",
           "capture snap",
-          "exec dev",
-          "pause dev",
         ]);
         expect(machines.stdout).toContain("dev");
         expect(none.stderr).toBe("clankerbox: no machines to list");
         expect(listed.stdout).toContain("snap");
         expect(fieldsOf(got.stdout)).toStrictEqual(
           expect.arrayContaining([
-            ["STATE", "paused"],
+            ["STATE", "stopped"],
             ["LABELS", "app=web"],
           ])
         );

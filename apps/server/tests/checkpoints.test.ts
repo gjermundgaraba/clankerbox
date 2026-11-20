@@ -23,6 +23,7 @@ import { expect } from "vite-plus/test";
 
 import * as Sqlite from "../src/platform/sqlite.ts";
 import {
+  saving,
   at,
   clientOf,
   eventually,
@@ -288,7 +289,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a fork of a source the runtime doesn't copy is refused before its host is asked, and leaves no VM and no row",
     () =>
       Effect.gen(function* () {
-        const { client, host, store } = yield* withSource();
+        const { client, host, store } = yield* withSource(saving);
 
         yield* client.stopMachine({ id: "dev" });
 
@@ -456,7 +457,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a capture of a running machine is ram, with the source's spec, the runtime's pin and the handle its host's capture answered",
     () =>
       Effect.gen(function* () {
-        const { client, store } = yield* withSource();
+        const { client, store } = yield* withSource(saving);
 
         const ram = yield* client.captureCheckpoint({
           machine: "dev",
@@ -487,7 +488,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a capture of a stopped machine on a ram runtime is WrongState before anything is recorded, and leaves nothing on its host",
     () =>
       Effect.gen(function* () {
-        const served = yield* withSource();
+        const served = yield* withSource(saving);
         const { client, host } = served;
 
         yield* client.stopMachine({ id: "dev" });
@@ -561,7 +562,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a capture waits for a step that owns its machine, then captures",
     () =>
       Effect.gen(function* () {
-        const { client, host } = yield* withSource();
+        const { client, host } = yield* withSource(saving);
         const { release, entered } = host.fake.holdNext("stop");
 
         const stopping = yield* Effect.forkChild(
@@ -688,13 +689,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const refused = yield* Effect.forEach(
-          ["smolvm", "fixed"] as const,
+          ["saving", "fixed"] as const,
           (as) =>
             Effect.gen(function* () {
               const served = yield* withSource(on(as));
               const { client, host } = served;
 
-              if (as === "smolvm") {
+              if (as === "saving") {
                 yield* client.stopMachine({ id: "dev" });
               }
 
@@ -811,7 +812,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a pause with a capture records the checkpoint first, and pauses once the capture has begun, so it holds the machine as it ran",
     () =>
       Effect.gen(function* () {
-        const { client, host } = yield* withSource();
+        const { client, host } = yield* withSource(saving);
         const { entered, release } = host.fake.holdNext("capture");
 
         const pausing = yield* Effect.forkChild(
@@ -864,6 +865,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { client, host } = yield* withClient({
+          ...saving,
           recheck: Duration.seconds(2),
         });
 
@@ -978,7 +980,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a pause whose capture fails still pauses, after the capture, and answers the capture's error",
     () =>
       Effect.gen(function* () {
-        const served = yield* withSource();
+        const served = yield* withSource(saving);
         const { client, host } = served;
 
         host.fake.failNext("capture", new Internal({ message: "ENOTSUP" }));
@@ -1004,7 +1006,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a pause with a capture of a taken name is Conflict, and of a stopped machine WrongState, recording no pause",
     () =>
       Effect.gen(function* () {
-        const { client, host } = yield* withSource();
+        const { client, host } = yield* withSource(saving);
 
         yield* client.captureCheckpoint({ machine: "dev", name: "snap" });
         host.fake.calls.length = 0;
@@ -1036,7 +1038,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a pause with a capture pauses after the capture across a restart of the control plane between them",
     () =>
       Effect.gen(function* () {
-        const planned = yield* plane();
+        const planned = yield* plane(saving);
         const first = yield* planned.start();
         const host = firstHost(planned);
         const client = yield* clientOf(first.url);
@@ -1313,6 +1315,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { client, host, store } = yield* withClient({
+          ...saving,
           recheck: Duration.seconds(2),
         });
 
@@ -1364,7 +1367,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a pause with a capture whose machine is deleted while its capture waits to begin, where the capture comes first, answers NotFound and leaves no checkpoint",
     () =>
       Effect.gen(function* () {
-        const served = yield* withClient({ recheck: Duration.seconds(2) });
+        const served = yield* withClient({
+          ...saving,
+          recheck: Duration.seconds(2),
+        });
+
         const { client, host, store } = served;
 
         yield* client.create("dev", request("dev"));
@@ -1610,7 +1617,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a pause with a capture killed before its pause's write, where the capture comes first, leaves the capture to run and its machine running, and a retry under the capture's name is Conflict",
     () =>
       Effect.gen(function* () {
-        const { planned, host } = yield* madeOn("smolvm");
+        const { planned, host } = yield* madeOn("saving");
         const entered = yield* Deferred.make<true>();
 
         const first = yield* services(planned, (machines) => ({

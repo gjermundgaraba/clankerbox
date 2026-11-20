@@ -9,6 +9,7 @@ import { applied } from "../src/chart.ts";
 import { checkpointChart } from "../src/checkpoint-chart.ts";
 import { freshBoot } from "./chart-rows.ts";
 import {
+  saving,
   applying,
   at,
   clientOf,
@@ -494,6 +495,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { client, first, fake, planned, restart } = yield* killedPlane({
+          ...saving,
           recheck: Duration.millis(50),
         });
 

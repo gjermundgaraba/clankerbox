@@ -80,7 +80,6 @@ const smolvmIn = (stateDir: string, bucket: Store) => {
       ramBudgetMib: 4096,
       stateDir,
       arch: "x64",
-      bootId: "b00710ad",
       bucket,
     },
     { uid: 0, ended: () => Effect.succeed(true) }

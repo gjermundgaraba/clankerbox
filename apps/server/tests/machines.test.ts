@@ -20,6 +20,7 @@ import { Duration, Effect, Exit, Fiber, Option, Result, Scope } from "effect";
 import { expect } from "vite-plus/test";
 
 import {
+  saving,
   applying,
   at,
   clientOf,
@@ -1391,7 +1392,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
   it.effect("a start sent while a machine pauses cuts the pause short", () =>
     Effect.gen(function* () {
-      const { asking, client, fake } = yield* served();
+      const { asking, client, fake } = yield* served(saving);
 
       yield* client.create("dev", request("dev"));
       fake.calls.length = 0;
@@ -1418,7 +1419,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a machine keeps the pin it booted under through a pause and its resume",
     () =>
       Effect.gen(function* () {
-        const { client, fake, pins } = yield* served();
+        const { client, fake, pins } = yield* served(saving);
 
         yield* client.create("dev", request("dev"));
         fake.calls.length = 0;
@@ -1509,7 +1510,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a machine paused under another runtime build is PinMismatch to a start or a stop, and never resumed",
     () =>
       Effect.gen(function* () {
-        const { bootedUnder, client, fake, pins } = yield* served();
+        const { bootedUnder, client, fake, pins } = yield* served(saving);
 
         yield* client.create("dev", request("dev"));
         yield* client.pauseMachine({ id: "dev" });
@@ -1611,7 +1612,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a wish that goes stopped, running, stopped during a stop that fails reads as asked, and answers the failure",
     () =>
       Effect.gen(function* () {
-        const { client, fake, machine, machines, store } = yield* served();
+        const { client, fake, machine, machines, store } =
+          yield* served(saving);
 
         yield* client.create("dev", request("dev"));
         yield* client.pauseMachine({ id: "dev" });
@@ -3397,7 +3399,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
   it.effect("a resize asked during a failing stop still runs", () =>
     Effect.gen(function* () {
-      const { asking, client, fake, machine, row } = yield* served();
+      const { asking, client, fake, machine, row } = yield* served(saving);
 
       yield* client.create("dev", request("dev"));
       yield* client.pauseMachine({ id: "dev" });
@@ -3493,7 +3495,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a linux copy's vCPUs or RAM below its source's, and any copy's smaller disk, are Unsizable before a row is written",
     () =>
       Effect.gen(function* () {
-        const linux = yield* served();
+        const linux = yield* served(saving);
 
         const mac = yield* served({
           hosts: [{ id: "tart", as: "tart" }],
@@ -3552,7 +3554,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a fork or capture of a machine whose last step failed, in the state its host doesn't copy, is WrongState before a row is written",
     () =>
       Effect.gen(function* () {
-        const { client, fake, machine, rows, store } = yield* served();
+        const { client, fake, machine, rows, store } = yield* served(saving);
 
         yield* client.create("dev", request("dev"));
         yield* client.stopMachine({ id: "dev" });
@@ -3595,7 +3597,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const mac = yield* served({ hosts: [{ id: "fixed", as: "fixed" }] });
-        const linux = yield* served();
+        const linux = yield* served(saving);
 
         yield* mac.client.create("dev", request("dev"));
         yield* linux.client.create("dev", request("dev"));
@@ -3723,7 +3725,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a fork whose source grows past the copy while it waits is refused by the rule its request passed, and its copy is deleted",
     () =>
       Effect.gen(function* () {
-        const { asking, client, fake, machine } = yield* served();
+        const { asking, client, fake, machine } = yield* served(saving);
 
         yield* client.create("dev", request("dev"));
 

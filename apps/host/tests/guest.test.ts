@@ -39,8 +39,6 @@ import {
   scrubScript,
   tailnetIn,
   tailnetScript,
-  unkey,
-  unkeyScript,
 } from "../src/guest.ts";
 import { Runtime } from "../src/runtime.ts";
 import { furnish, writeStubs, writeTailscaleStubs } from "./fake-runtime.ts";
@@ -592,7 +590,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           rejoin: true,
         });
         yield* scrubNode(recording, machine);
-        yield* unkey(recording, machine);
         yield* leave(recording, machine, "stop", 10);
         yield* runCommand(recording, {
           machine,
@@ -606,7 +603,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           )
         );
 
-        expect(argvs).toHaveLength(15);
+        expect(argvs).toHaveLength(14);
         expect(shown).toStrictEqual([]);
         expect(
           new Set(argvs.map((argv) => argv.slice(0, -1).join("\0"))).size
@@ -942,7 +939,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a build is captured with no host key files, and a child gets one new Ed25519 key",
+    "a child of a build an older host captured with its host keys dropped gets one new Ed25519 key",
     () =>
       Effect.gen(function* () {
         const build = yield* guest();
@@ -959,25 +956,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* mkdir(ssh);
         yield* write(path.join(ssh, "sshd_config"), "Port 22\n");
-
-        for (const type of ["rsa", "ed25519"]) {
-          yield* write(path.join(ssh, `ssh_host_${type}_key`), "old private\n");
-          yield* write(
-            path.join(ssh, `ssh_host_${type}_key.pub`),
-            `ssh-${type} AAAAold root@old\n`
-          );
-        }
-
-        const unkeyed = yield* outputOf(
-          "/bin/sh",
-          ["-c", unkeyScript, "unkey"],
-          {
-            env: { CLANKERBOX_ROOT: build.root, PATH: "/nowhere" },
-            extendEnv: true,
-          }
+        yield* mkdir(path.join(build.root, "var", "lib", "clankerbox"));
+        yield* write(
+          path.join(build.root, "var", "lib", "clankerbox", "host-key-wanted"),
+          ""
         );
 
-        const captured = [...(yield* readDirectory(ssh))];
         const child = yield* prepare(build, "child111");
         const plain = yield* prepare(keyless, "child111");
 
@@ -987,8 +971,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           path.join(ssh, "ssh_host_ed25519_key"),
         ]);
 
-        expect(unkeyed.code, unkeyed.stderr).toBe(0);
-        expect(captured).toStrictEqual(["sshd_config"]);
         expect(child.code, child.output).toBe(0);
         expect([...(yield* readDirectory(ssh))].toSorted()).toStrictEqual([
           "ssh_host_ed25519_key",

@@ -17,15 +17,11 @@ import {
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import {
   Context,
-  Deferred,
   Duration,
   Effect,
-  Exit,
   Fiber,
-  FileSystem,
   Layer,
   Logger,
-  Scope,
   Stream,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -65,7 +61,7 @@ import type {
 import { scripted as scriptedSpawner } from "../../scripted.ts";
 import type { Call, Reply } from "../../scripted.ts";
 import { prepared, smolvmModel } from "../../smolvm-model.ts";
-import { admitOn, eventually, memoryBuildStore } from "../../support.ts";
+import { admitOn, eventually } from "../../support.ts";
 
 const failure = (error: HostError) => [error._tag, error.message];
 
@@ -108,22 +104,6 @@ const inGuest = (as: string, ...argv: readonly string[]) => [
   "-i",
   "--",
   ...argv,
-];
-
-const baseStatus = [
-  "machine",
-  "status",
-  "--name",
-  "base_b00710ad_snap-fedcba98",
-  "--json",
-];
-
-const freezerStatus = [
-  "machine",
-  "status",
-  "--name",
-  "base_b00710ad_snap-fedcba98_freeze",
-  "--json",
 ];
 
 const listing = ["machine", "ls", "--json"];
@@ -249,10 +229,6 @@ const timed = <A, E>(effect: Effect.Effect<A, E>) =>
     return { value: yield* Fiber.join(fiber), waited };
   });
 
-const builderRef = sized({ ...machine, name: "building-1" });
-
-const builderPort = 11_001;
-
 const buildRef = sized({
   name: "built-0123456789abcdef",
   instance: "fedcba9876543210fedcba9876543210",
@@ -266,25 +242,6 @@ const baseOf = (checkpoint: Identity, bootId = "b00710ad") =>
 
 const childOf = (name: string) =>
   sized({ ...machine, name, instance: "abcdefabcdefabcdefabcdefabcdefab" });
-
-const basesIn = (model: ReturnType<typeof smolvmModel>) =>
-  [...model.vms.keys()].filter((vm) => vm.startsWith("base_"));
-
-const building = (model: ReturnType<typeof smolvmModel>) => {
-  model.vms.set(nativeName(builderRef), {
-    state: "running",
-    forwards: [`${builderPort}:22`],
-  });
-};
-
-const commands = (calls: readonly Call[]) =>
-  calls.flatMap(({ file, args }) => {
-    const at = args.indexOf("--name");
-
-    return file.endsWith("/smolvm") && at !== -1
-      ? [`${args[1]} ${args[at + 1]}`]
-      : [];
-  });
 
 const logging = (logged: unknown[]) =>
   Logger.layer([Logger.make(({ message }) => logged.push(message))]);
@@ -304,6 +261,22 @@ const live = (flag: string, size: string) => [
   flag,
   size,
 ];
+
+const parkedByOlderHost = (
+  model: ReturnType<typeof smolvmModel>,
+  child: Sized
+) => {
+  const base = baseOf(buildRef);
+
+  model.vms.set(base, { state: "frozen", forwards: [] });
+  model.vms.set(nativeName(child), {
+    state: "running",
+    parent: base,
+    forwards: ["10001:22"],
+  });
+
+  return base;
+};
 
 layer(NodeServices.layer)((it) => {
   it("a native name is the machine's name and its instance's first 8 characters", () => {
@@ -929,7 +902,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "pause saves a running machine, leaves a paused one, resumes one a pause left part way before pausing it again, and refuses a stopped or missing one",
+    "pause stops a running machine, resumes one an older host paused, or a pause left part way, to stop it, leaves a stopped one, and refuses a missing one",
     () =>
       Effect.gen(function* () {
         let reply = status("running");
@@ -940,37 +913,35 @@ layer(NodeServices.layer)((it) => {
 
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-        for (const next of ["running", "paused", "pausing"] as const) {
+        for (const next of [
+          "running",
+          "paused",
+          "pausing",
+          "stopped",
+        ] as const) {
           reply = status(next);
           yield* runtime.pause(machine);
         }
 
-        const refusals = [];
+        reply = unknown;
 
-        for (const next of [status("stopped"), unknown]) {
-          reply = next;
-          refusals.push(yield* Effect.flip(runtime.pause(machine)));
-        }
-
-        expect(refusals.map(failure)).toStrictEqual([
-          [
-            "WrongState",
-            "smolvm reads machine dev stopped, and pauses only a running machine",
-          ],
-          [
-            "Missing",
-            "machine dev is missing from the smolvm runtime; delete it",
-          ],
+        expect(
+          failure(yield* Effect.flip(runtime.pause(machine)))
+        ).toStrictEqual([
+          "Missing",
+          "machine dev is missing from the smolvm runtime; delete it",
         ]);
         expect(
           smolvmArgs(spawner.calls).map((args) => args.slice(1, 4).join(" "))
         ).toStrictEqual([
           "status --name dev-01234567",
-          "pause --name dev-01234567",
-          "status --name dev-01234567",
+          "stop --name dev-01234567",
           "status --name dev-01234567",
           "resume --name dev-01234567",
-          "pause --name dev-01234567",
+          "stop --name dev-01234567",
+          "status --name dev-01234567",
+          "resume --name dev-01234567",
+          "stop --name dev-01234567",
           "status --name dev-01234567",
           "status --name dev-01234567",
         ]);
@@ -1692,45 +1663,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "admit counts a parked base by the memory its scope holds, and capacity leaves it out",
-    () =>
-      Effect.gen(function* () {
-        const model = smolvmModel(1024 * 1024 * 1024);
-        const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
-        const builder = sized({ ...machine, name: "building-1" });
-        const build = { ...machine, name: "built-0123456789abcdef" };
-
-        model.vms.set(nativeName(builder), {
-          state: "running",
-          forwards: ["10000:22"],
-        });
-
-        yield* runtime.capture(builder, build);
-
-        const admitNext = (ramMib: number) => {
-          const target = sized({ ...machine, name: "next", ramMib });
-
-          return admitOn(runtime)({
-            action: "createMachine",
-            machine: target,
-            machines: [{ _tag: "booting", machine: target }],
-          });
-        };
-
-        yield* admitNext(4096 - 1024);
-
-        const refused = yield* Effect.flip(admitNext(4096 - 1024 + 1));
-
-        expect(refused._tag).toBe("Capacity");
-        expect(yield* runtime.capacity([])).toStrictEqual([
-          { resource: "cpu", used: 0 },
-          { resource: "ramMib", limit: 4096, used: 0 },
-        ]);
-      })
-  );
-
-  it.effect(
-    "a host that starts beside a parked base counts its memory before parking anything",
+    "a host that starts beside a base an older host parked counts its memory",
     () =>
       Effect.gen(function* () {
         const model = smolvmModel(1024 * 1024 * 1024);
@@ -1826,26 +1759,16 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a capture or a fork of a machine smolvm doesn't read running is refused before anything native",
+    "a capture or a fork of a machine smolvm reads neither running nor stopped is refused before anything native",
     () =>
       Effect.gen(function* () {
-        let reply = status("stopped");
+        let reply = unknown;
 
         const spawner = scripted((call) =>
           call.args[1] === "status" ? reply : undefined
         );
 
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
-
-        const capture = yield* Effect.flip(
-          runtime.capture(machine, ramCheckpoint)
-        );
-
-        const fork = yield* Effect.flip(
-          runtime.make(copy, fromMachine(machine), copyPort)
-        );
-
-        reply = unknown;
 
         const missing = yield* Effect.flip(
           runtime.capture(machine, ramCheckpoint)
@@ -1870,16 +1793,8 @@ layer(NodeServices.layer)((it) => {
         );
 
         expect(
-          [capture, fork, missing, unreachable, frozen, paused].map(failure)
+          [missing, unreachable, frozen, paused].map(failure)
         ).toStrictEqual([
-          [
-            "WrongState",
-            "a smolvm checkpoint holds a running machine's RAM, and dev is stopped: start it first",
-          ],
-          [
-            "WrongState",
-            "a fork copies a running machine, RAM included, and dev is stopped: start it first",
-          ],
           [
             "Missing",
             "machine dev is missing from the smolvm runtime; delete it",
@@ -1890,16 +1805,14 @@ layer(NodeServices.layer)((it) => {
           ],
           [
             "WrongState",
-            "smolvm reads machine dev frozen, and copies only a running machine",
+            "smolvm reads machine dev frozen, and copies only a running or stopped machine",
           ],
           [
             "WrongState",
-            "smolvm reads machine dev paused, and copies only a running machine",
+            "smolvm reads machine dev paused, and copies only a running or stopped machine",
           ],
         ]);
         expect(smolvmArgs(spawner.calls).map((args) => args[1])).toStrictEqual([
-          "status",
-          "status",
           "status",
           "status",
           "status",
@@ -1958,7 +1871,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a ram restore creates from the store with no restore cache, its port moved, then boots",
+    "a restore of a ram checkpoint creates from the store with no restore cache, its port moved, boots, then boots again, so it holds its source's disk and none of its memory",
     () =>
       Effect.gen(function* () {
         const settings = yield* prepared();
@@ -1970,7 +1883,6 @@ layer(NodeServices.layer)((it) => {
         yield* runtime.make(copy, fromCheckpoint(ramCheckpoint), copyPort);
 
         expect(smolvmArgs(spawner.calls)).toStrictEqual([
-          baseStatus,
           [
             "machine",
             "create",
@@ -1988,97 +1900,9 @@ layer(NodeServices.layer)((it) => {
             "0",
           ],
           ["machine", "start", "--name", "copy-abcdefab", "--branchable"],
+          ["machine", "stop", "--name", "copy-abcdefab"],
+          ["machine", "start", "--name", "copy-abcdefab", "--branchable"],
         ]);
-      })
-  );
-
-  it.effect(
-    "a copy from a parked base branches it, and one with no base restores the build",
-    () =>
-      Effect.gen(function* () {
-        const settings = yield* prepared();
-
-        yield* holdingSnap(settings);
-
-        const parked = scripted((call) =>
-          call.args[1] === "status" &&
-          call.args[3]?.startsWith("base_") === true
-            ? status("frozen")
-            : undefined
-        );
-
-        const unparked = scripted(() => {});
-
-        yield* (yield* runtimeOf(settings, parked)).make(
-          { ...copy, ramMib: 4096 },
-          fromCheckpoint(ramCheckpoint),
-          copyPort
-        );
-        yield* (yield* runtimeOf(settings, unparked)).make(
-          copy,
-          fromCheckpoint(ramCheckpoint),
-          copyPort
-        );
-
-        expect(smolvmArgs(parked.calls)).toStrictEqual([
-          baseStatus,
-          [
-            "machine",
-            "branch",
-            "--from",
-            "base_b00710ad_snap-fedcba98",
-            "--name",
-            "copy-abcdefab",
-            "--freeze-source",
-            "--branchable",
-            "-p",
-            "10001:22",
-          ],
-          ["machine", "resize", "--name", "copy-abcdefab", "--mem", "4096"],
-        ]);
-        expect(smolvmArgs(unparked.calls).map((args) => args[1])).toStrictEqual(
-          ["status", "create", "start"]
-        );
-        expect(smolvmArgs(unparked.calls)[1]).toContain(
-          path.join(
-            settings.stateDir,
-            "checkpoints",
-            "snap-fedcba98.checkpoint"
-          )
-        );
-      })
-  );
-
-  it.effect(
-    "a delete of a build retires its base, also past a freezer an interrupted freeze left",
-    () =>
-      Effect.gen(function* () {
-        const model = smolvmModel();
-        const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
-
-        const build = sized({
-          ...ramCheckpoint,
-          name: "built-0123456789abcdef",
-        });
-
-        const base = `base_b00710ad_${nativeName(build)}`;
-
-        model.vms.set(nativeName(builderRef), {
-          state: "running",
-          forwards: ["10000:22"],
-        });
-
-        yield* runtime.capture(builderRef, build);
-        model.vms.set(`${base}_freeze`, {
-          state: "running",
-          parent: base,
-          forwards: [],
-        });
-        yield* runtime.deleteCheckpoint(build);
-
-        expect(
-          [...model.vms.keys()].filter((vm) => vm.startsWith("base_"))
-        ).toStrictEqual([]);
       })
   );
 
@@ -2325,56 +2149,6 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a pause cut short ends only once smolvm has paused the machine, so it never leaves it half-paused",
-    () =>
-      Effect.gen(function* () {
-        const model = smolvmModel();
-        const gate = yield* Deferred.make<undefined>();
-        const vm = { state: "running", forwards: [] };
-
-        model.vms.set(machine.handle, vm);
-        model.faults.reply = ({ args }) => {
-          if (args[1] !== "pause") {
-            return undefined;
-          }
-
-          vm.state = "pausing";
-
-          return {
-            until: Effect.andThen(
-              Deferred.await(gate),
-              Effect.sync(() => {
-                vm.state = "paused";
-              })
-            ),
-          };
-        };
-
-        const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
-        const pausing = yield* Effect.forkChild(runtime.pause(machine));
-
-        yield* waitFor(
-          Effect.sync(() => vm.state),
-          (state) => state === "pausing"
-        );
-
-        const cut = yield* Effect.forkChild(Fiber.interrupt(pausing));
-
-        yield* TestClock.withLive(Effect.sleep(Duration.millis(50)));
-
-        const cutBeforePaused = cut.pollUnsafe() !== undefined;
-
-        yield* Deferred.succeed(gate, undefined);
-        yield* Fiber.join(cut);
-
-        expect({ cutBeforePaused, state: vm.state }).toStrictEqual({
-          cutBeforePaused: false,
-          state: "paused",
-        });
-      })
-  );
-
-  it.effect(
     "a machine smolvm lists in a state this host doesn't know refuses no admission",
     () =>
       Effect.gen(function* () {
@@ -2420,371 +2194,40 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a delete of a build whose base won't go keeps the build, so a retry retires the base",
-    () =>
-      Effect.gen(function* () {
-        const model = smolvmModel();
-        const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
-        const base = baseOf(buildRef);
-
-        building(model);
-        yield* runtime.capture(builderRef, buildRef);
-        model.faults.reply = ({ args }) =>
-          args[1] === "delete" && args.includes(base) ? locked : undefined;
-
-        const refused = yield* Effect.flip(runtime.deleteCheckpoint(buildRef));
-
-        model.faults.reply = undefined;
-
-        yield* runtime.deleteCheckpoint(buildRef);
-
-        expect(refused.message).toContain("database is locked");
-        expect(basesIn(model)).toStrictEqual([]);
-      })
-  );
-
-  it.effect(
-    "a capture of a build's copy drops the guest's host keys before it copies and parks a base after, and one of any other checkpoint does neither",
-    () =>
-      Effect.gen(function* () {
-        const model = smolvmModel();
-        const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
-        const builder = nativeName(builderRef);
-        const base = baseOf(buildRef);
-
-        building(model);
-
-        yield* runtime.capture(builderRef, { ...buildRef, name: "snap" });
-
-        const plain = commands(model.spawner.calls);
-        const before = model.spawner.calls.length;
-
-        yield* runtime.capture(builderRef, buildRef);
-
-        const built = model.spawner.calls.slice(before);
-
-        expect(plain).toStrictEqual([
-          `status ${builder}`,
-          `checkpoint ${builder}`,
-        ]);
-        expect(commands(built)).toStrictEqual([
-          `exec ${builder}`,
-          `status ${builder}`,
-          `checkpoint ${builder}`,
-          `status ${base}_freeze`,
-          `status ${base}`,
-          `create ${base}`,
-          `update ${base}`,
-          `start ${base}`,
-          `branch ${base}_freeze`,
-          `status ${base}_freeze`,
-          `stop ${base}_freeze`,
-          `delete ${base}_freeze`,
-        ]);
-        expect(built[0]?.stdin).toContain("clankerbox-unkey");
-        expect(basesIn(model)).toStrictEqual([base]);
-      })
-  );
-
-  it.effect(
-    "a capture of a build whose park fails is still done, keeps its checkpoint, parks no base, and logs why",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const settings = yield* prepared();
-        const model = smolvmModel();
-        const runtime = yield* runtimeOf(settings, model.spawner);
-        const logged: unknown[] = [];
-
-        building(model);
-        model.faults.reply = ({ args }) =>
-          args[1] === "create" ? locked : undefined;
-
-        yield* runtime
-          .capture(builderRef, buildRef)
-          .pipe(Effect.provide(logging(logged)));
-
-        expect(
-          yield* fs.exists(
-            path.join(
-              settings.stateDir,
-              "checkpoints",
-              `${nativeName(buildRef)}.checkpoint`
-            )
-          )
-        ).toBe(true);
-        expect(basesIn(model)).toStrictEqual([]);
-        expect(logged).toStrictEqual([
-          [
-            `park build ${buildRef.name}: smolvm machine create ${baseOf(buildRef)} exited 1: Error: database is locked`,
-          ],
-        ]);
-      })
-  );
-
-  it.effect(
-    "a capture of a build whose host keys can't be dropped fails Internal with the script's output, and copies nothing",
-    () =>
-      Effect.gen(function* () {
-        const model = smolvmModel();
-        const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
-
-        building(model);
-        model.faults.reply = ({ stdin }) =>
-          stdin?.includes("clankerbox-unkey") === true
-            ? { exitCode: 1, stderr: "rm: Read-only file system\n" }
-            : undefined;
-
-        const error = yield* Effect.flip(runtime.capture(builderRef, buildRef));
-
-        expect(failure(error)).toStrictEqual([
-          "Internal",
-          "couldn't drop building-1's host keys before its capture: preparation exited 1; its last output:\nrm: Read-only file system",
-        ]);
-        expect(commands(model.spawner.calls)).toStrictEqual([
-          `exec ${nativeName(builderRef)}`,
-        ]);
-      })
-  );
-
-  it.effect(
-    "a fetch of a build's copy parks its base before it returns, and one whose park fails is installed all the same and logs why",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const settings = yield* prepared();
-        const model = smolvmModel();
-
-        const runtime = yield* runtimeOf(
-          { ...settings, bucket: memoryBuildStore().store },
-          model.spawner
-        );
-
-        const logged: unknown[] = [];
-        const store = path.join(settings.stateDir, "checkpoints");
-        const fetched = { ...buildRef, name: "fetched-fedcba9876543210" };
-        const failing = { ...buildRef, name: "fetched-0123456789abcdef" };
-
-        building(model);
-        yield* runtime.capture(builderRef, buildRef);
-        yield* runtime.builds.publish(buildRef);
-        yield* runtime.builds.fetch(fetched, buildRef.name, "web@1");
-
-        const parked = model.vms.get(baseOf(fetched))?.state;
-
-        model.faults.reply = ({ args }) =>
-          args[1] === "create" ? locked : undefined;
-
-        yield* runtime.builds
-          .fetch(failing, buildRef.name, "web@1")
-          .pipe(Effect.provide(logging(logged)));
-
-        expect(parked).toBe("frozen");
-        expect(
-          yield* fs.exists(
-            path.join(store, `${nativeName(failing)}.checkpoint`)
-          )
-        ).toBe(true);
-        expect(basesIn(model).toSorted()).toStrictEqual(
-          [baseOf(buildRef), baseOf(fetched)].toSorted()
-        );
-        expect(logged).toStrictEqual([
-          [
-            `park build ${failing.name}: smolvm machine create ${baseOf(failing)} exited 1: Error: database is locked`,
-          ],
-          [expect.stringMatching(/^fetch web@1 downloaded /u)],
-        ]);
-      })
-  );
-
-  it.effect(
-    "a fetch of a build's copy cut short in its install's park keeps the checkpoint it installed and leaves no staging folder",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const { store: bucket } = memoryBuildStore();
-        const source = smolvmModel();
-        const other = smolvmModel();
-        const fetched = { ...buildRef, name: "fetched-fedcba9876543210" };
-        const base = baseOf(fetched, "5bfae059");
-
-        const settings = {
-          ...(yield* prepared()),
-          bootId: "5bfae059",
-          bucket,
-        };
-
-        const builds = yield* runtimeOf(
-          { ...(yield* prepared()), bucket },
-          source.spawner
-        );
-
-        const fetches = yield* runtimeOf(settings, other.spawner);
-        let hung = false;
-
-        building(source);
-        yield* builds.capture(builderRef, buildRef);
-        yield* builds.builds.publish(buildRef);
-
-        other.faults.reply = ({ args }) => {
-          if (args[1] !== "create" || !args.includes(base)) {
-            return undefined;
-          }
-
-          hung = true;
-
-          return { hangs: true };
-        };
-
-        const fetching = yield* Effect.forkChild(
-          fetches.builds.fetch(fetched, buildRef.name, "web@1")
-        );
-
-        yield* waitFor(
-          Effect.sync(() => hung),
-          (cut) => cut
-        );
-        yield* Fiber.interrupt(fetching);
-
-        expect({
-          installed: yield* fs.exists(
-            path.join(
-              settings.stateDir,
-              "checkpoints",
-              `${nativeName(fetched)}.checkpoint`
-            )
-          ),
-          staging: yield* fs.exists(
-            path.join(
-              settings.stateDir,
-              "checkpoints",
-              `${nativeName(fetched)}.fetching`
-            )
-          ),
-        }).toStrictEqual({ installed: true, staging: false });
-      })
-  );
-
-  it.effect(
-    "a capture of a build cut short in its host-key drop, or in its park after its base or its freezer is made, leaves nothing its checkpoint's delete doesn't clear",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const settings = yield* prepared();
-        const model = smolvmModel();
-        const runtime = yield* runtimeOf(settings, model.spawner);
-        const base = baseOf(buildRef);
-
-        const stored = path.join(
-          settings.stateDir,
-          "checkpoints",
-          `${nativeName(buildRef)}.checkpoint`
-        );
-
-        const cutAt = (hangs: (call: Call) => boolean) =>
-          Effect.gen(function* () {
-            let hung = false;
-
-            model.faults.reply = (call) => {
-              if (hung || !hangs(call)) {
-                return undefined;
-              }
-
-              hung = true;
-
-              return { hangs: true };
-            };
-
-            const capture = yield* Effect.forkChild(
-              runtime.capture(builderRef, buildRef)
-            );
-
-            yield* waitFor(
-              Effect.sync(() => hung),
-              (cut) => cut
-            );
-
-            const left = basesIn(model);
-
-            yield* Fiber.interrupt(capture);
-            yield* runtime.deleteCheckpoint(buildRef);
-
-            return {
-              left,
-              after: basesIn(model),
-              stored: yield* fs.exists(stored),
-            };
-          });
-
-        building(model);
-
-        const unkeyed = yield* cutAt(
-          ({ stdin }) => stdin?.includes("clankerbox-unkey") === true
-        );
-
-        const started = yield* cutAt(
-          ({ args }) => args[1] === "start" && args.includes(base)
-        );
-
-        const frozen = yield* cutAt(
-          ({ args }) => args[1] === "stop" && args.includes(`${base}_freeze`)
-        );
-
-        expect([unkeyed, started, frozen]).toStrictEqual([
-          { left: [], after: [], stored: false },
-          { left: [base], after: [], stored: false },
-          { left: [base, `${base}_freeze`], after: [], stored: false },
-        ]);
-      })
-  );
-
-  it.effect("a base outlives its build until its last child is deleted", () =>
-    Effect.gen(function* () {
-      const model = smolvmModel();
-      const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
-      const child = childOf("web-1");
-      const base = baseOf(buildRef);
-
-      building(model);
-      yield* runtime.capture(builderRef, buildRef);
-
-      const parked = [...model.vms].map(([name, { state }]) => [name, state]);
-
-      yield* runtime.make(child, fromCheckpoint(buildRef), 10_001);
-
-      const branched = model.vms.get(nativeName(child));
-
-      yield* runtime.deleteCheckpoint(buildRef);
-
-      const kept = model.vms.get(base)?.state;
-
-      yield* runtime.delete(child, new Set());
-
-      expect(parked).toStrictEqual([
-        [nativeName(builderRef), "running"],
-        [base, "frozen"],
-      ]);
-      expect(branched?.parent).toBe(base);
-      expect(branched?.forwards).toStrictEqual(["10001:22"]);
-      expect(kept).toBe("frozen");
-      expect([...model.vms.keys()]).toStrictEqual([nativeName(builderRef)]);
-    })
-  );
-
-  it.effect(
-    "a child's delete that can't retire its base still succeeds, and a delete again retires it",
+    "a base an older host parked outlives a host's start while a copy branched from it is left, and goes with its last copy",
     () =>
       Effect.gen(function* () {
         const model = smolvmModel();
         const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
         const child = childOf("web-1");
-        const base = baseOf(buildRef);
+        const base = parkedByOlderHost(model, child);
+        const lone = baseOf({ ...buildRef, name: "built-fedcba9876543210" });
 
-        building(model);
-        yield* runtime.capture(builderRef, buildRef);
-        model.vms.delete(nativeName(builderRef));
-        yield* runtime.make(child, fromCheckpoint(buildRef), 10_001);
-        yield* runtime.deleteCheckpoint(buildRef);
+        model.vms.set(lone, { state: "frozen", forwards: [] });
+
+        yield* runtime.startup;
+        yield* waitFor(
+          Effect.sync(() => model.vms.has(lone)),
+          (left) => !left
+        );
+
+        const kept = model.vms.get(base)?.state;
+
+        yield* runtime.delete(child, new Set());
+
+        expect(kept).toBe("frozen");
+        expect([...model.vms.keys()]).toStrictEqual([]);
+      })
+  );
+
+  it.effect(
+    "a copy's delete that can't retire its base still succeeds, and a delete again retires it",
+    () =>
+      Effect.gen(function* () {
+        const model = smolvmModel();
+        const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
+        const child = childOf("web-1");
+        const base = parkedByOlderHost(model, child);
 
         model.faults.reply = ({ args }) =>
           args[1] === "delete" && args.includes(base) ? locked : undefined;
@@ -2803,20 +2246,14 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a base a child's delete couldn't retire goes at the host's next start, with no delete reaching smolvm again",
+    "a base a copy's delete couldn't retire goes at the host's next start",
     () =>
       Effect.gen(function* () {
         const model = smolvmModel();
         const settings = yield* prepared();
         const runtime = yield* runtimeOf(settings, model.spawner);
         const child = childOf("web-1");
-        const base = baseOf(buildRef);
-
-        building(model);
-        yield* runtime.capture(builderRef, buildRef);
-        model.vms.delete(nativeName(builderRef));
-        yield* runtime.make(child, fromCheckpoint(buildRef), 10_001);
-        yield* runtime.deleteCheckpoint(buildRef);
+        const base = parkedByOlderHost(model, child);
 
         model.faults.reply = ({ args }) =>
           args[1] === "delete" && args.includes(base) ? locked : undefined;
@@ -2840,111 +2277,6 @@ layer(NodeServices.layer)((it) => {
       })
   );
 
-  it.effect(
-    "a restore of a build restores the copy when its base can't be read or goes before the branch, and fails when the branch fails beside a frozen base",
-    () =>
-      Effect.gen(function* () {
-        const model = smolvmModel();
-        const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
-        const base = baseOf(buildRef);
-
-        const restored = (name: string, port: number) =>
-          Effect.map(
-            Effect.exit(
-              runtime.make(childOf(name), fromCheckpoint(buildRef), port)
-            ),
-            (exit) => ({
-              done: Exit.isSuccess(exit),
-              parent: model.vms.get(nativeName(childOf(name)))?.parent,
-            })
-          );
-
-        building(model);
-        yield* runtime.capture(builderRef, buildRef);
-        model.vms.delete(nativeName(builderRef));
-
-        model.faults.reply = ({ args }) =>
-          args[1] === "status" && args.includes(base) ? locked : undefined;
-
-        const unread = yield* restored("web-1", 10_001);
-
-        model.faults.reply = ({ args }) =>
-          args[1] === "branch" && !args.includes(`${base}_freeze`)
-            ? { exitCode: 1, stderr: "Error: port 10002 is already in use\n" }
-            : undefined;
-
-        const refused = yield* restored("web-2", 10_002);
-
-        model.faults.reply = ({ args }) => {
-          if (args[1] !== "branch") {
-            return undefined;
-          }
-
-          model.vms.delete(base);
-
-          return {
-            exitCode: 1,
-            stderr: `Error: machine '${base}' not found\n`,
-          };
-        };
-
-        const gone = yield* restored("web-3", 10_003);
-
-        expect([unread, refused, gone]).toStrictEqual([
-          { done: true, parent: undefined },
-          { done: false, parent: undefined },
-          { done: true, parent: undefined },
-        ]);
-      })
-  );
-
-  it.effect(
-    "a restore of a build whose base goes before its branch, and whose half-made VM can't be removed, fails with the branch's error and logs the removal's",
-    () =>
-      Effect.gen(function* () {
-        const model = smolvmModel();
-        const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
-        const child = childOf("web-1");
-        const base = baseOf(buildRef);
-        const native = nativeName(child);
-        const logged: unknown[] = [];
-        let branched = false;
-
-        building(model);
-        yield* runtime.capture(builderRef, buildRef);
-        model.vms.delete(nativeName(builderRef));
-
-        model.faults.reply = ({ args }) => {
-          if (args[1] === "branch") {
-            branched = true;
-            model.vms.delete(base);
-
-            return {
-              exitCode: 1,
-              stderr: `Error: machine '${base}' not found\n`,
-            };
-          }
-
-          return branched && args[1] === "status" && args.includes(native)
-            ? locked
-            : undefined;
-        };
-
-        const error = yield* Effect.flip(
-          runtime.make(child, fromCheckpoint(buildRef), 10_001)
-        ).pipe(Effect.provide(logging(logged)));
-
-        expect(error.message).toContain(`machine '${base}' not found`);
-        expect(
-          logged.filter(
-            (line) =>
-              String(line).includes(`${native} couldn't be removed`) &&
-              String(line).includes("database is locked")
-          )
-        ).toHaveLength(1);
-      })
-  );
-
   it.effect("a ram restore that got its source's old port keeps it", () =>
     Effect.gen(function* () {
       const spawner = scripted(() => {});
@@ -2956,8 +2288,9 @@ layer(NodeServices.layer)((it) => {
       yield* runtime.make(copy, fromCheckpoint(ramCheckpoint), 10_000);
 
       expect(smolvmArgs(spawner.calls).map((args) => args[1])).toStrictEqual([
-        "status",
         "create",
+        "start",
+        "stop",
         "start",
       ]);
     })
@@ -3091,7 +2424,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a ram restore or fork given larger sizes than its source's grows the copy live once it boots",
+    "a restore of a ram checkpoint or a fork of a running machine given other sizes than its source's sets them while the copy is stopped between its boots",
     () =>
       Effect.gen(function* () {
         const spawner = scripted((call) =>
@@ -3112,46 +2445,40 @@ layer(NodeServices.layer)((it) => {
 
         yield* runtime.make(larger, fromCheckpoint(ramCheckpoint), 10_000);
         yield* runtime.make(
-          { ...larger, cpu: 2 },
+          { ...larger, cpu: 2, ramMib: 1024 },
           fromMachine(machine),
           10_000
         );
 
-        const resizes = smolvmArgs(spawner.calls).filter(
-          (args) => args[1] === "resize"
-        );
-
-        const grow = (flag: string, size: string) => [
+        const update = (...flags: readonly string[]) => [
           "machine",
-          "resize",
+          "update",
           "--name",
           nativeName(copy),
-          flag,
-          size,
+          ...flags,
         ];
 
-        expect(resizes).toStrictEqual([
-          grow("--mem", "4096"),
-          grow("--cpus", "4"),
-          grow("--storage", "30"),
-          grow("--mem", "4096"),
-          grow("--storage", "30"),
+        expect(
+          smolvmArgs(spawner.calls).filter((args) => args[1] === "update")
+        ).toStrictEqual([
+          update("--cpus", "4", "--mem", "4096", "--storage", "30"),
+          update("--mem", "1024", "--storage", "30"),
         ]);
         expect(
           smolvmArgs(spawner.calls)
-            .slice(0, 4)
+            .slice(0, 5)
             .map((args) => args[1])
-        ).toStrictEqual(["status", "create", "start", "resize"]);
+        ).toStrictEqual(["create", "start", "stop", "update", "start"]);
       })
   );
 
   it.effect(
-    "a restore whose create, boot or live grow fails returns its error, and leaves its VM to delete",
+    "a restore whose create, boot or resize fails returns its error, and leaves its VM to delete",
     () =>
       Effect.gen(function* () {
         const larger = { ...copy, ramMib: 4096 };
 
-        for (const failing of ["create", "start", "resize"]) {
+        for (const failing of ["create", "start", "update"]) {
           const spawner = scripted((call) =>
             call.args[1] === failing
               ? { exitCode: 1, stderr: "Error: database is locked\n" }
@@ -3167,7 +2494,7 @@ layer(NodeServices.layer)((it) => {
             runtime.make(larger, fromCheckpoint(ramCheckpoint), copyPort)
           );
 
-          const steps = ["status", "create", "start", "resize"];
+          const steps = ["create", "start", "stop", "update"];
           const seedBuildsRead = failing === "start" ? ["ls"] : [];
 
           expect(error.message).toBe(
@@ -3203,7 +2530,7 @@ layer(NodeServices.layer)((it) => {
     });
 
   it.effect(
-    "a fork captures into a store of its own, restores from it, and removes the store",
+    "a fork of a running machine captures it into a store of its own, restores from it, boots the copy again, and removes the store",
     () =>
       Effect.gen(function* () {
         const settings = yield* prepared();
@@ -3250,7 +2577,62 @@ layer(NodeServices.layer)((it) => {
             "0",
           ],
           ["machine", "start", "--name", "copy-abcdefab", "--branchable"],
+          ["machine", "stop", "--name", "copy-abcdefab"],
+          ["machine", "start", "--name", "copy-abcdefab", "--branchable"],
         ]);
+        expect(
+          yield* readDirectory(path.join(settings.stateDir, "forks"))
+        ).toStrictEqual([]);
+      })
+  );
+
+  it.effect(
+    "a fork of a stopped machine packs it with its /workspace into a store of its own, never booting it, creates the copy from the pack at its own sizes and port, boots it, and removes the store",
+    () =>
+      Effect.gen(function* () {
+        const model = smolvmModel();
+        const settings = yield* prepared();
+        const runtime = yield* runtimeOf(settings, model.spawner);
+        const store = path.join(settings.stateDir, "forks", "copy-abcdefab");
+        const smaller = { ...copy, cpu: 1, ramMib: 1024, diskGib: 30 };
+
+        model.vms.set(nativeName(machine), {
+          state: "stopped",
+          forwards: ["10000:22"],
+        });
+
+        const before = model.spawner.calls.length;
+
+        yield* runtime.make(smaller, fromMachine(machine), copyPort);
+
+        expect(
+          model.spawner.calls
+            .slice(before)
+            .map(({ args }) => args.slice(0, 2).join(" "))
+        ).toStrictEqual([
+          "machine status",
+          "pack create",
+          "machine create",
+          "machine start",
+        ]);
+        expect(
+          model.spawner.calls.find(({ args }) => args[0] === "pack")?.args
+        ).toStrictEqual([
+          "pack",
+          "create",
+          "--from-vm",
+          "dev-01234567",
+          "--include-workspace",
+          "-o",
+          path.join(store, "machine"),
+        ]);
+        expect(model.vms.get(nativeName(machine))?.state).toBe("stopped");
+        expect(model.vms.get(nativeName(copy))).toStrictEqual({
+          state: "running",
+          forwards: ["10001:22"],
+          sizes: { "--cpus": 1, "--mem": 1024, "--storage": 30 },
+          unpacked: "dev-01234567",
+        });
         expect(
           yield* readDirectory(path.join(settings.stateDir, "forks"))
         ).toStrictEqual([]);
@@ -3282,7 +2664,79 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "deleting a ram checkpoint removes its directory, then prunes the store",
+    "a capture of a stopped machine packs it with its /workspace into its checkpoint, never booting it, and a restore of that creates the copy from the pack at its own sizes and port and boots it once",
+    () =>
+      Effect.gen(function* () {
+        const model = smolvmModel();
+        const settings = yield* prepared();
+        const runtime = yield* runtimeOf(settings, model.spawner);
+
+        const held = path.join(
+          settings.stateDir,
+          "checkpoints",
+          "snap-fedcba98.checkpoint"
+        );
+
+        model.vms.set(nativeName(machine), {
+          state: "stopped",
+          forwards: ["10000:22"],
+        });
+
+        const handle = yield* runtime.capture(machine, ramCheckpoint);
+        const captured = yield* readDirectory(held);
+        const before = model.spawner.calls.length;
+
+        yield* runtime.make(
+          { ...copy, ramMib: 1024 },
+          fromCheckpoint({ ...ramCheckpoint, handle }),
+          copyPort
+        );
+
+        expect(handle).toBe("snap-fedcba98");
+        expect(captured).toStrictEqual(["machine.smolmachine"]);
+        expect(model.packs).toStrictEqual(["dev-01234567"]);
+        expect(model.vms.get(nativeName(machine))?.state).toBe("stopped");
+        expect(
+          model.spawner.calls
+            .slice(before)
+            .map(({ args }) => args.slice(0, 2).join(" "))
+        ).toStrictEqual(["machine create", "machine start"]);
+        expect(model.vms.get(nativeName(copy))).toStrictEqual({
+          state: "running",
+          forwards: ["10001:22"],
+          sizes: { "--cpus": 2, "--mem": 1024, "--storage": 20 },
+          unpacked: "dev-01234567",
+        });
+      })
+  );
+
+  it.effect(
+    "a capture of a stopped machine whose pack fails leaves no checkpoint behind",
+    () =>
+      Effect.gen(function* () {
+        const model = smolvmModel();
+        const settings = yield* prepared();
+        const runtime = yield* runtimeOf(settings, model.spawner);
+
+        model.vms.set(nativeName(machine), { state: "stopped", forwards: [] });
+        model.faults.reply = ({ args }) =>
+          args[0] === "pack" ? locked : undefined;
+
+        const error = yield* Effect.flip(
+          runtime.capture(machine, ramCheckpoint)
+        );
+
+        expect(error.message).toBe(
+          "smolvm pack create dev-01234567 exited 1: Error: database is locked"
+        );
+        expect(
+          yield* readDirectory(path.join(settings.stateDir, "checkpoints"))
+        ).toStrictEqual([]);
+      })
+  );
+
+  it.effect(
+    "deleting a checkpoint removes its directory, then prunes the store",
     () =>
       Effect.gen(function* () {
         const settings = yield* prepared();
@@ -3296,15 +2750,13 @@ layer(NodeServices.layer)((it) => {
 
         expect(yield* readDirectory(store)).toStrictEqual(["objects"]);
         expect(smolvmArgs(spawner.calls)).toStrictEqual([
-          freezerStatus,
-          baseStatus,
           ["machine", "checkpoint-prune", "--store", store],
         ]);
       })
   );
 
   it.effect(
-    "deleting a ram checkpoint from a store no capture has written prunes nothing",
+    "deleting a checkpoint from a store no capture has written prunes nothing",
     () =>
       Effect.gen(function* () {
         const settings = yield* prepared();
@@ -3321,12 +2773,7 @@ layer(NodeServices.layer)((it) => {
         );
         yield* runtime.deleteCheckpoint(ramCheckpoint);
 
-        expect(smolvmArgs(spawner.calls)).toStrictEqual([
-          listing,
-          listing,
-          freezerStatus,
-          baseStatus,
-        ]);
+        expect(smolvmArgs(spawner.calls)).toStrictEqual([listing, listing]);
       })
   );
 
@@ -3352,496 +2799,6 @@ layer(NodeServices.layer)((it) => {
           listing,
           prune,
         ]);
-      })
-  );
-
-  it.effect(
-    "a host's start parks a base for a build's copy, and none for a checkpoint a client named as one begins, whose copies restore it",
-    () =>
-      Effect.gen(function* () {
-        const settings = yield* prepared();
-        const model = smolvmModel();
-        const runtime = yield* runtimeOf(settings, model.spawner);
-        const base = baseOf(buildRef, "5bfae059");
-        const named = sized({ ...buildRef, name: "built" });
-
-        const others = ["fetched", "built-x"].map((name) => ({
-          ...buildRef,
-          name,
-        }));
-
-        building(model);
-
-        for (const checkpoint of [buildRef, named, ...others]) {
-          yield* runtime.capture(builderRef, checkpoint);
-        }
-
-        const restarted = yield* runtimeOf(
-          { ...settings, bootId: "5bfae059" },
-          model.spawner
-        );
-
-        yield* restarted.startup;
-
-        const bases = yield* waitFor(
-          Effect.sync(() => basesIn(model)),
-          (found) =>
-            found.length === 1 && model.vms.get(base)?.state === "frozen"
-        );
-
-        yield* restarted.make(copy, fromCheckpoint(named), copyPort);
-
-        expect(bases).toStrictEqual([base]);
-        expect(model.vms.get(nativeName(copy))?.parent).toBeUndefined();
-      })
-  );
-
-  it.effect(
-    "a build whose index names no smolvm version parks no base at a host's start, and its warning says so",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const settings = yield* prepared();
-        const model = smolvmModel();
-        const runtime = yield* runtimeOf(settings, model.spawner);
-        const logged: unknown[] = [];
-
-        const index = path.join(
-          settings.stateDir,
-          "checkpoints",
-          `${nativeName(buildRef)}.checkpoint`,
-          "checkpoint.json"
-        );
-
-        building(model);
-        yield* runtime.capture(builderRef, buildRef);
-
-        yield* fs.writeFileString(
-          index,
-          (yield* fs.readFileString(index)).replace(
-            `"smolvm_version":"${minimumVersion}",`,
-            ""
-          )
-        );
-
-        const restarted = yield* runtimeOf(settings, model.spawner);
-
-        yield* restarted.startup.pipe(Effect.provide(logging(logged)));
-        yield* waitFor(
-          Effect.sync(() => logged.length),
-          (count) => count > 0
-        );
-
-        expect(basesIn(model)).toStrictEqual([]);
-        expect(logged).toStrictEqual([
-          [
-            `${nativeName(buildRef)}'s checkpoint.json names no smolvm version, so it parks no base and its copies restore`,
-          ],
-        ]);
-      })
-  );
-
-  it.effect(
-    "a restore of a build returns before its base parks, and the park goes on in the runtime's scope after it",
-    () =>
-      Effect.gen(function* () {
-        const model = smolvmModel();
-        const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
-        const child = childOf("web-1");
-        const base = baseOf(buildRef);
-        const gate = yield* Deferred.make<undefined>();
-        let held = false;
-
-        building(model);
-        model.faults.reply = ({ args }) =>
-          args[1] === "create" && args.includes(base) ? locked : undefined;
-        yield* runtime.capture(builderRef, buildRef);
-
-        model.faults.reply = ({ args }) => {
-          if (
-            held ||
-            args[1] !== "status" ||
-            !args.includes(`${base}_freeze`)
-          ) {
-            return undefined;
-          }
-
-          held = true;
-
-          return { ...notFound(`${base}_freeze`), until: Deferred.await(gate) };
-        };
-
-        yield* runtime.make(child, fromCheckpoint(buildRef), 10_001);
-        yield* waitFor(
-          Effect.sync(() => held),
-          (parking) => parking
-        );
-
-        const restored = {
-          parent: model.vms.get(nativeName(child))?.parent,
-          parked: model.vms.has(base),
-        };
-
-        yield* Deferred.succeed(gate, undefined);
-
-        yield* waitFor(
-          Effect.sync(() => model.vms.get(base)?.state),
-          (state) => state === "frozen"
-        );
-
-        expect(restored).toStrictEqual({ parent: undefined, parked: false });
-      })
-  );
-
-  it.effect(
-    "a delete of a build waits for the park its restore began, and then retires the base",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const settings = yield* prepared();
-        const model = smolvmModel();
-        const runtime = yield* runtimeOf(settings, model.spawner);
-        const child = childOf("web-1");
-        const base = baseOf(buildRef);
-        const gate = yield* Deferred.make<undefined>();
-        let held = false;
-
-        const stored = path.join(
-          settings.stateDir,
-          "checkpoints",
-          `${nativeName(buildRef)}.checkpoint`
-        );
-
-        building(model);
-        model.faults.reply = ({ args }) =>
-          args[1] === "create" && args.includes(base) ? locked : undefined;
-        yield* runtime.capture(builderRef, buildRef);
-
-        model.faults.reply = ({ args }) => {
-          const vm = model.vms.get(base);
-
-          if (
-            held ||
-            args[1] !== "start" ||
-            !args.includes(base) ||
-            vm === undefined
-          ) {
-            return undefined;
-          }
-
-          vm.state = "running";
-          held = true;
-
-          return { until: Deferred.await(gate) };
-        };
-
-        yield* runtime.make(child, fromCheckpoint(buildRef), 10_001);
-        yield* waitFor(
-          Effect.sync(() => held),
-          (parking) => parking
-        );
-
-        const deleting = yield* Effect.forkChild(
-          runtime.deleteCheckpoint(buildRef)
-        );
-
-        yield* TestClock.withLive(Effect.sleep(Duration.millis(100)));
-
-        const whileParking = {
-          stored: yield* fs.exists(stored),
-          deleted: deleting.pollUnsafe() !== undefined,
-        };
-
-        yield* Deferred.succeed(gate, undefined);
-        yield* Fiber.join(deleting);
-
-        expect(whileParking).toStrictEqual({ stored: true, deleted: false });
-        expect({
-          stored: yield* fs.exists(stored),
-          bases: basesIn(model),
-        }).toStrictEqual({ stored: false, bases: [] });
-      })
-  );
-
-  it.effect(
-    "a restore's park and a host's start's settle end with the runtime's scope, and run nothing after it closes",
-    () =>
-      Effect.gen(function* () {
-        const settings = yield* prepared();
-        const model = smolvmModel();
-        const runtime = yield* runtimeOf(settings, model.spawner);
-        const child = childOf("web-1");
-        const base = baseOf(buildRef);
-
-        building(model);
-        model.faults.reply = ({ args }) =>
-          args[1] === "create" && args.includes(base) ? locked : undefined;
-        yield* runtime.capture(builderRef, buildRef);
-
-        const cutWith = Effect.fn(function* (
-          bootId: string,
-          held: (args: readonly string[]) => Reply | undefined,
-          run: (runtime: Interface) => Effect.Effect<void, HostError>
-        ) {
-          const scope = yield* Scope.make();
-          const gate = yield* Deferred.make<undefined>();
-          let holding = false;
-
-          model.faults.reply = ({ args }) => {
-            const reply = holding ? undefined : held(args);
-
-            if (reply === undefined) {
-              return undefined;
-            }
-
-            holding = true;
-
-            return { ...reply, until: Deferred.await(gate) };
-          };
-
-          const scoped = yield* runtimeOf(
-            { ...settings, bootId },
-            model.spawner
-          ).pipe(Scope.provide(scope));
-
-          yield* run(scoped);
-          yield* waitFor(
-            Effect.sync(() => holding),
-            (parking) => parking
-          );
-          yield* Scope.close(scope, Exit.void);
-
-          const closed = model.spawner.calls.length;
-
-          yield* Deferred.succeed(gate, undefined);
-          yield* TestClock.withLive(Effect.sleep(Duration.millis(100)));
-
-          return model.spawner.calls.length - closed;
-        });
-
-        const afterRestore = yield* cutWith(
-          "b00710ad",
-          (args) =>
-            args[1] === "status" && args.includes(`${base}_freeze`)
-              ? notFound(`${base}_freeze`)
-              : undefined,
-          (scoped) => scoped.make(child, fromCheckpoint(buildRef), 10_001)
-        );
-
-        let lists = 0;
-
-        const afterSettle = yield* cutWith(
-          "5bfae059",
-          (args) => {
-            lists += args[1] === "ls" ? 1 : 0;
-
-            return args[1] === "ls" && lists === 2
-              ? { stdout: "[]" }
-              : undefined;
-          },
-          (scoped) => scoped.startup
-        );
-
-        expect({
-          afterRestore,
-          afterSettle,
-          bases: basesIn(model),
-        }).toStrictEqual({ afterRestore: 0, afterSettle: 0, bases: [] });
-      })
-  );
-
-  it.effect(
-    "a host that fetches a build's copy parks its base before the fetch ends, so its first restore branches, and parks one again when it starts",
-    () =>
-      Effect.gen(function* () {
-        const { store: bucket } = memoryBuildStore();
-        const source = smolvmModel();
-        const other = smolvmModel();
-        const fetched = { ...buildRef, name: "fetched-fedcba9876543210" };
-        const child = childOf("web-1");
-
-        const settings = {
-          ...(yield* prepared()),
-          bootId: "5bfae059",
-          bucket,
-        };
-
-        const builds = yield* runtimeOf(
-          { ...(yield* prepared()), bucket },
-          source.spawner
-        );
-
-        const fetches = yield* runtimeOf(settings, other.spawner);
-
-        building(source);
-        yield* builds.capture(builderRef, buildRef);
-        yield* builds.builds.publish(buildRef);
-
-        const handle = yield* fetches.builds.fetch(
-          fetched,
-          buildRef.name,
-          "web@1"
-        );
-
-        const parked = other.vms.get(baseOf(fetched, "5bfae059"))?.state;
-
-        yield* fetches.make(
-          child,
-          fromCheckpoint({ ...fetched, handle }),
-          10_001
-        );
-
-        const rebooted = yield* runtimeOf(
-          { ...settings, bootId: "c0ffee00" },
-          other.spawner
-        );
-
-        yield* rebooted.startup;
-        yield* waitFor(
-          Effect.sync(() => other.vms.get(baseOf(fetched, "c0ffee00"))?.state),
-          (state) => state === "frozen"
-        );
-
-        expect(parked).toBe("frozen");
-        expect(other.vms.get(nativeName(child))?.parent).toBe(
-          baseOf(fetched, "5bfae059")
-        );
-      })
-  );
-
-  it.effect(
-    "a host that starts under another smolvm than a build was captured under drops the build's base and parks none, so its copies restore",
-    () => {
-      const logged: unknown[] = [];
-
-      return Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const settings = yield* prepared();
-        const model = smolvmModel();
-        const runtime = yield* runtimeOf(settings, model.spawner);
-        const child = childOf("web-1");
-        const base = baseOf(buildRef);
-
-        const index = path.join(
-          settings.stateDir,
-          "checkpoints",
-          `${nativeName(buildRef)}.checkpoint`,
-          "checkpoint.json"
-        );
-
-        building(model);
-        yield* runtime.capture(builderRef, buildRef);
-
-        const parked = model.vms.get(base)?.state;
-
-        model.vms.delete(nativeName(builderRef));
-
-        yield* fs.writeFileString(
-          index,
-          (yield* fs.readFileString(index)).replace(
-            `"smolvm_version":"${minimumVersion}"`,
-            '"smolvm_version":"1.32.0"'
-          )
-        );
-
-        const upgraded = yield* runtimeOf(settings, model.spawner);
-
-        yield* upgraded.startup;
-        yield* waitFor(
-          Effect.sync(() => model.vms.has(base)),
-          (kept) => !kept
-        );
-        yield* upgraded.make(child, fromCheckpoint(buildRef), 10_001);
-        yield* waitFor(
-          Effect.sync(
-            () =>
-              logged.filter((line) =>
-                String(line).includes(
-                  "captured under smolvm 1.32.0, not this host's"
-                )
-              ).length
-          ),
-          (skipped) => skipped === 2
-        );
-
-        expect(parked).toBe("frozen");
-        expect(model.vms.get(nativeName(child))?.parent).toBeUndefined();
-        expect(basesIn(model)).toStrictEqual([]);
-      }).pipe(Effect.provide(logging(logged)));
-    }
-  );
-
-  it.effect(
-    "a host that starts again under the same boot freezes a base its last run left running, so a restore branches it",
-    () =>
-      Effect.gen(function* () {
-        const settings = yield* prepared();
-        const model = smolvmModel();
-        const runtime = yield* runtimeOf(settings, model.spawner);
-        const child = childOf("web-1");
-        const base = baseOf(buildRef);
-
-        building(model);
-        yield* runtime.capture(builderRef, buildRef);
-
-        const parked = model.vms.get(base);
-
-        if (parked !== undefined) {
-          parked.state = "running";
-        }
-
-        const restarted = yield* runtimeOf(settings, model.spawner);
-
-        yield* restarted.startup;
-        yield* waitFor(
-          Effect.sync(() => model.vms.get(base)?.state),
-          (state) => state === "frozen"
-        );
-        yield* restarted.make(child, fromCheckpoint(buildRef), 10_001);
-
-        expect(model.vms.get(nativeName(child))?.parent).toBe(base);
-      })
-  );
-
-  it.effect(
-    "a host that boots again parks each build it keeps anew, and drops the old base with its last child",
-    () =>
-      Effect.gen(function* () {
-        const settings = yield* prepared();
-        const model = smolvmModel();
-        const runtime = yield* runtimeOf(settings, model.spawner);
-        const child = childOf("web-1");
-        const before = baseOf(buildRef);
-        const after = baseOf(buildRef, "5bfae059");
-
-        building(model);
-        yield* runtime.capture(builderRef, buildRef);
-        yield* runtime.make(child, fromCheckpoint(buildRef), 10_001);
-
-        for (const vm of model.vms.values()) {
-          vm.state = "stopped";
-        }
-
-        const rebooted = yield* runtimeOf(
-          { ...settings, bootId: "5bfae059" },
-          model.spawner
-        );
-
-        yield* rebooted.startup;
-        yield* waitFor(
-          Effect.sync(() => model.vms.get(after)?.state),
-          (state) => state === "frozen"
-        );
-
-        const pinned = model.vms.get(before)?.state;
-
-        yield* rebooted.delete(child, new Set());
-
-        expect(pinned).toBe("stopped");
-        expect(model.vms.get(after)?.forwards).toStrictEqual([]);
-        expect([...model.vms.keys()].toSorted()).toStrictEqual(
-          [nativeName(builderRef), after].toSorted()
-        );
       })
   );
 });

@@ -469,19 +469,6 @@ export const tailnetIn = (output: string): TailnetReport | undefined => {
 
 const keyWanted = "$state/host-key-wanted";
 
-export const unkeyScript = [
-  "set -eu",
-  "root=${CLANKERBOX_ROOT-}",
-  guestPath,
-  `state=${stateDir}`,
-  `if ls "$root"/etc/ssh/ssh_host_*_key >/dev/null 2>&1; then`,
-  `  mkdir -p "$state"`,
-  `  : >"${keyWanted}"`,
-  `  rm -f "$root"/etc/ssh/ssh_host_*`,
-  "fi",
-  "",
-].join("\n");
-
 export const identityScript = [
   "set -eu",
   "instance=$1",
@@ -581,20 +568,6 @@ export const identify = (
           globalThis.crypto.getRandomValues(new Uint8Array(seedBytes))
         ),
       },
-      preparationTimeout
-    )
-  );
-
-export const unkey = (
-  runtime: Pick<Runtime, "exec">,
-  machine: Target
-): Effect.Effect<void, RuntimeError | ScriptFailed> =>
-  Effect.asVoid(
-    runInGuest(
-      runtime,
-      "preparation",
-      machine,
-      { argv: ["/bin/sh", "-c", unkeyScript, "clankerbox-unkey"] },
       preparationTimeout
     )
   );

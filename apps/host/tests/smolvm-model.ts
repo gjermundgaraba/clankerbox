@@ -20,6 +20,8 @@ export interface Vm {
   readonly parent?: string | undefined;
   forwards: readonly string[];
   sizes?: Readonly<Record<SizeFlag, number | undefined>> | undefined;
+  /** The VM whose pack this one was created from. */
+  readonly unpacked?: string | undefined;
 }
 
 type SizeFlag = "--cpus" | "--mem" | "--storage";
@@ -52,6 +54,12 @@ const decodeIndex = Schema.decodeUnknownSync(
         }),
       }),
     })
+  )
+);
+
+const decodePack = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({ vm: Schema.String, workspace: Schema.Boolean })
   )
 );
 
@@ -89,6 +97,7 @@ const heldElsewhereOn1341 = (forward: string): Reply => ({
  */
 export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
   const vms = new Map<string, Vm>();
+  const packs: string[] = [];
   const unrecorded = new Set<string>();
   const elsewhere = new Set<number>();
 
@@ -132,9 +141,38 @@ export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
     return args[1] === "--property=LoadState" ? { stdout: "loaded\n" } : {};
   };
 
+  const sized = (vm: Vm | undefined, args: readonly string[]) => {
+    const given = (flag: SizeFlag) => {
+      const [value] = valuesOf(args, flag);
+
+      return value === undefined ? vm?.sizes?.[flag] : Number(value);
+    };
+
+    return {
+      "--cpus": given("--cpus"),
+      "--mem": given("--mem"),
+      "--storage": given("--storage"),
+    };
+  };
+
   const create = (name: string, args: readonly string[]): Reply => {
     const [from] = valuesOf(args, "--from");
     const given = valuesOf(args, "-p");
+
+    // https://github.com/smol-machines/smolvm/blob/v1.34.1/src/machine_spec.rs#L960-L1038
+    if (from?.endsWith(".smolmachine") === true) {
+      const { vm } = decodePack(readFileSync(from, "utf8"));
+
+      vms.set(name, {
+        state: "created",
+        forwards: given,
+        sizes: sized(undefined, args),
+        unpacked: vm,
+      });
+
+      return {};
+    }
+
     const captured = from === undefined ? [] : forwardsIn(from);
 
     if (
@@ -155,20 +193,6 @@ export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
     });
 
     return {};
-  };
-
-  const sized = (vm: Vm | undefined, args: readonly string[]) => {
-    const given = (flag: SizeFlag) => {
-      const [value] = valuesOf(args, flag);
-
-      return value === undefined ? vm?.sizes?.[flag] : Number(value);
-    };
-
-    return {
-      "--cpus": given("--cpus"),
-      "--mem": given("--mem"),
-      "--storage": given("--storage"),
-    };
   };
 
   const update = (vm: Vm, args: readonly string[]): Reply => {
@@ -276,7 +300,44 @@ export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
     return {};
   };
 
+  // https://github.com/smol-machines/smolvm/blob/v1.34.1/src/cli/pack.rs#L1075-L1094
+  const pack = (args: readonly string[]): Reply => {
+    const [from = ""] = valuesOf(args, "--from-vm");
+    const [output = ""] = valuesOf(args, "-o");
+    const vm = vms.get(from);
+
+    if (vm === undefined) {
+      return {
+        exitCode: 1,
+        stderr: `Error: agent operation failed: pack from VM: VM '${from}' not found\n`,
+      };
+    }
+
+    if (live.has(vm.state)) {
+      return {
+        exitCode: 1,
+        stderr: `Error: agent operation failed: pack from VM: VM '${from}' is running. Stop it first with: smolvm machine stop --name ${from}\n`,
+      };
+    }
+
+    writeFileSync(output, "stub");
+    writeFileSync(
+      `${output}.smolmachine`,
+      JSON.stringify({
+        vm: from,
+        workspace: args.includes("--include-workspace"),
+      })
+    );
+    packs.push(from);
+
+    return {};
+  };
+
   const smolvm = ({ args, stdin }: Call): Reply => {
+    if (args[0] === "pack" && args[1] === "create") {
+      return pack(args);
+    }
+
     const [name = ""] = valuesOf(args, "--name");
     const vm = vms.get(name);
     const command = args[1] ?? "";
@@ -412,6 +473,7 @@ export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
 
   return {
     vms,
+    packs,
     spawner,
     faults,
     orphanVmm,
@@ -447,7 +509,6 @@ export const prepared = (expanded: readonly string[] = templates) =>
       ramBudgetMib: 4096,
       stateDir,
       arch: "x64",
-      bootId: "b00710ad",
     };
 
     return settings;

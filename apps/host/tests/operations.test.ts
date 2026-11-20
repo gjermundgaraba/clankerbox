@@ -347,7 +347,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "cancel turns the report cancelled only once the step has ended",
     () =>
       Effect.gen(function* () {
-        const host = yield* runner();
+        const host = yield* runner({ as: "saving" });
 
         yield* finished(host, makes("dev"));
 
@@ -982,7 +982,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a stop that resumes admits a VM the runtime holds paused, beside the machines that run",
     () =>
       Effect.gen(function* () {
-        const host = yield* runner({ ramBudgetMib: 1024 });
+        const host = yield* runner({ as: "saving", ramBudgetMib: 1024 });
         const dev = ref("dev", reached(firstPort));
         const other = ref("other", reached(firstPort + 1));
 
@@ -1145,7 +1145,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       `a ${verb} with an exec in flight first ends its command, as a cut does, and the exec answers WrongState in the phase ${phase}, saying the ${verb} ended it`,
       () =>
         Effect.gen(function* () {
-          const host = yield* runner();
+          const host = yield* runner({ as: "saving" });
           const dev = ref("dev", reached(firstPort));
 
           yield* finished(host, makes("dev"));
@@ -1337,7 +1337,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
   it.effect("a paused machine starts only under the pin it booted under", () =>
     Effect.gen(function* () {
-      const host = yield* runner();
+      const host = yield* runner({ as: "saving" });
 
       yield* finished(host, makes("dev"));
       yield* finished(
@@ -1400,7 +1400,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a stop that resumes a paused machine does so only under its pin, and is admitted",
     () =>
       Effect.gen(function* () {
-        const host = yield* runner();
+        const host = yield* runner({ as: "saving" });
 
         yield* finished(host, makes("dev"));
         yield* finished(
@@ -1472,7 +1472,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     const lines: string[] = [];
 
     return Effect.gen(function* () {
-      const host = yield* runner();
+      const host = yield* runner({ as: "saving" });
 
       yield* finished(host, makes("dev"));
 
@@ -1494,7 +1494,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
   it.effect("a pause under the host's pin saves the VM", () =>
     Effect.gen(function* () {
-      const host = yield* runner();
+      const host = yield* runner({ as: "saving" });
 
       yield* finished(host, makes("dev"));
       yield* finished(
@@ -1892,7 +1892,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a resize refused up front touches nothing, admission included, and says why",
     () =>
       Effect.gen(function* () {
-        const host = yield* runner();
+        const host = yield* runner({ as: "saving" });
         const mac = yield* runner({ as: "tart" });
         const dev = ref("dev");
 
@@ -1948,7 +1948,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ],
           [
             "WrongState",
-            "machine paused is paused, and the smolvm runtime resizes a stopped or running machine: stop it first",
+            "machine paused is paused, and the saving runtime resizes a stopped or running machine: stop it first",
           ],
         ]);
         expect(gone.error?._tag).toBe("Missing");
@@ -1964,7 +1964,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "sizes the runtime can't give are refused before admission and anything native, for a resize and a copy",
     () =>
       Effect.gen(function* () {
-        const host = yield* runner();
+        const host = yield* runner({ as: "saving" });
 
         const refused = new Unsizable({
           message: "this host takes no 2G of RAM",
@@ -2334,7 +2334,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       `a ${step} that asks for its hook reads the VM once, runs the guest's ${hook} hook while it runs, then ends it ${ends}`,
       () =>
         Effect.gen(function* () {
-          const host = yield* runner();
+          const host = yield* runner({ as: "saving" });
 
           yield* finished(host, makes("dev"));
           yield* identified(host);
@@ -2354,7 +2354,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       `a ${step} that doesn't ask for a hook runs none, and ends the VM ${ends}`,
       () =>
         Effect.gen(function* () {
-          const host = yield* runner();
+          const host = yield* runner({ as: "saving" });
 
           yield* finished(host, makes("dev"));
           yield* identified(host);
@@ -2595,7 +2595,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const logged: string[] = [];
 
       return Effect.gen(function* () {
-        const host = yield* runner();
+        const host = yield* runner({ as: "saving" });
 
         yield* finished(host, makes("dev"));
         yield* identified(host);

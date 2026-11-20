@@ -482,3 +482,6 @@ export const stubHost = (
       return `http://127.0.0.1:${port}`;
     })
   );
+
+/** A plane whose one host keeps a paused machine's RAM, as smol cloud does. */
+export const saving = { hosts: [{ id: "smolvm", as: "saving" as const }] };

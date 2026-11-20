@@ -15,7 +15,7 @@ import { Effect, Exit, Fiber, Layer, Schema } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { expect } from "vite-plus/test";
 
-import { clientOf, eventually, running } from "../support.ts";
+import { saving, clientOf, eventually, running } from "../support.ts";
 
 const spec: MachineSpec = { base: "ubuntu", cpu: 1, ramMib: 1024, diskGib: 10 };
 
@@ -221,7 +221,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "the SDK's client forks, captures, restores and deletes checkpoints on a served control plane",
     () =>
       Effect.gen(function* () {
-        const { url, store } = yield* running();
+        const { url, store } = yield* running(saving);
         const client = yield* clientOf(url);
 
         yield* client.create("dev", spec);

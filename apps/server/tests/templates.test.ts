@@ -407,7 +407,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(copy).toMatchObject({
           build: "web@1",
           runtime: "smolvm",
-          kind: "ram",
+          kind: "disk",
         });
         expect(isBuildCopy(copy?.name ?? "")).toBe(true);
         expect(copy?.machine).toMatch(/^building-[0-9a-f]{16}$/u);
@@ -419,7 +419,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "start",
           "exec",
           "exec",
-          "exec",
+          "stop",
           "capture",
           "delete",
         ]);
