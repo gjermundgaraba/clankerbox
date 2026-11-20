@@ -48,8 +48,10 @@ const Live = Schema.Struct({
  *   only larger ones; `any`; or `none`, which refuses a machine in that state. A runtime that grows
  *   a running machine, live, declares in `live` what that grow takes: its RAM only in steps of
  *   `ramStepMib` from the RAM it booted with, at most `ramGrowthMib` above that RAM, and its vCPUs
- *   only where `cpu`. A grow of RAM past `ramGrowthMib` in one resize is refused up front; the
- *   runtime refuses the rest, as only it holds the RAM the machine booted with, and may give less.
+ *   only where `cpu`. The up-front check is not complete: it refuses a grow past `ramGrowthMib`
+ *   in one resize only, measured from the machine's RAM before that resize. Several smaller grows
+ *   that together pass `ramGrowthMib` above the RAM it booted with, which only the runtime holds,
+ *   and a host whose guests address less memory, are refused by the runtime inside the step.
  * - `sizes`: `free`, any sizes, or `classes`, named sizes a machine's vCPUs, RAM and disk must
  *   together equal one of.
  * - `limits`: what the runtime gives a machine of each size it caps: at `least` and at `most` that,

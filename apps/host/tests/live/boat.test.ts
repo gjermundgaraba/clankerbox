@@ -762,6 +762,84 @@ describe.runIf(live)("boat, against the real account", () => {
   );
 
   it.live(
+    "refuses Unsizable a fork of a running machine to a type its data doesn't fit, which goes through a save and a create from it",
+    () =>
+      Effect.gen(function* () {
+        const { api: boat, dir } = yield* client;
+
+        yield* finding(`host ${host}: the shrinking fork run's mark`);
+        yield* swept(boat);
+
+        yield* Effect.addFinalizer(() =>
+          Effect.gen(function* () {
+            const left = yield* swept(boat);
+
+            yield* finding(
+              `left at the end: ${left.swept.machines.length} sandboxes and ${left.swept.copies.length} saved snapshots of this run or one over`
+            );
+          }).pipe(Effect.orDie)
+        );
+
+        const context = yield* Layer.build(
+          Boat.layer(
+            { apiKeyFile: path.join(dir, "boat-key"), api },
+            {
+              id: host,
+              stateDir: path.join(dir, "state"),
+              listen: { address: "127.0.0.1", port: 1 },
+            }
+          )
+        );
+
+        const runtime = Context.get(context, Runtime);
+
+        const source = {
+          name: "full",
+          instance: liveInstance(),
+          ...types.large,
+        };
+
+        const made = yield* runtime.make(
+          source,
+          { _tag: "image", image: Boat.image },
+          10_022
+        );
+
+        note("sandbox", made.handle);
+
+        const machine = { ...source, handle: made.handle };
+
+        yield* Effect.addFinalizer(() =>
+          Effect.ignore(runtime.delete(machine, new Set()))
+        );
+
+        const filled = yield* runCommand(runtime, {
+          machine,
+          argv: ["/bin/sh", "-c", 'fallocate -l 60G "$HOME/fill" && sync'],
+        });
+
+        expect(filled.exitCode).toBe(0);
+
+        const fork = {
+          name: "small",
+          instance: liveInstance(),
+          ...types.small,
+        };
+
+        const failed = yield* Effect.flip(
+          runtime.make(fork, { _tag: "machine", machine }, 10_022)
+        );
+
+        yield* finding(
+          `a fork of a running large machine holding 60G to small: ${failed._tag}: ${failed.message}`
+        );
+
+        expect(failed._tag).toBe("Unsizable");
+      }).pipe(Effect.scoped, Effect.provide(services)),
+    { timeout: 30 * 60 * 1000 }
+  );
+
+  it.live(
     "leaves nothing of its run behind, and lists what other live runs hold",
     () =>
       Effect.gen(function* () {
