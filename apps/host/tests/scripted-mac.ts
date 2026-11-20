@@ -218,6 +218,14 @@ export const scriptedMac = (stateDir: string, tart = binary) => {
     { readonly CPU: number; readonly Memory: number }
   >();
 
+  /**
+   * Each VM's ASIF disk in bytes, as diskutil reads them: past the GB `tart get` floors them to,
+   * so a `--disk-size` of that GB is below them, which Tart refuses as a shrink.
+   * https://github.com/cirruslabs/tart/blob/2.41.1/Sources/tart/Commands/Get.swift#L36
+   */
+  const diskBytes = new Map<string, number>();
+  const baseDiskBytes = 65e9 + 4096;
+
   const tartCommand = ({ args, stdin }: Call): Reply | undefined => {
     const [command = "", ...rest] = args;
     const vm = rest[0] ?? "";
@@ -247,6 +255,7 @@ export const scriptedMac = (stateDir: string, tart = binary) => {
         }
 
         vms.set(rest[1] ?? "", "stopped");
+        diskBytes.set(rest[1] ?? "", diskBytes.get(vm) ?? baseDiskBytes);
 
         return undefined;
       }
@@ -259,7 +268,8 @@ export const scriptedMac = (stateDir: string, tart = binary) => {
         }
 
         const at = rest.indexOf("--disk-size");
-        const size = at === -1 ? 50 : Number(rest[at + 1]);
+        const holds = diskBytes.get(vm) ?? baseDiskBytes;
+        const size = at === -1 ? holds / 1e9 : Number(rest[at + 1]);
         const cpu = Number(rest[rest.indexOf("--cpu") + 1]);
 
         if (cpu === 1) {
@@ -270,11 +280,16 @@ export const scriptedMac = (stateDir: string, tart = binary) => {
           };
         }
 
-        if (size < 50) {
+        // https://github.com/cirruslabs/tart/blob/2.41.1/Sources/tart/VMDirectory.swift#L301-L320
+        if (size * 1e9 < holds) {
           return {
             exitCode: 1,
-            stderr: `new disk size of ${size} GB should be larger than the current disk size of 50 GB\n`,
+            stderr: `New disk size of ${size} GB should be larger than the current disk size of ${Math.floor(holds / 1e9)} GB\n`,
           };
+        }
+
+        if (size * 1e9 > holds) {
+          diskBytes.set(vm, size * 1e9);
         }
 
         const had = sizes.get(vm) ?? { CPU: 4, Memory: 8192 };
@@ -292,7 +307,7 @@ export const scriptedMac = (stateDir: string, tart = binary) => {
           hooks.get?.(vm) ?? {
             stdout: JSON.stringify({
               ...(sizes.get(vm) ?? { CPU: 4, Memory: 8192 }),
-              Disk: 65,
+              Disk: Math.floor((diskBytes.get(vm) ?? baseDiskBytes) / 1e9),
             }),
           }
         );

@@ -175,9 +175,10 @@ const resizedStates = ({ resize }: RuntimeTraits): string => {
 
 /**
  * Why a runtime refuses a resize of machine `name` from `from` to `to`, none where it takes it: a
- * disk that would shrink, and sizes it doesn't give; where the machine's `state` is known, also a
- * state it takes no resize in, which a paused machine is in on every runtime, and vCPUs or RAM
- * that shrink where it only grows them.
+ * disk that would shrink, but where the runtime's `classes` each give their own disk, which its
+ * provider takes where the machine's data fits, and sizes it doesn't give; where the machine's
+ * `state` is known, also a state it takes no resize in, which a paused machine is in on every
+ * runtime, and vCPUs or RAM that shrink where it only grows them.
  * The control plane asks it before it records the resize, and the host before it runs the step.
  */
 export const resizeRefusal = (
@@ -189,7 +190,7 @@ export const resizeRefusal = (
 ): WrongState | Unsizable | undefined => {
   const { runtime } = traits;
 
-  if (to.diskGib < from.diskGib) {
+  if (to.diskGib < from.diskGib && traits.sizes._tag === "free") {
     return new Unsizable({
       message: `machine ${name}'s disk is ${formatGib(from.diskGib)}, and a disk only grows`,
     });

@@ -150,7 +150,7 @@ const shrinks = (from: Sized, to: Sized) =>
 
 describe("resizeRefusal", () => {
   it.effect.prop(
-    "a resize is refused Unsizable where its disk shrinks, WrongState in a known state its runtime takes none in, and Unsizable where its runtime doesn't give its sizes, or takes only growth there and it shrinks",
+    "a resize is refused Unsizable where its disk shrinks on a runtime of free sizes, WrongState in a known state its runtime takes none in, and Unsizable where its runtime doesn't give its sizes, or takes only growth there and it shrinks",
     {
       traits: RuntimeTraits,
       given: Given,
@@ -176,11 +176,13 @@ describe("resizeRefusal", () => {
         const unfitted =
           !gives(given, to) || (takes === "grow" && shrinks(from, to));
 
-        const wrongState =
-          to.diskGib >= from.diskGib && state !== undefined && takes === "none";
+        const diskShrinks =
+          to.diskGib < from.diskGib && given.sizes._tag === "free";
 
-        const unsizable =
-          to.diskGib < from.diskGib || (!wrongState && unfitted);
+        const wrongState =
+          !diskShrinks && state !== undefined && takes === "none";
+
+        const unsizable = diskShrinks || (!wrongState && unfitted);
 
         expect([
           refusal?._tag === "WrongState",

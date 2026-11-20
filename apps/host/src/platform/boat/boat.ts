@@ -575,7 +575,7 @@ export const make = (
     const retyped = (
       machine: Target,
       type: Api.BoatType
-    ): Effect.Effect<void, Internal> =>
+    ): Effect.Effect<void, Internal | Unsizable> =>
       Effect.gen(function* () {
         const untaken: string[] = [];
         let taken = false;
@@ -590,8 +590,12 @@ export const make = (
             (held === "running" || held === "stopped") &&
             now !== type
           ) {
+            if (held === "running") {
+              yield* stopped(machine);
+            }
+
             return yield* new Internal({
-              message: `boat took the resize of ${machine.name} to ${type}, and resumed it at ${now}`,
+              message: `boat took the resize of ${machine.name} to ${type}, and resumed it at ${now}, so the host stopped it again`,
             });
           }
 
@@ -641,19 +645,22 @@ export const make = (
 
               const unsent = yield* api.retype(machine.handle, type).pipe(
                 Effect.as(undefined),
-                Effect.catchTag("Unanswered", () =>
-                  Effect.succeed("its answer was lost")
-                ),
-                Effect.catchIf(
-                  (error): error is Api.Refused =>
-                    error._tag === "Refused" &&
-                    error.code === "sandbox_running_stop_first",
-                  (error) =>
-                    Effect.succeed(
-                      `boat refused it as running while it read archived, ${error.code}: ${error.message}`
-                    )
-                ),
-                Effect.mapError(internal(`couldn't resize ${machine.name}`))
+                Effect.catchTags({
+                  Unanswered: () => Effect.succeed("its answer was lost"),
+                  Refused: (error) =>
+                    error.code === "sandbox_running_stop_first"
+                      ? Effect.succeed(
+                          `boat refused it as running while it read archived, ${error.code}: ${error.message}`
+                        )
+                      : Effect.fail(error),
+                }),
+                Effect.mapError((error) =>
+                  error._tag === "Refused" && error.code === "type_too_small"
+                    ? new Unsizable({
+                        message: `machine ${machine.name} holds more data than boat's ${type} type takes, and boat keeps it at ${now}: ${error.message}`,
+                      })
+                    : internal(`couldn't resize ${machine.name}`)(error)
+                )
               );
 
               taken = unsent === undefined;

@@ -732,9 +732,48 @@ export const make = (
         }
       });
 
-    const set = (machine: Target, sizes: Sizes, flags: readonly string[]) =>
+    /**
+     * The flags without `--disk-size` where the VM's disk already reads the GiB asked: the GB that
+     * GiB rounds up to can land below the bytes an ASIF disk holds, which Tart refuses as a shrink.
+     * https://github.com/cirruslabs/tart/blob/2.41.1/Sources/tart/VMDirectory.swift#L301-L320
+     */
+    const unchangedDisk = (
+      vm: string,
+      sizes: Sizes,
+      flags: readonly string[]
+    ) =>
+      Effect.gen(function* () {
+        const at = flags.indexOf("--disk-size");
+
+        if (at === -1) {
+          return flags;
+        }
+
+        const ran = yield* call(["get", vm, "--format", "json"], `get ${vm}`);
+
+        const { Disk } = yield* decodeInfo(ran.stdout).pipe(
+          Effect.mapError(
+            (error) =>
+              new Internal({
+                message: `tart get ${vm} answered something unexpected: ${error.message}`,
+              })
+          )
+        );
+
+        return Disk !== null && diskGibOf(Disk) === sizes.diskGib
+          ? [...flags.slice(0, at), ...flags.slice(at + 2)]
+          : flags;
+      });
+
+    const set = (machine: Target, sizes: Sizes, asked: readonly string[]) =>
       Effect.gen(function* () {
         const vm = machine.handle;
+        const flags = yield* unchangedDisk(vm, sizes, asked);
+
+        if (flags.length === 0) {
+          return;
+        }
+
         const ran = yield* tart(["set", vm, ...flags], `set ${vm}`);
 
         if (ran.exitCode !== 0 && ran.stderr.includes(shrinkRefusal)) {

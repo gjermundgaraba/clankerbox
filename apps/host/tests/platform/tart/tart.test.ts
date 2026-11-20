@@ -382,7 +382,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(calls(mac)).toStrictEqual([
           `tart clone ${image} ${vm}`,
-          `tart set ${vm} --random-serial --cpu 4 --memory 8192 --disk-size 65`,
+          `tart get ${vm} --format json`,
+          `tart set ${vm} --random-serial --cpu 4 --memory 8192`,
           `launchctl bootstrap gui/501 ${path.join(jobsDir(mac.settings.stateDir), `${vm}.plist`)}`,
           `launchctl kickstart gui/501/${vm}`,
           `tart exec ${vm} true`,
@@ -726,10 +727,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect([error._tag, error.message]).toStrictEqual([
           "Unsizable",
-          "machine small's disk of 20G is below the disk Tart holds for it, and Tart only grows a disk: new disk size of 22 GB should be larger than the current disk size of 50 GB",
+          "machine small's disk of 20G is below the disk Tart holds for it, and Tart only grows a disk: New disk size of 22 GB should be larger than the current disk size of 65 GB",
         ]);
         expect(calls(mac)).toStrictEqual([
           `tart clone base ${vm}`,
+          `tart get ${vm} --format json`,
           `tart set ${vm} --random-serial --cpu 4 --memory 8192 --disk-size 22`,
         ]);
         expect(mac.vms.get(vm)).toBe("stopped");
@@ -1007,7 +1009,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   });
 
   it.effect(
-    "a resize sets the vCPUs, memory and disk it is asked, and a size below Tart's least is Unsizable",
+    "a resize sets the vCPUs, memory and disk it is asked, sends no disk Tart already holds, and a size below Tart's least is Unsizable",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -1017,6 +1019,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         mac.vms.set(vm, "stopped");
 
         yield* runtime.resize(machine, { cpu: 2, ramMib: 4096 }, false);
+        yield* runtime.resize(machine, { diskGib: 60 }, false);
+        yield* runtime.resize(machine, { diskGib: 100 }, false);
         yield* runtime.resize(machine, { diskGib: 100 }, false);
         yield* runtime.resize(machine, {}, false);
 
@@ -1026,7 +1030,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(calls(mac)).toStrictEqual([
           `tart set ${vm} --cpu 2 --memory 4096`,
+          `tart get ${vm} --format json`,
+          `tart get ${vm} --format json`,
           `tart set ${vm} --disk-size 108`,
+          `tart get ${vm} --format json`,
           `tart set ${vm} --cpu 1`,
         ]);
         expect(failure(least)).toStrictEqual([
@@ -1495,7 +1502,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           own: [...new Set(run(true))].toSorted(),
           hosts: run(false),
         }).toStrictEqual({
-          own: ["--version", "clone", "launchctl", "perl", "set"],
+          own: ["--version", "clone", "get", "launchctl", "perl", "set"],
           hosts: ["exec", "exec", "exec", "exec", "exec"],
         });
       })

@@ -69,6 +69,8 @@ export interface FakeSandbox {
   hydratingFor: number;
   answeredHydrated: boolean | undefined;
   dataExpired: boolean;
+  /** The GB of the user's own files it holds, which a resume onto a type whose disk takes less refuses. */
+  dataGb: number;
   failed: boolean;
   cancelled: boolean;
   stoppedAt: number | undefined;
@@ -201,6 +203,14 @@ const expired = (sandbox: FakeSandbox) =>
     "snapshot_data_expired",
     `sandbox ${sandbox.id}'s snapshot data was deleted after 14 days stopped`
   );
+
+// The GB of a user's own files each type's disk takes, as boat's docs list them:
+// https://docs.boat.dev/machines
+const filesGb: Readonly<Record<Offered, number>> = {
+  small: 51,
+  default: 51,
+  large: 111,
+};
 
 const typeIn = (asked: string | undefined, otherwise: Offered) => {
   const type = asked ?? otherwise;
@@ -669,6 +679,7 @@ export const fakeBoat = (
         hydratingFor: hydratingNext,
         answeredHydrated: undefined,
         dataExpired: false,
+        dataGb: 0,
         failed: failingNext,
         cancelled: cancellingNext,
         stoppedAt: undefined,
@@ -863,6 +874,14 @@ export const fakeBoat = (
               "sandbox_running_stop_first",
               "stop the sandbox before changing its type"
             );
+      }
+
+      if (sandbox.dataGb > filesGb[type]) {
+        return refused(
+          409,
+          "type_too_small",
+          `sandbox ${sandbox.id} holds ${sandbox.dataGb} GB, more than ${type}'s disk takes`
+        );
       }
 
       const kept =
@@ -1645,6 +1664,14 @@ export const fakeBoat = (
         Effect.sync(() => {
           refusing.add(call);
         }),
+      fill: (id: string, gb: number) =>
+        Effect.sync(() => {
+          const sandbox = sandboxes.get(id);
+
+          if (sandbox !== undefined) {
+            sandbox.dataGb = gb;
+          }
+        }),
       calls,
       requests,
       sandboxes,
@@ -1696,6 +1723,8 @@ export interface FakeBoat {
     lasts?: Duration.Input
   ) => Effect.Effect<void>;
   readonly refuseOnce: (call: BoatCall) => Effect.Effect<void>;
+  /** The sandbox holds this many GB of the user's own files. */
+  readonly fill: (id: string, gb: number) => Effect.Effect<void>;
   readonly calls: readonly string[];
   readonly requests: readonly FakeRequest[];
   readonly sandboxes: ReadonlyMap<string, FakeSandbox>;

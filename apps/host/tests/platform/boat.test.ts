@@ -786,6 +786,10 @@ describe("the boat runtime over fake boat", () => {
             expect(failed.message).toContain("to default");
             expect(failed.message).toContain("at small");
             expect(boat.starts() - from).toBe(1);
+            expect(boat.sandboxes.get(machine.handle)).toMatchObject({
+              type: "small",
+              running: false,
+            });
           }),
         {
           onCall: (line) => {
@@ -796,6 +800,42 @@ describe("the boat runtime over fake boat", () => {
         }
       );
     },
+    30_000
+  );
+
+  it.live(
+    "a resize moves a machine down a type its data fits, and one it doesn't fit is Unsizable at one resume, left stopped where it was",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          const machine = yield* made(runtime, "dev");
+
+          yield* runtime.stop(machine);
+          yield* runtime.resize(machine, types.large, false);
+          yield* runtime.resize(machine, types.default, false);
+
+          expect(yield* runtime.sizes(machine)).toStrictEqual(types.default);
+
+          yield* runtime.resize(machine, types.large, false);
+          yield* boat.fill(machine.handle, 80);
+
+          const sent = boat.calls.length;
+
+          const failed = yield* Effect.flip(
+            runtime.resize(machine, types.default, false)
+          );
+
+          expect(failed).toMatchObject({ _tag: "Unsizable" });
+          expect(failed.message).toContain("boat keeps it at large");
+          expect(
+            boat.calls.slice(sent).filter((line) => line.includes("/resume"))
+          ).toHaveLength(1);
+          expect(boat.sandboxes.get(machine.handle)).toMatchObject({
+            type: "large",
+            running: false,
+          });
+        })
+      ),
     30_000
   );
 
