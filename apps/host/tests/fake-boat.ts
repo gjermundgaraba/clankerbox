@@ -927,6 +927,11 @@ export const fakeBoat = (
       }
 
       await guests.end(sandbox.root);
+      await rm(path.join(sandbox.root, "dev", "shm"), {
+        recursive: true,
+        force: true,
+      });
+      await mkdir(path.join(sandbox.root, "dev", "shm"), { recursive: true });
       sandbox.running = false;
       sandbox.inPassing = "archiving";
       sandbox.stoppedAt = Date.now();
@@ -1051,6 +1056,9 @@ export const fakeBoat = (
       const root = path.join(options.dir, "snapshots", minted(name));
 
       await cp(source.root, root, { recursive: true, verbatimSymlinks: true });
+      // A save holds files, never memory: https://docs.boat.dev/snapshots/whats-saved
+      await rm(path.join(root, "dev", "shm"), { recursive: true, force: true });
+      await mkdir(path.join(root, "dev", "shm"), { recursive: true });
 
       if (before !== undefined) {
         await rm(before.root, { recursive: true, force: true });

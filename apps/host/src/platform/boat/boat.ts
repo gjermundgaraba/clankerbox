@@ -449,15 +449,16 @@ export const make = (
       [instanceLabel]: machine.instance,
     });
 
-    const sourceStopped = (
+    const copyable = (
       source: Target
-    ): Effect.Effect<void, Internal | Missing | WrongState> =>
+    ): Effect.Effect<"running" | "stopped", Internal | Missing | WrongState> =>
       Effect.flatMap(
         rested(source),
-        (held): Effect.Effect<void, Missing | WrongState> => {
+        (held): Effect.Effect<"running" | "stopped", Missing | WrongState> => {
           switch (held) {
+            case "running":
             case "stopped": {
-              return Effect.void;
+              return Effect.succeed(held);
             }
 
             case "expired": {
@@ -478,19 +479,38 @@ export const make = (
                 })
               );
             }
-
-            case "running": {
-              return Effect.fail(
-                new WrongState({
-                  message: `boat copies a stopped machine, and ${source.name} is running: stop it first`,
-                  machine: source.name,
-                  state: "running",
-                })
-              );
-            }
           }
         }
       );
+
+    // A save of a running sandbox is a fresh capture, which can run minutes, where a fork reads the
+    // newest automatic snapshot, up to a minute old:
+    // https://docs.boat.dev/snapshots/resume-and-fork
+    const savedAs = (machine: Target, name: string, what: string) =>
+      Effect.gen(function* () {
+        yield* api.save(machine.handle, name).pipe(
+          Effect.catchTag("Unanswered", (lost) =>
+            Effect.flatMap(api.saved(name), (found) =>
+              found === undefined ? Effect.fail(lost) : Effect.void
+            )
+          ),
+          Effect.mapError(failure(`${what} ${machine.name}`))
+        );
+
+        const snapshot = yield* untilRest(
+          api
+            .saved(name)
+            .pipe(Effect.mapError(internal(`couldn't read snapshot ${name}`))),
+          (found) => found === undefined || settled.has(found.status),
+          pollEvery
+        );
+
+        if (snapshot?.status !== "ready") {
+          return yield* new Internal({
+            message: `boat's save of ${machine.name} as ${name} failed: ${snapshot?.error ?? "it is gone"}`,
+          });
+        }
+      });
 
     const snapshots = api.savedSnapshots(snapshotPrefix, (name) =>
       snapshotMark(name)
@@ -751,8 +771,14 @@ export const make = (
 
           const key = `${snapshotPrefix}${host.id}-${machine.instance}`;
 
-          if (origin._tag === "machine") {
-            yield* sourceStopped(origin.machine);
+          const through =
+            origin._tag === "machine" &&
+            (yield* copyable(origin.machine)) === "running"
+              ? snapshotName(machine)
+              : undefined;
+
+          if (origin._tag === "machine" && through !== undefined) {
+            yield* savedAs(origin.machine, through, "fork");
           }
 
           if (origin._tag === "checkpoint") {
@@ -771,9 +797,17 @@ export const make = (
             }
           }
 
+          const fromMachine = (source: Target) =>
+            through === undefined
+              ? api.fork(source.handle, { type, labels }, key)
+              : api.create(
+                  { type, labels, name: machine.name, from: through },
+                  key
+                );
+
           const sent =
             origin._tag === "machine"
-              ? api.fork(origin.machine.handle, { type, labels }, key)
+              ? fromMachine(origin.machine)
               : api.create(
                   { type, labels, name: machine.name, ...createdFrom(origin) },
                   key
@@ -786,6 +820,18 @@ export const make = (
           const handle = Handle.make(sandbox.id);
 
           yield* ready({ ...machine, handle }, "make");
+
+          if (through !== undefined) {
+            yield* api
+              .unsave(through)
+              .pipe(
+                Effect.catch((error) =>
+                  Effect.logWarning(
+                    `make ${machine.name}: couldn't delete snapshot ${through}, which its source's next start or delete deletes: ${error.message}`
+                  )
+                )
+              );
+          }
 
           return { handle, sizes: types[type] };
         }).pipe(bounded("boat", `make ${machine.name}`)),
@@ -852,31 +898,8 @@ export const make = (
         Effect.gen(function* () {
           const name = snapshotName(checkpoint);
 
-          yield* sourceStopped(machine);
-          yield* api.save(machine.handle, name).pipe(
-            Effect.catchTag("Unanswered", (lost) =>
-              Effect.flatMap(api.saved(name), (found) =>
-                found === undefined ? Effect.fail(lost) : Effect.void
-              )
-            ),
-            Effect.mapError(failure(`capture ${machine.name}`))
-          );
-
-          const snapshot = yield* untilRest(
-            api
-              .saved(name)
-              .pipe(
-                Effect.mapError(internal(`couldn't read snapshot ${name}`))
-              ),
-            (found) => found === undefined || settled.has(found.status),
-            pollEvery
-          );
-
-          if (snapshot?.status !== "ready") {
-            return yield* new Internal({
-              message: `boat's save of ${machine.name} as ${name} failed: ${snapshot?.error ?? "it is gone"}`,
-            });
-          }
+          yield* copyable(machine);
+          yield* savedAs(machine, name, "capture");
 
           return Handle.make(name);
         }).pipe(bounded("boat", `capture ${machine.name}`)),

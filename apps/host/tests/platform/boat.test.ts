@@ -702,6 +702,64 @@ describe("the boat runtime over fake boat", () => {
   );
 
   it.live(
+    "a fork of a running machine makes it from a fresh save, at one start, and deletes the save once the fork is ready, leaving the source running",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          const source = yield* made(runtime, "dev");
+
+          yield* runCommand(runtime, {
+            machine: source,
+            argv: ["/bin/sh", "-c", 'echo fresh >"$CLANKERBOX_ROOT/marker"'],
+          });
+
+          const from = boat.calls.length;
+
+          const machine = {
+            name: "fork",
+            instance: instanceOf("fork"),
+            ...types.small,
+          };
+
+          const fork = yield* runtime.make(
+            machine,
+            { _tag: "machine", machine: source },
+            10_022
+          );
+
+          const save = `cbx-${machine.instance}`;
+
+          expect({
+            sent: boat.calls
+              .slice(from)
+              .filter(
+                (line) => line.startsWith("POST") || line.startsWith("DELETE")
+              ),
+            starts: startsSince(boat, from),
+            marker: readFileSync(
+              path.join(rootOf(boat, fork.handle), "marker"),
+              "utf8"
+            ),
+            saves: [...boat.snapshots.keys()],
+            source: yield* runtime.observe([source]),
+          }).toStrictEqual({
+            sent: [
+              "POST /saved-snapshots 202",
+              "POST /sandboxes 202 start",
+              `POST /sandboxes/${fork.handle}/sshkey 200`,
+              `DELETE /saved-snapshots/${save} 200`,
+            ],
+            starts: 1,
+            marker: "fresh\n",
+            saves: [],
+            source: new Map([[source.name, "running"]]),
+          });
+        })
+      ),
+    30_000
+  );
+
+  it.live(
     "a resize whose answer was lost finishes from what boat holds, and leaves the machine stopped at its new type",
     () =>
       onBoat(({ boat, runtime }) =>
@@ -1195,7 +1253,7 @@ describe("each boat goal from each state boat holds", () => {
             running: {
               observe: "running",
               find: "found",
-              capture: "WrongState running",
+              capture: "done",
               start: "done",
               stop: "done",
               pause: "done",

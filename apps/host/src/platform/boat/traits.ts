@@ -34,7 +34,7 @@ export const traits = (
   runtime: RuntimeName.make("boat"),
   images: "named",
   checkpoint: "disk",
-  captureFrom: "stopped",
+  captureFrom: "either",
   pause: "stops",
   stop: "discards",
   copies: "any",
