@@ -707,7 +707,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
               return {
                 tag: error._tag,
                 rows: (yield* captured(served.store)).length,
-                calls: [...host.fake.calls],
+                calls: host.fake.calls.filter(
+                  (call) => call !== "marked machines"
+                ),
                 freed: Option.isSome(
                   yield* Effect.timeoutOption(
                     client.deleteMachine({ id: "dev" }),
