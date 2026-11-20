@@ -35,14 +35,17 @@ export const typeOf = (
     );
   });
 
+/**
+ * A fork of a running sandbox saves a fresh snapshot first. Its save and fill, and their time
+ * against a step's 10-minute bound, are checked against the fake alone; the live suite against an
+ * account is owed.
+ */
 export const traits = (
   offered: Arr.NonEmptyReadonlyArray<BoatType>
 ): RuntimeTraits => ({
   runtime: RuntimeName.make("boat"),
   images: "named",
-  checkpoint: "disk",
   captureFrom: "either",
-  pause: "stops",
   stop: "discards",
   copies: "any",
   resize: { running: "none", stopped: "any" },

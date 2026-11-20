@@ -4,9 +4,7 @@ import { RuntimeName } from "@gjermundgaraba/clankerbox-sdk";
 export const traits: RuntimeTraits = {
   runtime: RuntimeName.make("agent-sandbox"),
   images: "references",
-  checkpoint: "disk",
   captureFrom: "either",
-  pause: "stops",
   stop: "discards",
   copies: "any",
   resize: { running: "none", stopped: "any" },

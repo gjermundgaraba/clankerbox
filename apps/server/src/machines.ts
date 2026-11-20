@@ -880,10 +880,14 @@ export const make = (
         const info = yield* answering(hosts, from.host);
         const spec = yield* copied(name, "fork", from, sizing, info.traits);
 
+        const seen = yield* stateOf(hosts, from);
+
         const refusal =
           unjoinedCopy(info, from, `machine ${id}`) ??
-          uncopiable(from, yield* stateOf(hosts, from), info.traits, "fork") ??
-          pinRefusal({ copy: id }, from.pin, info.pin);
+          uncopiable(from, seen, info.traits, "fork") ??
+          (seen === "running"
+            ? pinRefusal({ copy: id }, from.pin, info.pin)
+            : undefined);
 
         if (refusal !== undefined) {
           return yield* refusal;

@@ -89,7 +89,7 @@ export const quiet = Duration.hours(1);
 /** The runtime of each fake host a test plane runs, for the create or build it places there. */
 export const runtimes = {
   smolvm: RuntimeName.make("smolvm"),
-  saving: RuntimeName.make("saving"),
+  copiesRunning: RuntimeName.make("copies-running"),
   tart: RuntimeName.make("tart"),
   fixed: RuntimeName.make("fixed"),
 };
@@ -492,5 +492,7 @@ export const stubHost = (
     })
   );
 
-/** A plane whose one host keeps a paused machine's RAM. */
-export const saving = { hosts: [{ id: "smolvm", as: "saving" as const }] };
+/** A plane whose one host copies only a running machine, saying why, as smol cloud does. */
+export const copiesRunning = {
+  hosts: [{ id: "smolvm", as: "copiesRunning" as const }],
+};

@@ -1262,7 +1262,6 @@ describe("each boat goal from each state boat holds", () => {
                 const read = yield* holdingFor("read");
                 const start = yield* holdingFor("start");
                 const stop = yield* holdingFor("stop");
-                const pause = yield* holdingFor("pause");
                 const remove = yield* holdingFor("delete");
 
                 return [
@@ -1281,7 +1280,6 @@ describe("each boat goal from each state boat holds", () => {
                     ),
                     start: yield* outcome(runtime.start(start, new Set())),
                     stop: yield* outcome(runtime.stop(stop)),
-                    pause: yield* outcome(runtime.pause(pause)),
                     delete: yield* outcome(runtime.delete(remove, new Set())),
                   },
                 ] as const;
@@ -1296,7 +1294,6 @@ describe("each boat goal from each state boat holds", () => {
               capture: "done",
               start: "done",
               stop: "done",
-              pause: "done",
               delete: "done",
             },
             archiving: {
@@ -1305,7 +1302,6 @@ describe("each boat goal from each state boat holds", () => {
               capture: "done",
               start: "done",
               stop: "done",
-              pause: "done",
               delete: "done",
             },
             stopped: {
@@ -1314,7 +1310,6 @@ describe("each boat goal from each state boat holds", () => {
               capture: "done",
               start: "done",
               stop: "done",
-              pause: "done",
               delete: "done",
             },
             expired: {
@@ -1323,7 +1318,6 @@ describe("each boat goal from each state boat holds", () => {
               capture: "Missing",
               start: "Missing",
               stop: "done",
-              pause: "done",
               delete: "done",
             },
             error: {
@@ -1332,7 +1326,6 @@ describe("each boat goal from each state boat holds", () => {
               capture: "WrongState error",
               start: "done",
               stop: "done",
-              pause: "done",
               delete: "done",
             },
             cancelled: {
@@ -1341,7 +1334,6 @@ describe("each boat goal from each state boat holds", () => {
               capture: "Missing",
               start: "Missing",
               stop: "done",
-              pause: "done",
               delete: "done",
             },
             gone: {
@@ -1350,7 +1342,6 @@ describe("each boat goal from each state boat holds", () => {
               capture: "Missing",
               start: "Missing",
               stop: "done",
-              pause: "done",
               delete: "done",
             },
           });

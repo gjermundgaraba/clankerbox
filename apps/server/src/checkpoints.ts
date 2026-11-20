@@ -368,7 +368,9 @@ export const make = (settings: {
             onNone: () => undefined,
             onSome: ({ traits, pin }) =>
               uncopiable(found, seen, traits, "capture") ??
-              pinRefusal({ copy: found.name }, found.pin, pin),
+              (seen === "running"
+                ? pinRefusal({ copy: found.name }, found.pin, pin)
+                : undefined),
           });
 
           if (refusal !== undefined) {
@@ -391,19 +393,7 @@ export const make = (settings: {
         const unpinnedRefusal = pinRefusal({ copy: id }, found.pin, pin);
 
         switch (pauseCapture(traits)) {
-          case "never": {
-            return yield* new WrongState({
-              message: `machine ${id}'s host captures only a stopped machine, and its pause leaves it paused, so no pause captures it: stop it and capture it, or pause it without a capture`,
-              machine: id,
-              state: yield* stateOf(hosts, found),
-            });
-          }
-
           case "after": {
-            if (unpinnedRefusal !== undefined) {
-              return yield* unpinnedRefusal;
-            }
-
             return yield* Effect.uninterruptible(
               Effect.gen(function* () {
                 const record = yield* recorded({ machine: id, ...capture });

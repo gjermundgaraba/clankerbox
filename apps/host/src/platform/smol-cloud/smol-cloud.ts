@@ -1001,11 +1001,6 @@ export const make = (
           settled(machine, "stopped"),
           (error) => new Internal({ message: error.message })
         ),
-      pause: (machine) =>
-        Effect.mapError(
-          settled(machine, "stopped"),
-          (error) => new Internal({ message: error.message })
-        ),
       delete: (machine, keep) =>
         toward(machine, "gone", heldByFork(machine)).pipe(
           Effect.andThen(

@@ -1308,15 +1308,6 @@ export const make = (
           stopped(machine.handle, recorded)
         )
       ),
-      pause: Effect.fn("Smolvm.pause")(function* (machine) {
-        const recorded = yield* status(machine.handle);
-
-        if (recorded === "missing") {
-          return yield* missing(traits.runtime, machine);
-        }
-
-        yield* stopped(machine.handle, recorded);
-      }),
       sizable,
       resize: Effect.fn("Smolvm.resize")((machine, to, running) =>
         running

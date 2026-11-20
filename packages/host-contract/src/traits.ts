@@ -1,5 +1,4 @@
 import {
-  CheckpointKind,
   formatCpu,
   formatGib,
   formatMib,
@@ -35,15 +34,15 @@ const Live = Schema.Struct({
  *
  * - `images`: `named` creates only from the host's named bases; `references` also from an image
  *   reference.
- * - `checkpoint`: what a checkpoint keeps, `ram` (RAM and disks) or `disk`, and so its `kind`.
- * - `captureFrom`: the state, `running` or `stopped`, a machine is captured or forked in, or
- *   `either` of them, a copy of its disk; one in any other state fails the capture or the fork, and
- *   a template build stops its builder before its copy but where it is `running`.
+ * - `captureFrom`: the state a machine is captured or forked in, `either` running or stopped, or
+ *   `running` alone; one in any other state fails the capture or the fork. Every copy is of the
+ *   disk, booted fresh, and a template build stops its builder before its copy but where it is
+ *   `running`.
  * - `whyRunning`: where `captureFrom` is `running`, why the runtime copies no stopped machine,
  *   which a refusal of one gives, so the caller learns more than the state it should be in.
- * - `pause`: `saves` keeps the machine's RAM; `stops` stops it.
- * - `stop`: what a stop does to a paused machine: `resumes` it first, to end its processes, which
- *   takes room as a start does and the runtime pin it booted under; or `discards` its saved state.
+ * - `stop`: what a stop does to a machine an older host paused, keeping its RAM: `resumes` it
+ *   first, to end its processes, which takes room as a start does and the runtime pin it booted
+ *   under; or `discards` its saved state.
  * - `copies`: a fork's or restore's vCPUs and RAM against its source's: `grow`, the source's or
  *   larger; `any`; or `same`, the source's sizes alone, its disk's included.
  * - `resize`: what a running and what a stopped machine take of a resize of vCPUs and RAM: `grow`,
@@ -62,10 +61,8 @@ const Live = Schema.Struct({
 export const RuntimeTraits = Schema.Struct({
   runtime: RuntimeName,
   images: Schema.Literals(["named", "references"]),
-  checkpoint: CheckpointKind,
-  captureFrom: Schema.Literals(["running", "stopped", "either"]),
+  captureFrom: Schema.Literals(["running", "either"]),
   whyRunning: Schema.optionalKey(Schema.String),
-  pause: Schema.Literals(["saves", "stops"]),
   stop: Schema.Literals(["resumes", "discards"]),
   copies: Schema.Literals(["grow", "any", "same"]),
   resize: Schema.Struct({
@@ -338,15 +335,8 @@ export const copyRefusal = (
 };
 
 /** Where a pause with a capture takes it, as `pauseMachine`'s description states the rule. */
-export const pauseCapture = (
-  traits: RuntimeTraits
-): "before" | "after" | "never" => {
-  if (traits.pause === "stops" && traits.captureFrom !== "running") {
-    return "after";
-  }
-
-  return traits.captureFrom === "stopped" ? "never" : "before";
-};
+export const pauseCapture = (traits: RuntimeTraits): "before" | "after" =>
+  traits.captureFrom === "running" ? "before" : "after";
 
 export const stopsBeforeCapture = (traits: RuntimeTraits): boolean =>
   traits.captureFrom !== "running";
@@ -356,9 +346,10 @@ export const fetchable = (from: RuntimeName, to: RuntimeTraits): boolean =>
 
 /**
  * Why a host running runtime pin `runs` refuses what was made under `under`, none where they are
- * the same: a machine's RAM is copied, a checkpoint's restored and a paused machine resumed only
- * under the pin its VM booted or its state was saved under. The control plane asks it before it
- * writes a row, and the host before it runs the step.
+ * the same: a running machine is copied, a checkpoint restored and a paused machine resumed only
+ * under the pin its VM booted or its state was saved under, as each goes through the VM's own
+ * saved state. A stopped machine's copy is of its disk alone, so its callers ask none for it. A checkpoint's restore is asked whichever way it was captured, as its row doesn't record whether its source ran, and a running machine's smolvm checkpoint holds VM state only its smolvm build restores. The
+ * control plane asks it before it writes a row, and the host before it runs the step.
  */
 export const pinRefusal = (
   of:
@@ -376,7 +367,7 @@ export const pinRefusal = (
 
   if ("copy" in of) {
     return new PinMismatch({
-      message: `machine ${of.copy}'s VM booted under ${under ?? "an older host"}, and this host runs ${host}, so a copy of its RAM would restore under the wrong one: stop it and start it again first`,
+      message: `machine ${of.copy}'s VM booted under ${under ?? "an older host"}, and this host runs ${host}, so a copy of it running would restore its saved state under the wrong one: stop it, then copy it stopped, or start it again first`,
     });
   }
 

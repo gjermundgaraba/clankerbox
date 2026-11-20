@@ -100,7 +100,8 @@ export type MachinePhase = Exclude<Phase, "waiting">;
 /**
  * What a machine's row keeps of the runtime it was made on, the one way a host's traits reach a
  * row: its `runtime`, which a client is shown and a copy of the machine stays on, and what a capture
- * of it `captures`, its checkpoint's `kind`, recorded also while its host can't be read. Every
+ * of it `captures`, its checkpoint's `kind`: `disk` for every row this release writes, and `ram`
+ * only on a row an older release wrote, whose checkpoints kept RAM. Every
  * decision about what a host does reads the host's traits as it answers now, so a trait a release
  * adds or changes migrates no row.
  */
@@ -113,7 +114,7 @@ export type MadeOn = typeof MadeOn.Type;
 
 export const madeOn = (traits: RuntimeTraits): MadeOn => ({
   runtime: traits.runtime,
-  captures: traits.checkpoint,
+  captures: "disk",
 });
 
 const made = {

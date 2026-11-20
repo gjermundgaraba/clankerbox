@@ -1007,7 +1007,6 @@ export const make = (
         })
       ),
       stop: Effect.fn("Tart.stop")(stop),
-      pause: Effect.fn("Tart.pause")(stop),
       delete: Effect.fn("Tart.delete")((machine) =>
         machine.handle === undefined ? Effect.void : removed(machine.handle)
       ),

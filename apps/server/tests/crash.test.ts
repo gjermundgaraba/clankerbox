@@ -9,7 +9,7 @@ import { applied } from "../src/chart.ts";
 import { checkpointChart } from "../src/checkpoint-chart.ts";
 import { freshBoot } from "./chart-rows.ts";
 import {
-  saving,
+  copiesRunning,
   applying,
   at,
   clientOf,
@@ -496,7 +496,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { client, first, fake, planned, restart } = yield* killedPlane({
-          ...saving,
+          ...copiesRunning,
           recheck: Duration.millis(50),
         });
 
@@ -504,7 +504,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* client.create(
           "dev",
-          request("dev", { runtime: runtimes.saving })
+          request("dev", { runtime: runtimes.copiesRunning })
         );
         yield* client.captureCheckpoint({ machine: "dev", name: "snap" });
         fake.calls.length = 0;

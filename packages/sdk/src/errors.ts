@@ -82,10 +82,9 @@ export class Conflict extends Schema.TaggedError<
 }
 
 /**
- * What the operator asked a machine to be. `paused` keeps its RAM, processes and disks, saved by
- * the runtime with the VM stopped, and a start resumes it; a machine that is stopped when a pause
- * comes stays stopped, and one the runtime can't save, such as a VM an older runtime booted, is
- * stopped instead.
+ * What the operator asked a machine to be. `paused` stops it, as `stopped` does, on every runtime,
+ * keeping its disk and none of its memory; a machine an older host paused keeping its RAM stays so
+ * until a start resumes it.
  */
 export const Desired = Schema.Literals([
   "running",

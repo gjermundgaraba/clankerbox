@@ -85,7 +85,7 @@ export const uncopiable = (
   const fix =
     captureFrom === "either"
       ? "a running or stopped machine: start or stop it"
-      : `a machine only ${captureFrom}${captureFrom === "running" && whyRunning !== undefined ? `, as ${whyRunning}` : ""}: ${captureFrom === "stopped" ? "stop" : "start"} it`;
+      : `a machine only running${whyRunning === undefined ? "" : `, as ${whyRunning}`}: start it`;
 
   return new WrongState({
     message: `machine ${source.name} is ${seen}, and its host copies ${fix}, then ${action} it`,

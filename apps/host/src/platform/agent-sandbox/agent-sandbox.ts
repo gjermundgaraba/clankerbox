@@ -1459,7 +1459,6 @@ export const make = (
           );
         }),
       stop: stopped,
-      pause: stopped,
       delete: (machine, keep) =>
         Effect.gen(function* () {
           yield* prune(machine, keep);

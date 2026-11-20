@@ -902,53 +902,6 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "pause stops a running machine, resumes one an older host paused, or a pause left part way, to stop it, leaves a stopped one, and refuses a missing one",
-    () =>
-      Effect.gen(function* () {
-        let reply = status("running");
-
-        const spawner = scripted((call) =>
-          call.args[1] === "status" ? reply : undefined
-        );
-
-        const runtime = yield* runtimeOf(yield* prepared(), spawner);
-
-        for (const next of [
-          "running",
-          "paused",
-          "pausing",
-          "stopped",
-        ] as const) {
-          reply = status(next);
-          yield* runtime.pause(machine);
-        }
-
-        reply = unknown;
-
-        expect(
-          failure(yield* Effect.flip(runtime.pause(machine)))
-        ).toStrictEqual([
-          "Missing",
-          "machine dev is missing from the smolvm runtime; delete it",
-        ]);
-        expect(
-          smolvmArgs(spawner.calls).map((args) => args.slice(1, 4).join(" "))
-        ).toStrictEqual([
-          "status --name dev-01234567",
-          "stop --name dev-01234567",
-          "status --name dev-01234567",
-          "resume --name dev-01234567",
-          "stop --name dev-01234567",
-          "status --name dev-01234567",
-          "resume --name dev-01234567",
-          "stop --name dev-01234567",
-          "status --name dev-01234567",
-          "status --name dev-01234567",
-        ]);
-      })
-  );
-
-  it.effect(
     "a stopped machine is resized in one machine update, and a running one in one live machine resize per size, RAM, then vCPUs, then disk, each sending every size asked, also one it has, so a grow cut short finishes",
     () =>
       Effect.gen(function* () {

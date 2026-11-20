@@ -294,9 +294,6 @@ export interface Interface {
     keep: ReadonlySet<Handle>
   ) => Effect.Effect<void, RoomError | StateError>;
   readonly stop: (machine: Target) => Effect.Effect<void, RuntimeError>;
-  readonly pause: (
-    machine: Target
-  ) => Effect.Effect<void, RuntimeError | StateError>;
   /**
    * Deletes the machine of `machine`'s instance, and each checkpoint it holds whose handle `keep`
    * lacks. A remove calls it whatever its search found, with no handle where the runtime holds

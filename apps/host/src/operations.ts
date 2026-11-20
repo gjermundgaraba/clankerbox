@@ -302,23 +302,6 @@ export const make = (
     const runtime = yield* Runtime;
     const { traits } = runtime;
 
-    const pauseOrStop = (machine: Target, pin: string | undefined) => {
-      if (traits.pause === "stops") {
-        return runtime.stop(machine);
-      }
-
-      if (pin === runtime.pin) {
-        return runtime.pause(machine);
-      }
-
-      return Effect.andThen(
-        Effect.logWarning(
-          `pause ${machine.name}: its VM booted under ${pin ?? "an older host"}, and this host runs ${runtime.pin ?? "no pin"}, so it stops it instead`
-        ),
-        runtime.stop(machine)
-      );
-    };
-
     const reaches = yield* Reaches;
     const hostScope = yield* Effect.scope;
     const admitting = yield* Semaphore.make(1);
@@ -445,6 +428,29 @@ export const make = (
       return refusal === undefined ? Effect.void : Effect.fail(refusal);
     };
 
+    const stateNow = (machine: Target, what: string) =>
+      Effect.gen(function* () {
+        const seen = stateIn(
+          yield* runtime
+            .observe([machine])
+            .pipe(inTime(`the ${traits.runtime} runtime`)),
+          machine
+        );
+
+        if (seen === "unknown") {
+          return yield* new Internal({
+            message: `the ${traits.runtime} runtime couldn't read machine ${machine.name}, so it isn't ${what}: try again`,
+          });
+        }
+
+        return seen;
+      });
+
+    const copiedPinned = (machine: Target, pin: string | undefined) =>
+      Effect.flatMap(stateNow(machine, "copied"), (seen) =>
+        seen === "running" ? pinned({ copy: machine.name }, pin) : Effect.void
+      );
+
     const originOf = (source: Source): Effect.Effect<Origin, HostError> =>
       Effect.gen(function* () {
         if (source._tag === "base") {
@@ -467,30 +473,11 @@ export const make = (
           } as const;
         }
 
-        yield* pinned({ copy: source.machine.name }, source.pin);
+        const machine = yield* machineTarget(source.machine);
 
-        return {
-          _tag: "machine",
-          machine: yield* machineTarget(source.machine),
-        } as const;
-      });
+        yield* copiedPinned(machine, source.pin);
 
-    const stateNow = (machine: Target, what: string) =>
-      Effect.gen(function* () {
-        const seen = stateIn(
-          yield* runtime
-            .observe([machine])
-            .pipe(inTime(`the ${traits.runtime} runtime`)),
-          machine
-        );
-
-        if (seen === "unknown") {
-          return yield* new Internal({
-            message: `the ${traits.runtime} runtime couldn't read machine ${machine.name}, so it isn't ${what}: try again`,
-          });
-        }
-
-        return seen;
+        return { _tag: "machine", machine } as const;
       });
 
     const flushed = (machine: Target) =>
@@ -755,12 +742,7 @@ export const make = (
 
         yield* source._tag === "base"
           ? runtime.sizable(machine, machine, machine, false)
-          : runtime.sizable(
-              machine,
-              sourceSizes(source),
-              machine,
-              traits.checkpoint === "ram"
-            );
+          : runtime.sizable(machine, sourceSizes(source), machine, false);
 
         const origin = yield* originOf(source);
 
@@ -896,7 +878,7 @@ export const make = (
         }
 
         case "pause": {
-          const { pin, hook } = step;
+          const { hook } = step;
 
           return Effect.gen(function* () {
             const machine = yield* machineTarget(step.machine);
@@ -907,7 +889,7 @@ export const make = (
               hook,
               stateNow(machine, "given its pause hook")
             );
-            yield* pauseOrStop(machine, pin);
+            yield* runtime.stop(machine);
           });
         }
 
@@ -956,9 +938,8 @@ export const make = (
 
           return Effect.gen(function* () {
             const machine = yield* Effect.tapError(
-              Effect.andThen(
-                pinned({ copy: step.machine.name }, pin),
-                Effect.tap(machineTarget(step.machine), flushed)
+              Effect.tap(machineTarget(step.machine), (target) =>
+                Effect.andThen(copiedPinned(target, pin), flushed(target))
               ),
               () => cleared
             );

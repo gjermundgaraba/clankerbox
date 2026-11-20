@@ -1666,7 +1666,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* runtime.stop(machine);
         yield* runtime.start(machine, new Set());
         const started = set();
-        yield* runtime.pause(machine);
+        yield* runtime.stop(machine);
         yield* runtime.start(machine, new Set());
         const resumed = set();
 
@@ -1728,7 +1728,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const vm = vmOf(machine);
 
         yield* runtime.make(machine, fromImage("base"), sshPort);
-        yield* runtime.pause(machine);
+        yield* runtime.stop(machine);
         mac.hooks.clock = () => ({
           exitCode: 1,
           stderr: "sudo: a password is required\n",
@@ -1763,7 +1763,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const before = calls(mac).length;
 
-        yield* runtime.pause(machine);
+        yield* runtime.stop(machine);
 
         expect(calls(mac).slice(before)).toStrictEqual([
           `tart exec ${vm} sudo -n /sbin/shutdown -h now`,
@@ -1865,7 +1865,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           );
           failures.push(
             failure(yield* Effect.flip(runtime.stop(machine))),
-            failure(yield* Effect.flip(runtime.pause(machine)))
+            failure(yield* Effect.flip(runtime.stop(machine)))
           );
         }
 
@@ -2106,7 +2106,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
               yield* Effect.flip(runtime.observe([machine])),
               yield* Effect.flip(runtime.start(machine, new Set())),
               yield* Effect.flip(runtime.stop(machine)),
-              yield* Effect.flip(runtime.pause(machine)),
+              yield* Effect.flip(runtime.stop(machine)),
               yield* Effect.flip(runtime.capture(machine, snapOf())),
               yield* Effect.flip(
                 runtime.make(copy, fromMachine(machine), sshPort)

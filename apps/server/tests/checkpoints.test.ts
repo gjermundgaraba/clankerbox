@@ -3,7 +3,7 @@ import path from "node:path";
 import { Handle } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { presets, startHost } from "@gjermundgaraba/clankerbox-host/testing";
+import { startHost } from "@gjermundgaraba/clankerbox-host/testing";
 import type {
   TestHost,
   FakeRuntimeName,
@@ -23,7 +23,7 @@ import { expect } from "vite-plus/test";
 
 import * as Sqlite from "../src/platform/sqlite.ts";
 import {
-  saving,
+  copiesRunning,
   at,
   clientOf,
   eventually,
@@ -295,7 +295,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a fork of a source the runtime doesn't copy is refused before its host is asked, and leaves no VM and no row",
     () =>
       Effect.gen(function* () {
-        const { client, host, store } = yield* withSource(saving);
+        const { client, host, store } = yield* withSource(copiesRunning);
 
         yield* client.stopMachine({ id: "dev" });
 
@@ -460,10 +460,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a capture of a running machine is ram, with the source's spec, the runtime's pin and the handle its host's capture answered",
+    "a capture of a running machine is disk, with the source's spec, the runtime's pin and the handle its host's capture answered",
     () =>
       Effect.gen(function* () {
-        const { client, store } = yield* withSource(saving);
+        const { client, store } = yield* withSource(copiesRunning);
 
         const ram = yield* client.captureCheckpoint({
           machine: "dev",
@@ -476,7 +476,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           id: "hot",
           createdAt: ram.createdAt,
           machine: "dev",
-          kind: "ram",
+          kind: "disk",
           phase: "ready",
           base: "ubuntu",
           cpu: 1,
@@ -494,7 +494,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a capture of a stopped machine on a ram runtime is WrongState before anything is recorded, and leaves nothing on its host",
     () =>
       Effect.gen(function* () {
-        const served = yield* withSource(saving);
+        const served = yield* withSource(copiesRunning);
         const { client, host } = served;
 
         yield* client.stopMachine({ id: "dev" });
@@ -568,7 +568,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a capture waits for a step that owns its machine, then captures",
     () =>
       Effect.gen(function* () {
-        const { client, host } = yield* withSource(saving);
+        const { client, host } = yield* withSource(copiesRunning);
         const { release, entered } = host.fake.holdNext("stop");
 
         const stopping = yield* Effect.forkChild(
@@ -694,47 +694,32 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a capture refused leaves nothing for its host or the control plane to delete",
     () =>
       Effect.gen(function* () {
-        const refused = yield* Effect.forEach(
-          ["saving", "fixed"] as const,
-          (as) =>
-            Effect.gen(function* () {
-              const served = yield* withSource(on(as));
-              const { client, host } = served;
+        const served = yield* withSource(on("copiesRunning"));
+        const { client, host } = served;
 
-              if (as === "saving") {
-                yield* client.stopMachine({ id: "dev" });
-              }
+        yield* client.stopMachine({ id: "dev" });
+        host.fake.calls.length = 0;
 
-              host.fake.calls.length = 0;
-
-              const error = yield* Effect.flip(
-                client.captureCheckpoint({ machine: "dev", name: "snap" })
-              );
-
-              return {
-                tag: error._tag,
-                rows: (yield* captured(served.store)).length,
-                calls: host.fake.calls.filter(
-                  (call) => call !== "marked machines"
-                ),
-                freed: Option.isSome(
-                  yield* Effect.timeoutOption(
-                    client.deleteMachine({ id: "dev" }),
-                    Duration.seconds(10)
-                  )
-                ),
-              };
-            })
+        const error = yield* Effect.flip(
+          client.captureCheckpoint({ machine: "dev", name: "snap" })
         );
 
-        expect(refused).toStrictEqual(
-          ["smolvm", "fixed"].map(() => ({
-            tag: "WrongState",
-            rows: 0,
-            calls: [],
-            freed: true,
-          }))
-        );
+        expect({
+          tag: error._tag,
+          rows: (yield* captured(served.store)).length,
+          calls: host.fake.calls.filter((call) => call !== "marked machines"),
+          freed: Option.isSome(
+            yield* Effect.timeoutOption(
+              client.deleteMachine({ id: "dev" }),
+              Duration.seconds(10)
+            )
+          ),
+        }).toStrictEqual({
+          tag: "WrongState",
+          rows: 0,
+          calls: [],
+          freed: true,
+        });
       })
   );
 
@@ -818,7 +803,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a pause with a capture records the checkpoint first, and pauses once the capture has begun, so it holds the machine as it ran",
     () =>
       Effect.gen(function* () {
-        const { client, host } = yield* withSource(saving);
+        const { client, host } = yield* withSource(copiesRunning);
         const { entered, release } = host.fake.holdNext("capture");
 
         const pausing = yield* Effect.forkChild(
@@ -853,7 +838,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "running",
         ]);
         expect([paused.state, paused.phase]).toStrictEqual([
-          "paused",
+          "stopped",
           "settled",
         ]);
         expect(snap).toMatchObject({ phase: "ready", labels: { app: "web" } });
@@ -861,7 +846,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "exec dev",
           "capture snap",
           "exec dev",
-          "pause dev",
+          "stop dev",
         ]);
       })
   );
@@ -871,13 +856,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { client, host } = yield* withClient({
-          ...saving,
+          ...copiesRunning,
           recheck: Duration.seconds(2),
         });
 
         yield* client.create(
           "dev",
-          request("dev", { runtime: runtimes.saving })
+          request("dev", { runtime: runtimes.copiesRunning })
         );
 
         const resizing = host.fake.holdNext("resize");
@@ -900,15 +885,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           Effect.timeout(Duration.seconds(30))
         );
 
-        expect(at(paused)).toStrictEqual(["paused", "paused", "settled"]);
+        expect(at(paused)).toStrictEqual(["stopped", "paused", "settled"]);
         expect(yield* client.getCheckpoint({ id: "snap" })).toMatchObject({
           phase: "ready",
         });
         expect(
           host.fake.calls.filter(
-            (call) => call === "capture snap" || call === "pause dev"
+            (call) => call === "capture snap" || call === "stop dev"
           )
-        ).toStrictEqual(["capture snap", "pause dev"]);
+        ).toStrictEqual(["capture snap", "stop dev"]);
       }),
     60_000
   );
@@ -946,53 +931,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a pause with a capture where a capture takes a stopped machine and a pause saves it is WrongState, recording nothing",
-    () =>
-      Effect.gen(function* () {
-        const { client, host } = yield* withClient({
-          hosts: [
-            {
-              id: "tart",
-              as: "tart",
-              options: {
-                runtime: {
-                  traits: {
-                    ...presets.tart.traits,
-                    captureFrom: "stopped",
-                    pause: "saves",
-                  },
-                },
-              },
-            },
-          ],
-        });
-
-        yield* client.create("dev", request("dev", { runtime: runtimes.tart }));
-        host.fake.calls.length = 0;
-
-        const refused = yield* Effect.flip(
-          client.pauseMachine({ id: "dev", capture: { name: "snap" } })
-        );
-
-        const dev = yield* client.getMachine({ id: "dev" });
-
-        expect(refused).toMatchObject({ _tag: "WrongState", state: "running" });
-        expect(refused.message).toBe(
-          "machine dev's host captures only a stopped machine, and its pause leaves it paused, so no pause captures it: stop it and capture it, or pause it without a capture"
-        );
-        expect([dev.desired, dev.state]).toStrictEqual(["running", "running"]);
-        expect(
-          yield* Effect.flip(client.getCheckpoint({ id: "snap" }))
-        ).toMatchObject({ _tag: "NotFound" });
-        expect(host.fake.calls).toStrictEqual([]);
-      })
-  );
-
-  it.effect(
     "a pause whose capture fails still pauses, after the capture, and answers the capture's error",
     () =>
       Effect.gen(function* () {
-        const served = yield* withSource(saving);
+        const served = yield* withSource(copiesRunning);
         const { client, host } = served;
 
         host.fake.failNext("capture", new Internal({ message: "ENOTSUP" }));
@@ -1005,11 +947,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const row = yield* rested(served, "snap");
 
         expect(error.message).toBe("ENOTSUP");
-        expect([dev.state, dev.phase]).toStrictEqual(["paused", "settled"]);
+        expect([dev.state, dev.phase]).toStrictEqual(["stopped", "settled"]);
         expect(row.state).toBe("failed");
         expect(callsTo(host, "capture")).toStrictEqual(["capture snap"]);
         expect(host.fake.calls.indexOf("capture snap")).toBeLessThan(
-          host.fake.calls.indexOf("pause dev")
+          host.fake.calls.indexOf("stop dev")
         );
       })
   );
@@ -1018,7 +960,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a pause with a capture of a taken name is Conflict, and of a stopped machine WrongState, recording no pause",
     () =>
       Effect.gen(function* () {
-        const { client, host } = yield* withSource(saving);
+        const { client, host } = yield* withSource(copiesRunning);
 
         yield* client.captureCheckpoint({ machine: "dev", name: "snap" });
         host.fake.calls.length = 0;
@@ -1050,7 +992,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a pause with a capture pauses after the capture across a restart of the control plane between them",
     () =>
       Effect.gen(function* () {
-        const planned = yield* plane(saving);
+        const planned = yield* plane(copiesRunning);
         const first = yield* planned.start();
         const host = firstHost(planned);
         const client = yield* clientOf(first.url);
@@ -1058,7 +1000,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* client.create(
           "dev",
-          request("dev", { runtime: runtimes.saving })
+          request("dev", { runtime: runtimes.copiesRunning })
         );
         host.fake.calls.length = 0;
 
@@ -1077,7 +1019,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const paused = yield* eventually(
           again.getMachine({ id: "dev" }),
-          ({ state, phase }) => state === "paused" && phase === "settled"
+          ({ state, phase }) => state === "stopped" && phase === "settled"
         );
 
         const snap = yield* again.getCheckpoint({ id: "snap" });
@@ -1088,7 +1030,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "exec dev",
           "capture snap",
           "exec dev",
-          "pause dev",
+          "stop dev",
         ]);
       })
   );
@@ -1330,13 +1272,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { client, host, store } = yield* withClient({
-          ...saving,
+          ...copiesRunning,
           recheck: Duration.seconds(2),
         });
 
         yield* client.create(
           "dev",
-          request("dev", { runtime: runtimes.saving })
+          request("dev", { runtime: runtimes.copiesRunning })
         );
 
         const resizing = host.fake.holdNext("resize");
@@ -1364,7 +1306,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const paused = yield* eventually(
           client.getMachine({ id: "dev" }),
-          ({ state, phase }) => state === "paused" && phase === "settled"
+          ({ state, phase }) => state === "stopped" && phase === "settled"
         ).pipe(Effect.timeout(Duration.seconds(30)));
 
         expect(recorded).toBe("paused");
@@ -1374,9 +1316,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         });
         expect(
           host.fake.calls.filter(
-            (call) => call === "capture snap" || call === "pause dev"
+            (call) => call === "capture snap" || call === "stop dev"
           )
-        ).toStrictEqual(["capture snap", "pause dev"]);
+        ).toStrictEqual(["capture snap", "stop dev"]);
       }),
     60_000
   );
@@ -1386,7 +1328,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const served = yield* withClient({
-          ...saving,
+          ...copiesRunning,
           recheck: Duration.seconds(2),
         });
 
@@ -1394,7 +1336,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* client.create(
           "dev",
-          request("dev", { runtime: runtimes.saving })
+          request("dev", { runtime: runtimes.copiesRunning })
         );
 
         const resizing = host.fake.holdNext("resize");
@@ -1583,7 +1525,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   }
 
   it.effect(
-    "a pause with a capture killed between its two writes, where the pause comes first, leaves a capture its host refuses at the restart, saying why, its machine running, and a retry that pauses and captures",
+    "a pause with a capture killed between its two writes, where the pause comes first, leaves a capture its host takes of the running machine at the restart, its machine running, and a retry that pauses and captures",
     () =>
       Effect.gen(function* () {
         const { planned, host } = yield* madeOn("fixed");
@@ -1613,38 +1555,31 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const client = yield* clientOf(second.url);
         const snap = yield* rested(second, "snap");
         const left = yield* client.getMachine({ id: "dev" });
-        const refusal = yield* client.getCheckpoint({ id: "snap" });
 
         const paused = yield* client.pauseMachine({
           id: "dev",
-          capture: { name: "snap" },
+          capture: { name: "again" },
         });
 
-        const again = yield* client.getCheckpoint({ id: "snap" });
+        const again = yield* client.getCheckpoint({ id: "again" });
 
-        expect(snap).toMatchObject({
-          state: "failed",
-          error: { _tag: "WrongState" },
-        });
-        expect(snap.error?.message).toContain("running");
-        expect(snap.handle).toBeUndefined();
-        expect(refusal.phase).toBe("failed");
+        expect(snap).toMatchObject({ state: "ready" });
+        expect(snap.handle).toBeDefined();
         expect(at(left)).toStrictEqual(["running", "running", "settled"]);
         expect(at(paused)).toStrictEqual(["stopped", "paused", "settled"]);
         expect(again.phase).toBe("ready");
         expect(
           host.fake.calls.filter(
-            (call) => call === "capture snap" || call === "stop dev"
+            (call) => call.startsWith("capture ") || call === "stop dev"
           )
-        ).toStrictEqual(["capture snap", "stop dev", "capture snap"]);
+        ).toStrictEqual(["capture snap", "stop dev", "capture again"]);
       })
   );
-
   it.effect(
     "a pause with a capture killed before its pause's write, where the capture comes first, leaves the capture to run and its machine running, and a retry under the capture's name is Conflict",
     () =>
       Effect.gen(function* () {
-        const { planned, host } = yield* madeOn("saving");
+        const { planned, host } = yield* madeOn("copiesRunning");
         const entered = yield* Deferred.make<true>();
 
         const first = yield* services(planned, (machines) => ({
@@ -1681,12 +1616,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(snap.state).toBe("ready");
         expect(at(left)).toStrictEqual(["running", "running", "settled"]);
         expect(retried).toMatchObject({ _tag: "Conflict" });
-        expect(at(paused)).toStrictEqual(["paused", "paused", "settled"]);
+        expect(at(paused)).toStrictEqual(["stopped", "paused", "settled"]);
         expect(
           host.fake.calls.filter(
-            (call) => call === "capture snap" || call === "pause dev"
+            (call) => call === "capture snap" || call === "stop dev"
           )
-        ).toStrictEqual(["capture snap", "pause dev"]);
+        ).toStrictEqual(["capture snap", "stop dev"]);
       })
   );
 
@@ -1907,7 +1842,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a machine whose VM booted under another runtime pin than its host's now is refused a capture, a fork and a pause with a capture before anything is recorded, and copied after a stop and a start",
+    "a running machine whose VM booted under another runtime pin than its host's now is refused a capture and a fork before anything is recorded, and a pause with a capture and a fork take it once stopped",
     () =>
       Effect.gen(function* () {
         const { client, host, store } = yield* withSource();
@@ -1921,21 +1856,17 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           yield* Effect.flip(
             client.captureCheckpoint({ machine: "dev", name: "hot" })
           ),
-          yield* Effect.flip(
-            client.pauseMachine({ id: "dev", capture: { name: "hot" } })
-          ),
         ];
 
         expect(
           refused.map(({ _tag, message }) => [_tag, message])
         ).toStrictEqual(
-          Array.from({ length: 3 }, () => [
+          Array.from({ length: 2 }, () => [
             "PinMismatch",
-            "machine dev's VM booted under fake 1, and this host runs fake 2, so a copy of its RAM would restore under the wrong one: stop it and start it again first",
+            "machine dev's VM booted under fake 1, and this host runs fake 2, so a copy of it running would restore its saved state under the wrong one: stop it, then copy it stopped, or start it again first",
           ])
         );
         expect(refused.map((error) => "made" in error)).toStrictEqual([
-          false,
           false,
           false,
         ]);
@@ -1943,19 +1874,16 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(yield* captured(store)).toStrictEqual([]);
         expect(host.fake.calls).toStrictEqual([]);
 
-        yield* client.stopMachine({ id: "dev" });
-        yield* client.startMachine({ id: "dev" });
-
-        yield* client.captureCheckpoint({ machine: "dev", name: "hot" });
+        yield* client.pauseMachine({ id: "dev", capture: { name: "cold" } });
         yield* client.forkMachine({ machine: "dev", name: "copy" });
 
-        expect(yield* checkpointIds(client)).toStrictEqual(["hot"]);
+        expect(yield* checkpointIds(client)).toStrictEqual(["cold"]);
         expect(yield* machineNames({ store })).toStrictEqual(["dev", "copy"]);
       })
   );
 
   it.effect(
-    "a machine whose row holds no pin, as one an older host booted, is refused a capture, a fork and a pause with a capture before anything is recorded",
+    "a running machine whose row holds no pin, as one an older host booted, is refused a capture and a fork before anything is recorded",
     () =>
       Effect.gen(function* () {
         const { client, host, store } = yield* withSource();
@@ -1969,17 +1897,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           yield* Effect.flip(
             client.captureCheckpoint({ machine: "dev", name: "hot" })
           ),
-          yield* Effect.flip(
-            client.pauseMachine({ id: "dev", capture: { name: "hot" } })
-          ),
         ];
 
         expect(refused).toStrictEqual(
-          (["forkMachine", "captureCheckpoint", "pauseMachine"] as const).map(
+          (["forkMachine", "captureCheckpoint"] as const).map(
             (action) =>
               new PinMismatch({
                 message:
-                  "machine dev's VM booted under an older host, and this host runs fake 1, so a copy of its RAM would restore under the wrong one: stop it and start it again first",
+                  "machine dev's VM booted under an older host, and this host runs fake 1, so a copy of it running would restore its saved state under the wrong one: stop it, then copy it stopped, or start it again first",
                 action,
                 id: "dev",
               })

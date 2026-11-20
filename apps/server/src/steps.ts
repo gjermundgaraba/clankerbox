@@ -203,7 +203,6 @@ export const machineStep = (
         return {
           _tag: "pause",
           machine: ref,
-          ...pinned(found.pin),
           ...hook,
         };
       }

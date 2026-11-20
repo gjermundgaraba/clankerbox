@@ -895,8 +895,6 @@ export const make = (
         }).pipe(bounded("boat", `start ${machine.name}`)),
       stop: (machine) =>
         bounded("boat", `stop ${machine.name}`)(stopped(machine)),
-      pause: (machine) =>
-        bounded("boat", `pause ${machine.name}`)(stopped(machine)),
       delete: (machine, keep) =>
         Effect.gen(function* () {
           yield* prune(machine, keep);

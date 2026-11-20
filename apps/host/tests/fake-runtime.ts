@@ -65,7 +65,6 @@ import type {
   Interface,
   RuntimeError,
   Sizes,
-  StateError,
   Target,
 } from "../src/runtime.ts";
 import { allotted, checkRamBudget, inUse } from "../src/usage.ts";
@@ -78,7 +77,6 @@ export type Operation =
   | "create"
   | "start"
   | "stop"
-  | "pause"
   | "resize"
   | "sizes"
   | "delete"
@@ -111,9 +109,7 @@ export interface Preset {
 export const fixed: RuntimeTraits = {
   runtime: RuntimeName.make("fixed"),
   images: "named",
-  checkpoint: "disk",
-  captureFrom: "stopped",
-  pause: "stops",
+  captureFrom: "either",
   stop: "discards",
   copies: "any",
   resize: { running: "none", stopped: "any" },
@@ -140,14 +136,12 @@ export const presets = {
     cut: "ends",
     stopsOnItsOwn: false,
   },
-  saving: {
+  copiesRunning: {
     traits: {
       ...smolvm("x64"),
-      runtime: RuntimeName.make("saving"),
-      checkpoint: "ram",
+      runtime: RuntimeName.make("copies-running"),
       captureFrom: "running",
       whyRunning: "it copies only memory",
-      pause: "saves",
       copies: "grow",
     },
     guest: "debian",
@@ -565,7 +559,6 @@ export const fakeRuntime = (options: FakeOptions) => {
     create: [],
     start: [],
     stop: [],
-    pause: [],
     resize: [],
     sizes: [],
     delete: [],
@@ -1188,32 +1181,6 @@ export const fakeRuntime = (options: FakeOptions) => {
               })
             )
           ),
-        pause: (machine) =>
-          call(
-            "pause",
-            machine,
-            Effect.suspend((): Effect.Effect<void, StateError> => {
-              const found = machineOf(machine);
-
-              if (found === undefined) {
-                return Effect.fail(missing(traits.runtime, machine));
-              }
-
-              if (found.state === "stopped") {
-                return Effect.fail(
-                  new WrongState({
-                    message: `${machine.name} is stopped: start it first`,
-                    machine: machine.name,
-                    state: found.state,
-                  })
-                );
-              }
-
-              found.state = traits.pause === "stops" ? "stopped" : "paused";
-
-              return Effect.void;
-            })
-          ),
         resize: (machine, to) =>
           call(
             "resize",
@@ -1448,6 +1415,14 @@ export const fakeRuntime = (options: FakeOptions) => {
     root: (name: string) => byName.get(name)?.root,
     images,
     machines: byName,
+    pausedByOlderHost: (name: string) =>
+      Effect.sync(() => {
+        const found = byName.get(name);
+
+        if (found !== undefined) {
+          found.state = "paused";
+        }
+      }),
     hold: (machine: Omit<FakeMachine, "marked" | "sizes">) => {
       machines.set(machine.handle, {
         ...machine,

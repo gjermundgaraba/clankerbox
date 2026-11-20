@@ -277,20 +277,13 @@ describe("copyRefusal", () => {
 
 describe("pauseCapture", () => {
   it.effect.prop(
-    "a pause captures its machine after it where a capture takes what the pause leaves, else before it where a capture takes a running machine, else never",
+    "a pause captures its machine after it, stopped, where a capture takes a stopped machine, else before it",
     { traits: RuntimeTraits },
     ({ traits }) =>
       Effect.sync(() => {
-        const left = traits.pause === "stops" ? "stopped" : "paused";
-
-        const takes = (state: string) =>
-          traits.captureFrom === "either"
-            ? state !== "paused"
-            : state === traits.captureFrom;
-
-        const before = takes("running") ? "before" : "never";
-
-        expect(pauseCapture(traits)).toBe(takes(left) ? "after" : before);
+        expect(pauseCapture(traits)).toBe(
+          traits.captureFrom === "either" ? "after" : "before"
+        );
       })
   );
 });
