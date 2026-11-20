@@ -73,13 +73,24 @@ export const uncopiable = (
 ): WrongState | undefined => {
   const resting = restingAs(source, seen);
 
-  return resting !== undefined && resting !== captureFrom
-    ? new WrongState({
-        message: `machine ${source.name} is ${seen}, and its host copies a machine only ${captureFrom}: ${captureFrom === "stopped" ? "stop" : "start"} it, then ${action} it`,
-        machine: source.name,
-        state: seen,
-      })
-    : undefined;
+  if (
+    resting === undefined ||
+    resting === captureFrom ||
+    (captureFrom === "either" && resting !== "paused")
+  ) {
+    return undefined;
+  }
+
+  const fix =
+    captureFrom === "either"
+      ? "a running or stopped machine: start or stop it"
+      : `a machine only ${captureFrom}: ${captureFrom === "stopped" ? "stop" : "start"} it`;
+
+  return new WrongState({
+    message: `machine ${source.name} is ${seen}, and its host copies ${fix}, then ${action} it`,
+    machine: source.name,
+    state: seen,
+  });
 };
 
 /**

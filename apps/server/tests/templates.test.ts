@@ -419,6 +419,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "start",
           "exec",
           "exec",
+          "exec",
           "capture",
           "delete",
         ]);

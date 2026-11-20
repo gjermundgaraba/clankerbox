@@ -3207,7 +3207,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a fork the runtime refuses for its source's state, and a fork or a restore refused for the pin, open no relay, and their removes are done",
     () =>
       Effect.gen(function* () {
-        const host = yield* runner({ relayed: true, as: "tart" });
+        const host = yield* runner({ relayed: true, as: "fixed" });
         const src = ref("src", reached(relayPorts));
 
         yield* finished(host, makes("src"));

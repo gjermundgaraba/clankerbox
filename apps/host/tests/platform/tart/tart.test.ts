@@ -1,10 +1,4 @@
-import {
-  appendFileSync,
-  existsSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -407,7 +401,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
               "run",
               "--no-graphics",
               "--net-softnet-block=@host",
-              "--suspendable",
               vm,
             ],
             environment: environment(mac.settings),
@@ -770,7 +763,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
                 "run",
                 "--no-graphics",
                 "--net-softnet-block=@host",
-                "--suspendable",
                 vmOf(machine),
               ],
               environment: environment(mac.settings),
@@ -806,6 +798,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "run",
           "--no-graphics",
           "--net-softnet-block=@host",
+          "--suspendable",
           vmOf(older),
         ]);
 
@@ -837,7 +830,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "run",
           "--no-graphics",
           "--net-softnet-block=@host",
-          "--suspendable",
           vmOf(older),
         ]);
       })
@@ -964,20 +956,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a fork's source and a capture's machine must be stopped: anything else is refused before a clone",
+    "a fork's source and a capture's machine must be running or stopped: a paused or missing one is refused before a clone",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
         const [source, copy] = [machineOn("src"), machineOn("copy")];
         const checkpoint = snapOf();
-
-        mac.vms.set(vmOf(source), "running");
-
-        const fork = yield* Effect.flip(
-          runtime.make(copy, fromMachine(source), sshPort)
-        );
-
-        const capture = yield* Effect.flip(runtime.capture(source, checkpoint));
 
         mac.vms.set(vmOf(source), "suspended");
 
@@ -985,22 +969,20 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           runtime.make(copy, fromMachine(source), sshPort)
         );
 
+        const capture = yield* Effect.flip(runtime.capture(source, checkpoint));
+
         mac.vms.delete(vmOf(source));
 
         const missing = yield* Effect.flip(runtime.capture(source, checkpoint));
 
-        expect([fork, capture, paused, missing].map(failure)).toStrictEqual([
+        expect([paused, capture, missing].map(failure)).toStrictEqual([
           [
             "WrongState",
-            "a Tart fork copies a stopped machine's disk, and src is running: stop it first",
+            "a Tart fork copies a running or stopped machine's disk, and src is paused: start or stop it first",
           ],
           [
             "WrongState",
-            "a Tart checkpoint copies a stopped machine's disk, and src is running: stop it first",
-          ],
-          [
-            "WrongState",
-            "a Tart fork copies a stopped machine's disk, and src is paused: stop it first",
+            "a Tart checkpoint copies a running or stopped machine's disk, and src is paused: start or stop it first",
           ],
           [
             "Missing",
@@ -1664,7 +1646,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   });
 
   it.effect(
-    "each boot of a Tart machine, its make, a start and a resume, ends with its guest's clock set to the host's",
+    "each boot of a Tart machine, its make, a start and a start after a pause, ends with its guest's clock set to the host's",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -1755,28 +1737,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "pause suspends a VM its job runs suspendable, and waits for Tart to save it",
-    () =>
-      Effect.gen(function* () {
-        const { mac, runtime } = yield* runtimeOn();
-        const machine = machineOn("dev");
-        const vm = vmOf(machine);
-
-        yield* runtime.make(machine, fromImage("base"), sshPort);
-
-        const before = calls(mac).length;
-
-        yield* runtime.pause(machine);
-
-        expect(calls(mac).slice(before)).toStrictEqual([`tart suspend ${vm}`]);
-        expect(yield* runtime.observe([machine])).toStrictEqual(
-          new Map([[machine.name, "paused"]])
-        );
-      })
-  );
-
-  it.effect(
-    "pause shuts down a VM whose job an older host loaded without --suspendable, which Tart would power off",
+    "pause shuts down a VM, as a stop does, also one whose job an older host loaded with --suspendable",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -1789,6 +1750,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "run",
           "--no-graphics",
           "--net-softnet-block=@host",
+          "--suspendable",
           vm,
         ]);
 
@@ -1926,7 +1888,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a suspend whose save fails has tart stop remove what it left of the state, and fails, as Tart powered the VM off",
+    "start of a VM an older host paused boots its job, which resumes it",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -1934,140 +1896,20 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const vm = vmOf(machine);
 
         yield* runtime.make(machine, fromImage("base"), sshPort);
-        mac.hooks.suspend = (label) => {
-          appendFileSync(
-            mac.logOf(label),
-            "creating a snapshot...\nFailed to suspend the VM: The virtual machine failed to save with error “permission denied”.\n"
-          );
-          mac.vms.set(label, "suspended");
-        };
+        yield* runtime.stop(machine);
+        mac.vms.set(vm, "suspended");
 
-        const error = yield* Effect.flip(runtime.pause(machine));
+        const before = calls(mac).length;
 
-        expect(failure(error)).toStrictEqual([
-          "Internal",
-          "Tart couldn't save dev's state and powered its VM off, as it does when the first save on a Mac runs while its session is locked: creating a snapshot...\nFailed to suspend the VM: The virtual machine failed to save with error “permission denied”.",
-        ]);
-        expect(calls(mac).slice(-2)).toStrictEqual([
-          `tart suspend ${vm}`,
-          `tart stop ${vm}`,
+        yield* runtime.start(machine, new Set());
+
+        expect(calls(mac).slice(before)).toStrictEqual([
+          `launchctl kickstart gui/501/${vm}`,
+          `tart exec ${vm} true`,
+          `tart exec ${vm} sudo -n settle <now>`,
         ]);
         expect(yield* runtime.observe([machine])).toStrictEqual(
-          new Map([[machine.name, "stopped"]])
-        );
-      })
-  );
-
-  it.effect(
-    "a suspend whose job log can't be read fails, and keeps what Tart saved",
-    () =>
-      Effect.gen(function* () {
-        const { mac, runtime } = yield* runtimeOn();
-        const machine = machineOn("dev");
-        const vm = vmOf(machine);
-
-        yield* runtime.make(machine, fromImage("base"), sshPort);
-        mac.hooks.suspend = (label) => {
-          rmSync(mac.logOf(label));
-          mac.vms.set(label, "suspended");
-        };
-
-        const error = yield* Effect.flip(runtime.pause(machine));
-
-        expect(failure(error)[0]).toBe("Internal");
-        expect(failure(error)[1]).toContain(`couldn't read ${mac.logOf(vm)}`);
-        expect(calls(mac).slice(-1)).toStrictEqual([`tart suspend ${vm}`]);
-        expect(yield* runtime.observe([machine])).toStrictEqual(
-          new Map([[machine.name, "paused"]])
-        );
-      })
-  );
-
-  it.effect(
-    "pause of a paused VM does nothing; of a stopped one or one Tart lacks, it refuses",
-    () =>
-      Effect.gen(function* () {
-        const { mac, runtime } = yield* runtimeOn();
-
-        const [paused, stopped, gone] = [
-          machineOn("paused"),
-          machineOn("stopped"),
-          machineOn("gone"),
-        ];
-
-        mac.vms.set(vmOf(paused), "suspended");
-        mac.vms.set(vmOf(stopped), "stopped");
-
-        yield* runtime.pause(paused);
-
-        const errors = [
-          yield* Effect.flip(runtime.pause(stopped)),
-          yield* Effect.flip(runtime.pause(gone)),
-        ];
-
-        expect(errors.map(failure)).toStrictEqual([
-          [
-            "WrongState",
-            "Tart reads stopped stopped, and suspends only a running machine",
-          ],
-          [
-            "Missing",
-            "machine gone is missing from the tart runtime; delete it",
-          ],
-        ]);
-        expect(calls(mac)).toStrictEqual([]);
-      })
-  );
-
-  it.effect("start of a paused VM boots its job, which resumes it", () =>
-    Effect.gen(function* () {
-      const { mac, runtime } = yield* runtimeOn();
-      const machine = machineOn("dev");
-      const vm = vmOf(machine);
-
-      yield* runtime.make(machine, fromImage("base"), sshPort);
-      yield* runtime.pause(machine);
-
-      const before = calls(mac).length;
-
-      yield* runtime.start(machine, new Set());
-
-      expect(calls(mac).slice(before)).toStrictEqual([
-        `launchctl kickstart gui/501/${vm}`,
-        `tart exec ${vm} true`,
-        `tart exec ${vm} sudo -n settle <now>`,
-      ]);
-      expect(yield* runtime.observe([machine])).toStrictEqual(
-        new Map([[machine.name, "running"]])
-      );
-    })
-  );
-
-  it.effect(
-    "a resume that fails says a locked session refuses it, and the VM stays paused",
-    () =>
-      Effect.gen(function* () {
-        const { mac, runtime } = yield* runtimeOn();
-        const machine = machineOn("dev");
-
-        yield* runtime.make(machine, fromImage("base"), sshPort);
-        yield* runtime.pause(machine);
-        mac.hooks.kickstart = (label) => {
-          mac.exited.set(label, 1);
-          appendFileSync(
-            mac.logOf(label),
-            'restoring VM state from a snapshot...\nError Domain=VZErrorDomain Code=12 "The virtual machine failed to restore with error “permission denied”."\n'
-          );
-        };
-
-        const error = yield* Effect.flip(runtime.start(machine, new Set()));
-
-        expect(failure(error)[0]).toBe("Internal");
-        expect(failure(error)[1]).toContain(
-          "macOS resumes a saved state only while the Mac's session is unlocked, so if it is locked, unlock it and start dev again: a restore that fails keeps the saved state, and a stop discards it"
-        );
-        expect(yield* runtime.observe([machine])).toStrictEqual(
-          new Map([[machine.name, "paused"]])
+          new Map([[machine.name, "running"]])
         );
       })
   );
@@ -2168,7 +2010,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a VM a tart run outside its job runs reads running, however that run's executable is named: a start boots nothing but sets its clock, a capture or fork is refused, capacity counts it, and a stop shuts it down and waits for that run to end",
+    "a VM a tart run outside its job runs reads running, however that run's executable is named: a start boots nothing but sets its clock, capacity counts it, and a stop shuts it down and waits for that run to end",
     () =>
       Effect.gen(function* () {
         for (const executable of [
@@ -2177,7 +2019,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "/opt/tart builds/tart",
         ]) {
           const { mac, runtime } = yield* runtimeOn();
-          const [machine, copy] = [machineOn("dev"), machineOn("copy")];
+          const machine = machineOn("dev");
           const vm = vmOf(machine);
 
           yield* runtime.make(machine, fromImage("base"), sshPort);
@@ -2189,13 +2031,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
           yield* runtime.start(machine, new Set());
 
-          const refused = [
-            yield* Effect.flip(runtime.capture(machine, snapOf())),
-            yield* Effect.flip(
-              runtime.make(copy, fromMachine(machine), sshPort)
-            ),
-          ].map(failure);
-
           const used = yield* runtime.capacity([{ _tag: "found", machine }]);
 
           yield* runtime.stop(machine);
@@ -2203,16 +2038,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           expect([executable, observed]).toStrictEqual([
             executable,
             new Map([[machine.name, "running"]]),
-          ]);
-          expect(refused).toStrictEqual([
-            [
-              "WrongState",
-              "a Tart checkpoint copies a stopped machine's disk, and dev is running: stop it first",
-            ],
-            [
-              "WrongState",
-              "a Tart fork copies a stopped machine's disk, and dev is running: stop it first",
-            ],
           ]);
           expect(used[0]).toStrictEqual({
             resource: "runningVms",
@@ -2227,59 +2052,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             new Map([[machine.name, "stopped"]])
           );
         }
-      })
-  );
-
-  it.effect(
-    "a hand run that starts while a capture or fork clones its source fails the copy WrongState, leaving the copy to the host's discard or the fork's undo",
-    () =>
-      Effect.gen(function* () {
-        const { mac, runtime } = yield* runtimeOn();
-        const [machine, copy] = [machineOn("dev"), machineOn("copy")];
-        const vm = vmOf(machine);
-
-        yield* runtime.make(machine, fromImage("base"), sshPort);
-        yield* runtime.stop(machine);
-
-        const raced = <A>(copying: Effect.Effect<A, HostError>) =>
-          Effect.gen(function* () {
-            mac.hooks.clone = (from) => {
-              if (from === vm) {
-                mac.runByHand(vm);
-              }
-
-              return undefined;
-            };
-
-            const refused = failure(yield* Effect.flip(copying));
-
-            mac.hooks.clone = () => undefined;
-            yield* runtime.stop(machine);
-
-            return refused;
-          });
-
-        const refused = [
-          yield* raced(runtime.capture(machine, snapOf())),
-          yield* raced(runtime.make(copy, fromMachine(machine), sshPort)),
-        ];
-
-        expect({
-          refused,
-          left: [...mac.vms.keys()].toSorted(),
-        }).toStrictEqual({
-          refused: [
-            [
-              "WrongState",
-              "a Tart checkpoint copies a stopped machine's disk, and dev is running: stop it first",
-            ],
-            [
-              "WrongState",
-              "a Tart fork copies a stopped machine's disk, and dev is running: stop it first",
-            ],
-          ],
-          left: [checkpointName("mac", snapOf()), vmOf(copy), vm].toSorted(),
-        });
       })
   );
 
@@ -2461,31 +2233,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "pause of a VM a tart run outside its job runs stops it instead, as the host can't read that run's output for Tart's save",
-    () =>
-      Effect.gen(function* () {
-        const { mac, runtime } = yield* runtimeOn();
-        const machine = machineOn("dev");
-        const vm = vmOf(machine);
-
-        yield* runtime.make(machine, fromImage("base"), sshPort);
-        yield* runtime.stop(machine);
-        mac.runByHand(vm, ["tart", "run", "--suspendable", vm]);
-
-        const before = calls(mac).length;
-
-        yield* runtime.pause(machine);
-
-        expect(calls(mac).slice(before)).toStrictEqual([
-          `tart exec ${vm} sudo -n /sbin/shutdown -h now`,
-        ]);
-        expect(yield* runtime.observe([machine])).toStrictEqual(
-          new Map([[machine.name, "stopped"]])
-        );
-      })
-  );
-
-  it.effect(
     "a forced stop waits for the tart run to end after tart stop returns, and fails, deleting nothing, when it never ends",
     () =>
       Effect.gen(function* () {
@@ -2607,7 +2354,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "stop of a paused VM discards its saved state with tart stop, booting nothing",
+    "stop of a VM an older host paused discards its saved state with tart stop, booting nothing",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -2615,7 +2362,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const vm = vmOf(machine);
 
         yield* runtime.make(machine, fromImage("base"), sshPort);
-        yield* runtime.pause(machine);
+        yield* runtime.stop(machine);
+        mac.vms.set(vm, "suspended");
 
         const before = calls(mac).length;
 

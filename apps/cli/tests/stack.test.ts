@@ -1031,6 +1031,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(paused).toMatchObject({ code: 0, stdout: "dev paused" });
         expect(hosts[0]?.fake.calls).toStrictEqual([
+          "exec dev",
           "capture snap",
           "exec dev",
           "pause dev",

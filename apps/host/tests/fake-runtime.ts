@@ -207,6 +207,7 @@ const guestTools = [
   "setsid",
   "sh",
   "sleep",
+  "sync",
   "tr",
 ];
 
@@ -831,6 +832,13 @@ export const fakeRuntime = (options: FakeOptions) => {
           await access(from);
           await cp(from, root, { recursive: true });
 
+          if (traits.captureFrom === "either") {
+            const memory = path.join(root, "dev", "shm");
+
+            await rm(memory, { recursive: true, force: true });
+            await mkdir(memory, { recursive: true });
+          }
+
           return madeOf(machine, root);
         },
         catch: (cause) =>
@@ -843,7 +851,11 @@ export const fakeRuntime = (options: FakeOptions) => {
   const copyable = (machine: Target) => {
     const state = machineOf(machine)?.state ?? "missing";
 
-    if (state === traits.captureFrom) {
+    if (
+      state === traits.captureFrom ||
+      (traits.captureFrom === "either" &&
+        (state === "running" || state === "stopped"))
+    ) {
       return Effect.void;
     }
 
@@ -851,7 +863,7 @@ export const fakeRuntime = (options: FakeOptions) => {
       state === "missing"
         ? missing(traits.runtime, machine)
         : new WrongState({
-            message: `${machine.name} is ${state}: ${traits.captureFrom === "stopped" ? "stop" : "start"} it first`,
+            message: `${machine.name} is ${state}: ${{ stopped: "stop", running: "start", either: "start or stop" }[traits.captureFrom]} it first`,
             machine: machine.name,
             state,
           })

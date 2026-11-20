@@ -30,9 +30,9 @@ type Bounds = typeof Bounds.Type;
  * - `images`: `named` creates only from the host's named bases; `references` also from an image
  *   reference.
  * - `checkpoint`: what a checkpoint keeps, `ram` (RAM and disks) or `disk`, and so its `kind`.
- * - `captureFrom`: the one state, `running` or `stopped`, a machine is captured or forked in; one in
- *   any other state fails the capture or the fork, and a template build stops its builder before
- *   its copy where it is `stopped`.
+ * - `captureFrom`: the state, `running` or `stopped`, a machine is captured or forked in, or
+ *   `either` of them, a copy of its disk; one in any other state fails the capture or the fork, and
+ *   a template build stops its builder before its copy but where it is `running`.
  * - `pause`: `saves` keeps the machine's RAM; `stops` stops it.
  * - `stop`: what a stop does to a paused machine: `resumes` it first, to end its processes, which
  *   takes room as a start does and the runtime pin it booted under; or `discards` its saved state.
@@ -49,7 +49,7 @@ export const RuntimeTraits = Schema.Struct({
   runtime: RuntimeName,
   images: Schema.Literals(["named", "references"]),
   checkpoint: CheckpointKind,
-  captureFrom: Schema.Literals(["running", "stopped"]),
+  captureFrom: Schema.Literals(["running", "stopped", "either"]),
   pause: Schema.Literals(["saves", "stops"]),
   stop: Schema.Literals(["resumes", "discards"]),
   copies: Schema.Literals(["grow", "any", "same"]),
@@ -275,15 +275,15 @@ export const copyRefusal = (
 export const pauseCapture = (
   traits: RuntimeTraits
 ): "before" | "after" | "never" => {
-  if (traits.captureFrom === "running") {
-    return "before";
+  if (traits.pause === "stops" && traits.captureFrom !== "running") {
+    return "after";
   }
 
-  return traits.pause === "stops" ? "after" : "never";
+  return traits.captureFrom === "stopped" ? "never" : "before";
 };
 
 export const stopsBeforeCapture = (traits: RuntimeTraits): boolean =>
-  traits.captureFrom === "stopped";
+  traits.captureFrom !== "running";
 
 export const fetchable = (from: RuntimeName, to: RuntimeTraits): boolean =>
   from === to.runtime;

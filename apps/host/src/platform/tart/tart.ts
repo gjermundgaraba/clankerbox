@@ -82,7 +82,6 @@ export interface Settings {
 const softnet = "--net-softnet-block=@host";
 
 // https://github.com/openai/tart/blob/2.41.1/Sources/tart/Commands/Run.swift#L638
-const saved = "snapshot created successfully";
 
 // https://github.com/openai/tart/blob/2.41.1/Sources/tart/VMStorageHelper.swift#L80
 const vmLimit = 2;
@@ -120,8 +119,6 @@ const startWait = Duration.minutes(1);
 const startPause = Duration.millis(100);
 
 const shutdownWait = Duration.minutes(1);
-
-const suspendWait = Duration.minutes(2);
 
 const forcedStopWait = Duration.seconds(10);
 
@@ -175,7 +172,6 @@ const program = (binary: string, vm: string): readonly string[] => [
   "run",
   "--no-graphics",
   softnet,
-  "--suspendable",
   vm,
 ];
 
@@ -284,16 +280,6 @@ const ended = (job: Launchd.Job | undefined, target: string): string => {
   return job._tag === "exited" && job.lastExit !== undefined
     ? `exited ${job.lastExit}`
     : "ended before launchd recorded its exit";
-};
-
-const whyUnsaveable = (job: Launchd.Job | undefined): string | undefined => {
-  if (job?._tag !== "running") {
-    return "a tart run outside its launchd job runs it, whose output the host can't read for Tart's save";
-  }
-
-  return job.program.includes("--suspendable")
-    ? undefined
-    : "an older host booted it without --suspendable, which Tart can't suspend";
 };
 
 export const make = (
@@ -787,7 +773,7 @@ export const make = (
 
     const copyable = (what: string, machine: Target) =>
       Effect.flatMap(state(machine.handle), (observed) => {
-        if (observed === "stopped") {
+        if (observed === "stopped" || observed === "running") {
           return Effect.void;
         }
 
@@ -795,7 +781,7 @@ export const make = (
           observed === "missing"
             ? missing(traits.runtime, machine)
             : new WrongState({
-                message: `a Tart ${what} copies a stopped machine's disk, and ${machine.name} is ${observed}: stop it first`,
+                message: `a Tart ${what} copies a running or stopped machine's disk, and ${machine.name} is ${observed}: start or stop it first`,
                 machine: machine.name,
                 state: observed,
               })
@@ -808,79 +794,6 @@ export const make = (
       Effect.gen(function* () {
         yield* copyable(what, source);
         yield* clone(source.handle, into);
-        yield* copyable(what, source);
-      });
-
-    const resume = (machine: Target) =>
-      booted(machine).pipe(
-        Effect.catchTag("Internal", (error) =>
-          Effect.fail(
-            new Internal({
-              message: `${error.message}; macOS resumes a saved state only while the Mac's session is unlocked, so if it is locked, unlock it and start ${machine.name} again: a restore that fails keeps the saved state, and a stop discards it`,
-            })
-          )
-        ),
-        Effect.andThen(settled(machine))
-      );
-
-    const suspend = (machine: Target) =>
-      Effect.gen(function* () {
-        const vm = machine.handle;
-        const { log } = job(vm);
-        const observed = yield* state(vm);
-
-        if (observed === "paused") {
-          return;
-        }
-
-        if (observed === "missing") {
-          return yield* missing(traits.runtime, machine);
-        }
-
-        if (observed !== "running") {
-          return yield* new WrongState({
-            message: `Tart reads ${machine.name} ${observed}, and suspends only a running machine`,
-            machine: machine.name,
-            state: observed,
-          });
-        }
-
-        const unsaveable = whyUnsaveable(yield* jobOf(vm));
-
-        if (unsaveable !== undefined) {
-          yield* Effect.logWarning(
-            `pause ${machine.name}: ${unsaveable}, so it stops it instead`
-          );
-
-          yield* stop(machine);
-
-          return;
-        }
-
-        yield* Effect.uninterruptible(
-          Effect.gen(function* () {
-            yield* call(["suspend", vm], `suspend ${vm}`);
-
-            if (!(yield* halted(vm, suspendWait))) {
-              return yield* new Internal({
-                message: `${machine.name} still runs ${Duration.format(suspendWait)} after tart suspend`,
-              });
-            }
-
-            const output = yield* files(
-              `couldn't read ${log}`,
-              fs.readFileString(log)
-            );
-
-            if (!output.includes(saved)) {
-              yield* call(["stop", vm], `stop ${vm}`, [0, 2]);
-
-              return yield* new Internal({
-                message: `Tart couldn't save ${machine.name}'s state and powered its VM off, as it does when the first save on a Mac runs while its session is locked: ${lastLines(output)}`,
-              });
-            }
-          })
-        );
       });
 
     const made = (machine: Identity & Sizes, origin: Origin) => {
@@ -1046,7 +959,7 @@ export const make = (
           }
 
           if (observed === "paused") {
-            yield* resume(machine);
+            yield* boot(machine);
           }
 
           if (observed === "running") {
@@ -1055,7 +968,7 @@ export const make = (
         })
       ),
       stop: Effect.fn("Tart.stop")(stop),
-      pause: Effect.fn("Tart.pause")(suspend),
+      pause: Effect.fn("Tart.pause")(stop),
       delete: Effect.fn("Tart.delete")((machine) =>
         machine.handle === undefined ? Effect.void : removed(machine.handle)
       ),

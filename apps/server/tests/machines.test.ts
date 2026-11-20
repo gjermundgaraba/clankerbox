@@ -3594,7 +3594,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a fork or capture of a running machine on a host that copies only a stopped one is WrongState before a row is written, and so is one of a stopped machine where a copy takes a running one",
     () =>
       Effect.gen(function* () {
-        const mac = yield* served({ hosts: [{ id: "tart", as: "tart" }] });
+        const mac = yield* served({ hosts: [{ id: "fixed", as: "fixed" }] });
         const linux = yield* served();
 
         yield* mac.client.create("dev", request("dev"));

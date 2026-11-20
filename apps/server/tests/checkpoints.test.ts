@@ -3,7 +3,7 @@ import path from "node:path";
 import { Handle } from "@clankerbox/host-contract";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { startHost } from "@gjermundgaraba/clankerbox-host/testing";
+import { presets, startHost } from "@gjermundgaraba/clankerbox-host/testing";
 import type {
   TestHost,
   FakeRuntimeName,
@@ -162,6 +162,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(yield* machineId(host, "copy")).toBe("copy\n");
         expect(yield* machineId(host, "dev")).toBe("dev\n");
         expect(host.fake.calls).toStrictEqual([
+          "exec dev",
           "admit copy",
           "fork copy",
           "exec copy",
@@ -340,6 +341,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ]);
           expect(got).toMatchObject({ state: "missing", phase: "failed" });
           expect(host.fake.calls).toStrictEqual([
+            ...(operation === "fork" ? ["exec dev"] : []),
             `admit ${name}`,
             `${operation} ${name}`,
             `delete ${name}`,
@@ -686,7 +688,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const refused = yield* Effect.forEach(
-          ["smolvm", "tart"] as const,
+          ["smolvm", "fixed"] as const,
           (as) =>
             Effect.gen(function* () {
               const served = yield* withSource(on(as));
@@ -717,7 +719,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
 
         expect(refused).toStrictEqual(
-          ["smolvm", "tart"].map(() => ({
+          ["smolvm", "fixed"].map(() => ({
             tag: "WrongState",
             rows: 0,
             calls: [],
@@ -847,6 +849,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         ]);
         expect(snap).toMatchObject({ phase: "ready", labels: { app: "web" } });
         expect(host.fake.calls).toStrictEqual([
+          "exec dev",
           "capture snap",
           "exec dev",
           "pause dev",
@@ -931,7 +934,21 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { client, host } = yield* withClient({
-          hosts: [{ id: "tart", as: "tart" }],
+          hosts: [
+            {
+              id: "tart",
+              as: "tart",
+              options: {
+                runtime: {
+                  traits: {
+                    ...presets.tart.traits,
+                    captureFrom: "stopped",
+                    pause: "saves",
+                  },
+                },
+              },
+            },
+          ],
         });
 
         yield* client.create("dev", request("dev"));
@@ -1049,6 +1066,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(paused.desired).toBe("paused");
         expect(snap.phase).toBe("ready");
         expect(host.fake.calls).toStrictEqual([
+          "exec dev",
           "capture snap",
           "exec dev",
           "pause dev",
@@ -1172,6 +1190,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           Option.none()
         );
         expect(host.fake.calls).toStrictEqual([
+          "exec dev",
           "capture snap",
           "deleteCheckpoint snap",
         ]);

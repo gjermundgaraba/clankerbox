@@ -1,4 +1,4 @@
-import { loginUser } from "@gjermundgaraba/clankerbox-sdk";
+import { Internal, loginUser } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   Executed,
   Setup,
@@ -9,6 +9,7 @@ import { Hex } from "effect/encoding";
 
 import { executed, limited, markName, ran, runInGuest } from "./exec.ts";
 import type { Leaving } from "./exec.ts";
+import { lastLines } from "./runtime.ts";
 import type { Interface as Runtime, Target, RuntimeError } from "./runtime.ts";
 
 const preparationTimeout = Duration.seconds(60);
@@ -678,6 +679,37 @@ export const scrubNode = (
         .filter((line) => line.startsWith(scrubMarker))
         .map((line) => line.slice(scrubMarker.length))
     )
+  );
+
+const flushScript = ["root=${CLANKERBOX_ROOT-}", guestPath, "sync"].join("\n");
+
+const flushTimeout = Duration.minutes(1);
+
+/**
+ * Writes what a running guest holds of its files to its disk, as root, before a copy of its disk,
+ * so the copy holds every write that ended before it was asked.
+ */
+export const flush = (
+  runtime: Runtime,
+  machine: Target
+): Effect.Effect<void, RuntimeError> =>
+  Effect.flatMap(
+    ran(
+      runtime,
+      {
+        machine,
+        argv: ["/bin/sh", "-c", flushScript, "clankerbox-flush"],
+      },
+      limited(flushTimeout)
+    ),
+    ({ ending, kept }) =>
+      ending._tag === "exited" && ending.code === 0
+        ? Effect.void
+        : Effect.fail(
+            new Internal({
+              message: `couldn't write ${machine.name}'s files to its disk before its copy: sync ${ending._tag === "exited" ? `exited ${ending.code}` : `ran past ${Duration.format(flushTimeout)}`}: ${lastLines(kept.output)}`,
+            })
+          )
   );
 
 const leaveScript = [

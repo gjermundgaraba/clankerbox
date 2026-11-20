@@ -46,6 +46,7 @@ import { runCommand } from "./exec.ts";
 import type { Leaving } from "./exec.ts";
 import {
   checkTailnet,
+  flush,
   identify,
   addMissingKeys,
   leave,
@@ -492,6 +493,11 @@ export const make = (
         return seen;
       });
 
+    const flushed = (machine: Target) =>
+      Effect.flatMap(stateNow(machine, "copied"), (seen) =>
+        seen === "running" ? flush(runtime, machine) : Effect.void
+      );
+
     const withRoom = (
       action: Booting,
       machine: MachineRef,
@@ -758,6 +764,10 @@ export const make = (
 
         const origin = yield* originOf(source);
 
+        if (origin._tag === "machine") {
+          yield* flushed(origin.machine);
+        }
+
         const { handle, sizes } = yield* Effect.scoped(
           Effect.andThen(
             admitted(booted[source._tag], machine, machines),
@@ -948,7 +958,7 @@ export const make = (
             const machine = yield* Effect.tapError(
               Effect.andThen(
                 pinned({ copy: step.machine.name }, pin),
-                machineTarget(step.machine)
+                Effect.tap(machineTarget(step.machine), flushed)
               ),
               () => cleared
             );

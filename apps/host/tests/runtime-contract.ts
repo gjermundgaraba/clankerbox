@@ -1,7 +1,7 @@
 import type { Handle } from "@clankerbox/host-contract";
 import { fitted, resizeRefusal } from "@clankerbox/host-contract/traits";
 import { describe, it } from "@effect/vitest";
-import { Capacity, Missing, WrongState } from "@gjermundgaraba/clankerbox-sdk";
+import { Capacity, Missing } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Fiber, Schedule, Stream } from "effect";
 import type { Scope } from "effect";
 import { expect } from "vite-plus/test";
@@ -136,6 +136,25 @@ const outOfCaptureState = (runtime: Runtime, machine: Sized) =>
   runtime.traits.captureFrom === "stopped"
     ? Effect.void
     : runtime.stop(machine);
+
+const shell = (runtime: Runtime, machine: Sized, script: string) =>
+  Effect.flatMap(
+    runtime.exec(machine, {
+      argv: ["/bin/sh", "-c", `root=\${CLANKERBOX_ROOT-}\n${script}`],
+    }),
+    (execution) =>
+      Effect.map(
+        Effect.all([outputOf(execution), execution.exitCode]),
+        ([output, exitCode]) => `${exitCode}: ${output.trim()}`
+      )
+  ).pipe(Effect.scoped);
+
+const marks = (runtime: Runtime, machine: Sized) =>
+  shell(
+    runtime,
+    machine,
+    `printf '%s,' "$(cat "$root/etc/clankerbox-mark" 2>/dev/null)" "$(cat "$root/dev/shm/clankerbox-mark" 2>/dev/null)"`
+  );
 
 export const runtimeContract = (subject: Subject): void => {
   const lacking = subject.lacks ?? {};
@@ -294,16 +313,26 @@ export const runtimeContract = (subject: Subject): void => {
       () =>
         withFixture(({ runtime }) =>
           Effect.gen(function* () {
+            const { captureFrom } = runtime.traits;
             const machine = yield* made(runtime, "dev");
             const snap = { name: "snap", instance: second };
 
-            yield* outOfCaptureState(runtime, machine);
+            const refused =
+              captureFrom === "either"
+                ? undefined
+                : yield* Effect.gen(function* () {
+                    yield* outOfCaptureState(runtime, machine);
 
-            const refused = yield* Effect.flip(runtime.capture(machine, snap));
+                    const refusal = yield* Effect.flip(
+                      runtime.capture(machine, snap)
+                    );
 
-            yield* runtime.traits.captureFrom === "running"
-              ? runtime.start(machine, new Set())
-              : runtime.stop(machine);
+                    yield* captureFrom === "running"
+                      ? runtime.start(machine, new Set())
+                      : runtime.stop(machine);
+
+                    return refusal;
+                  });
 
             const handle = yield* runtime.capture(machine, snap);
             const copy = sized("copy", third);
@@ -317,7 +346,9 @@ export const runtimeContract = (subject: Subject): void => {
               nextFree()
             );
 
-            expect(refused).toBeInstanceOf(WrongState);
+            expect(refused?._tag ?? "none").toBe(
+              captureFrom === "either" ? "none" : "WrongState"
+            );
             expect(yield* runtime.find(copy)).toBe(restored.handle);
 
             yield* runtime.stop({ ...copy, handle: restored.handle });
@@ -327,6 +358,91 @@ export const runtimeContract = (subject: Subject): void => {
             );
             yield* runtime.deleteCheckpoint({ ...snap, handle });
             yield* runtime.deleteCheckpoint({ ...snap, handle });
+          })
+        )
+    );
+
+    const guestRuns = subject.runsNoGuest === undefined;
+
+    it.live.skipIf(!guestRuns)(
+      `forks a running or stopped machine into a machine booted from a copy of its disk, leaving the source as it was${guestRuns ? "" : `: ${subject.runsNoGuest}`}`,
+      () =>
+        withFixture(({ runtime }) =>
+          Effect.gen(function* () {
+            if (runtime.traits.captureFrom !== "either") {
+              return;
+            }
+
+            const source = yield* made(runtime, "dev");
+
+            const wrote = yield* shell(
+              runtime,
+              source,
+              [
+                `printf disk >"$root/etc/clankerbox-mark"`,
+                `printf memory >"$root/dev/shm/clankerbox-mark"`,
+                "sync",
+              ].join("\n")
+            );
+
+            const fork = sized("fork", third);
+
+            const running = yield* runtime.make(
+              fork,
+              { _tag: "machine", machine: source },
+              nextFree()
+            );
+
+            const forked = { ...fork, handle: running.handle };
+
+            const kept = {
+              source: yield* stateOf(runtime, source),
+              fork: yield* stateOf(runtime, forked),
+              copied: yield* marks(runtime, forked),
+            };
+
+            yield* shell(
+              runtime,
+              forked,
+              `printf fork >"$root/etc/clankerbox-mark"`
+            );
+
+            const sourceAfter = yield* marks(runtime, source);
+
+            yield* runtime.stop(source);
+
+            const later = sized("later", fourth);
+
+            const fromStopped = yield* runtime.make(
+              later,
+              { _tag: "machine", machine: source },
+              nextFree()
+            );
+
+            const laterForked = { ...later, handle: fromStopped.handle };
+
+            expect({
+              wrote,
+              ...kept,
+              sourceAfter,
+              stoppedSource: yield* stateOf(runtime, source),
+              laterFork: yield* stateOf(runtime, laterForked),
+              laterCopied: yield* marks(runtime, laterForked),
+            }).toStrictEqual({
+              wrote: "0: ",
+              source: "running",
+              fork: "running",
+              copied: "0: disk,,",
+              sourceAfter: "0: disk,memory,",
+              stoppedSource: "stopped",
+              laterFork: "running",
+              laterCopied: "0: disk,,",
+            });
+
+            for (const copy of [forked, laterForked]) {
+              yield* runtime.stop(copy);
+              yield* runtime.delete(copy, new Set());
+            }
           })
         )
     );
