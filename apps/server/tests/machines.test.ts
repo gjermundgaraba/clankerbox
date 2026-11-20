@@ -3247,19 +3247,19 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* client.create("dev", request("dev"));
 
         const refused = new Unsizable({
-          message: "smolvm grows RAM in 128M steps",
+          message: "this host takes no 2G of RAM",
         });
 
         fake.refuseNextSizes(refused);
 
         const resized = yield* Effect.flip(
-          client.resizeMachine({ id: "dev", ramMib: 2100 })
+          client.resizeMachine({ id: "dev", ramMib: 2048 })
         );
 
         fake.refuseNextSizes(refused);
 
         const forked = yield* Effect.flip(
-          client.forkMachine({ machine: "dev", name: "copy", ramMib: 2100 })
+          client.forkMachine({ machine: "dev", name: "copy", ramMib: 2048 })
         );
 
         expect(

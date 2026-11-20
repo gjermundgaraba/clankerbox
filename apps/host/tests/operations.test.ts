@@ -1965,7 +1965,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const host = yield* runner();
-        const refused = new Unsizable({ message: "grows RAM in 128M steps" });
+
+        const refused = new Unsizable({
+          message: "this host takes no 2G of RAM",
+        });
 
         yield* finished(host, makes("dev"));
         host.fake.sized.length = 0;
@@ -1979,7 +1982,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           {
             _tag: "resize",
             machine: ref("dev"),
-            to: { ramMib: 2100 },
+            to: { ramMib: 2048 },
             machines: [],
           },
           2
@@ -1990,13 +1993,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const forked = yield* finished(
           host,
           makes("copy", {
-            machine: { ramMib: 2100 },
+            machine: { ramMib: 2048 },
             source: { _tag: "machine", machine: ref("dev"), pin: "fake 1" },
           })
         );
 
         const held = { cpu: 1, ramMib: 1024, diskGib: 10 };
-        const asked = { ...held, ramMib: 2100 };
+        const asked = { ...held, ramMib: 2048 };
 
         expect([resized.error, forked.error]).toStrictEqual([refused, refused]);
         expect(host.fake.sized).toStrictEqual([

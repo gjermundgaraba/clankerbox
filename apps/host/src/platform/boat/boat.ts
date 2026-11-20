@@ -592,6 +592,13 @@ export const make = (
         )
       );
 
+    /**
+     * Moves stopped machine `machine` to `type` through boat's resume, which counts a start. A
+     * resume boat refuses `type_too_small` is sent once and never again: boat's limits say a
+     * refused `rate_limited` start counts none, and say nothing of this refusal, so it spends at
+     * most one start whichever way boat counts it.
+     * https://docs.boat.dev/limits
+     */
     const retyped = (
       machine: Target,
       type: Api.BoatType
@@ -814,7 +821,13 @@ export const make = (
                 );
 
           const sandbox = yield* landed(machine, sent).pipe(
-            Effect.mapError(failure(`make ${machine.name}`))
+            Effect.mapError((error) =>
+              error._tag === "Refused" && error.code === "type_too_small"
+                ? new Unsizable({
+                    message: `machine ${machine.name}'s source holds more data than boat's ${type} type takes: ${error.message}`,
+                  })
+                : failure(`make ${machine.name}`)(error)
+            )
           );
 
           const handle = Handle.make(sandbox.id);

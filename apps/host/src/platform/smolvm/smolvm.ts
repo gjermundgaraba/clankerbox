@@ -1,8 +1,8 @@
 import { totalmem } from "node:os";
 import path from "node:path";
 
+import { liveRefusal } from "@clankerbox/host-contract/traits";
 import {
-  formatGib,
   formatMib,
   Internal,
   Invalid,
@@ -64,7 +64,7 @@ import type { CheckpointFiles, Store } from "../bucket/builds.ts";
 import * as S3 from "../bucket/s3.ts";
 import { cliIn, expect, failure, files, regularFiles } from "../process.ts";
 import { aloneOnBox, boxLock } from "./one-per-box.ts";
-import { traits } from "./traits.ts";
+import { ramGrowthMib, traits as traitsOn } from "./traits.ts";
 
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
 
@@ -99,9 +99,6 @@ export interface Settings {
 
 const bootIdFile = "/proc/sys/kernel/random/boot_id";
 
-// https://github.com/smol-machines/smolvm/blob/v1.34.1/src/agent/live_resize.rs#L368
-const ramStepMib = 128;
-
 // https://github.com/smol-machines/smolvm/blob/v1.34.1/src/data/storage.rs#L14
 const defaultStorageGib = 20;
 
@@ -110,9 +107,6 @@ const unfinishedRefusal = "an unfinished resize belongs to a different target";
 
 // https://github.com/smol-machines/libkrun/blob/9df62257098acb5a3cd4f6807cf84f09e1b13323/src/vmm/src/memory_growth.rs#L28
 const apertureRefusal = "within the platform aperture";
-
-// https://github.com/smol-machines/libkrun/blob/9df62257098acb5a3cd4f6807cf84f09e1b13323/src/vmm/src/builder.rs#L3966
-const apertureGib = 64;
 
 export const pathsIn = (stateDir: string) => ({
   dataDir: path.join(stateDir, "smolvm"),
@@ -412,6 +406,7 @@ export const make = (
     const fs = yield* FileSystem.FileSystem;
     const probe = yield* PortProbe;
     const layerScope = yield* Effect.scope;
+    const traits = traitsOn(settings.arch);
     const binary = path.join(settings.prefix, "smolvm");
     const paths = pathsIn(settings.stateDir);
     const { run, exec } = yield* cliIn(environment(settings));
@@ -741,7 +736,7 @@ export const make = (
                   ) {
                     return Effect.fail(
                       new Unsizable({
-                        message: `smolvm grows a running machine's RAM only within ${formatGib(apertureGib)} above the RAM it booted with, and this one would grow to ${formatMib(size)}: stop it to give it more`,
+                        message: `smolvm grows a running machine's RAM only within ${formatMib(ramGrowthMib)} above the RAM it booted with, or less on a host whose guests address less memory, and this one would grow to ${formatMib(size)}: stop it to give it more`,
                       })
                     );
                   }
@@ -759,32 +754,17 @@ export const make = (
       );
     };
 
-    // https://github.com/smol-machines/smolvm/blob/v1.34.1/src/agent/live_resize.rs#L391
     const sizable = (
       machine: Pick<MachineRef, "name">,
       from: Sizes,
       to: Sizes,
       live: boolean
     ) => {
-      if (!live) {
-        return Effect.void;
-      }
+      const refusal = live
+        ? liveRefusal(traits, machine.name, from, to)
+        : undefined;
 
-      if ((to.ramMib - from.ramMib) % ramStepMib !== 0) {
-        return Effect.fail(
-          new Unsizable({
-            message: `smolvm grows a running machine's RAM in ${ramStepMib}M steps, and ${machine.name}'s would grow from ${formatMib(from.ramMib)} to ${formatMib(to.ramMib)}`,
-          })
-        );
-      }
-
-      return to.cpu > from.cpu && settings.arch !== "x64"
-        ? Effect.fail(
-            new Unsizable({
-              message: `smolvm grows a running machine's vCPUs only on x86_64, and this host is ${settings.arch}: give ${machine.name} more vCPUs once it is stopped`,
-            })
-          )
-        : Effect.void;
+      return refusal === undefined ? Effect.void : Effect.fail(refusal);
     };
 
     // https://github.com/smol-machines/smolvm/blob/v1.34.1/src/machine_spec.rs#L1181

@@ -130,7 +130,7 @@ export const fixed: RuntimeTraits = {
 
 export const presets = {
   smolvm: {
-    traits: smolvm,
+    traits: smolvm("x64"),
     guest: "debian",
     pin: "fake 1",
     prepares: "with-setup",

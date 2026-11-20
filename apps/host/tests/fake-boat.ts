@@ -811,6 +811,14 @@ export const fakeBoat = (
         return expired(source);
       }
 
+      if (source.dataGb > filesGb[type]) {
+        return refused(
+          409,
+          "type_too_small",
+          `sandbox ${source.id} holds ${source.dataGb} GB, more than ${type}'s disk takes`
+        );
+      }
+
       return await make(
         key,
         async () =>

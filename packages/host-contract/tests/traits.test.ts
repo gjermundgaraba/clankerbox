@@ -27,6 +27,8 @@ const Bases = Schema.Array(Schema.Literals(["ubuntu", "macos"]));
 
 const State = Schema.Literals(["running", "stopped", "paused"]);
 
+const Copy = Schema.Literals(["fork", "restore"]);
+
 const Bound = Schema.Struct({
   cpu: Schema.optionalKey(Small),
   ramMib: Schema.optionalKey(Small),
@@ -150,7 +152,7 @@ const shrinks = (from: Sized, to: Sized) =>
 
 describe("resizeRefusal", () => {
   it.effect.prop(
-    "a resize is refused Unsizable where its disk shrinks on a runtime of free sizes, WrongState in a known state its runtime takes none in, and Unsizable where its runtime doesn't give its sizes, or takes only growth there and it shrinks",
+    "a resize is refused Unsizable where its disk shrinks on a runtime of free sizes, WrongState in a known state its runtime takes none in, and Unsizable where its runtime doesn't give its sizes, takes only growth there and it shrinks, or grows a running machine live and the grow is off its RAM steps, past its RAM growth or of vCPUs it grows none of",
     {
       traits: RuntimeTraits,
       given: Given,
@@ -182,7 +184,18 @@ describe("resizeRefusal", () => {
         const wrongState =
           !diskShrinks && state !== undefined && takes === "none";
 
-        const unsizable = diskShrinks || (!wrongState && unfitted);
+        const { live } = traits.resize;
+        const grown = to.ramMib - from.ramMib;
+
+        const liveRefused =
+          state === "running" &&
+          live !== undefined &&
+          ((live.ramStepMib !== undefined && grown % live.ramStepMib !== 0) ||
+            (live.ramGrowthMib !== undefined && grown > live.ramGrowthMib) ||
+            (!live.cpu && to.cpu > from.cpu));
+
+        const unsizable =
+          diskShrinks || (!wrongState && (unfitted || liveRefused));
 
         expect([
           refusal?._tag === "WrongState",
@@ -198,33 +211,45 @@ describe("resizeRefusal", () => {
 
 describe("copyRefusal", () => {
   it.effect.prop(
-    "a copy whose disk is below its source's is never made",
-    { traits: RuntimeTraits, from: Sizes, to: Sizes },
-    ({ traits, from, to }) =>
+    "a copy whose disk is below its source's is never made, but a fork on a runtime of size classes",
+    { traits: RuntimeTraits, copy: Copy, from: Sizes, to: Sizes },
+    ({ traits, copy, from, to }) =>
       Effect.sync(() => {
-        if (to.diskGib < from.diskGib) {
-          expect(copyRefusal(traits, "dev", from, to)?._tag).toBe("Unsizable");
+        if (
+          to.diskGib < from.diskGib &&
+          !(copy === "fork" && traits.sizes._tag === "classes")
+        ) {
+          expect(copyRefusal(traits, "dev", copy, from, to)?._tag).toBe(
+            "Unsizable"
+          );
         }
       })
   );
 
   it.effect.prop(
     "a copy at its source's own sizes is made wherever the runtime gives them",
-    { traits: RuntimeTraits, given: Given, from: Sizes },
-    ({ traits, given, from }) =>
+    { traits: RuntimeTraits, given: Given, copy: Copy, from: Sizes },
+    ({ traits, given, copy, from }) =>
       Effect.sync(() => {
         expect(
-          copyRefusal({ ...traits, ...given }, "dev", from, from) === undefined
+          copyRefusal({ ...traits, ...given }, "dev", copy, from, from) ===
+            undefined
         ).toBe(gives(given, from));
       })
   );
 
   it.effect.prop(
-    "copies that grow take no lower vCPUs or RAM, copies of any sizes take any vCPUs and RAM, and copies of the same sizes take only the source's, of the sizes the runtime gives",
-    { traits: RuntimeTraits, given: Given, from: Sizes, to: Sizes },
-    ({ traits, given, from, to }) =>
+    "copies that grow take no lower vCPUs or RAM, copies of any sizes take any vCPUs and RAM, and any disk in a fork on a runtime of size classes, and copies of the same sizes take only the source's, of the sizes the runtime gives",
+    { traits: RuntimeTraits, given: Given, copy: Copy, from: Sizes, to: Sizes },
+    ({ traits, given, copy, from, to }) =>
       Effect.sync(() => {
         const disk = to.diskGib >= from.diskGib && gives(given, to);
+
+        const anyDisk =
+          (to.diskGib >= from.diskGib ||
+            (copy === "fork" && given.sizes._tag === "classes")) &&
+          gives(given, to);
+
         const grows = to.cpu >= from.cpu && to.ramMib >= from.ramMib;
 
         const equal =
@@ -238,15 +263,14 @@ describe("copyRefusal", () => {
           copies,
         });
 
-        expect(copyRefusal(sized("grow"), "dev", from, to) === undefined).toBe(
-          disk && grows
-        );
-        expect(copyRefusal(sized("any"), "dev", from, to) === undefined).toBe(
-          disk
-        );
-        expect(copyRefusal(sized("same"), "dev", from, to) === undefined).toBe(
-          equal && gives(given, to)
-        );
+        const taken = (copies: RuntimeTraits["copies"]) =>
+          copyRefusal(sized(copies), "dev", copy, from, to) === undefined;
+
+        expect([taken("grow"), taken("any"), taken("same")]).toStrictEqual([
+          disk && grows,
+          anyDisk,
+          equal && gives(given, to),
+        ]);
       })
   );
 });

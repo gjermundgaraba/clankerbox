@@ -3014,7 +3014,7 @@ layer(NodeServices.layer)((it) => {
               cpu: 16,
               ramMib: 4096,
             })?._tag,
-            copyRefusal(runtime.traits, "dev", old, old) === undefined,
+            copyRefusal(runtime.traits, "dev", "fork", old, old) === undefined,
           ],
         }).toStrictEqual({
           ramMib: [true, false],
@@ -3029,6 +3029,25 @@ layer(NodeServices.layer)((it) => {
           ],
           given32: ["Unsizable", undefined, false],
         });
+
+        expect([
+          resizeRefusal(runtime.traits, "dev", "running", machine, {
+            ...machine,
+            ramMib: machine.ramMib + 65 * 1024,
+          })?.message,
+          resizeRefusal(arm.traits, "dev", "running", machine, {
+            ...machine,
+            cpu: 4,
+          })?._tag,
+          resizeRefusal(arm.traits, "dev", "stopped", machine, {
+            ...machine,
+            cpu: 4,
+          })?._tag,
+        ]).toStrictEqual([
+          "the smolvm runtime grows a running machine's RAM at most 64G above the RAM it booted with, and dev's would grow by 65G: give dev more once it is stopped",
+          "Unsizable",
+          undefined,
+        ]);
 
         const refused = [
           yield* Effect.flip(
@@ -3060,11 +3079,11 @@ layer(NodeServices.layer)((it) => {
         expect(refused.map(failure)).toStrictEqual([
           [
             "Unsizable",
-            "smolvm grows a running machine's RAM in 128M steps, and dev's would grow from 2G to 2100M",
+            "the smolvm runtime grows a running machine's RAM in 128M steps, and dev's would grow from 2G to 2100M",
           ],
           [
             "Unsizable",
-            "smolvm grows a running machine's vCPUs only on x86_64, and this host is arm64: give dev more vCPUs once it is stopped",
+            "the smolvm runtime grows no running machine's vCPUs on this host, and dev has 2 vCPUs: give dev more once it is stopped",
           ],
         ]);
         expect(spawner.calls).toHaveLength(before);

@@ -32,6 +32,7 @@ export interface Spec {
 
 export const copied = (
   name: string,
+  copy: "fork" | "restore",
   from: Spec,
   sizing: Sizing | undefined,
   traits: RuntimeTraits
@@ -42,7 +43,7 @@ export const copied = (
     ...sizedBy(from, sizing),
   };
 
-  const refusal = copyRefusal(traits, name, from, spec);
+  const refusal = copyRefusal(traits, name, copy, from, spec);
 
   return refusal === undefined ? Effect.succeed(spec) : Effect.fail(refusal);
 };
@@ -114,7 +115,7 @@ export const cloned = (
           message: `machine ${name} takes at least build ${build}'s ${formatSizes(from)}`,
         })
       )
-    : copied(name, from, sizing, traits);
+    : copied(name, "restore", from, sizing, traits);
 };
 
 export const refusedBySource = (
@@ -143,7 +144,13 @@ export const refusedBySource = (
           });
     }
 
-    return yield* copied(found.name, from.value, found, traits).pipe(
+    return yield* copied(
+      found.name,
+      source.kind === "machine" ? "fork" : "restore",
+      from.value,
+      found,
+      traits
+    ).pipe(
       Effect.match({
         onFailure: (refusal) => refusal,
         onSuccess: () => undefined,

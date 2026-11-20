@@ -19,7 +19,18 @@ const mostCpu = 16;
 // https://github.com/smol-machines/libkrun/blob/9df62257098acb5a3cd4f6807cf84f09e1b13323/src/libkrun/src/lib.rs#L2671
 const mostRamMib = 2 ** 32 - 1;
 
-export const traits: RuntimeTraits = {
+// https://github.com/smol-machines/smolvm/blob/v1.34.1/src/agent/live_resize.rs#L368-L381
+export const ramStepMib = 128;
+
+// https://github.com/smol-machines/libkrun/blob/9df62257098acb5a3cd4f6807cf84f09e1b13323/src/vmm/src/builder.rs#L3966-L3980
+export const ramGrowthMib = 64 * 1024;
+
+/**
+ * smolvm's traits on a host of `arch`, as Node names it: a running machine grows its vCPUs live
+ * only on x86_64, as smolvm's live CPU growth takes no other Linux.
+ * https://github.com/smol-machines/smolvm/blob/v1.34.1/src/agent/live_resize.rs#L392-L402
+ */
+export const traits = (arch: string): RuntimeTraits => ({
   runtime: RuntimeName.make("smolvm"),
   images: "references",
   checkpoint: "ram",
@@ -27,10 +38,14 @@ export const traits: RuntimeTraits = {
   pause: "saves",
   stop: "resumes",
   copies: "grow",
-  resize: { running: "grow", stopped: "any" },
+  resize: {
+    running: "grow",
+    stopped: "any",
+    live: { ramStepMib, ramGrowthMib, cpu: arch === "x64" },
+  },
   sizes: { _tag: "free" },
   limits: {
     least: { ramMib: leastRamMib },
     most: { cpu: mostCpu, ramMib: mostRamMib },
   },
-};
+});

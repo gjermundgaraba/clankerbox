@@ -760,6 +760,46 @@ describe("the boat runtime over fake boat", () => {
   );
 
   it.live(
+    "a fork goes down a type its source's data fits, and one it doesn't fit is Unsizable at no start, its source left as it was",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          const source = yield* made(runtime, "dev");
+
+          yield* runtime.stop(source);
+          yield* runtime.resize(source, types.large, false);
+
+          const forkAt = (name: string) =>
+            runtime.make(
+              { name, instance: instanceOf(name), ...types.small },
+              { _tag: "machine", machine: source },
+              10_022
+            );
+
+          const fitting = yield* forkAt("fits");
+
+          expect(yield* runtime.sizes({ ...source, ...fitting })).toStrictEqual(
+            types.small
+          );
+
+          yield* boat.fill(source.handle, 80);
+
+          const from = boat.starts();
+          const failed = yield* Effect.flip(forkAt("unfit"));
+
+          expect(failed).toMatchObject({ _tag: "Unsizable" });
+          expect(failed.message).toContain("boat's small type");
+          expect(boat.starts() - from).toBe(0);
+          expect(boat.sandboxes.get(source.handle)).toMatchObject({
+            type: "large",
+            running: false,
+          });
+        })
+      ),
+    30_000
+  );
+
+  it.live(
     "a resize whose answer was lost finishes from what boat holds, and leaves the machine stopped at its new type",
     () =>
       onBoat(({ boat, runtime }) =>

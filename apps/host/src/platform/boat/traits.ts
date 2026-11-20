@@ -7,6 +7,13 @@ import type { BoatType } from "./api.ts";
 
 const gib = 1024;
 
+/**
+ * Each type's disk as the guest's block device reads it. boat's own figures, 51, 51, 111 and 251
+ * GB, are the room it leaves the user's own files, without the system's, so the two differ and
+ * neither decides a resize or a fork to a smaller type: boat refuses `type_too_small` where the
+ * machine's data doesn't fit.
+ * https://docs.boat.dev/machines
+ */
 export const types: Readonly<Record<BoatType, Sizes>> = {
   small: { cpu: 2, ramMib: 4 * gib, diskGib: 80 },
   default: { cpu: 4, ramMib: 8 * gib, diskGib: 80 },

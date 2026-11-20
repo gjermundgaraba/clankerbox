@@ -871,7 +871,7 @@ export const make = (
         const from = yield* madeMachine(store, id);
 
         const info = yield* answering(hosts, from.host);
-        const spec = yield* copied(name, from, sizing, info.traits);
+        const spec = yield* copied(name, "fork", from, sizing, info.traits);
 
         const refusal =
           unjoinedCopy(info, from, `machine ${id}`) ??
@@ -911,7 +911,10 @@ export const make = (
 
         return yield* copy(
           name,
-          { spec: yield* copied(name, record, sizing, info.traits), labels },
+          {
+            spec: yield* copied(name, "restore", record, sizing, info.traits),
+            labels,
+          },
           info,
           {
             host: record.host,

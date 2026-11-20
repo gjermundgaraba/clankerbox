@@ -22,6 +22,12 @@ const Bounds = Schema.Struct({
 
 type Bounds = typeof Bounds.Type;
 
+const Live = Schema.Struct({
+  ramStepMib: Schema.optionalKey(Size),
+  ramGrowthMib: Schema.optionalKey(Size),
+  cpu: Schema.Boolean,
+});
+
 /**
  * What every machine of a runtime does where runtimes differ, declared once in the runtime's own
  * folder on its host, and read from the host as it answers. A client sees only a runtime's name;
@@ -39,7 +45,11 @@ type Bounds = typeof Bounds.Type;
  * - `copies`: a fork's or restore's vCPUs and RAM against its source's: `grow`, the source's or
  *   larger; `any`; or `same`, the source's sizes alone, its disk's included.
  * - `resize`: what a running and what a stopped machine take of a resize of vCPUs and RAM: `grow`,
- *   only larger ones; `any`; or `none`, which refuses a machine in that state.
+ *   only larger ones; `any`; or `none`, which refuses a machine in that state. A runtime that grows
+ *   a running machine, live, declares in `live` what that grow takes: its RAM only in steps of
+ *   `ramStepMib` from the RAM it booted with, at most `ramGrowthMib` above that RAM, and its vCPUs
+ *   only where `cpu`. A grow of RAM past `ramGrowthMib` in one resize is refused up front; the
+ *   runtime refuses the rest, as only it holds the RAM the machine booted with, and may give less.
  * - `sizes`: `free`, any sizes, or `classes`, named sizes a machine's vCPUs, RAM and disk must
  *   together equal one of.
  * - `limits`: what the runtime gives a machine of each size it caps: at `least` and at `most` that,
@@ -53,7 +63,11 @@ export const RuntimeTraits = Schema.Struct({
   pause: Schema.Literals(["saves", "stops"]),
   stop: Schema.Literals(["resumes", "discards"]),
   copies: Schema.Literals(["grow", "any", "same"]),
-  resize: Schema.Struct({ running: Growth, stopped: Growth }),
+  resize: Schema.Struct({
+    running: Growth,
+    stopped: Growth,
+    live: Schema.optionalKey(Live),
+  }),
   sizes: Schema.Union([
     Schema.TaggedStruct("free", {}),
     Schema.TaggedStruct("classes", {
@@ -174,6 +188,42 @@ const resizedStates = ({ resize }: RuntimeTraits): string => {
 };
 
 /**
+ * Why a runtime refuses to grow running machine `name` from `from` to `to` live, none where its
+ * `live` takes it: RAM off its steps, past its growth in one resize, or vCPUs where it grows none.
+ */
+export const liveRefusal = (
+  { runtime, resize: { live } }: RuntimeTraits,
+  name: string,
+  from: Sizes,
+  to: Sizes
+): Unsizable | undefined => {
+  if (live === undefined) {
+    return undefined;
+  }
+
+  const grown = to.ramMib - from.ramMib;
+  const stopFirst = `: give ${name} more once it is stopped`;
+
+  if (live.ramStepMib !== undefined && grown % live.ramStepMib !== 0) {
+    return new Unsizable({
+      message: `the ${runtime} runtime grows a running machine's RAM in ${formatMib(live.ramStepMib)} steps, and ${name}'s would grow from ${formatMib(from.ramMib)} to ${formatMib(to.ramMib)}`,
+    });
+  }
+
+  if (live.ramGrowthMib !== undefined && grown > live.ramGrowthMib) {
+    return new Unsizable({
+      message: `the ${runtime} runtime grows a running machine's RAM at most ${formatMib(live.ramGrowthMib)} above the RAM it booted with, and ${name}'s would grow by ${formatMib(grown)}${stopFirst}`,
+    });
+  }
+
+  return !live.cpu && to.cpu > from.cpu
+    ? new Unsizable({
+        message: `the ${runtime} runtime grows no running machine's vCPUs on this host, and ${name} has ${formatCpu(from.cpu)}${stopFirst}`,
+      })
+    : undefined;
+};
+
+/**
  * Why a runtime refuses a resize of machine `name` from `from` to `to`, none where it takes it: a
  * disk that would shrink, but where the runtime's `classes` each give their own disk, which its
  * provider takes where the machine's data fits, and sizes it doesn't give; where the machine's
@@ -220,17 +270,24 @@ export const resizeRefusal = (
     });
   }
 
-  return fitted(traits, to) ? undefined : unfitted;
+  if (!fitted(traits, to)) {
+    return unfitted;
+  }
+
+  return state === "running" ? liveRefusal(traits, name, from, to) : undefined;
 };
 
 /**
- * Why a runtime of `traits` refuses a fork or restore `name` of a source sized `from` at `to`,
- * none where it takes it: it gives `to`, a disk only grows, a runtime whose copies `grow` keeps the
- * vCPUs and RAM it holds, and one whose copies are the source's `same` takes no other sizes.
+ * Why a runtime of `traits` refuses a `fork` or `restore` `name` of a source sized `from` at `to`,
+ * none where it takes it: it gives `to`, a disk only grows, but in a fork on a runtime of size
+ * `classes`, each giving its own disk, which its provider takes where the source's data fits, a
+ * runtime whose copies `grow` keeps the vCPUs and RAM it holds, and one whose copies are the
+ * source's `same` takes no other sizes.
  */
 export const copyRefusal = (
   traits: RuntimeTraits,
   name: string,
+  copy: "fork" | "restore",
   from: Sizes,
   to: Sizes
 ): Unsizable | undefined => {
@@ -262,7 +319,10 @@ export const copyRefusal = (
       }
 
       case "any": {
-        return to.diskGib >= from.diskGib ? undefined : shrunkDisk;
+        return to.diskGib >= from.diskGib ||
+          (copy === "fork" && traits.sizes._tag === "classes")
+          ? undefined
+          : shrunkDisk;
       }
     }
   })();
