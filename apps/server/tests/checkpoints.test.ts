@@ -299,7 +299,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect([error._tag, error.message]).toStrictEqual([
           "WrongState",
-          "machine dev is stopped, and its host copies a machine only running: start it, then fork it",
+          "machine dev is stopped, and its host copies a machine only running, as it copies only memory: start it, then fork it",
         ]);
         expect(host.fake.machines.has("copy")).toBe(false);
         expect(callsTo(host, "fork")).toStrictEqual([]);
@@ -500,7 +500,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect([error._tag, error.message]).toStrictEqual([
           "WrongState",
-          "machine dev is stopped, and its host copies a machine only running: start it, then capture it",
+          "machine dev is stopped, and its host copies a machine only running, as it copies only memory: start it, then capture it",
         ]);
         expect(yield* client.listCheckpoints()).toStrictEqual([]);
         expect(callsTo(host, "capture")).toStrictEqual([]);

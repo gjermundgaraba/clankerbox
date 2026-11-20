@@ -454,7 +454,7 @@ describe("the smol cloud runtime on its host", () => {
             instance: "kept-1",
           });
 
-          yield* runtime.pause(dev);
+          yield* fake.pausedByOlderHost(dev.handle);
           yield* runtime.start(dev, new Set([kept]));
 
           expect(
@@ -475,21 +475,21 @@ describe("the smol cloud runtime on its host", () => {
   );
 
   it.live(
-    "starts a paused machine by resuming it, and stops it the same way",
+    "starts a machine an older host paused by resuming it, and stops it the same way",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
           const { runtime, fake } = yield* onHost();
           const dev = yield* made(runtime, "dev");
 
-          yield* runtime.pause(dev);
+          yield* fake.pausedByOlderHost(dev.handle);
           expect(fake.machines.get(dev.handle)?.state).toBe("paused");
 
           yield* runtime.stop(dev);
           expect(fake.machines.get(dev.handle)?.state).toBe("stopped");
 
           yield* runtime.start(dev, new Set());
-          yield* runtime.pause(dev);
+          yield* fake.pausedByOlderHost(dev.handle);
           yield* runtime.start(dev, new Set());
           expect(fake.machines.get(dev.handle)?.state).toBe("started");
           expect(
@@ -509,7 +509,7 @@ describe("the smol cloud runtime on its host", () => {
           const { fake, runtime, failing } = yield* flaky;
           const dev = yield* made(runtime, "dev");
 
-          yield* runtime.pause(dev);
+          yield* fake.pausedByOlderHost(dev.handle);
 
           const [own = ""] = fake.checkpoints.keys();
 
@@ -560,7 +560,7 @@ describe("the smol cloud runtime on its host", () => {
             const dev = yield* made(runtime, `dev-${ending}`);
             const release = yield* fake.faults.holdCaptures;
 
-            yield* runtime.pause(dev);
+            yield* fake.pausedByOlderHost(dev.handle);
 
             const own =
               [...fake.checkpoints.values()].find(
@@ -608,7 +608,7 @@ describe("the smol cloud runtime on its host", () => {
           const release = yield* fake.faults.holdCaptures;
 
           yield* fake.faults.lagCaptures(true);
-          yield* runtime.pause(dev);
+          yield* fake.pausedByOlderHost(dev.handle);
 
           const own =
             [...fake.checkpoints.values()].find(
@@ -2384,7 +2384,6 @@ describe("a smol cloud act or delete whose every answer is lost", () => {
             (runtime: Interface) => runtime.start(dev1, new Set()),
           ],
           ["stop", "started", (runtime: Interface) => runtime.stop(dev1)],
-          ["pause", "started", (runtime: Interface) => runtime.pause(dev1)],
           [
             "delete",
             "stopped",

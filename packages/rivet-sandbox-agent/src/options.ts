@@ -3,9 +3,9 @@ import type { SandboxProvider } from "sandbox-agent";
 
 /**
  * A template whose build runs the Sandbox Agent, as `web` for its current build or `web@3` for
- * that one, a checkpoint of a machine that has it, or a machine to fork. A fork or `ram` restore
- * carries its source's sessions: take it from an idle one, and not a paused one, which can't be
- * forked. `cpu`, `ramMib` and `diskGib`, where given, replace the build's sizes with larger ones,
+ * that one, a checkpoint of a machine that has it, or a machine to fork. A fork or restore boots
+ * fresh from its source's disk, so it carries none of the source's sessions, which the SDK replays
+ * into new ones. `cpu`, `ramMib` and `diskGib`, where given, replace the build's sizes with larger ones,
  * as `clankerbox create --template` does, or the copy's, as `restoreMachine` and `forkMachine`
  * take them.
  */

@@ -118,6 +118,10 @@ const third = "fedcba98".repeat(4);
 
 const fourth = "89abcdef".repeat(4);
 
+const fifth = "13579bdf".repeat(4);
+
+const sixth = "02468ace".repeat(4);
+
 const outputOf = (execution: Execution) =>
   Stream.mkString(Stream.decodeText(execution.output));
 
@@ -365,11 +369,13 @@ export const runtimeContract = (subject: Subject): void => {
     const guestRuns = subject.runsNoGuest === undefined;
 
     it.live.skipIf(!guestRuns)(
-      `forks a running or stopped machine into a machine booted from a copy of its disk, leaving the source as it was${guestRuns ? "" : `: ${subject.runsNoGuest}`}`,
+      `forks and restores a machine in each state its traits copy into a machine booted from a copy of its disk, holding none of its memory, leaving the source as it was${guestRuns ? "" : `: ${subject.runsNoGuest}`}`,
       () =>
         withFixture(({ runtime }) =>
           Effect.gen(function* () {
-            if (runtime.traits.captureFrom !== "either") {
+            const { captureFrom } = runtime.traits;
+
+            if (captureFrom === "stopped") {
               return;
             }
 
@@ -385,20 +391,30 @@ export const runtimeContract = (subject: Subject): void => {
               ].join("\n")
             );
 
-            const fork = sized("fork", third);
+            const copyOf = (name: string, instance: string, origin: Origin) =>
+              Effect.map(
+                runtime.make(sized(name, instance), origin, nextFree()),
+                ({ handle }) => ({ ...sized(name, instance), handle })
+              );
 
-            const running = yield* runtime.make(
-              fork,
-              { _tag: "machine", machine: source },
-              nextFree()
-            );
+            const forked = yield* copyOf("fork", third, {
+              _tag: "machine",
+              machine: source,
+            });
 
-            const forked = { ...fork, handle: running.handle };
+            const snap = { name: "snap", instance: fifth };
+            const handle = yield* runtime.capture(source, snap);
+
+            const restored = yield* copyOf("restored", sixth, {
+              _tag: "checkpoint",
+              checkpoint: { ...snap, ...subject.sizes, handle },
+            });
 
             const kept = {
               source: yield* stateOf(runtime, source),
               fork: yield* stateOf(runtime, forked),
               copied: yield* marks(runtime, forked),
+              restored: yield* marks(runtime, restored),
             };
 
             yield* shell(
@@ -408,41 +424,55 @@ export const runtimeContract = (subject: Subject): void => {
             );
 
             const sourceAfter = yield* marks(runtime, source);
+            const copies = [forked, restored];
 
-            yield* runtime.stop(source);
+            const stoppedHalf =
+              captureFrom === "either"
+                ? yield* Effect.gen(function* () {
+                    yield* runtime.stop(source);
 
-            const later = sized("later", fourth);
+                    const later = yield* copyOf("later", fourth, {
+                      _tag: "machine",
+                      machine: source,
+                    });
 
-            const fromStopped = yield* runtime.make(
-              later,
-              { _tag: "machine", machine: source },
-              nextFree()
-            );
+                    copies.push(later);
 
-            const laterForked = { ...later, handle: fromStopped.handle };
+                    return {
+                      stoppedSource: yield* stateOf(runtime, source),
+                      laterFork: yield* stateOf(runtime, later),
+                      laterCopied: yield* marks(runtime, later),
+                    };
+                  })
+                : {};
 
             expect({
               wrote,
               ...kept,
               sourceAfter,
-              stoppedSource: yield* stateOf(runtime, source),
-              laterFork: yield* stateOf(runtime, laterForked),
-              laterCopied: yield* marks(runtime, laterForked),
+              ...stoppedHalf,
             }).toStrictEqual({
               wrote: "0: ",
               source: "running",
               fork: "running",
               copied: "0: disk,,",
+              restored: "0: disk,,",
               sourceAfter: "0: disk,memory,",
-              stoppedSource: "stopped",
-              laterFork: "running",
-              laterCopied: "0: disk,,",
+              ...(captureFrom === "either"
+                ? {
+                    stoppedSource: "stopped",
+                    laterFork: "running",
+                    laterCopied: "0: disk,,",
+                  }
+                : {}),
             });
 
-            for (const copy of [forked, laterForked]) {
+            for (const copy of copies) {
               yield* runtime.stop(copy);
               yield* runtime.delete(copy, new Set());
             }
+
+            yield* runtime.deleteCheckpoint({ ...snap, handle });
           })
         )
     );

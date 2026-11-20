@@ -222,7 +222,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(paused).toMatchObject({ code: 0, stderr: "" });
         expect(yield* client.getMachine({ id: orb })).toMatchObject({
-          state: "paused",
+          state: "stopped",
         });
         expect(yield* client.getCheckpoint({ id: "snap-1" })).toMatchObject({
           machine: orb,

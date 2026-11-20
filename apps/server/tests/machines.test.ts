@@ -3639,12 +3639,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ],
           [
             "WrongState",
-            "machine dev is stopped, and its host copies a machine only running: start it, then fork it",
+            "machine dev is stopped, and its host copies a machine only running, as it copies only memory: start it, then fork it",
             undefined,
           ],
           [
             "WrongState",
-            "machine dev is stopped, and its host copies a machine only running: start it, then capture it",
+            "machine dev is stopped, and its host copies a machine only running, as it copies only memory: start it, then capture it",
             undefined,
           ],
         ]);

@@ -83,7 +83,7 @@ const unstageTimeout = Duration.seconds(30);
 
 const poll = Duration.seconds(1);
 
-type Goal = "running" | "stopped" | "paused" | "gone";
+type Goal = "running" | "stopped" | "gone";
 
 type Move = Api.Verb | "delete" | "wait" | "done" | "stuck" | "missing";
 
@@ -105,15 +105,6 @@ const moves: Readonly<Record<Goal, Readonly<Record<string, Move>>>> = {
     paused: "resume",
     missing: "done",
     deleted: "done",
-  },
-  paused: {
-    started: "pause",
-    running: "pause",
-    stopped: "done",
-    created: "done",
-    paused: "done",
-    missing: "missing",
-    deleted: "missing",
   },
   gone: { missing: "done", deleted: "done" },
 };
@@ -974,7 +965,14 @@ export const make = (
             Effect.catchIf(fromApi, failed(`make ${machine.name}`))
           );
 
-          yield* toward(targetOf(machine, handle), "running");
+          const made = targetOf(machine, handle);
+
+          yield* toward(made, "running");
+
+          if (origin._tag !== "image") {
+            yield* toward(made, "stopped");
+            yield* toward(made, "running");
+          }
 
           const found = yield* Effect.mapError(
             record(handle),
@@ -1004,8 +1002,9 @@ export const make = (
           (error) => new Internal({ message: error.message })
         ),
       pause: (machine) =>
-        Effect.catchTag(settled(machine, "paused"), "Capacity", (error) =>
-          Effect.fail(new Internal({ message: error.message }))
+        Effect.mapError(
+          settled(machine, "stopped"),
+          (error) => new Internal({ message: error.message })
         ),
       delete: (machine, keep) =>
         toward(machine, "gone", heldByFork(machine)).pipe(

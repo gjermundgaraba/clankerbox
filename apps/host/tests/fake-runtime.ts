@@ -146,6 +146,7 @@ export const presets = {
       runtime: RuntimeName.make("saving"),
       checkpoint: "ram",
       captureFrom: "running",
+      whyRunning: "it copies only memory",
       pause: "saves",
       copies: "grow",
     },

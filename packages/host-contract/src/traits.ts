@@ -39,6 +39,8 @@ const Live = Schema.Struct({
  * - `captureFrom`: the state, `running` or `stopped`, a machine is captured or forked in, or
  *   `either` of them, a copy of its disk; one in any other state fails the capture or the fork, and
  *   a template build stops its builder before its copy but where it is `running`.
+ * - `whyRunning`: where `captureFrom` is `running`, why the runtime copies no stopped machine,
+ *   which a refusal of one gives, so the caller learns more than the state it should be in.
  * - `pause`: `saves` keeps the machine's RAM; `stops` stops it.
  * - `stop`: what a stop does to a paused machine: `resumes` it first, to end its processes, which
  *   takes room as a start does and the runtime pin it booted under; or `discards` its saved state.
@@ -62,6 +64,7 @@ export const RuntimeTraits = Schema.Struct({
   images: Schema.Literals(["named", "references"]),
   checkpoint: CheckpointKind,
   captureFrom: Schema.Literals(["running", "stopped", "either"]),
+  whyRunning: Schema.optionalKey(Schema.String),
   pause: Schema.Literals(["saves", "stops"]),
   stop: Schema.Literals(["resumes", "discards"]),
   copies: Schema.Literals(["grow", "any", "same"]),

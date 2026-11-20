@@ -90,6 +90,8 @@ export interface FakeSmolCloud {
     name: string,
     id?: string | number
   ) => Effect.Effect<void>;
+  /** Pauses a machine as a host before 0.42 did, keeping its memory. */
+  readonly pausedByOlderHost: (id: string) => Effect.Effect<void>;
   readonly calls: readonly string[];
   readonly machines: ReadonlyMap<string, FakeMachine>;
   readonly checkpoints: ReadonlyMap<string, FakeCheckpoint>;
@@ -1106,6 +1108,14 @@ export const fakeSmolCloud = (
       malformedMachine: (name: string, id: string | number = idOf("mach")) =>
         Effect.sync(() => {
           malformed.push({ id, name, state: null });
+        }),
+      pausedByOlderHost: (id: string) =>
+        Effect.promise(async () => {
+          const machine = machines.get(id);
+
+          if (machine !== undefined) {
+            await act(machine, "pause");
+          }
         }),
       calls,
       machines,

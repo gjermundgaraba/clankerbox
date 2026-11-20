@@ -69,7 +69,7 @@ export const restingAs = (
 export const uncopiable = (
   source: MachineRow,
   seen: MachineState,
-  { captureFrom }: RuntimeTraits,
+  { captureFrom, whyRunning }: RuntimeTraits,
   action: "fork" | "capture"
 ): WrongState | undefined => {
   const resting = restingAs(source, seen);
@@ -85,7 +85,7 @@ export const uncopiable = (
   const fix =
     captureFrom === "either"
       ? "a running or stopped machine: start or stop it"
-      : `a machine only ${captureFrom}: ${captureFrom === "stopped" ? "stop" : "start"} it`;
+      : `a machine only ${captureFrom}${captureFrom === "running" && whyRunning !== undefined ? `, as ${whyRunning}` : ""}: ${captureFrom === "stopped" ? "stop" : "start"} it`;
 
   return new WrongState({
     message: `machine ${source.name} is ${seen}, and its host copies ${fix}, then ${action} it`,

@@ -483,5 +483,5 @@ export const stubHost = (
     })
   );
 
-/** A plane whose one host keeps a paused machine's RAM, as smol cloud does. */
+/** A plane whose one host keeps a paused machine's RAM. */
 export const saving = { hosts: [{ id: "smolvm", as: "saving" as const }] };
