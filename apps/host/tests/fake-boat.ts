@@ -560,6 +560,7 @@ export const fakeBoat = (
     const losing = new Map<BoatCall, number>();
     const pageSize = options.pageSize ?? 200;
     let savingLate = false;
+    let postedSavesLast = Duration.zero;
     let listsLagging = 0;
     let failingNext = false;
     let cancellingNext = false;
@@ -1134,6 +1135,14 @@ export const fakeBoat = (
         return notFound(`saved snapshot ${name}`);
       }
 
+      if (settled(snapshot).status === "saving") {
+        return refused(
+          409,
+          "snapshot_not_ready",
+          `"${name}" is still saving. Wait for it to finish.`
+        );
+      }
+
       snapshots.delete(name);
       await rm(snapshot.root, { recursive: true, force: true });
 
@@ -1249,7 +1258,8 @@ export const fakeBoat = (
         return method === "POST"
           ? await withBody(
               saveBody(raw),
-              async (body) => await save(body.sandboxId, body.name)
+              async (body) =>
+                await save(body.sandboxId, body.name, postedSavesLast)
             )
           : savedList(url);
       }
@@ -1647,6 +1657,10 @@ export const fakeBoat = (
       landSaveDuringDelete: Effect.sync(() => {
         savingLate = true;
       }),
+      savesLast: (lasts) =>
+        Effect.sync(() => {
+          postedSavesLast = Duration.fromInputUnsafe(lasts);
+        }),
       saveAs: (sandboxId, name, lasts) =>
         Effect.promise(async () => {
           await save(
@@ -1805,6 +1819,8 @@ export interface FakeBoat {
     name: string,
     sourceSandboxId?: string | number
   ) => Effect.Effect<void>;
+  /** Each save a POST asks from now on runs `lasts`. */
+  readonly savesLast: (lasts: Duration.Input) => Effect.Effect<void>;
   /** Saves `name` as a POST does, the save running `lasts`, none by default. */
   readonly saveAs: (
     sandboxId: string,

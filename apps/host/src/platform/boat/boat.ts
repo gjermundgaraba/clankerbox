@@ -33,6 +33,7 @@ import {
   missing,
   missingCheckpoint,
   Runtime,
+  timeoutFail,
   unshared,
 } from "../../runtime.ts";
 import type {
@@ -531,16 +532,35 @@ export const make = (
     // https://docs.boat.dev/snapshots/resume-and-fork
     // A create from a saved snapshot that is still saving is answered with a sandbox, seen live on
     // 2026-11-21, so a save is waited out to `ready` before anything is made from it.
-    const savedAs = (machine: Target, name: string, what: string) =>
+    //
+    // Only the save's request runs whole, as a provider call: the wait for its snapshot after it
+    // is reads, which a later request cuts as on any runtime. A save cut so goes on at boat, under
+    // a name made from the instance, so a `fork` asked again finds it and waits for it, where
+    // `reuses` says a snapshot already saved from the machine under that name stands for a new one.
+    const savedAs = (
+      machine: Target,
+      name: string,
+      what: string,
+      reuses = false
+    ) =>
       Effect.gen(function* () {
-        yield* api.save(machine.handle, name).pipe(
-          Effect.catchTag("Unanswered", (lost) =>
-            Effect.flatMap(api.saved(name), (found) =>
-              found === undefined ? Effect.fail(lost) : Effect.void
-            )
-          ),
-          Effect.mapError(failure(`${what} ${machine.name}`))
-        );
+        const before = reuses
+          ? yield* api
+              .saved(name)
+              .pipe(Effect.mapError(internal(`couldn't read snapshot ${name}`)))
+          : undefined;
+
+        if (before?.sourceSandboxId !== machine.handle) {
+          yield* api.save(machine.handle, name).pipe(
+            Effect.catchTag("Unanswered", (lost) =>
+              Effect.flatMap(api.saved(name), (found) =>
+                found === undefined ? Effect.fail(lost) : Effect.void
+              )
+            ),
+            Effect.mapError(failure(`${what} ${machine.name}`)),
+            bounded("boat", `${what} ${machine.name}'s save`)
+          );
+        }
 
         const snapshot = yield* untilRest(
           api
@@ -548,6 +568,14 @@ export const make = (
             .pipe(Effect.mapError(internal(`couldn't read snapshot ${name}`))),
           (found) => found === undefined || settled.has(found.status),
           pollEvery
+        ).pipe(
+          timeoutFail(
+            savingWithin,
+            () =>
+              new Internal({
+                message: `boat's save of ${machine.name} as ${name} didn't end within ${Duration.format(savingWithin)}; it goes on at boat, and ${machine.name}'s next start or delete deletes it`,
+              })
+          )
         );
 
         if (snapshot?.status !== "ready") {
@@ -757,22 +785,35 @@ export const make = (
       });
     }).pipe(Effect.mapError(internal("couldn't list what this host marked")));
 
+    /**
+     * Unsaves each snapshot of `machine` that `keep` doesn't name, and answers those boat still
+     * saves, which it refuses to delete until they are saved: seen live on 2026-11-21 as
+     * `snapshot_not_ready`, https://docs.boat.dev/openapi/boat-v1.yaml (`SavedSnapshot.status`).
+     */
     const prune = (machine: Target, keep: ReadonlySet<Handle>) =>
       Effect.gen(function* () {
         const saved = yield* snapshots.pipe(
           Effect.mapError(internal("couldn't list saved snapshots"))
         );
 
+        const saving: Handle[] = [];
+
         yield* Effect.forEach(
           heldBy(saved, machine.handle).filter((handle) => !keep.has(handle)),
           (handle) =>
-            api
-              .unsave(handle)
-              .pipe(
-                Effect.mapError(internal(`couldn't delete snapshot ${handle}`))
+            api.unsave(handle).pipe(
+              Effect.catchIf(
+                (error) =>
+                  error._tag === "Refused" &&
+                  error.code === "snapshot_not_ready",
+                () => Effect.sync(() => saving.push(handle))
               ),
+              Effect.mapError(internal(`couldn't delete snapshot ${handle}`))
+            ),
           { discard: true }
         );
+
+        return saving;
       });
 
     const listed = (machine: Identity) =>
@@ -1027,7 +1068,7 @@ export const make = (
             const source = origin.machine;
 
             yield* Effect.gen(function* () {
-              const snapshot = yield* savedAs(source, through, "fork");
+              const snapshot = yield* savedAs(source, through, "fork", true);
 
               yield* fits(source, snapshot, type, machine.name).pipe(
                 Effect.tapError(() =>
@@ -1042,13 +1083,7 @@ export const make = (
                     )
                 )
               );
-            }).pipe(
-              bounded(
-                "boat",
-                `make ${machine.name}'s save of ${source.name}`,
-                savingWithin
-              )
-            );
+            });
           }
 
           return yield* Effect.gen(function* () {
@@ -1156,6 +1191,13 @@ export const make = (
           });
           yield* ready(machine, "start");
           yield* prune(machine, keep).pipe(
+            Effect.flatMap((saving) =>
+              saving.length === 0
+                ? Effect.void
+                : Effect.logInfo(
+                    `start ${machine.name}: boat is still saving ${saving.join(", ")}, which it deletes only once saved, so the machine's next start or delete deletes it`
+                  )
+            ),
             Effect.catch((error) =>
               Effect.logWarning(
                 `${error.message}, so the machine's next start or delete prunes it`
@@ -1167,14 +1209,60 @@ export const make = (
         bounded("boat", `stop ${machine.name}`)(stopped(machine)),
       delete: (machine, keep) =>
         Effect.gen(function* () {
-          yield* prune(machine, keep);
-          yield* api
-            .remove(machine.handle)
-            .pipe(Effect.mapError(internal(`couldn't delete ${machine.name}`)));
-          yield* toward(machine, "gone");
-          yield* prune(machine, keep);
+          const saving = yield* Effect.gen(function* () {
+            yield* prune(machine, keep);
+            yield* api
+              .remove(machine.handle)
+              .pipe(
+                Effect.mapError(internal(`couldn't delete ${machine.name}`))
+              );
+            yield* toward(machine, "gone");
+
+            return yield* prune(machine, keep);
+          }).pipe(bounded("boat", `delete ${machine.name}`));
+
           pins.delete(machine.handle);
-        }).pipe(bounded("boat", `delete ${machine.name}`)),
+
+          if (saving.length === 0) {
+            return;
+          }
+
+          yield* Effect.logInfo(
+            `delete ${machine.name}: boat is still saving ${saving.join(", ")} from it, and deletes a snapshot only once it is saved, so the delete waits for that save`
+          );
+          yield* Effect.forEach(
+            saving,
+            (name) =>
+              untilRest(
+                api
+                  .saved(name)
+                  .pipe(
+                    Effect.mapError(internal(`couldn't read snapshot ${name}`))
+                  ),
+                (found) => found === undefined || settled.has(found.status),
+                pollEvery
+              ),
+            { discard: true }
+          ).pipe(
+            timeoutFail(
+              savingWithin,
+              () =>
+                new Internal({
+                  message: `delete ${machine.name}: boat's save of ${saving.join(", ")} didn't end within ${Duration.format(savingWithin)}, so the snapshot is left until this delete runs again`,
+                })
+            )
+          );
+
+          const left = yield* prune(machine, keep).pipe(
+            bounded("boat", `delete ${machine.name}'s snapshots`)
+          );
+
+          if (left.length > 0) {
+            return yield* new Internal({
+              message: `delete ${machine.name}: boat still holds ${left.join(", ")} as saving after its save ended`,
+            });
+          }
+        }),
       capture: (machine, checkpoint) =>
         Effect.gen(function* () {
           const name = snapshotName(checkpoint);
@@ -1183,7 +1271,7 @@ export const make = (
           yield* savedAs(machine, name, "capture");
 
           return Handle.make(name);
-        }).pipe(bounded("boat", `capture ${machine.name}`, savingWithin)),
+        }),
       resize: (machine, to) =>
         Effect.gen(function* () {
           const type = yield* typeFor(sizedBy(machine, to), machine.name);

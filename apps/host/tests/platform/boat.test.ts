@@ -21,6 +21,7 @@ import {
   Duration,
   Effect,
   Exit,
+  Fiber,
   Layer,
   Logger,
   Option,
@@ -808,6 +809,84 @@ describe("the boat runtime over fake boat", () => {
             type: "large",
             running: false,
           });
+        })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a fork of a running machine cut while boat saves ends at once, and its source's delete waits for the save it left, then deletes it",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          const source = yield* made(runtime, "dev");
+
+          yield* boat.savesLast("3 seconds");
+
+          const forking = yield* Effect.forkChild(
+            runtime.make(
+              { name: "fork", instance: instanceOf("fork"), ...types.small },
+              { _tag: "machine", machine: source },
+              10_022
+            )
+          );
+
+          yield* Effect.sleep("1 second");
+
+          const cutAt = Date.now();
+
+          yield* Fiber.interrupt(forking);
+
+          expect(Date.now() - cutAt).toBeLessThan(1000);
+
+          const deletedAt = Date.now();
+
+          yield* runtime.delete(source, new Set());
+
+          expect(Date.now() - deletedAt).toBeGreaterThanOrEqual(1500);
+          expect([...boat.snapshots.keys()]).toStrictEqual([]);
+          expect(boat.sandboxes.size).toBe(0);
+        })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a fork of a running machine cut while boat saves, and asked again, waits for the save already running rather than saving afresh",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          const source = yield* made(runtime, "dev");
+
+          const machine = {
+            name: "fork",
+            instance: instanceOf("fork"),
+            ...types.small,
+          };
+
+          yield* boat.savesLast("3 seconds");
+
+          const forking = yield* Effect.forkChild(
+            runtime.make(machine, { _tag: "machine", machine: source }, 10_022)
+          );
+
+          yield* Effect.sleep("1 second");
+          yield* Fiber.interrupt(forking);
+
+          const from = boat.starts();
+
+          const fork = yield* runtime.make(
+            machine,
+            { _tag: "machine", machine: source },
+            10_022
+          );
+
+          expect(posts(boat, "/saved-snapshots")).toStrictEqual([
+            "POST /saved-snapshots 202",
+          ]);
+          expect(boat.starts() - from).toBe(1);
+          expect(boat.sandboxes.get(fork.handle)?.running).toBe(true);
+          expect([...boat.snapshots.keys()]).toStrictEqual([]);
         })
       ),
     30_000
