@@ -246,16 +246,18 @@ const listedWithin = Duration.seconds(5);
 
 /**
  * The bound on boat's save of a sandbox, a fork's or a capture's, which is longer than a step's
- * 10 minutes: boat's fresh save of a running sandbox runs minutes, and measured live on 2026-11-21
- * took 694 s and 906 s for a large sandbox holding 90 GiB of random data, against 177 s and 332 s
- * for 100 GiB of sparse file. An xlarge holds up to 251 GB, so this allows it the same rate with room to spare.
+ * 10 minutes: boat's fresh save of a running sandbox runs minutes, and varies by more than three
+ * times on the same data. Measured live on 2026-11-21, a large sandbox holding 90 GiB of random data
+ * saved in 694 s, 906 s and 2807 s, and 100 GiB of sparse file in 177 s and 332 s. Two hours stands
+ * well clear of the slowest; the wait is reads, which hold up no other request, so a longer bound
+ * costs only how late a save that never ends is reported.
  * It is a total cap, not a stall bound, because nothing boat shows moves while a save runs: the
  * saved snapshot reads `saving` throughout, and the sandbox's `updatedAt` and
  * `lastSnapshotAttemptAt` stand still, both seen live through a 15-minute save. A save cut by it
  * leaves its snapshot, which the source's next start or delete deletes.
  * https://docs.boat.dev/openapi/boat-v1.yaml (`SavedSnapshot.status`, `Sandbox.lastSnapshotAttemptAt`)
  */
-const savingWithin = Duration.minutes(45);
+const savingWithin = Duration.hours(2);
 
 const internal =
   (what: string) =>
@@ -567,7 +569,7 @@ export const make = (
             savingWithin,
             () =>
               new Internal({
-                message: `boat's save of ${machine.name} as ${name} didn't end within ${Duration.format(savingWithin)}; it goes on at boat, and ${machine.name}'s next start or delete deletes it`,
+                message: `boat is still saving ${machine.name} as ${name} after ${Duration.format(savingWithin)}, so this ${what} failed though nothing is wrong with the machine: boat's saves of one disk have taken from 11 to 47 minutes. Asking for a ${what} again starts a fresh save, and may succeed. The save left running, ${name}, is billed as a snapshot until ${machine.name}'s next start or delete deletes it, and each ${what} asked again that also runs out leaves another`,
               })
           )
         );
@@ -583,8 +585,11 @@ export const make = (
 
     /**
      * Fails `Unsizable` where the data saved in `snapshot` is more than `type` holds, which boat's
-     * create from a saved snapshot doesn't check, where its `/fork` and resume do. A save whose size
-     * boat doesn't say goes only to a type that holds at least as much as its source's.
+     * create from a saved snapshot doesn't check, where its `/fork` and resume do. Without it boat
+     * makes a silent partial copy: measured live on 2026-11-21, 90 GiB saved and made a small came
+     * up `idle` and healthy, `ls` showing every file at full size, and the files past its disk
+     * failed `Input/output error` on their first read. A save whose size boat doesn't say goes only
+     * to a type that holds at least as much as its source's.
      * https://docs.boat.dev/machines/change-size.md
      */
     const fits = (
