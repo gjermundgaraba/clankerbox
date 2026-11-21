@@ -57,7 +57,7 @@ import {
   scrubNode,
   tailnetTimeout,
 } from "./guest.ts";
-import type { TailnetReport } from "./guest.ts";
+import type { DiskMark, TailnetReport } from "./guest.ts";
 import { Reaches } from "./reach.ts";
 import * as Recheck from "./recheck.ts";
 import {
@@ -66,6 +66,7 @@ import {
   missing,
   missingCheckpoint,
   Runtime,
+  sightingIn,
   stateIn,
   targetOf,
   timeoutFail,
@@ -75,6 +76,7 @@ import type {
   Handle,
   Held,
   Observed,
+  Sighting,
   Origin,
   Sized,
   Target,
@@ -609,15 +611,21 @@ export const make = (
         )
       );
 
-    const readied = (progress: Progress, machine: Target) =>
+    const readied = (
+      progress: Progress,
+      machine: Target,
+      mark: DiskMark | undefined
+    ) =>
       Effect.gen(function* () {
         yield* identify(runtime, machine);
 
-        const hostKey = yield* prepare(runtime, machine);
+        const { hostKey, rolledBack } = yield* prepare(runtime, machine, mark);
 
         progress.outcome = {
           ...progress.outcome,
           ...(hostKey === undefined ? {} : { hostKey }),
+          ...(mark === undefined ? {} : { marked: true }),
+          ...(rolledBack === undefined ? {} : { rolledBack }),
         };
       });
 
@@ -783,7 +791,7 @@ export const make = (
         }
 
         if (source._tag !== "base") {
-          yield* readied(progress, ref);
+          yield* readied(progress, ref, step.mark);
           progress.outcome = { ...progress.outcome, prepared: true };
         }
       });
@@ -837,7 +845,7 @@ export const make = (
                   started
                 );
 
-            yield* readied(progress, machine);
+            yield* readied(progress, machine, step.mark);
           });
         }
 
@@ -1294,19 +1302,19 @@ export const make = (
     const readAlone = (machine: Ref) =>
       Effect.flatMap(found(machine), (handle) =>
         handle === undefined
-          ? Effect.succeed<MachineState>("missing")
+          ? Effect.succeed<Sighting>({ state: "missing" })
           : Effect.map(observed([targetOf(machine, handle)]), (seen) =>
-              stateIn(seen, machine)
+              sightingIn(seen, machine)
             )
       ).pipe(
         inTime(`the ${traits.runtime} runtime's read of ${machine.name}`),
         Effect.catch((error) =>
           Effect.as(
             Effect.logWarning(`read ${machine.name}: ${error.message}`),
-            "unknown" as const
+            { state: "unknown" } satisfies Sighting
           )
         ),
-        Effect.map((state) => [machine.name, state] as const)
+        Effect.map((seen) => [machine.name, seen] as const)
       );
 
     const reading: Interface["read"] = (machines) =>
@@ -1336,7 +1344,7 @@ export const make = (
           return new Map(
             machines.map(({ name }) => [
               name,
-              resolved.get(name) ?? stateIn(seen, { name }),
+              resolved.get(name) ?? sightingIn(seen, { name }),
             ])
           );
         })

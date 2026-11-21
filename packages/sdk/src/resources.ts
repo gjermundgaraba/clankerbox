@@ -211,13 +211,25 @@ export const templateRef = (
  * - `started`: one asked to stay stopped or paused that runs, which the control plane stops again.
  * - `rebooted`: one its runtime reports booted again in place while it ran.
  * - `lost`: one its runtime no longer has, which can only be deleted.
+ * - `rolledBack`: one whose disk a start found not as its last boot left it, by the boot mark its
+ *   host writes there and in `/workspace` at each start: gone back to older files, come back blank,
+ *   or its `/workspace` emptied, as a provider that rebuilds a machine after losing its node does.
+ *   It tells only at that start, after the fact, and prevents nothing; a disk its host never marked,
+ *   as one made before this release until its first start, tells nothing.
  *
- * `at` is the read that found it, so the change came at or before it. `why` is the cause in the
- * runtime's own words, on a `stopped` or `lost` machine whose runtime names one, such as an idle
- * stop or an out-of-memory kill; without it the runtime didn't say.
+ * `at` is the read or the start that found it, so the change came at or before it. `why` is the
+ * cause: on a `stopped` or `lost` machine, in its runtime's own words where it names one, such as
+ * an idle stop or an out-of-memory kill, and without it the runtime didn't say; on a `rolledBack`
+ * one, what its marks found.
  */
 export const Unasked = Schema.Struct({
-  what: Schema.Literals(["stopped", "started", "rebooted", "lost"]),
+  what: Schema.Literals([
+    "stopped",
+    "started",
+    "rebooted",
+    "lost",
+    "rolledBack",
+  ]),
   at: Schema.DateTimeUtcFromString,
   why: Schema.optionalKey(Schema.String),
 }).annotate({ identifier: "Unasked" });

@@ -41,6 +41,8 @@ export interface Outcome {
   readonly hostKey?: string;
   readonly sizes?: Pick<Facts, "cpu" | "ramMib" | "diskGib">;
   readonly prepared?: true;
+  readonly marked?: true;
+  readonly rolledBack?: string;
 }
 
 export type Reach = Pick<Outcome, "handle" | "endpoint">;
@@ -358,6 +360,7 @@ export const machine = setup({
                       ...told(context, event),
                       prepared: event.outcome.prepared === true,
                       boots: 1,
+                      marked: event.outcome.marked === true,
                     },
                   }
                 : {
@@ -415,14 +418,23 @@ export const machine = setup({
                 reported: (args) => {
                   const { context, event } = args;
                   const next = ended("start", { prepared: true })(args);
-                  const booted = context.booting && event.status === "done";
+                  const done = event.status === "done" ? event : undefined;
+                  const why = done?.outcome.rolledBack;
 
                   return {
                     ...next,
                     context: {
                       ...next.context,
                       booting: false,
-                      boots: context.boots + (booted ? 1 : 0),
+                      boots:
+                        context.boots +
+                        (done !== undefined && context.booting ? 1 : 0),
+                      marked: context.marked || done?.outcome.marked === true,
+                      ...(why === undefined || done === undefined
+                        ? {}
+                        : {
+                            unasked: { what: "rolledBack", at: done.at, why },
+                          }),
                     },
                   };
                 },

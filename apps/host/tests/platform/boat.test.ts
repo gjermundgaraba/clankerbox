@@ -43,7 +43,7 @@ import {
 } from "../../src/platform/boat/boat.ts";
 import { types } from "../../src/platform/boat/traits.ts";
 import { SweepEvery } from "../../src/platform/tombstones.ts";
-import { Handle, Runtime } from "../../src/runtime.ts";
+import { Handle, Runtime, sightingIn, stateIn } from "../../src/runtime.ts";
 import type { Interface, RuntimeError, Target } from "../../src/runtime.ts";
 import { fakeBoat } from "../fake-boat.ts";
 import type { FakeBoat, FakeBoatOptions } from "../fake-boat.ts";
@@ -303,7 +303,7 @@ describe("the boat runtime over fake boat", () => {
           const after = hostKeyOf(boat, machine.handle);
 
           expect(after).not.toBe(before);
-          expect(yield* prepare(runtime, machine)).toBe(after);
+          expect((yield* prepare(runtime, machine)).hostKey).toBe(after);
           expect(
             boat.calls.filter((line) => line.includes("/sshkey 200"))
           ).toHaveLength(2);
@@ -507,8 +507,22 @@ describe("the boat runtime over fake boat", () => {
 
           const machine = yield* made(runtime, "dev");
 
+          const unmarked = yield* runtime.observe([machine]);
+
+          yield* boat.reboot(machine.handle, "2026-11-21T00:00:00Z");
+
+          expect([unmarked, yield* runtime.observe([machine])]).toStrictEqual([
+            new Map([[machine.name, { state: "running" }]]),
+            new Map([
+              [
+                machine.name,
+                { state: "running", reboot: "2026-11-21T00:00:00Z" },
+              ],
+            ]),
+          ]);
+
           yield* boat.faults.drift(machine.instance);
-          expect((yield* runtime.observe([machine])).get(machine.name)).toBe(
+          expect(stateIn(yield* runtime.observe([machine]), machine)).toBe(
             "stopped"
           );
 
@@ -752,7 +766,7 @@ describe("the boat runtime over fake boat", () => {
             starts: 1,
             marker: "fresh\n",
             saves: [],
-            source: new Map([[source.name, "running"]]),
+            source: new Map([[source.name, { state: "running" }]]),
           });
         })
       ),
@@ -1070,9 +1084,9 @@ describe("the boat runtime over fake boat", () => {
             const observed = yield* runtime.observe(machines);
 
             expect(Object.fromEntries(observed)).toStrictEqual({
-              a: "running",
-              b: "running",
-              c: "running",
+              a: { state: "running" },
+              b: { state: "running" },
+              c: { state: "running" },
             });
           }),
         { pageSize: 1 }
@@ -1100,7 +1114,9 @@ describe("the boat runtime over fake boat", () => {
 
           yield* runtime.observe([a, b]);
 
-          expect(Object.fromEntries(one)).toStrictEqual({ a: "running" });
+          expect(Object.fromEntries(one)).toStrictEqual({
+            a: { state: "running" },
+          });
           expect(single).toStrictEqual([`GET /sandboxes/${a.handle}`]);
           expect(asked().slice(middle)).toStrictEqual(["GET /sandboxes?"]);
         })
@@ -1267,7 +1283,7 @@ describe("each boat goal from each state boat holds", () => {
                 return [
                   held,
                   {
-                    observe: (yield* runtime.observe([read])).get(read.name),
+                    observe: sightingIn(yield* runtime.observe([read]), read),
                     find:
                       (yield* runtime.find(read)) === read.handle
                         ? "found"
@@ -1289,7 +1305,7 @@ describe("each boat goal from each state boat holds", () => {
 
           expect(Object.fromEntries(found)).toStrictEqual({
             running: {
-              observe: "running",
+              observe: { state: "running" },
               find: "found",
               capture: "done",
               start: "done",
@@ -1297,7 +1313,7 @@ describe("each boat goal from each state boat holds", () => {
               delete: "done",
             },
             archiving: {
-              observe: "stopped",
+              observe: { state: "stopped" },
               find: "found",
               capture: "done",
               start: "done",
@@ -1305,7 +1321,7 @@ describe("each boat goal from each state boat holds", () => {
               delete: "done",
             },
             stopped: {
-              observe: "stopped",
+              observe: { state: "stopped" },
               find: "found",
               capture: "done",
               start: "done",
@@ -1313,7 +1329,10 @@ describe("each boat goal from each state boat holds", () => {
               delete: "done",
             },
             expired: {
-              observe: "missing",
+              observe: {
+                state: "missing",
+                why: "boat deleted its disk 14 days into a stop",
+              },
               find: "found",
               capture: "Missing",
               start: "Missing",
@@ -1321,7 +1340,10 @@ describe("each boat goal from each state boat holds", () => {
               delete: "done",
             },
             error: {
-              observe: "stopped",
+              observe: {
+                state: "stopped",
+                why: "fake boat failed its sandbox",
+              },
               find: "found",
               capture: "WrongState error",
               start: "done",
@@ -1329,7 +1351,7 @@ describe("each boat goal from each state boat holds", () => {
               delete: "done",
             },
             cancelled: {
-              observe: "missing",
+              observe: { state: "missing" },
               find: "none",
               capture: "Missing",
               start: "Missing",
@@ -1337,7 +1359,7 @@ describe("each boat goal from each state boat holds", () => {
               delete: "done",
             },
             gone: {
-              observe: "missing",
+              observe: { state: "missing" },
               find: "none",
               capture: "Missing",
               start: "Missing",

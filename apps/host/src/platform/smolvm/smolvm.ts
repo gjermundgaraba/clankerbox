@@ -51,6 +51,7 @@ import type {
   MachineRef,
   MachineState,
   Observed,
+  Sighting,
   Sizes,
   StateError,
   Target,
@@ -156,7 +157,7 @@ export const machineReadWait = Duration.subtract(
 
 export const observeEach = (
   machines: readonly Target[],
-  read: (machine: Target) => Effect.Effect<MachineState, Internal>
+  read: (machine: Target) => Effect.Effect<Sighting, Internal>
 ): Effect.Effect<Observed> =>
   Effect.flatMap(Semaphore.make(observeConcurrency), (turns) =>
     Effect.forEach(
@@ -172,12 +173,12 @@ export const observeEach = (
                   message: `no answer within ${Duration.format(machineReadWait)}`,
                 })
             ),
-            Effect.catch((error): Effect.Effect<MachineState> =>
+            Effect.catch((error): Effect.Effect<Sighting> =>
               Effect.as(
                 Effect.logWarning(
                   `couldn't read ${machine.name}'s state: ${error.message}`
                 ),
-                "unknown"
+                { state: "unknown" }
               )
             ),
             Effect.map((state) => [machine.name, state] as const)
@@ -339,6 +340,24 @@ export const stateOf = (state: RecordState): MachineState => {
   return alive.has(state) ? "running" : "stopped";
 };
 
+/**
+ * A VM as `observe` tells it: one smolvm reads unreachable, its VM manager alive but its agent not
+ * answering, is stopped, as nothing runs in it for its owner and its start boots it afresh:
+ * https://github.com/smol-machines/smolvm/blob/v1.34.1/src/config.rs#L52-L60
+ */
+const sightingOf = (recorded: RecordState | "missing"): Sighting => {
+  if (recorded === "missing") {
+    return { state: "missing" };
+  }
+
+  return recorded === "unreachable"
+    ? {
+        state: "stopped",
+        why: "smolvm reads its VM unreachable: its VM manager runs, but the agent in it doesn't answer",
+      }
+    : { state: stateOf(recorded) };
+};
+
 const leftBehind = (
   what: string,
   work: Effect.Effect<void, Internal>
@@ -497,7 +516,14 @@ export const make = (
       );
 
     const observe = (machines: readonly Target[]) =>
-      observeEach(machines, (machine) => state(machine.handle));
+      observeEach(machines, (machine) =>
+        Effect.map(status(machine.handle), sightingOf)
+      );
+
+    const holdingRam = (machines: readonly Target[]) =>
+      observeEach(machines, (machine) =>
+        Effect.map(state(machine.handle), (seen): Sighting => ({ state: seen }))
+      );
 
     const resume = (native: string) =>
       call(["machine", "resume", "--name", native], `machine resume ${native}`);
@@ -1160,7 +1186,12 @@ export const make = (
           Effect.andThen(
             checkPort(probe, settings.publishAddress, activation),
             Effect.flatMap(heldMib, (held) =>
-              checkRamBudget(settings.ramBudgetMib, activation, observe, held)
+              checkRamBudget(
+                settings.ramBudgetMib,
+                activation,
+                holdingRam,
+                held
+              )
             )
           )
         ),
@@ -1220,7 +1251,7 @@ export const make = (
       checkpointHandle: nativeName,
       observe: Effect.fn("Smolvm.observe")(observe),
       capacity: Effect.fn("Smolvm.capacity")((machines) =>
-        Effect.map(inUse(machines, observe), ({ running, unread }) =>
+        Effect.map(inUse(machines, holdingRam), ({ running, unread }) =>
           allotted(running, unread, settings.ramBudgetMib)
         )
       ),

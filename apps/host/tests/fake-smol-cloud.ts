@@ -33,6 +33,8 @@ export interface FakeMachine {
   readonly branchedFrom: string | undefined;
   readonly rootBranch: string;
   pausedWith: string | undefined;
+  /** The `error` smol cloud answers with a machine it holds in `error`, such as one whose node it lost. */
+  failedWith?: string | undefined;
 }
 
 export interface FakeCheckpoint {
@@ -92,6 +94,8 @@ export interface FakeSmolCloud {
   ) => Effect.Effect<void>;
   /** Pauses a machine as a host before 0.42 did, keeping its memory. */
   readonly pausedByOlderHost: (id: string) => Effect.Effect<void>;
+  /** Holds a machine in `error`, answering `why` as its `error`. */
+  readonly fail: (id: string, why: string) => Effect.Effect<void>;
   readonly calls: readonly string[];
   readonly machines: ReadonlyMap<string, FakeMachine>;
   readonly checkpoints: ReadonlyMap<string, FakeCheckpoint>;
@@ -166,7 +170,9 @@ const answer = (status: number, body?: unknown): Answer =>
 const recordOf = (machine: FakeMachine) => ({
   id: machine.id,
   name: machine.name,
-  state: machine.state,
+  ...(machine.failedWith === undefined
+    ? { state: machine.state }
+    : { state: "error", error: machine.failedWith }),
   ...(machine.branchedFrom === undefined
     ? {}
     : { parentMachineId: machine.branchedFrom }),
@@ -1115,6 +1121,14 @@ export const fakeSmolCloud = (
 
           if (machine !== undefined) {
             await act(machine, "pause");
+          }
+        }),
+      fail: (id: string, why: string) =>
+        Effect.sync(() => {
+          const machine = machines.get(id);
+
+          if (machine !== undefined) {
+            machine.failedWith = why;
           }
         }),
       calls,

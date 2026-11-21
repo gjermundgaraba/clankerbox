@@ -442,6 +442,28 @@ describe("the smol cloud runtime on its host", () => {
   );
 
   it.live(
+    "reads a machine smol cloud holds in error as stopped, with the error it gives as why",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { runtime, fake } = yield* onHost();
+          const dev = yield* made(runtime, "dev");
+
+          yield* fake.fail(dev.handle, "the node it ran on was lost");
+
+          expect(yield* runtime.observe([dev])).toStrictEqual(
+            new Map([
+              [
+                dev.name,
+                { state: "stopped", why: "the node it ran on was lost" },
+              ],
+            ])
+          );
+        })
+      )
+  );
+
+  it.live(
     "a remove cut short after the machine's delete finishes the checkpoints when sent again",
     () =>
       Effect.scoped(
@@ -811,8 +833,8 @@ describe("the smol cloud runtime over an account without a card", () => {
           ).pipe(Effect.provide(Logger.layer([capturing(lines)])));
 
           expect(Object.fromEntries(observed)).toStrictEqual({
-            dev: "running",
-            web: "running",
+            dev: { state: "running" },
+            web: { state: "running" },
           });
           expect(
             lines.filter((line) =>

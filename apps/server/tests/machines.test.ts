@@ -2241,6 +2241,41 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a start whose machine's disk went back to what an earlier boot left records it unasked, saying so, and still starts it",
+    () =>
+      Effect.gen(function* () {
+        const { client, fake } = yield* served();
+
+        yield* client.create("dev", request("dev"));
+
+        const held = fake.machines.get("dev");
+        const marks = path.join(held?.root ?? "", "var/lib/clankerbox/boots");
+        const atBoot1 = yield* read(marks);
+
+        yield* client.stopMachine({ id: "dev" });
+
+        const clean = yield* client.startMachine({ id: "dev" });
+
+        yield* client.stopMachine({ id: "dev" });
+        yield* write(marks, atBoot1);
+
+        const rolled = yield* client.startMachine({ id: "dev" });
+
+        expect({
+          atBoot1,
+          clean: [clean.boots, clean.unasked],
+          rolled: [at(rolled), rolled.boots, rolled.unasked?.what],
+          why: rolled.unasked?.why,
+        }).toStrictEqual({
+          atBoot1: `${held?.instance} 1\n`,
+          clean: [2, undefined],
+          rolled: [["running", "running", "settled"], 3, "rolledBack"],
+          why: "its disk is as boot 1 left it, not boot 2: it went back to older files",
+        });
+      })
+  );
+
+  it.effect(
     "a pause is asked for, so the stop it makes records no change unasked",
     () =>
       Effect.gen(function* () {

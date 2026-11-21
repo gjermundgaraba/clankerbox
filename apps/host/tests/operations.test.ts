@@ -3242,9 +3242,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         ]);
 
         expect(Object.fromEntries(states)).toStrictEqual({
-          ok: "running",
-          broken: "unknown",
-          gone: "missing",
+          ok: { state: "running" },
+          broken: { state: "unknown" },
+          gone: { state: "missing" },
         });
       })
   );

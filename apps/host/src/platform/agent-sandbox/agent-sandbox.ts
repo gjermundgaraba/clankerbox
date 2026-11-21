@@ -1308,7 +1308,8 @@ export const make = (
         if (machines.length === 1 && only !== undefined) {
           return Effect.map(
             read(only),
-            (found): Observed => new Map([[only.name, readAs[heldOf(found)]]])
+            (found): Observed =>
+              new Map([[only.name, { state: readAs[heldOf(found)] }]])
           );
         }
 
@@ -1321,9 +1322,14 @@ export const make = (
             return new Map(
               machines.map((machine) => [
                 machine.name,
-                readAs[
-                  heldOf(owned(byName.get(machine.handle), machine.instance))
-                ],
+                {
+                  state:
+                    readAs[
+                      heldOf(
+                        owned(byName.get(machine.handle), machine.instance)
+                      )
+                    ],
+                },
               ])
             );
           }),

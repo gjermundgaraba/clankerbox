@@ -793,7 +793,7 @@ export const fakeRuntime = (options: FakeOptions) => {
       return new Map(
         refs.map((machine) => [
           machine.name,
-          machineOf(machine)?.state ?? "missing",
+          { state: machineOf(machine)?.state ?? "missing" },
         ])
       );
     });

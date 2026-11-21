@@ -7,6 +7,8 @@ import type { Scope } from "effect";
 import { expect } from "vite-plus/test";
 
 import { runCommand } from "../src/exec.ts";
+import { identify, prepare } from "../src/guest.ts";
+import { stateIn } from "../src/runtime.ts";
 import type {
   Execution,
   Interface as Runtime,
@@ -126,9 +128,8 @@ const outputOf = (execution: Execution) =>
   Stream.mkString(Stream.decodeText(execution.output));
 
 const stateOf = (runtime: Runtime, machine: Sized) =>
-  Effect.map(
-    runtime.observe([machine]),
-    (observed) => observed.get(machine.name) ?? "unknown"
+  Effect.map(runtime.observe([machine]), (observed) =>
+    stateIn(observed, machine)
   );
 
 const outOfCaptureState = (runtime: Runtime, machine: Sized) =>
@@ -587,6 +588,59 @@ export const runtimeContract = (subject: Subject): void => {
             expect(yield* running(beside.pids)).toStrictEqual(beside.pids);
 
             yield* Fiber.interrupt(beside.fiber);
+          })
+        )
+    );
+
+    it.live.skipIf(subject.runsNoGuest !== undefined)(
+      `keeps a start's boot mark on the machine's disk through a stop, so a start finds a disk put back as an earlier boot left it${subject.runsNoGuest === undefined ? "" : `: ${subject.runsNoGuest}`}`,
+      () =>
+        withFixture(({ runtime }) =>
+          Effect.gen(function* () {
+            const machine = yield* made(runtime, "dev");
+
+            const readied = (writes: number, expected?: number) =>
+              Effect.andThen(
+                identify(runtime, machine),
+                Effect.map(
+                  prepare(runtime, machine, { writes, expect: expected }),
+                  ({ rolledBack }) => rolledBack
+                )
+              );
+
+            const bootMarks = '"$root/var/lib/clankerbox/boots"';
+
+            const restarted = (writes: number, expected: number) =>
+              Effect.andThen(
+                Effect.andThen(
+                  runtime.stop(machine),
+                  runtime.start(machine, new Set())
+                ),
+                readied(writes, expected)
+              );
+
+            const firstBoot = yield* readied(1);
+            const atBoot1 = yield* shell(runtime, machine, `cat ${bootMarks}`);
+            const clean = yield* restarted(2, 1);
+
+            yield* shell(
+              runtime,
+              machine,
+              `printf '%s\\n' '${machine.instance} 1' >${bootMarks}`
+            );
+
+            expect({
+              first: firstBoot,
+              atBoot1,
+              clean,
+              rolled: yield* restarted(3, 2),
+            }).toStrictEqual({
+              first: undefined,
+              atBoot1: `0: ${machine.instance} 1`,
+              clean: undefined,
+              rolled:
+                "its disk is as boot 1 left it, not boot 2: it went back to older files",
+            });
           })
         )
     );

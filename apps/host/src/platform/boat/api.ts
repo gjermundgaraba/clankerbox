@@ -29,6 +29,10 @@ export const Sandbox = Schema.Struct({
   labels: Schema.optionalKey(Labels),
   dataExpiredAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
   hydrated: Schema.optionalKey(Schema.Boolean),
+  error: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  lastReboot: Schema.optionalKey(
+    Schema.NullOr(Schema.Struct({ at: Schema.String }))
+  ),
 });
 
 export type Sandbox = typeof Sandbox.Type;

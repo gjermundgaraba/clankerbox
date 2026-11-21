@@ -409,7 +409,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           })
         );
         expect(yield* runtime.observe([machine])).toStrictEqual(
-          new Map([[machine.name, "running"]])
+          new Map([[machine.name, { state: "running" }]])
         );
       })
   );
@@ -636,7 +636,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           run: false,
           jobExit: 2,
           log: `VM "${vm}" is already running!\n`,
-          state: "running",
+          state: { state: "running" },
         });
       })
   );
@@ -1633,9 +1633,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(observed).toStrictEqual(
           new Map([
-            [up.name, "running"],
-            [paused.name, "paused"],
-            [gone.name, "missing"],
+            [up.name, { state: "running" }],
+            [paused.name, { state: "paused" }],
+            [gone.name, { state: "missing" }],
           ])
         );
         expect(
@@ -1713,7 +1713,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           setAgain: mac.clockSets.slice(before).map((each) => each.vm),
         }).toStrictEqual({
           refused: "Internal",
-          state: new Map([[machine.name, "running"]]),
+          state: new Map([[machine.name, { state: "running" }]]),
           setAgain: [vm],
         });
       })
@@ -1769,7 +1769,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           `tart exec ${vm} sudo -n /sbin/shutdown -h now`,
         ]);
         expect(yield* runtime.observe([machine])).toStrictEqual(
-          new Map([[machine.name, "stopped"]])
+          new Map([[machine.name, { state: "stopped" }]])
         );
       })
   );
@@ -1800,14 +1800,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             .filter((line) => line.startsWith("launchctl kickstart")),
           after: yield* runtime.observe([machine]),
         }).toStrictEqual({
-          observed: new Map([[machine.name, "stopped"]]),
+          observed: new Map([[machine.name, { state: "stopped" }]]),
           used: [
             { resource: "runningVms", limit: 2, used: 0 },
             { resource: "cpu", used: 0 },
             { resource: "ramMib", used: 0 },
           ],
           kickstarted: [`launchctl kickstart gui/501/${vm}`],
-          after: new Map([[machine.name, "running"]]),
+          after: new Map([[machine.name, { state: "running" }]]),
         });
       })
   );
@@ -1878,8 +1878,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           unreadable.map(
             () =>
               new Map([
-                [machine.name, "unknown"],
-                [other.name, "stopped"],
+                [machine.name, { state: "unknown" }],
+                [other.name, { state: "stopped" }],
               ])
           )
         );
@@ -1916,7 +1916,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           `tart exec ${vm} sudo -n settle <now>`,
         ]);
         expect(yield* runtime.observe([machine])).toStrictEqual(
-          new Map([[machine.name, "running"]])
+          new Map([[machine.name, { state: "running" }]])
         );
       })
   );
@@ -1953,8 +1953,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(reads._tag === "Some" ? reads.value : "hung").toStrictEqual([
           new Map([
-            ["growing", "stopped"],
-            ["other", "running"],
+            ["growing", { state: "stopped" }],
+            ["other", { state: "running" }],
           ]),
           vmOf(growing),
         ]);
@@ -2044,7 +2044,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
           expect([executable, observed]).toStrictEqual([
             executable,
-            new Map([[machine.name, "running"]]),
+            new Map([[machine.name, { state: "running" }]]),
           ]);
           expect(used[0]).toStrictEqual({
             resource: "runningVms",
@@ -2056,7 +2056,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             `tart exec ${vm} sudo -n /sbin/shutdown -h now`,
           ]);
           expect(yield* runtime.observe([machine])).toStrictEqual(
-            new Map([[machine.name, "stopped"]])
+            new Map([[machine.name, { state: "stopped" }]])
           );
         }
       })
@@ -2164,7 +2164,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         });
 
         expect(yield* runtime.observe([machine])).toStrictEqual(
-          new Map([[machine.name, "missing"]])
+          new Map([[machine.name, { state: "missing" }]])
         );
       })
   );
@@ -2205,7 +2205,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         mac.starting.add(vmOf(machine));
 
         expect(yield* runtime.observe([machine])).toStrictEqual(
-          new Map([[machine.name, "running"]])
+          new Map([[machine.name, { state: "running" }]])
         );
       })
   );
@@ -2378,7 +2378,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(calls(mac).slice(before)).toStrictEqual([`tart stop ${vm}`]);
         expect(yield* runtime.observe([machine])).toStrictEqual(
-          new Map([[machine.name, "stopped"]])
+          new Map([[machine.name, { state: "stopped" }]])
         );
       })
   );

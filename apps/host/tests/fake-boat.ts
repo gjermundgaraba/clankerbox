@@ -74,6 +74,8 @@ export interface FakeSandbox {
   failed: boolean;
   cancelled: boolean;
   stoppedAt: number | undefined;
+  /** When its kernel last restarted on its machine, which boat answers as `lastReboot`. */
+  rebootedAt: string | undefined;
   relay: Relay;
 }
 
@@ -605,6 +607,9 @@ export const fakeBoat = (
       createdAt: sandbox.createdAt,
       dataExpiredAt: sandbox.dataExpired ? sandbox.createdAt : null,
       hydrated: sandbox.hydratingFor === 0,
+      error: sandbox.failed ? "fake boat failed its sandbox" : null,
+      lastReboot:
+        sandbox.rebootedAt === undefined ? null : { at: sandbox.rebootedAt },
     });
 
     const sandboxJson = (sandbox: FakeSandbox) => {
@@ -683,6 +688,7 @@ export const fakeBoat = (
         failed: failingNext,
         cancelled: cancellingNext,
         stoppedAt: undefined,
+        rebootedAt: undefined,
         relay: await listen(),
       };
 
@@ -1653,6 +1659,14 @@ export const fakeBoat = (
             sandbox.failed = true;
           }
         }),
+      reboot: (id: string, at: string) =>
+        Effect.sync(() => {
+          const sandbox = sandboxes.get(id);
+
+          if (sandbox !== undefined) {
+            sandbox.rebootedAt = at;
+          }
+        }),
       archiveSlowly: (id: string, reads: number) =>
         Effect.promise(async () => {
           const sandbox = sandboxes.get(id);
@@ -1723,6 +1737,8 @@ export interface FakeBoat {
   /** `vanish` at once, for an `onCall` hook. */
   readonly vanishNow: (id: string) => void;
   readonly fail: (id: string) => Effect.Effect<void>;
+  /** Restarts a running sandbox's kernel in place, as boat does on its own, which it answers in `lastReboot`. */
+  readonly reboot: (id: string, at: string) => Effect.Effect<void>;
   /** Stops a sandbox, which then reads `archiving` for this many reads of it. */
   readonly archiveSlowly: (id: string, reads: number) => Effect.Effect<void>;
   /** Stops a sandbox and drops its data, as boat does 14 days into a stop: it reads `dataExpiredAt`, and a resume or fork of it is refused. */

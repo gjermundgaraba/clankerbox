@@ -376,10 +376,12 @@ describe.runIf(dir !== "")("agent-sandbox, on kind", () => {
         const middle = requests.length;
         const both = yield* runtime.observe([a, b]);
 
-        expect(Object.fromEntries(one)).toStrictEqual({ a: "missing" });
+        expect(Object.fromEntries(one)).toStrictEqual({
+          a: { state: "missing" },
+        });
         expect(Object.fromEntries(both)).toStrictEqual({
-          a: "missing",
-          b: "missing",
+          a: { state: "missing" },
+          b: { state: "missing" },
         });
         expect(single).toHaveLength(1);
         expect(single[0]).toMatch(
@@ -416,7 +418,7 @@ describe.runIf(dir !== "")("agent-sandbox, on kind", () => {
         yield* prepareBase(runtime, dev, false);
         yield* identify(runtime, dev);
 
-        const hostKey = yield* prepare(runtime, dev);
+        const { hostKey } = yield* prepare(runtime, dev);
 
         yield* addMissingKeys(runtime, dev, publicKey);
         yield* runCommand(runtime, {
@@ -487,7 +489,7 @@ describe.runIf(dir !== "")("agent-sandbox, on kind", () => {
 
         yield* identify(runtime, copy);
 
-        const forkKey = yield* prepare(runtime, copy);
+        const forkKey = (yield* prepare(runtime, copy)).hostKey;
 
         expect(forkKey).not.toBe(hostKey);
         expect(

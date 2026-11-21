@@ -597,7 +597,7 @@ describe.runIf(live)("boat, against the real account", () => {
         yield* prepareBase(runtime, ci, true);
         yield* identify(runtime, ci);
 
-        const started = yield* prepare(runtime, ci);
+        const started = (yield* prepare(runtime, ci)).hostKey;
 
         yield* finding(
           `after the base script and the identity script, the start script's host key ${started === (yield* providerKey(ci)) ? "equals" : "differs from"} the one /sshkey answers, and the guest runs commands as ${yield* whoami(ci)}`
@@ -618,7 +618,7 @@ describe.runIf(live)("boat, against the real account", () => {
         yield* runtime.stop(ci);
         yield* runtime.start(ci, new Set());
 
-        const warm = yield* prepare(runtime, ci);
+        const warm = (yield* prepare(runtime, ci)).hostKey;
         const warmTailnet = yield* tailnet(ci);
 
         yield* finding(
@@ -641,7 +641,7 @@ describe.runIf(live)("boat, against the real account", () => {
 
         yield* identify(runtime, copy);
 
-        const copyKey = yield* prepare(runtime, copy);
+        const copyKey = (yield* prepare(runtime, copy)).hostKey;
         const copyTailnet = yield* tailnet(copy);
 
         yield* finding(
@@ -663,7 +663,7 @@ describe.runIf(live)("boat, against the real account", () => {
 
         yield* runtime.start(ci, new Set());
 
-        const cold = yield* prepare(runtime, ci);
+        const cold = (yield* prepare(runtime, ci)).hostKey;
         const coldTailnet = yield* tailnet(ci);
 
         yield* finding(

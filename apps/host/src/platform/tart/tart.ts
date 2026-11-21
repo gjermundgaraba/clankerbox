@@ -479,7 +479,7 @@ export const make = (
                   Effect.as(Effect.logWarning(message), "unknown" as const)
                 )
               ),
-              (read) => [machine.name, read] as const
+              (read) => [machine.name, { state: read }] as const
             ),
           { concurrency: "unbounded" }
         );

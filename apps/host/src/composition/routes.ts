@@ -5,7 +5,7 @@ import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Effect, Layer } from "effect";
 
 import { Operations } from "../operations.ts";
-import { Runtime, stateIn } from "../runtime.ts";
+import { Runtime, sightingIn } from "../runtime.ts";
 import type { HostSettings } from "../settings.ts";
 
 type Served = Pick<HostSettings, "id" | "bases" | "tailnet">;
@@ -33,10 +33,16 @@ const app = (config: Served) =>
           }),
         readMachines: ({ machines }) =>
           Effect.map(operations.read(machines), (observed) =>
-            machines.map(({ name }) => ({
-              name,
-              state: stateIn(observed, { name }),
-            }))
+            machines.map(({ name }) => {
+              const { state, reboot, why } = sightingIn(observed, { name });
+
+              return {
+                name,
+                state,
+                ...(reboot === undefined ? {} : { reboot }),
+                ...(why === undefined ? {} : { why }),
+              };
+            })
           ),
         readSizes: ({ machine }) => operations.sizes(machine),
         readCapacity: ({ machines }) => operations.capacity(machines),

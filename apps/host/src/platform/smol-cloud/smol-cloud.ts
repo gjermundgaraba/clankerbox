@@ -41,6 +41,7 @@ import type {
   Interface,
   MachineState,
   Observed,
+  Sighting,
   Origin,
   Sizes,
   Target,
@@ -161,7 +162,8 @@ const stateOf = (record: MachineRecord | undefined): MachineState => {
     }
 
     case "stopped":
-    case "created": {
+    case "created":
+    case "error": {
       return "stopped";
     }
 
@@ -174,6 +176,19 @@ const stateOf = (record: MachineRecord | undefined): MachineState => {
     }
   }
 };
+
+/**
+ * A machine as `observe` tells it, with the reason smol cloud gives for one in its `error` state,
+ * its latest control-plane error, as https://smolmachines.com/openapi.json's `MachineInfo.error`
+ * defines it.
+ */
+const sightingOf = (record: MachineRecord | undefined): Sighting =>
+  record?.state === "error"
+    ? {
+        state: stateOf(record),
+        why: record.error ?? "smol cloud holds it in error, saying nothing",
+      }
+    : { state: stateOf(record) };
 
 const isGone = (error: ApiError) =>
   error._tag === "Refused" && error.status === 404;
@@ -879,7 +894,7 @@ export const make = (
       if (machines.length === 1 && only !== undefined) {
         return Effect.map(
           record(only.handle),
-          (found): Observed => new Map([[only.name, stateOf(found)]])
+          (found): Observed => new Map([[only.name, sightingOf(found)]])
         );
       }
 
@@ -889,7 +904,7 @@ export const make = (
         return new Map(
           machines.map(({ name, handle }) => [
             name,
-            stateOf(byHandle.get(handle)),
+            sightingOf(byHandle.get(handle)),
           ])
         );
       });

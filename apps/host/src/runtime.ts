@@ -42,12 +42,28 @@ export type RoomError = RuntimeError | Capacity;
 
 export type StateError = Missing | WrongState;
 
-export type Observed = ReadonlyMap<string, MachineState>;
+/**
+ * What a runtime reads of a machine beyond its state, where it tells it: `reboot`, a mark that
+ * changes each time the machine boots again in place while it runs and at no other time, and `why`,
+ * the cause in the provider's words of a machine stopped or missing.
+ */
+export interface Sighting {
+  readonly state: MachineState;
+  readonly reboot?: string | undefined;
+  readonly why?: string | undefined;
+}
+
+export type Observed = ReadonlyMap<string, Sighting>;
+
+export const sightingIn = (
+  observed: Observed,
+  machine: Pick<MachineRef, "name">
+): Sighting => observed.get(machine.name) ?? { state: "unknown" };
 
 export const stateIn = (
   observed: Observed,
   machine: Pick<MachineRef, "name">
-): MachineState => observed.get(machine.name) ?? "unknown";
+): MachineState => sightingIn(observed, machine).state;
 
 export type Sizes = Pick<MachineRef, "cpu" | "ramMib" | "diskGib">;
 

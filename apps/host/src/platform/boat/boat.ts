@@ -42,6 +42,7 @@ import type {
   MachineState,
   Observed,
   Origin,
+  Sighting,
   Target,
 } from "../../runtime.ts";
 import type { HostSettings } from "../../settings.ts";
@@ -160,8 +161,33 @@ const readAs: Readonly<Record<Held, MachineState>> = {
   gone: "missing",
 };
 
-const stateOf = (sandbox: Sandbox | undefined): MachineState =>
-  readAs[heldOf(sandbox)];
+const whyOf = (held: Held, error: string | undefined): string | undefined => {
+  if (held === "expired") {
+    return "boat deleted its disk 14 days into a stop";
+  }
+
+  return held === "error"
+    ? (error ?? "boat holds it in error, saying nothing")
+    : error;
+};
+
+/**
+ * A sandbox as `observe` reads it. `reboot` is when its kernel last restarted on its machine, and
+ * `why` boat's `error`, which https://docs.boat.dev/openapi/boat-v1.yaml's `Sandbox.error` gives
+ * for a sandbox stopped, failed or cancelled, or its dropped data.
+ */
+const sightingOf = (sandbox: Sandbox | undefined): Sighting => {
+  const held = heldOf(sandbox);
+  const reboot = sandbox?.lastReboot?.at;
+
+  const why = whyOf(held, sandbox?.error ?? undefined);
+
+  return {
+    state: readAs[held],
+    ...(reboot === undefined ? {} : { reboot }),
+    ...(why === undefined || readAs[held] === "running" ? {} : { why }),
+  };
+};
 
 type Goal = "running" | "stopped" | "gone";
 
@@ -734,7 +760,7 @@ export const make = (
         if (machines.length === 1 && only !== undefined) {
           return api.sandbox(only.handle).pipe(
             Effect.map(
-              (sandbox): Observed => new Map([[only.name, stateOf(sandbox)]])
+              (sandbox): Observed => new Map([[only.name, sightingOf(sandbox)]])
             ),
             Effect.mapError(internal(`couldn't read ${only.name}`))
           );
@@ -749,7 +775,7 @@ export const make = (
             return new Map(
               machines.map((machine) => [
                 machine.name,
-                stateOf(byId.get(machine.handle)),
+                sightingOf(byId.get(machine.handle)),
               ])
             );
           }),

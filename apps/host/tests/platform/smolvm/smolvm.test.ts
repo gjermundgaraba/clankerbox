@@ -55,6 +55,7 @@ import type {
   Interface,
   MachineState,
   Origin,
+  Sighting,
   Sized,
   Sizes,
 } from "../../../src/runtime.ts";
@@ -438,6 +439,7 @@ layer(NodeServices.layer)((it) => {
       const replies = new Map([
         ["dev-01234567", status("running")],
         ["two-01234567", status("created")],
+        ["far-01234567", status("unreachable")],
         [
           "gone-01234567",
           {
@@ -457,24 +459,33 @@ layer(NodeServices.layer)((it) => {
       const observed = yield* runtime.observe([
         machine,
         sized({ ...machine, name: "two" }),
+        sized({ ...machine, name: "far" }),
         sized({ ...machine, name: "gone" }),
       ]);
 
       expect(observed).toStrictEqual(
         new Map([
-          ["dev", "running"],
-          ["two", "stopped"],
-          ["gone", "missing"],
+          ["dev", { state: "running" }],
+          ["two", { state: "stopped" }],
+          [
+            "far",
+            {
+              state: "stopped",
+              why: "smolvm reads its VM unreachable: its VM manager runs, but the agent in it doesn't answer",
+            },
+          ],
+          ["gone", { state: "missing" }],
         ])
       );
       expect(smolvmArgs(spawner.calls).map((args) => args[3])).toStrictEqual(
         expect.arrayContaining([
           "dev-01234567",
           "two-01234567",
+          "far-01234567",
           "gone-01234567",
         ])
       );
-      expect(spawner.calls).toHaveLength(4);
+      expect(spawner.calls).toHaveLength(5);
     })
   );
 
@@ -505,8 +516,8 @@ layer(NodeServices.layer)((it) => {
 
         expect(observed).toStrictEqual(
           new Map([
-            ["dev", "unknown"],
-            ["two", "stopped"],
+            ["dev", { state: "unknown" }],
+            ["two", { state: "stopped" }],
           ])
         );
         expect(logged).toStrictEqual([
@@ -546,8 +557,8 @@ layer(NodeServices.layer)((it) => {
         expect(Duration.format(waited)).toBe("8s");
         expect(value).toStrictEqual(
           new Map([
-            ["two", "stopped"],
-            ...hanging.map(({ name }) => [name, "unknown"] as const),
+            ["two", { state: "stopped" }],
+            ...hanging.map(({ name }) => [name, { state: "unknown" }] as const),
           ])
         );
       })
@@ -2780,15 +2791,15 @@ layer(NodeServices.layer)((it) => {
       ];
 
       const read = yield* observeEach(machines, (ref) =>
-        Effect.succeed(states[names.indexOf(ref.name)] ?? "unknown")
+        Effect.succeed({ state: states[names.indexOf(ref.name)] ?? "unknown" })
       );
 
       expect(read).toStrictEqual(
         new Map([
-          ["a", "running"],
-          ["b", "stopped"],
-          ["c", "missing"],
-          ["d", "running"],
+          ["a", { state: "running" }],
+          ["b", { state: "stopped" }],
+          ["c", { state: "missing" }],
+          ["d", { state: "running" }],
         ])
       );
     })
@@ -2805,15 +2816,15 @@ layer(NodeServices.layer)((it) => {
             ? Effect.fail(
                 new Internal({ message: "smolvm machine status exited 1" })
               )
-            : Effect.succeed<MachineState>("running")
+            : Effect.succeed<Sighting>({ state: "running" })
         ).pipe(Effect.provide(logging(logged)));
 
         expect(read).toStrictEqual(
           new Map([
-            ["a", "running"],
-            ["b", "unknown"],
-            ["c", "running"],
-            ["d", "running"],
+            ["a", { state: "running" }],
+            ["b", { state: "unknown" }],
+            ["c", { state: "running" }],
+            ["d", { state: "running" }],
           ])
         );
         expect(logged).toStrictEqual([
@@ -2832,7 +2843,7 @@ layer(NodeServices.layer)((it) => {
           observeEach(machines, (ref) =>
             ref.name === "c"
               ? Effect.never
-              : Effect.succeed<MachineState>("stopped")
+              : Effect.succeed<Sighting>({ state: "stopped" })
           ).pipe(Effect.provide(logging(logged)))
         );
 
@@ -2842,10 +2853,10 @@ layer(NodeServices.layer)((it) => {
 
         expect(read).toStrictEqual(
           new Map([
-            ["a", "stopped"],
-            ["b", "stopped"],
-            ["c", "unknown"],
-            ["d", "stopped"],
+            ["a", { state: "stopped" }],
+            ["b", { state: "stopped" }],
+            ["c", { state: "unknown" }],
+            ["d", { state: "stopped" }],
           ])
         );
         expect(logged).toStrictEqual([
@@ -2864,7 +2875,7 @@ layer(NodeServices.layer)((it) => {
       yield* observeEach(
         Array.from({ length: 12 }, (_, index) => observed(`m${index}`)),
         () =>
-          Effect.gen(function* (): Effect.fn.Return<MachineState> {
+          Effect.gen(function* (): Effect.fn.Return<Sighting> {
             running += 1;
             most = Math.max(most, running);
 
@@ -2872,7 +2883,7 @@ layer(NodeServices.layer)((it) => {
 
             running -= 1;
 
-            return "running" satisfies MachineState;
+            return { state: "running" } satisfies Sighting;
           })
       );
 
@@ -2954,8 +2965,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
 
         expect(Object.fromEntries(read)).toStrictEqual({
-          dev: "running",
-          two: "unknown",
+          dev: { state: "running" },
+          two: { state: "unknown" },
         });
         expect(capacity).toContainEqual({
           resource: "ramMib",

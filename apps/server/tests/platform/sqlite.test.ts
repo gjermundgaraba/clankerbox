@@ -262,6 +262,7 @@ const row = (name: string, fields?: Partial<MachineRow>): MachineRow => ({
   after: undefined,
   boots: 0,
   booting: false,
+  marked: false,
   reboot: undefined,
   unasked: undefined,
   ...fields,
@@ -604,6 +605,7 @@ layer(NodeServices.layer)((it) => {
               "tailnet",
               "boots",
               "booting",
+              "marked",
               "reboot",
               "unasked"
             )
