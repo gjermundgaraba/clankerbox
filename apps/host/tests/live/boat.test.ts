@@ -928,6 +928,11 @@ describe.runIf(live)("boat, against the real account", () => {
           yield* Effect.sleep(Duration.seconds(3));
         }
 
+        expect(
+          (yield* boat.sandbox(older.handle))?.lastReboot?.at,
+          "boat gave the older machine no reboot mark within 3 minutes, so the case can't check one rebooted before the host's first read"
+        ).toBeDefined();
+
         const all = [fresh, still, older];
 
         const markChangesInOrder = new Map<string, string[]>(
