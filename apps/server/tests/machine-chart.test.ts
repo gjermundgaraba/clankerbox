@@ -287,9 +287,9 @@ const decidedBy = (from: Leaf, input: Input, joins: boolean): Leaf => {
   }
 
   if (
-    from === "made.settled" &&
     seen === "stopped" &&
-    input.desired === "running"
+    input.desired === "running" &&
+    (from === "made.settled" || (prepared && !owing))
   ) {
     return "made.failed";
   }
@@ -1048,6 +1048,30 @@ const factsWritten: readonly Write[] = [
   [
     "a machine at rest running that its runtime stopped unasked rests failed saying so, and isn't started again",
     rowAt("made.settled", { ...prepared, boots: 2 }),
+    read("stopped"),
+    {
+      state: "made.failed",
+      error: stoppedUnasked,
+      unasked: { what: "stopped", at },
+    },
+  ],
+  [
+    "a machine its runtime stopped unasked just after a start of ours rests failed saying so, and isn't started again",
+    rowAt("made.observing", { ...prepared, boots: 2 }),
+    read("stopped"),
+    {
+      state: "made.failed",
+      error: stoppedUnasked,
+      unasked: { what: "stopped", at },
+    },
+  ],
+  [
+    "a resize of a machine resting failed after its runtime stopped it unasked leaves it stopped, failed again",
+    rowAt("made.observing", {
+      ...prepared,
+      boots: 2,
+      unasked: { what: "stopped", at: DateTime.makeUnsafe(1) },
+    }),
     read("stopped"),
     {
       state: "made.failed",

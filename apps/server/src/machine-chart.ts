@@ -255,7 +255,10 @@ const noticed = (atRest: boolean) => (args: On<"read">) => {
       return "rebooted";
     }
 
-    return atRest && seen === "stopped" && context.desired === "running"
+    const wasRunning =
+      atRest || (context.prepared && context.resize === undefined);
+
+    return seen === "stopped" && context.desired === "running" && wasRunning
       ? "stopped"
       : undefined;
   })();
