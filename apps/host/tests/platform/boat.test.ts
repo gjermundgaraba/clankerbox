@@ -572,7 +572,7 @@ describe("the boat runtime over fake boat", () => {
   );
 
   it.live(
-    "a capture whose name boat is still saving waits that save out, refused while it saves, and saves again over the ready name, which stays ready",
+    "a capture whose name boat is still saving from its machine joins that save, posting none, as a capture cut in its wait and sent again does",
     () =>
       onBoat(({ boat, runtime }) =>
         Effect.gen(function* () {
@@ -585,16 +585,9 @@ describe("the boat runtime over fake boat", () => {
 
           const handle = yield* runtime.capture(machine, checkpoint);
 
+          expect(handle).toBe(name);
           expect(boat.snapshots.get(handle)?.status).toBe("ready");
-          expect(posts(boat, "/saved-snapshots")).toStrictEqual([
-            "POST /saved-snapshots 409",
-            "POST /saved-snapshots 409",
-            "POST /saved-snapshots 202",
-          ]);
-
-          yield* boat.saveAs(machine.handle, name);
-
-          expect(boat.snapshots.get(name)?.status).toBe("ready");
+          expect(posts(boat, "/saved-snapshots")).toStrictEqual([]);
         })
       ),
     30_000

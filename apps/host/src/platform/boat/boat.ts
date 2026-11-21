@@ -535,20 +535,14 @@ export const make = (
     //
     // Only the save's request runs whole, as a provider call: the wait for its snapshot after it
     // is reads, which a later request cuts as on any runtime. A save cut so goes on at boat, under
-    // a name made from the instance, so a `fork` asked again finds it and waits for it, where
-    // `reuses` says a snapshot already saved from the machine under that name stands for a new one.
-    const savedAs = (
-      machine: Target,
-      name: string,
-      what: string,
-      reuses = false
-    ) =>
+    // a name made from the instance, so a fork or capture asked again finds it and waits for it,
+    // and a snapshot already saved from the machine under that name stands for a new one: a POST
+    // over it would wait out its save inside the call's 10 minutes, then save afresh.
+    const savedAs = (machine: Target, name: string, what: string) =>
       Effect.gen(function* () {
-        const before = reuses
-          ? yield* api
-              .saved(name)
-              .pipe(Effect.mapError(internal(`couldn't read snapshot ${name}`)))
-          : undefined;
+        const before = yield* api
+          .saved(name)
+          .pipe(Effect.mapError(internal(`couldn't read snapshot ${name}`)));
 
         if (before?.sourceSandboxId !== machine.handle) {
           yield* api.save(machine.handle, name).pipe(
@@ -1068,19 +1062,21 @@ export const make = (
             const source = origin.machine;
 
             yield* Effect.gen(function* () {
-              const snapshot = yield* savedAs(source, through, "fork", true);
+              const snapshot = yield* savedAs(source, through, "fork");
 
               yield* fits(source, snapshot, type, machine.name).pipe(
                 Effect.tapError(() =>
-                  api
-                    .unsave(through)
-                    .pipe(
-                      Effect.catch((error) =>
-                        Effect.logWarning(
-                          `make ${machine.name}: couldn't delete snapshot ${through} after refusing the fork, so it bills until ${source.name}'s next start or delete deletes it: ${error.message}`
-                        )
+                  api.unsave(through).pipe(
+                    bounded(
+                      "boat",
+                      `make ${machine.name}'s unsave of ${through}`
+                    ),
+                    Effect.catch((error) =>
+                      Effect.logWarning(
+                        `make ${machine.name}: couldn't delete snapshot ${through} after refusing the fork, so it bills until ${source.name}'s next start or delete deletes it: ${error.message}`
                       )
                     )
+                  )
                 )
               );
             });
