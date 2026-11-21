@@ -466,6 +466,10 @@ the run.
   host its tests take; the SDK's
   `.` entry imports no Node and uses no `Buffer` or `process`; and
   `fence/no-manual-run` keeps hand-run Effect to the files above.
+- **A removal removes its promises.** Taking out a behaviour includes the
+  README, JSDoc and `docs/` lines that describe it: grep for the concept's
+  name, such as "resume", before calling the removal done. Twice the code went
+  cleanly and the prose kept promising what was gone, until a reviewer found it.
 
 Removable packages are not a practice here: the provider package is optional,
 but CI publishes it beside the SDK.
