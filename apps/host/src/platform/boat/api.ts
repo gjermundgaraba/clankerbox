@@ -40,6 +40,9 @@ export type Sandbox = typeof Sandbox.Type;
  * https://docs.boat.dev/openapi/boat-v1.yaml's `Sandbox` holds, but which its list,
  * `GET /sandboxes`, answers null for every sandbox, rebooted or not, as a live account showed on
  * 2026-11-21. So `Sandbox`, which a list decodes to, has no `lastReboot`, and only this has one.
+ * That is worth reporting to boat, as it contradicts boat's own OpenAPI: a list that answered it
+ * would let the host read each mark from the list, and the own-record reads `updatedAt` decides,
+ * with their owed re-reads, would go (see docs/design/machine-charts-decisions.tsv, 2026-11-21).
  */
 export const OwnSandbox = Schema.Struct({
   ...Sandbox.fields,

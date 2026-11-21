@@ -92,7 +92,10 @@ export const labelledWith = (
 /**
  * What the control plane is doing about a machine. A client waits for a rest:
  * `settled`, at rest with what was asked; `failed`, after a step failed, or after its runtime
- * stopped a machine asked to run (`Machine.unasked`), until the next request, as nothing is retried;
+ * stopped a machine asked to run (`Machine.unasked`), until the next request, as nothing is retried.
+ * A machine `failed` so, as a routine idle stop on boat or smol cloud leaves it, is intact, its
+ * disk kept, and waits to be started: answer it with a start, never a delete and a create again,
+ * which loses its disk;
  * and `lost`, one the runtime no longer has, which can only be deleted. `waiting` is no rest: the
  * control plane can't read the machine's host, so it tells nothing of a request, which stays saved
  * and acts when it can, and a wait reads on through it as through an outage. `creating` makes or
