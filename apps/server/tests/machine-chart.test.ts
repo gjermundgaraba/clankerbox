@@ -1573,7 +1573,16 @@ describe("the chart", () => {
       input: facts(),
       events: [...representatives],
       serializeState: ({ value, context }) =>
-        JSON.stringify({ value, context: { ...context, boots: "unbounded" } }),
+        JSON.stringify({
+          value,
+          context: {
+            ...context,
+            boots: "unbounded",
+            booting: "decides no target",
+            reboot: context.reboot !== undefined,
+            unasked: "decides no target",
+          },
+        }),
     });
 
     const reached = adjacencyMapToArray(adjacency).map(
