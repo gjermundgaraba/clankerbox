@@ -606,7 +606,7 @@ layer(NodeServices.layer)((it) => {
         ).toStrictEqual(
           before.machines.map(({ state }) => ({
             state,
-            boots: String(state).startsWith("made.") ? 1 : 0,
+            boots: 0,
           }))
         );
         expect(after.machines.map(({ endpoint }) => endpoint)).toStrictEqual(
@@ -859,7 +859,7 @@ layer(NodeServices.layer)((it) => {
           source: { kind: "checkpoint", name: "snap" },
           hostKey: "ssh-ed25519 AAAA",
           pin: "smolvm 0.0.0-test linux-x64",
-          boots: 1,
+          boots: 0,
         });
 
         const gone = row("gone", {
