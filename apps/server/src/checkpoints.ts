@@ -54,39 +54,24 @@ export interface Interface {
   readonly get: (
     id: string
   ) => Effect.Effect<Checkpoint, Declared<"getCheckpoint">>;
-  /** Records a capture and answers at once. */
   readonly capture: (
     request: CaptureRequest
   ) => Effect.Effect<Checkpoint, Declared<"captureCheckpoint">>;
-  /**
-   * Asks a machine to pause, capturing it too if `capture` says so, where `pauseCapture` of its
-   * host's traits, as the host answers now, says: `before` records the capture first and the pause
-   * waits for it to begin, so the checkpoint holds the machine as it ran; `after` records the pause
-   * first, and the capture waits for the machine to rest; `never` is refused, recording nothing. A
-   * host that can't be read is `Unavailable`, recording nothing.
-   */
   readonly pause: (
     request: PauseRequest
   ) => Effect.Effect<Machine, Declared<"pauseMachine">>;
   readonly delete: (
     id: string
   ) => Effect.Effect<void, Declared<"deleteCheckpoint">>;
-  /**
-   * Captures `machine` as a copy of template build `build`, which no client reaches as a
-   * checkpoint, and waits for the capture to end, failing with its error. Answers the copy's name.
-   */
   readonly copy: (
     machine: string,
     build: string
   ) => Effect.Effect<string, HostError>;
-  /** Publishes a build's copy to the build store, and waits for that to end, failing with its error. */
   readonly publish: (name: string) => Effect.Effect<void, HostError>;
-  /** Answers once the fetch is recorded, before it runs. */
   readonly fetch: (
     published: CheckpointRow,
     host: string
   ) => Effect.Effect<void, Conflict | Internal>;
-  /** A copy that isn't there is no failure. */
   readonly discard: (name: string) => Effect.Effect<void, Internal>;
 }
 

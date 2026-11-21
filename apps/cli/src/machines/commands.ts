@@ -287,10 +287,6 @@ export const restore = Command.make(
   )
 );
 
-/**
- * The environment `exec --env NAME` takes NAME's value from, where a variable set empty is set,
- * unlike the CLI's own settings, which read an empty one as unset.
- */
 export class Environment extends Context.Service<
   Environment,
   ConfigProvider.ConfigProvider

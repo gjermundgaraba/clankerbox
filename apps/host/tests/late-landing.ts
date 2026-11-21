@@ -5,11 +5,6 @@ interface Armed {
   land: (() => unknown) | undefined;
 }
 
-/**
- * The makes a fake fails whose machines land all the same, each when the test releases it: `arm`
- * answers the release, and `next` the hold of the next make armed, which lands that make's machine
- * at once if the test released it first.
- */
 export const lateLandings = () => {
   const armed: Armed[] = [];
 

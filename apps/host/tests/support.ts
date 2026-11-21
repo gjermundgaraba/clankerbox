@@ -73,7 +73,6 @@ export interface HostOptions {
   readonly bases?: ReadonlyMap<string, string>;
   readonly logger?: Logger.Logger<unknown, unknown>;
   readonly ports?: PortRange;
-  /** Whether the host takes machines that request the tailnet. */
   readonly tailnet?: boolean;
   readonly http?: Layer.Layer<HttpClient.HttpClient>;
 }
@@ -98,10 +97,6 @@ export const noHttp = Layer.succeed(
   )
 );
 
-/**
- * A host over the runtime `runtime` makes of its settings, on loopback. It ends with the scope, or
- * at `dispose`.
- */
 export const startHostOver = <E>(
   dir: string,
   runtime: (
@@ -163,7 +158,6 @@ export const startHost = (
     readonly fake?: FakeRuntime;
     readonly as?: FakeRuntimeName;
     readonly runtime?: Omit<FakeOptions, "dir" | "as" | "builds">;
-    /** The bucket the fake runtime shares template builds through. */
     readonly builds?: Store;
   }
 ) => {
@@ -195,7 +189,6 @@ export const hostOn =
       });
     });
 
-/** A build store in memory, which every host given it shares, and what was downloaded from it. */
 export const memoryBuildStore = () => {
   const objects = new Map<string, Uint8Array>();
   const downloaded: string[] = [];
@@ -251,7 +244,6 @@ export const accepts = (port: number) =>
     });
   });
 
-/** A loopback port the OS found free, for a test that listens on it. */
 export const freePort = Effect.callback<number>((resume) => {
   const server = createTcpServer();
 
@@ -268,7 +260,6 @@ export const freePort = Effect.callback<number>((resume) => {
   });
 });
 
-/** Whether another program could bind the loopback port now: it lets go of it at once. */
 export const strangerBinds = (port: number) =>
   Effect.callback<boolean>((resume) => {
     const server = createTcpServer();
@@ -283,7 +274,6 @@ export const strangerBinds = (port: number) =>
     });
   });
 
-/** What a loopback port echoes of the payload, once the client has sent it all. */
 export const roundTrip = (port: number, payload: string) =>
   Effect.promise(async () => {
     const socket = connect({ host: "127.0.0.1", port });
@@ -344,10 +334,6 @@ export const eventually = <A, E>(
     return last;
   });
 
-/**
- * A raw TCP connection to the HTTP server at `url`, for a test that sends what no HTTP client
- * would, such as part of a request, and keeps all it reads.
- */
 export const connection = (url: string) =>
   Effect.promise(async () => {
     const socket = connect(Number(new URL(url).port), "127.0.0.1");
@@ -377,7 +363,6 @@ export const connection = (url: string) =>
     };
   });
 
-/** The status line of `read` when it is one whole answer with no body, and what it is when not. */
 export const emptyAnswer = (read: string) => {
   const end = read.indexOf("\r\n\r\n");
   const head = read.slice(0, end).toLowerCase();

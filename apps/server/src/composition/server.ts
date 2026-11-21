@@ -43,17 +43,10 @@ class ClosingEveryConnection extends Server {
 }
 
 /**
- * The control plane's Node server, on its config's address. It stops at once, cutting the requests
- * still open. A write is one SQLite transaction, which a stop never splits, and a request it cuts
- * is one a crash would cut: the client reads to see what a mutation did, and a wait reads on
- * through the outage.
- *
  * Without the preemptive shutdown, the stop takes the routes off, cuts the requests they run, waits
  * for each to answer 503, and only then closes the server. A connection still open then is owed
  * nothing, so the server closes every one, where Node's own close closes the idle ones and waits on
- * the rest, on one whose request never completes for good. A request that comes once the routes
- * are off meets its connection closed, unanswered, once the requests the stop cut have ended, a
- * few milliseconds later as each ends at once, which its client reads as it reads a 503.
+ * the rest, on one whose request never completes for good.
  */
 export const controlPlaneServer = ({
   listen,
@@ -64,7 +57,6 @@ export const controlPlaneServer = ({
     disablePreemptiveShutdown: true,
   });
 
-/** The control plane, over `tailnet` when its config names one: without it, no machine joins one. */
 export const serverLayer = (
   config: ServerSettings,
   server: ServerLayer,

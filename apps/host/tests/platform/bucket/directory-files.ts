@@ -15,11 +15,6 @@ const filesIn = (root: string) =>
 const keyOf = (file: string) =>
   `fake/${createHash("sha256").update(readFileSync(file)).digest("hex")}`;
 
-/**
- * Checkpoints as directories under `dir/checkpoints`, one per instance, put together beside
- * themselves as `<instance>.fetching`. With `keyed`, each file is named by its content, which `held`
- * finds in any checkpoint.
- */
 export const directoryFiles = (
   dir: string,
   keyed: boolean

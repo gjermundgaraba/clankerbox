@@ -26,11 +26,6 @@ export const readerArguments = (
   paths: readonly string[]
 ): readonly string[] => ["-e", script, "--", ...paths];
 
-/**
- * Each path's lock holder from the reader's output, in the order of `paths`, 0 where none holds
- * it or the file is gone, or why the output isn't the whole answer for `paths`: an `fcntl` that
- * failed, or a line missing.
- */
 export const holders = (
   paths: readonly string[],
   output: string

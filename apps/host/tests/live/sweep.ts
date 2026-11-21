@@ -15,14 +15,11 @@ import { Effect, Predicate } from "effect";
 
 import { liveRun } from "./marks.ts";
 
-/** What a live run made that can carry no mark, written as it makes it, and who made it. */
 export interface Ledger {
   readonly run: string;
   readonly hostname: string;
   readonly pid: number;
-  /** boat snapshots by name, or smol cloud checkpoints by ID. */
   readonly copies: ReadonlySet<string>;
-  /** The IDs of the run's machines, which find their copies once they are gone, and nothing else. */
   readonly sources: ReadonlySet<string>;
 }
 
@@ -36,7 +33,6 @@ export interface Reading<M, C> {
   readonly ledgers: readonly Ledger[];
   readonly over: (ledger: Ledger) => boolean;
   readonly named: ReadonlySet<string>;
-  /** The run mark a machine carries, or undefined for one no live run made. */
   readonly runOf: (machine: M) => string | undefined;
   readonly idOf: (machine: M) => string;
   readonly keyOf: (copy: C) => string;
@@ -44,11 +40,8 @@ export interface Reading<M, C> {
 }
 
 export interface Selection<M, C> {
-  /** What the sweep deletes: this run's, and that of each run provably over. */
   readonly swept: Found<M, C>;
-  /** What other live runs hold, which the sweep only lists. */
   readonly listed: Found<M, C>;
-  /** The other runs this reading took as over, whose ledgers go once nothing is left to sweep. */
   readonly over: ReadonlySet<string>;
 }
 
@@ -128,10 +121,6 @@ export const selected = <M, C>(
   };
 };
 
-/**
- * Reads the ledgers, and which of their runs are over, before what the account holds, so a run read
- * as over had made all it left before the listing began, and selects from the two.
- */
 export const sweepRead = <M, C, E, R>(
   ledgers: () => readonly Ledger[],
   listing: Effect.Effect<Found<M, C>, E, R>,
@@ -154,7 +143,6 @@ export const sweepRead = <M, C, E, R>(
       )
   );
 
-/** The live runs' ledgers: a folder of the user's own, never the shared temporary one. */
 export const liveLedgers =
   process.env["CLANKERBOX_LIVE_LEDGERS"] ??
   path.join(
@@ -162,7 +150,6 @@ export const liveLedgers =
     "clankerbox-live"
   );
 
-/** Runs the operator names as over, comma-separated in `CLANKERBOX_LIVE_OVER`. */
 export const namedOver: ReadonlySet<string> = new Set(
   (process.env["CLANKERBOX_LIVE_OVER"] ?? "").split(",").filter(liveRun)
 );
@@ -249,16 +236,11 @@ export const ledgersIn = (dir: string, suite: string): readonly Ledger[] => {
 };
 
 export interface Writer {
-  /** Every run's ledger of the suite, this run's begun first, so a run its first sweep reads is one a later run can tell is over. */
   readonly ledgers: () => readonly Ledger[];
   readonly copy: (key: string) => void;
   readonly source: (id: string) => void;
 }
 
-/**
- * Starts this run's ledger, which says the host and process that run it, so a later run can tell it
- * is over only while that process is gone from this host.
- */
 export const ledgerOf = (dir: string, suite: string, run: string): Writer => {
   const file = fileOf(dir, suite, run);
 
@@ -297,10 +279,6 @@ export const retired = (dir: string, suite: string, run: string) => {
   rmSync(fileOf(dir, suite, run), { force: true });
 };
 
-/**
- * Ends the ledgers of the runs `selection` read as over once it left nothing to sweep, and no other:
- * a run that ended after the reading had its resources only listed.
- */
 export const retiredOver = <M, C>(
   dir: string,
   suite: string,
@@ -335,10 +313,6 @@ export interface Here {
 
 export const thisHost: Here = { hostname: hostname(), alive };
 
-/**
- * Whether the run of a ledger is provably over: its process, on this host, is gone. A ledger of
- * another host, or a PID reused since, reads as a run that may still be going.
- */
 export const over = (ledger: Ledger, from: Here): boolean =>
   ledger.hostname === from.hostname &&
   Number.isInteger(ledger.pid) &&

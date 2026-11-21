@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Kernel settings are not part of a snapshot, so this sets them each time an
-# orb starts or wakes.
 set -euo pipefail
 
 # oxlint with JS plugins, which the lint config loads, maps about 6 GiB per

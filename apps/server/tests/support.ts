@@ -68,7 +68,6 @@ export {
   pause,
 } from "@gjermundgaraba/clankerbox-host/testing";
 
-/** Ends a host as a kill does, and brings it back on its port and runtime under a new boot. */
 export const restartedHost = (
   host: TestHost,
   options?: Parameters<typeof startHost>[1]
@@ -86,7 +85,6 @@ export const restartedHost = (
 
 export const quiet = Duration.hours(1);
 
-/** The runtime of each fake host a test plane runs, for the create or build it places there. */
 export const runtimes = {
   smolvm: RuntimeName.make("smolvm"),
   saving: RuntimeName.make("saving"),
@@ -109,10 +107,6 @@ export const request = (
   ...fields,
 });
 
-/**
- * A machine with an SSH login: a clone of a template whose build's setup gave sshd its host keys,
- * as a base create the host doesn't prepare lacks them.
- */
 export const createWithLogin = (client: Client.Interface, name: string) =>
   Effect.andThen(
     client.buildTemplate({
@@ -135,7 +129,6 @@ export const phaseOf = ({ state }: Pick<MachineRow, "state">) =>
 export const stageOf = ({ state }: Pick<MachineRow, "state">) =>
   stageOfLeaf(state);
 
-/** One event through the chart, as the loop writes it, with no loop told. */
 export const applying = (
   store: StoreInterface,
   name: string,
@@ -145,7 +138,6 @@ export const applying = (
     applied(machineChart, row, event, op)
   );
 
-/** Facts no event sets, as a VM that booted under an older pin leaves them. */
 export const patched = (
   store: StoreInterface,
   name: string,
@@ -162,7 +154,6 @@ export interface Started {
   readonly checkpoints: Checkpoints.Interface;
   readonly templates: Templates.Interface;
   readonly store: StoreInterface;
-  /** Ends the process as a kill does: memory goes, and a host hears nothing. */
   readonly crash: Effect.Effect<void>;
 }
 
@@ -212,11 +203,6 @@ const started = (
     return served;
   });
 
-/**
- * `planned`'s control plane with no HTTP in front: its store, its hosts and the services a request
- * reaches, where `checkpoints` reaches `machines` around the real one, so a test can hold or refuse
- * the write a request makes of a machine.
- */
 export const services = (
   planned: Pick<Plane, "settings">,
   machines: (real: Machines.Interface) => Machines.Interface
@@ -251,11 +237,6 @@ export const services = (
     };
   });
 
-/**
- * `planned`'s templates with no HTTP in front, where `templates` reaches its hosts through `hosts`
- * around the real one, and every other service the real one, so a test can fail what a build alone
- * asks of a host.
- */
 export const templatesOver = (
   planned: Pick<Plane, "settings">,
   hosts: (real: Hosts.Interface) => Hosts.Interface
@@ -308,7 +289,6 @@ export const plane = (options?: {
   readonly hosts?: ReadonlyArray<{
     readonly id: string;
     readonly as?: FakeRuntimeName;
-    /** This host's own, over `runtime`. */
     readonly options?: Parameters<typeof startHost>[1];
   }>;
   readonly draining?: readonly string[];
@@ -316,16 +296,9 @@ export const plane = (options?: {
   readonly failedRowsLast?: Duration.Duration;
   readonly hookTimeoutSeconds?: number;
   readonly runtime?: Parameters<typeof startHost>[1];
-  /**
-   * Gives every guest tailscaled and tailscale, so a host's tailnet check finds them, and with
-   * `refuses` a `tailscale up` that signs in with no key.
-   */
   readonly tailscaled?: boolean | "refuses";
-  /** The control plane's tailnet, which mints its keys. */
   readonly tailnet?: Tailnet["Service"];
-  /** Hears the control plane's log, which goes nowhere without one. */
   readonly logger?: Logger.Logger<unknown, unknown>;
-  /** Members beside the test hosts, such as one served by a stub. */
   readonly members?: readonly Member[];
 }) =>
   Effect.gen(function* () {
@@ -387,7 +360,6 @@ export const plane = (options?: {
     return plan;
   });
 
-/** A control plane running over its hosts, ended with the test. */
 export const running = (options?: Parameters<typeof plane>[0]) =>
   Effect.gen(function* () {
     const planned = yield* plane(options);
@@ -427,7 +399,6 @@ export const machineNames = (served: Pick<Started, "store">) =>
 export const callsTo = (host: TestHost, operation: string) =>
   host.fake.calls.filter((call) => call.startsWith(`${operation} `));
 
-/** What a smolvm host answers of itself, for a stub that serves it. */
 export const stubInfo = {
   id: "old",
   traits: {
@@ -452,10 +423,6 @@ export const stubInfo = {
   builds: false,
 };
 
-/**
- * A host that answers `readHost` with `answer()` and every other action with an empty array, at
- * `status`, and records the path of each request it is sent in `asked`.
- */
 export const stubHost = (
   status: number,
   body: unknown,
@@ -492,5 +459,4 @@ export const stubHost = (
     })
   );
 
-/** A plane whose one host keeps a paused machine's RAM. */
 export const saving = { hosts: [{ id: "smolvm", as: "saving" as const }] };

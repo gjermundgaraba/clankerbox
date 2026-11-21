@@ -6,11 +6,9 @@ export interface ServerSettings {
   readonly listen: { readonly address: string; readonly port: number };
   readonly stateDir: string;
   readonly hosts: readonly Member[];
-  /** How often what no request wakes is looked at again. */
   readonly recheck: Duration.Duration;
   readonly failedRowsLast: Duration.Duration;
   readonly authorizedKeys: string;
-  /** How many seconds a machine's guest hook may run before its stop, pause or delete. */
   readonly hookTimeoutSeconds: number;
 }
 

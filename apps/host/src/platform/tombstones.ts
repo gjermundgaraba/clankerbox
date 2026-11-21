@@ -14,17 +14,12 @@ import type { Scope } from "effect";
 
 import type { Handle, Interface, RuntimeError, Target } from "../runtime.ts";
 
-/**
- * A machine carrying this host's mark at its provider, the instance the mark names, and the handle
- * of each checkpoint the provider holds through it.
- */
 export interface MarkedMachine {
   readonly instance: string;
   readonly handle: Handle;
   readonly checkpoints: readonly Handle[];
 }
 
-/** A rented runtime as its adapter writes it: its `delete` takes a machine its search found. */
 export type Found = Omit<Interface, "delete"> & {
   readonly delete: (
     machine: Target,
@@ -32,13 +27,11 @@ export type Found = Omit<Interface, "delete"> & {
   ) => Effect.Effect<void, RuntimeError>;
 };
 
-/** How often a sweep runs while a tombstone is kept. */
 export const SweepEvery = Context.Reference<Duration.Duration>(
   "@clankerbox/host/platform/tombstones/SweepEvery",
   { defaultValue: () => Duration.seconds(30) }
 );
 
-/** How long a tombstone lasts from its burial, past which a sweep whose list finds nothing of it forgets it. */
 export const tombstoneLast = Duration.days(1);
 
 const Kept = Schema.Array(
@@ -57,19 +50,6 @@ interface Options {
   readonly marked: Effect.Effect<readonly MarkedMachine[], RuntimeError>;
 }
 
-/**
- * `runtime` with tombstones, kept in a file in `dir`, under the host's state directory, so a host
- * that restarts keeps them, and its sweep, which the caller runs. Its `delete` buries the instance
- * once the inner one has answered, or at once when the search found nothing, and answers only once
- * the file holds the tombstone, so a delete tried again after a write that failed writes it again.
- * Its `make` refuses a buried instance, which only a control plane restored from a backup sends.
- * The sweep lists what carries this host's mark while a tombstone is kept, so a host with nothing
- * to delete pays for no list, and deletes each machine of a buried instance through the inner
- * `delete`, keeping every checkpoint it holds, as a row may still want one. A tombstone older than
- * `tombstoneLast` is forgotten by a sweep whose list succeeded and found nothing of it. A sweep
- * that fails or dies logs it, and the next sweep tries again. A tombstone only ever deletes, so a
- * host with none, or one that lost its file, keeps every machine a row wants.
- */
 export const tombstoned = <
   R extends Pick<Found, "make" | "delete"> & {
     readonly traits: Pick<RuntimeTraits, "runtime">;
@@ -259,7 +239,6 @@ export const tombstoned = <
     return { runtime: { ...runtime, make, delete: remove }, sweep };
   });
 
-/** `runtime` with its tombstones, swept every `SweepEvery` in the scope that makes it. */
 export const rented = (
   runtime: Found,
   options: Options

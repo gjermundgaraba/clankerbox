@@ -24,7 +24,7 @@ import {
   Result,
   Schema,
 } from "effect";
-import { expect } from "vite-plus/test";
+import { expect, expectTypeOf } from "vite-plus/test";
 
 import { applied } from "../../src/chart.ts";
 import {
@@ -1286,52 +1286,42 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a row at a leaf the chart hasn't is refused, and nothing is written",
+    "a machine or checkpoint stored at an unknown chart leaf cannot be read",
     () =>
       Effect.gen(function* () {
+        expectTypeOf<"capturing.nowhere">().not.toExtend<
+          CheckpointRow["state"]
+        >();
         const stateDir = yield* stateIn;
 
-        const { error, rows } = yield* withStore(stateDir, (store) =>
+        yield* withStore(stateDir, (store) =>
           Effect.gen(function* () {
-            const refused = yield* Effect.flip(
-              store.insertMachine(
-                // @ts-expect-error a row can't name a leaf the chart hasn't
-                row("dev", { state: "made.nowhere" })
-              )
-            );
-
-            return { error: refused, rows: yield* store.machines };
+            yield* store.insertMachine(row("dev"));
+            yield* store.insertCheckpoint(checkpoint("snap"));
           })
         );
 
-        expect(error._tag).toBe("Internal");
-        expect(error.message).toContain("insert machine dev");
-        expect(rows).toStrictEqual([]);
-      })
-  );
+        {
+          using db = new DatabaseSync(path.join(stateDir, databaseFile));
+          db.exec(`
+            UPDATE machines SET state = 'made.nowhere' WHERE name = 'dev';
+            UPDATE checkpoints SET state = 'capturing.nowhere' WHERE name = 'snap';
+          `);
+        }
 
-  it.effect(
-    "a checkpoint at a leaf the chart hasn't is refused, and nothing is written",
-    () =>
-      Effect.gen(function* () {
-        const stateDir = yield* stateIn;
-
-        const { error, rows } = yield* withStore(stateDir, (store) =>
-          Effect.gen(function* () {
-            const refused = yield* Effect.flip(
-              store.insertCheckpoint(
-                // @ts-expect-error a row can't name a leaf the chart hasn't
-                checkpoint("snap", { state: "capturing.nowhere" })
-              )
-            );
-
-            return { error: refused, rows: yield* store.checkpoints };
-          })
+        const [machineError, checkpointError] = yield* withStore(
+          stateDir,
+          (store) =>
+            Effect.all([
+              Effect.flip(store.findMachine("dev")),
+              Effect.flip(store.findCheckpoint("snap")),
+            ])
         );
 
-        expect(error._tag).toBe("Internal");
-        expect(error.message).toContain("insert checkpoint snap");
-        expect(rows).toStrictEqual([]);
+        expect(machineError._tag).toBe("Internal");
+        expect(machineError.message).toContain("read dev");
+        expect(checkpointError._tag).toBe("Internal");
+        expect(checkpointError.message).toContain("read checkpoint snap");
       })
   );
 

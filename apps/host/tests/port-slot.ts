@@ -4,7 +4,6 @@ import type { Server } from "node:net";
 
 import type { PortRange } from "../src/settings.ts";
 
-/** The variable the global setup sets to the first port of the slot it claims for the run. */
 export const testPortsVariable = "CLANKERBOX_TEST_PORTS";
 
 export const slotsFrom = 22_000;
@@ -20,10 +19,8 @@ export const slotSize = 250;
  */
 export const claimOffset = slotSize - 1;
 
-/** How many ports each host of a test control plane takes, `planes` cut into ranges this size. */
 export const planeRange = 20;
 
-/** How many ports each rented host of a test takes, `rented` cut into ranges this size. */
 export const rentedRange = 11;
 
 const slotFirst = () => {
@@ -43,12 +40,6 @@ const inSlot = (offset: number, size = 10): PortRange => ({
   last: slotFirst() + offset + size - 1,
 });
 
-/**
- * Every port range a test of any package listens on. `shared` sits outside the slots: the hosts
- * that take it, and a host the verify skill serves, probe each port before they take it. Every other
- * range lies within the slot the run claimed, at a fixed offset, so no other run on the machine
- * holds it while this one lasts; each is read only once the slot is claimed.
- */
 export const suitePorts = {
   shared: { first: 21_000, last: 21_099 },
   get tailnet() {
@@ -124,10 +115,6 @@ const slotUnheld = async (first: number) => {
   return true;
 };
 
-/**
- * Claims the first slot no other process holds, and on none of whose ports another listens, by
- * listening on its claim port until `release`.
- */
 export const claimSlot = async () => {
   for (let first = slotsFrom; first + slotSize <= slotsTo; first += slotSize) {
     const claim = await listening(first + claimOffset);
@@ -150,7 +137,6 @@ export const claimSlot = async () => {
   );
 };
 
-/** The global setup of each package whose tests listen: claims a slot for the run. */
 export default async function setup() {
   const { first, release } = await claimSlot();
 

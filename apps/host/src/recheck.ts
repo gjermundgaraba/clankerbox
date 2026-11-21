@@ -7,13 +7,9 @@ import { Reaches } from "./reach.ts";
 import { targetOf } from "./runtime.ts";
 import type { Handle } from "./runtime.ts";
 
-/** What the recheck's adopt reads of the steps the host runs, which it never changes. */
 export interface Steps {
-  /** A machine's handle: its ref's, or else the one the runtime finds by its instance, in a read's time. */
   readonly found: (machine: Ref) => Effect.Effect<Handle | undefined, Internal>;
-  /** Held while the host accepts a step, so an adopt reopens no relay beside one. */
   readonly accepting: Semaphore.Semaphore;
-  /** Whether no step the host accepted since gives the machine's name to another instance. */
   readonly reachable: (machine: MachineRef) => boolean;
 }
 
@@ -31,11 +27,6 @@ const heldAs = (machine: Ref, handle: Handle | undefined): string => {
     : `the runtime found it as ${handle}`;
 };
 
-/**
- * The host's side of the control plane's recheck. An adopt gives a restarted host the machines it
- * holds: it resolves each machine's handle, reopens the relay of each that no step since has moved
- * on, and answers each one's handle and endpoint, naming those whose search failed.
- */
 export const make = (steps: Steps) =>
   Effect.gen(function* () {
     const reaches = yield* Reaches;

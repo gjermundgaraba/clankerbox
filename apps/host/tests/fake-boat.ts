@@ -69,7 +69,6 @@ export interface FakeSandbox {
   hydratingFor: number;
   answeredHydrated: boolean | undefined;
   dataExpired: boolean;
-  /** The GB of the user's own files it holds, which a resume onto a type whose disk takes less refuses. */
   dataGb: number;
   failed: boolean;
   cancelled: boolean;
@@ -116,7 +115,6 @@ type Offered = typeof Offered.Type;
 
 const isOffered = Schema.is(Offered);
 
-/** The traits of a boat host over this fake, which offers the types measured on a boat plan: all but `xlarge`. */
 export const traits = boatTraits(Offered.literals);
 
 const isText = Schema.is(Schema.String);
@@ -519,13 +517,6 @@ const ssh = (
     );
   });
 
-/**
- * OpenSSH as fake boat answers it, from any process: fake boat runs the command of a call it
- * admits in `/bin/sh` under the sandbox's root, in its guest, and this process carries its stdio
- * over the session's FIFOs and exits with its status, or 255 once the session ends without one,
- * as ssh does, so a caller that ends leaves it running; one it refuses exits 255 with OpenSSH's
- * words in its log.
- */
 export const fakeBoatSsh = (url: string, apiKey: string) =>
   Layer.effect(
     ChildProcessSpawner.ChildProcessSpawner,
@@ -1713,33 +1704,24 @@ export interface FakeBoat {
   readonly listsLag: (times: number) => Effect.Effect<void>;
   readonly gatewayOnce: (call: BoatCall) => Effect.Effect<void>;
   readonly failNextSandbox: Effect.Effect<void>;
-  /** The next sandbox made reads `cancelled`, as one boat found no machine for, until a read of it by ID, which removes it. */
   readonly cancelNextSandbox: Effect.Effect<void>;
-  /** The next sandbox made, or resumed onto a new machine, reads `hydrated: false` for this many reads of it by ID, as one boat still copies its snapshot's files into. */
   readonly hydrateNext: (reads: number) => Effect.Effect<void>;
   readonly cancel: (id: string) => Effect.Effect<void>;
-  /** Removes a sandbox without a delete, so it reads 404 and lists nowhere. */
   readonly vanish: (id: string) => Effect.Effect<void>;
-  /** `vanish` at once, for an `onCall` hook. */
   readonly vanishNow: (id: string) => void;
   readonly fail: (id: string) => Effect.Effect<void>;
-  /** Stops a sandbox, which then reads `archiving` for this many reads of it. */
   readonly archiveSlowly: (id: string, reads: number) => Effect.Effect<void>;
-  /** Stops a sandbox and drops its data, as boat does 14 days into a stop: it reads `dataExpiredAt`, and a resume or fork of it is refused. */
   readonly expire: (id: string) => Effect.Effect<void>;
-  /** Lists a saved snapshot whose `status` boat answers null, saved from `sourceSandboxId`. */
   readonly malformedSnapshot: (
     name: string,
     sourceSandboxId?: string | number
   ) => Effect.Effect<void>;
-  /** Saves `name` as a POST does, the save running `lasts`, none by default. */
   readonly saveAs: (
     sandboxId: string,
     name: string,
     lasts?: Duration.Input
   ) => Effect.Effect<void>;
   readonly refuseOnce: (call: BoatCall) => Effect.Effect<void>;
-  /** The sandbox holds this many GB of the user's own files. */
   readonly fill: (id: string, gb: number) => Effect.Effect<void>;
   readonly calls: readonly string[];
   readonly requests: readonly FakeRequest[];

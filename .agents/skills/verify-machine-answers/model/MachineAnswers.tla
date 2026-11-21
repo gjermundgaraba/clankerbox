@@ -13,31 +13,9 @@ Absent == [state |-> "absent", desired |-> None, prepared |-> FALSE, err |-> FAL
            op |-> NoOp]
 
 VARIABLES
-  row,        \* the store's row and the operation in flight, or None
-  up,         \* the control plane runs
-  script,     \* the control plane holds the setup in memory
-  read,       \* the state the machine's loop last read, or None
-  known,      \* the host boot the control plane last learned
-  linked,     \* the control plane can reach the host
-  vm,         \* what the runtime holds
-  boot,       \* the host process's number
-  high,       \* the highest sequence the host has seen this boot
-  runs,       \* the operation the host runs or keeps, or None
-  net,        \* deliveries of operations: lost, repeated or late
-  cut,        \* cancels on their way to the host
-  applied,    \* how often each operation changed the VM, for OnceOnly
-  cl,         \* each request, from its call to its answer
-  nextOp,     \* the next operation's ID and sequence
-  faults,     \* runtime failures so far
-  crashes,    \* control plane crashes so far
-  partitions, \* partitions so far
-  restarts,   \* host restarts so far
-  drops,      \* deliveries lost so far
-  drift,      \* none; unread once the VM stops by itself, until a read that
-              \* saw it is decided; then read
-  late,       \* none; out once a make's call may yet land; then landed; swept
-              \* once the sweep deleted what landed
-  tomb        \* the host keeps the instance's tombstone: a remove of it answered
+  row, up, script, read, known, linked, vm, boot, high, runs, net, cut,
+  applied, cl, nextOp, faults, crashes, partitions, restarts,
+  drops, drift, late, tomb
 
 vars == <<row, up, script, read, known, linked, vm, boot, high, runs, net, cut,
           applied, cl, nextOp, faults, crashes, partitions, restarts,
@@ -84,9 +62,6 @@ Orphaned == (row.state = "absent" \/ row.state = Undone) /\ vm # "missing"
 
 Landed == late = "landed" /\ vm # "missing"
 
-\* A drift stops a running VM, so it can falsify only an answer that it runs,
-\* to a request made before it. A late VM runs where none should, so it can
-\* falsify only an answer that the machine is gone.
 Excused(k) ==
   \/ drift = "unread" /\ cl[k].pre = "none" /\ cl[k].d = "running"
   \/ Landed /\ cl[k].d = "deleted"
@@ -376,13 +351,8 @@ LandLate ==
                  cut, applied, tomb, cl, nextOp>>
   /\ UNCHANGED <<faults, crashes, partitions, restarts, drops, drift>>
 
-\* The store retired the one instance once its row, after the create, no longer
-\* holds it: the row went or rests undone. No row takes it again.
 Retired == cl[Creator].pc # "idle" /\ row.state \in {"absent", Undone}
 
-\* The adapter's own sweep, in its own scope: at any moment, with the control
-\* plane or without it, it deletes what it finds of an instance it keeps a
-\* tombstone of.
 Sweep ==
   /\ tomb /\ vm # "missing"
   /\ vm' = "missing"

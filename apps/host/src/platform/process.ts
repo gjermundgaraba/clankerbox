@@ -168,7 +168,6 @@ export const cliIn = (
     return { run, exec, dial };
   });
 
-/** Whether the process `pid` has ended: signal 0 reaches every process that runs, whoever owns it. */
 export const processEnded = (pid: number): Effect.Effect<boolean> =>
   Effect.match(
     Effect.try({

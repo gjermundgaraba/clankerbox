@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Prepares an Amp orb the way CI does: Vite+ (`vp`) at the version the catalog
-# pins, the Node.js `.node-version` pins, the workspace's dependencies, and the
-# guest shells the host's tests run the launcher under.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -31,8 +28,6 @@ apt_packages() {
 vp_bin="$HOME/.local/share/vite-plus/bin/vp"
 vp_version=$(sed -n 's/^  vite-plus: *//p' pnpm-workspace.yaml)
 
-# One vp serves every repository in the orb, so one pinning an older
-# version keeps the newer one.
 install_vp() {
   local installed
   installed=$("$vp_bin" --version 2>/dev/null | sed -n '1s/^vp v//p') || true
@@ -44,7 +39,6 @@ install_vp() {
 step "apt packages" apt_packages
 step "Vite+ $vp_version or newer" install_vp
 # The installer adds this to the login profiles, which this running script never reads.
-# shellcheck disable=SC1091
 . "$HOME/.config/vite-plus/env"
 step "Node.js and pnpm" vp env install
 step "dependencies" vp install --frozen-lockfile

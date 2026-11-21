@@ -7,14 +7,12 @@ import { Runtime } from "./runtime.ts";
 import type { Dial, Identity, Reach, Target } from "./runtime.ts";
 import type { PortRange } from "./settings.ts";
 
-/** A port a relay has bound. It closes each connection until `relay` gives it the dial to carry them through. */
 export interface Listener {
   readonly relay: (dial: Dial) => Effect.Effect<void>;
   readonly close: Effect.Effect<void>;
 }
 
 export interface RelaysInterface {
-  /** Binds the port, or answers none when another program holds it. */
   readonly bind: (
     address: string,
     port: number
@@ -30,7 +28,6 @@ export interface Reopened {
   readonly port: number;
 }
 
-/** The port a make took, held for it until it is done, and let go of by `release` if it isn't. */
 export interface Claim {
   readonly port: number;
   readonly release: Effect.Effect<void>;
@@ -42,18 +39,12 @@ export interface Interface {
     taken: ReadonlySet<number>
   ) => Effect.Effect<Claim, Capacity | Internal>;
   readonly endpoint: (port: number) => SshEndpoint;
-  /**
-   * Reaches the machine at `port`, or, where another program took that, at the first free port of
-   * the range that isn't one of `taken`, and answers the port it is reached at: none while a make of
-   * another instance holds its name. A published runtime's VM binds its own port, so it answers that.
-   */
   readonly open: (
     machine: Target,
     port: number,
     taken: ReadonlySet<number>
   ) => Effect.Effect<Option.Option<number>, Capacity | Internal>;
   readonly close: (machine: Identity) => Effect.Effect<void>;
-  /** Opens each machine, none taking another's port, and answers the port each is reached at. */
   readonly adopt: (
     machines: readonly Reopened[]
   ) => Effect.Effect<ReadonlyMap<string, number>>;

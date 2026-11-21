@@ -95,7 +95,6 @@ export interface Preset {
   readonly pin: string | undefined;
   readonly prepares: Interface["prepares"];
   readonly admits: boolean;
-  /** Whether it marks the machines it makes, and holds each checkpoint through its machine. */
   readonly owned: boolean;
   readonly relayed: boolean;
   /**
@@ -104,7 +103,6 @@ export interface Preset {
    * running, measured on each.
    */
   readonly cut: "ends" | "leaves";
-  /** Whether the runtime stops machines no request asked it to, as boat and smol cloud do. */
   readonly stopsOnItsOwn: boolean;
 }
 
@@ -193,14 +191,8 @@ export interface FakeOptions {
   readonly ramBudgetMib?: number | undefined;
   readonly pin?: string | undefined;
   readonly relayed?: boolean | undefined;
-  /**
-   * Whether a published machine's boot binds its port on loopback to find another program holding
-   * it, as a smolvm host's does; otherwise every port is free to it, so a run sharing a range with
-   * another never fails on the other's ports.
-   */
   readonly probesPorts?: boolean | undefined;
   readonly onCall?: ((call: string) => void) | undefined;
-  /** The bucket the fake shares template builds through: any fake given one shares, `fixed` included. */
   readonly builds?: Store | undefined;
 }
 
@@ -348,10 +340,6 @@ export const baseResolver = "192.168.64.1";
 
 export const tailnetResolver = "100.100.100.100";
 
-/**
- * Gives a guest `tailscaled` and `tailscale`, whose `up` signs in with any key, or, where it
- * `refuses`, signs in with none, as a guest that can't reach Tailscale's control.
- */
 export const writeTailscaleStubs = (bin: string, refuses = false): void => {
   mkdirSync(bin, { recursive: true });
 

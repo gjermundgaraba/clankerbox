@@ -9,7 +9,6 @@ import { loadSettings } from "./settings.ts";
 /** Amp gives a job five minutes; the rest is left for the provider's own round trip. */
 export const jobTimeout = Duration.seconds(270);
 
-/** What the client waits for a machine or checkpoint to rest, within the job's time. */
 export const waitTimeout = Duration.minutes(4);
 
 class Exited extends Data.TaggedError("Exited")<{ readonly code: number }> {

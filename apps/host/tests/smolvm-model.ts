@@ -20,7 +20,6 @@ export interface Vm {
   readonly parent?: string | undefined;
   forwards: readonly string[];
   sizes?: Readonly<Record<SizeFlag, number | undefined>> | undefined;
-  /** The VM whose pack this one was created from. */
   readonly unpacked?: string | undefined;
 }
 
@@ -88,13 +87,6 @@ const heldElsewhereOn1341 = (forward: string): Reply => ({
   stderr: `Error: agent operation failed: start machine: agent operation failed: monitor agent: Error: agent operation failed: configure virtio-net: failed to start virtio network runtime: cannot publish host TCP 127.0.0.1:${hostPort(forward)} to guest TCP 22: Address already in use (os error 98) (boot process exited (code 1) before the agent was ready); guest console: {"level":"INFO","fields":{"message":"accepted connection"}}\n`,
 });
 
-/**
- * smolvm's machine records as its CLI keeps them, for the calls a host makes: enough to follow a
- * build's base, the copies branched from it, and the host ports each holds. Each scope holds
- * `heldBytes`. `elsewhere` holds the host ports another program holds, which a VM's boot can't
- * publish, and `probe` finds a port free as a bind would: neither held elsewhere nor by a VM that
- * runs.
- */
 export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
   const vms = new Map<string, Vm>();
   const packs: string[] = [];
@@ -485,7 +477,6 @@ export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
   };
 };
 
-/** Settings for a smolvm runtime over a scratch prefix holding `expanded`, its state on a short path for its sockets. */
 export const prepared = (expanded: readonly string[] = templates) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
