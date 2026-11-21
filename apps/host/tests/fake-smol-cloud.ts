@@ -18,7 +18,7 @@ import { lateLandings } from "./late-landing.ts";
 import type { Dropped, Faults } from "./runtime-contract.ts";
 import { loopbackServer } from "./support.ts";
 
-export type FakeState = "stopped" | "creating" | "started" | "paused";
+export type FakeState = "stopped" | "creating" | "started";
 
 export interface FakeMachine {
   readonly id: string;
@@ -32,7 +32,6 @@ export interface FakeMachine {
   readonly restoredFrom: string | undefined;
   readonly branchedFrom: string | undefined;
   readonly rootBranch: string;
-  pausedWith: string | undefined;
   /** The `error` smol cloud answers with a machine it holds in `error`, such as one whose node it lost. */
   failedWith?: string | undefined;
 }
@@ -66,8 +65,8 @@ export interface FakeFaults extends Faults {
    */
   readonly holdStarts: Effect.Effect<Effect.Effect<void>>;
   /**
-   * Has each capture, a pause's own included, read `creating` until the effect it answers runs, as
-   * smol cloud's capture of a pause can still run once the machine is resumed.
+   * Has each capture read `creating` until the effect it answers runs, as smol cloud's capture can
+   * still run once the host has stopped waiting for it.
    */
   readonly holdCaptures: Effect.Effect<Effect.Effect<void>>;
   /**
@@ -92,8 +91,11 @@ export interface FakeSmolCloud {
     name: string,
     id?: string | number
   ) => Effect.Effect<void>;
-  /** Pauses a machine as a host before 0.42 did, keeping its memory. */
-  readonly pausedByOlderHost: (id: string) => Effect.Effect<void>;
+  /**
+   * Captures a machine as a capture whose answer was lost leaves it: smol cloud holds the
+   * checkpoint, and no row does.
+   */
+  readonly capturedUnanswered: (id: string) => Effect.Effect<void>;
   /** Holds a machine in `error`, answering `why` as its `error`. */
   readonly fail: (id: string, why: string) => Effect.Effect<void>;
   readonly calls: readonly string[];
@@ -335,10 +337,7 @@ export const fakeSmolCloud = (
       [...machines.values()].some((machine) => machine.name === name);
 
     const newMachine = async (
-      fields: Omit<
-        FakeMachine,
-        "id" | "createdAt" | "root" | "rootBranch" | "pausedWith"
-      >,
+      fields: Omit<FakeMachine, "id" | "createdAt" | "root" | "rootBranch">,
       from: string | undefined
     ) => {
       const id = idOf("mach");
@@ -361,7 +360,6 @@ export const fakeSmolCloud = (
             : (machines.get(fields.branchedFrom)?.rootBranch ??
               fields.branchedFrom),
         createdAt: now(),
-        pausedWith: undefined,
       };
 
       machines.set(id, machine);
@@ -458,14 +456,6 @@ export const fakeSmolCloud = (
     const act = async (machine: FakeMachine, verb: string): Promise<Answer> => {
       switch (verb) {
         case "start": {
-          if (machine.state === "paused") {
-            return problem(
-              409,
-              "conflict",
-              "machine has a pending or durable pause; wait for paused state and use resume"
-            );
-          }
-
           if (machine.state === "stopped") {
             if (!roomFor()) {
               return noRoom;
@@ -480,39 +470,8 @@ export const fakeSmolCloud = (
         }
 
         case "stop": {
-          if (machine.state === "paused") {
-            return problem(
-              409,
-              "conflict",
-              "machine has saved execution; use resume or delete"
-            );
-          }
-
           await killAll(machine);
           machine.state = "stopped";
-
-          return answer(200, recordOf(machine));
-        }
-
-        case "pause": {
-          if (machine.state !== "started") {
-            return problem(409, "conflict", `machine is ${machine.state}`);
-          }
-
-          const own = await capture(machine);
-
-          machine.pausedWith = own.id;
-          machine.state = "paused";
-
-          return answer(200, recordOf(machine));
-        }
-
-        case "resume": {
-          if (machine.state !== "paused") {
-            return problem(409, "conflict", `machine is ${machine.state}`);
-          }
-
-          machine.state = "started";
 
           return answer(200, recordOf(machine));
         }
@@ -527,10 +486,6 @@ export const fakeSmolCloud = (
       machine: FakeMachine,
       to: typeof Resources.Type
     ): Answer => {
-      if (machine.state === "paused") {
-        return problem(409, "conflict", "machine is paused");
-      }
-
       if (machine.state === "creating") {
         return problem(
           409,
@@ -610,9 +565,7 @@ export const fakeSmolCloud = (
       }
 
       const holder = [...machines.values()].find(
-        (machine) =>
-          machine.restoredFrom === checkpoint.id ||
-          (machine.state === "paused" && machine.pausedWith === checkpoint.id)
+        (machine) => machine.restoredFrom === checkpoint.id
       );
 
       if (holder !== undefined) {
@@ -926,14 +879,6 @@ export const fakeSmolCloud = (
               return HttpServerResponse.empty();
             }
 
-            if (machine.state === "paused") {
-              return problem(
-                409,
-                "conflict",
-                "machine has saved execution; use resume"
-              );
-            }
-
             if (machine.state === "stopped") {
               if (!roomFor()) {
                 return noRoom;
@@ -1115,12 +1060,12 @@ export const fakeSmolCloud = (
         Effect.sync(() => {
           malformed.push({ id, name, state: null });
         }),
-      pausedByOlderHost: (id: string) =>
+      capturedUnanswered: (id: string) =>
         Effect.promise(async () => {
           const machine = machines.get(id);
 
           if (machine !== undefined) {
-            await act(machine, "pause");
+            await capture(machine);
           }
         }),
       fail: (id: string, why: string) =>

@@ -43,7 +43,7 @@ TLC checks these invariants on every reachable state:
 
 | Invariant            | In plain words                                                                                       |
 | -------------------- | ---------------------------------------------------------------------------------------------------- |
-| `AnswerTrue`         | A success answer finds the VM as asked: running, stopped, paused (or stopped), gone                  |
+| `AnswerTrue`         | A success answer finds the VM as asked: running, stopped (also for a pause), gone                    |
 | `RestTrue`           | A row resting `settled` with no operation holds the VM it says, unless it drifted since a decided read |
 | `SupersededHonest`   | `Superseded` names what another request asked for, never the request's own                           |
 | `NoOrphan`           | A failed create once undone, and a deleted machine, leave no VM but one that landed late             |

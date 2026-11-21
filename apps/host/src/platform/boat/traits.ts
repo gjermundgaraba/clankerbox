@@ -60,7 +60,6 @@ export const traits = (
   runtime: RuntimeName.make("boat"),
   images: "named",
   captureFrom: "either",
-  stop: "discards",
   copies: "any",
   resize: { running: "none", stopped: "any" },
   sizes: {

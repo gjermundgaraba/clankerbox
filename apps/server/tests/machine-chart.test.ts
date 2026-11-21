@@ -248,17 +248,14 @@ const decisions: Readonly<
   running: {
     running: [stepped.start, settles],
     stopped: [stepped.start, stepped.start],
-    paused: [stepped.start, stepped.start],
   },
   stopped: {
     running: [stepped.stop, stepped.stop],
     stopped: resting,
-    paused: [stepped.stop, stepped.stop],
   },
   paused: {
     running: [stepped.pause, stepped.pause],
     stopped: resting,
-    paused: resting,
   },
 };
 
@@ -310,7 +307,7 @@ const vmAfter: Partial<Record<Leaf, MachineState>> = {
   "making.sent": "running",
   "made.stepping.starting": "running",
   "made.stepping.stopping": "stopped",
-  "made.stepping.pausing": "paused",
+  "made.stepping.pausing": "stopped",
 };
 
 const restsWithin = (input: Input, steps: number) => {
@@ -345,7 +342,7 @@ describe("a read", () => {
       )
     );
 
-    expect(table).toHaveLength(1120);
+    expect(table).toHaveLength(896);
     expect(
       table.filter(({ chart, decided }) => chart !== decided)
     ).toStrictEqual([]);
@@ -444,20 +441,6 @@ describe("a read", () => {
           ].includes(decide(input)) ||
             (decide(input) === "made.stepping.pausing") !==
               (input.seen === "running"))
-      )
-    ).toStrictEqual([]);
-  });
-
-  it("a paused machine asked to run or stop is started or stopped, never left at rest", () => {
-    expect(
-      madeInputs.filter(
-        (input) =>
-          input.seen === "paused" &&
-          !input.resizing &&
-          ((input.desired === "running" &&
-            decide(input) !== "made.stepping.starting") ||
-            (input.desired === "stopped" &&
-              decide(input) !== "made.stepping.stopping"))
       )
     ).toStrictEqual([]);
   });
@@ -708,10 +691,9 @@ describe("what a write begins and finishes", () => {
   it("only a start from stopped takes the host's pin", () => {
     expect([
       after(rowAt("made.observing"), read("stopped")).pin,
-      after(rowAt("made.observing"), read("paused")).pin,
       after(rowAt("made.observing", { desired: "stopped" }), read("running"))
         .pin,
-    ]).toStrictEqual(["new pin", "pin", "pin"]);
+    ]).toStrictEqual(["new pin", "pin"]);
   });
 
   it("a make takes the pin of the host it is sent to, which its VM boots under", () => {

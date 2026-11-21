@@ -24,7 +24,7 @@ const Base = Schema.Literals([
 
 const Bases = Schema.Array(Schema.Literals(["ubuntu", "macos"]));
 
-const State = Schema.Literals(["running", "stopped", "paused"]);
+const State = Schema.Literals(["running", "stopped"]);
 
 const Copy = Schema.Literals(["fork", "restore"]);
 
@@ -169,10 +169,7 @@ describe("resizeRefusal", () => {
           to
         );
 
-        const takes =
-          state === undefined || state === "paused"
-            ? "none"
-            : traits.resize[state];
+        const takes = state === undefined ? "none" : traits.resize[state];
 
         const unfitted =
           !gives(given, to) || (takes === "grow" && shrinks(from, to));
@@ -282,7 +279,6 @@ describe("pinRefusal", () => {
   const Of = Schema.Union([
     Schema.Struct({ copy: Schema.Literal("dev") }),
     Schema.Struct({ restore: Schema.Literal("dev") }),
-    Schema.Struct({ resume: Schema.Literal("dev") }),
   ]);
 
   it.effect.prop(

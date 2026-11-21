@@ -323,7 +323,7 @@ describe("client", () => {
           );
 
           expect([paused.state, paused.phase]).toStrictEqual([
-            "paused",
+            "stopped",
             "settled",
           ]);
           expect(snap).toMatchObject({
@@ -362,7 +362,7 @@ describe("client", () => {
             action: "pauseMachine",
             id: "snap",
           });
-          expect([dev.state, dev.phase]).toStrictEqual(["paused", "settled"]);
+          expect([dev.state, dev.phase]).toStrictEqual(["stopped", "settled"]);
         })
     );
 
@@ -480,7 +480,7 @@ describe("client", () => {
     it.effect("ensure starts the machine of the name when one exists", () =>
       Effect.gen(function* () {
         const stub = server({
-          machines: [machine("dev", { state: "paused", desired: "paused" })],
+          machines: [machine("dev", { state: "stopped", desired: "paused" })],
         });
 
         const ensured = yield* withClient(stub, (client) =>
@@ -1454,7 +1454,7 @@ describe("client", () => {
         );
 
         expect(states).toStrictEqual([
-          "paused",
+          "stopped",
           "running",
           "stopped",
           "stopped",

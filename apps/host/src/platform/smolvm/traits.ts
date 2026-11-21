@@ -34,7 +34,6 @@ export const traits = (arch: string): RuntimeTraits => ({
   runtime: RuntimeName.make("smolvm"),
   images: "references",
   captureFrom: "either",
-  stop: "resumes",
   copies: "any",
   resize: {
     running: "grow",

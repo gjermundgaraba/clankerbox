@@ -168,21 +168,23 @@ layer(NodeServices.layer)((it) => {
         })
     );
 
-    it.effect("resumes a paused orb and starts bootstrap again", () =>
-      Effect.gen(function* () {
-        const stub = server({
-          machines: [
-            machine("amp-T-123", { state: "paused", desired: "paused" }),
-          ],
-        });
+    it.effect(
+      "starts a paused orb, which is stopped, and bootstrap again",
+      () =>
+        Effect.gen(function* () {
+          const stub = server({
+            machines: [
+              machine("amp-T-123", { state: "stopped", desired: "paused" }),
+            ],
+          });
 
-        const result = yield* dispatched(spawnEnv, stub);
+          const result = yield* dispatched(spawnEnv, stub);
 
-        expect(result.code).toBe(0);
-        expect(stub.creates).toStrictEqual([]);
-        expect(stub.calls).toContain("machine.start");
-        expect(stub.execs.map(({ id }) => id)).toStrictEqual(["amp-T-123"]);
-      })
+          expect(result.code).toBe(0);
+          expect(stub.creates).toStrictEqual([]);
+          expect(stub.calls).toContain("machine.start");
+          expect(stub.execs.map(({ id }) => id)).toStrictEqual(["amp-T-123"]);
+        })
     );
 
     it.effect(
@@ -323,7 +325,8 @@ layer(NodeServices.layer)((it) => {
             "machine.get",
             "checkpoint.get",
           ]);
-          expect(stub.row("amp-T-123")?.state).toBe("paused");
+          expect(stub.row("amp-T-123")?.desired).toBe("paused");
+          expect(stub.row("amp-T-123")?.state).toBe("stopped");
 
           const saved = yield* readCheckpoint(stub, "snap-1");
 

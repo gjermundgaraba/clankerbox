@@ -1524,35 +1524,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a machine paused under another runtime build is PinMismatch to a start or a stop, and never resumed",
-    () =>
-      Effect.gen(function* () {
-        const { bootedUnder, client, fake, pins } =
-          yield* served(copiesRunning);
-
-        yield* client.create(
-          "dev",
-          request("dev", { runtime: runtimes.copiesRunning })
-        );
-        yield* client.pauseMachine({ id: "dev" });
-        yield* fake.pausedByOlderHost("dev");
-        yield* bootedUnder("dev", "fake 0");
-        fake.calls.length = 0;
-
-        const errors = [
-          yield* Effect.flip(client.startMachine({ id: "dev" })),
-          yield* Effect.flip(client.stopMachine({ id: "dev" })),
-        ];
-
-        expect(errors.map(({ _tag }) => _tag)).toStrictEqual([
-          "PinMismatch",
-          "PinMismatch",
-        ]);
-        expect(yield* pins).toStrictEqual(["fake 0"]);
-      })
-  );
-
-  it.effect(
     "a second request for what a step already works toward lets the step finish, and both answer",
     () =>
       Effect.gen(function* () {
@@ -1641,29 +1612,27 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "dev",
           request("dev", { runtime: runtimes.copiesRunning })
         );
-        yield* client.pauseMachine({ id: "dev" });
-        yield* fake.pausedByOlderHost("dev");
         fake.calls.length = 0;
 
-        const resuming = fake.holdNext("admit");
-
-        fake.failNext("stop", new Internal({ message: "guest didn't flush" }));
+        const stopping = fake.holdNext("stop", {
+          fails: new Internal({ message: "guest didn't flush" }),
+        });
 
         const stop = yield* Effect.forkChild(
           Effect.flip(client.stopMachine({ id: "dev" }))
         );
 
-        yield* resuming.entered;
+        yield* stopping.entered;
         yield* applying(store, "dev", { type: "ask", desired: "running" });
         yield* machines.stop("dev");
         yield* pause;
-        yield* resuming.release;
+        yield* stopping.release;
 
         const failure = yield* Fiber.join(stop);
         const rest = yield* machine("dev");
 
         expect(failure.message).toBe("guest didn't flush");
-        expect(at(rest)).toStrictEqual(["paused", "stopped", "failed"]);
+        expect(at(rest)).toStrictEqual(["running", "stopped", "failed"]);
         expect(rest.error?.message).toBe("guest didn't flush");
         expect(fake.calls.filter((call) => call === "stop dev")).toHaveLength(
           1
@@ -3453,16 +3422,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         "dev",
         request("dev", { runtime: runtimes.copiesRunning })
       );
-      yield* client.pauseMachine({ id: "dev" });
-      yield* fake.pausedByOlderHost("dev");
 
-      const resuming = fake.holdNext("admit");
-
-      fake.failNext("stop", new Internal({ message: "guest didn't flush" }));
+      const stopping = fake.holdNext("stop", {
+        fails: new Internal({ message: "guest didn't flush" }),
+      });
 
       yield* asking.stopMachine({ id: "dev" });
-      yield* resuming.entered;
-      turned(fake, "dev", "running");
+      yield* stopping.entered;
 
       const resize = yield* Effect.forkChild(
         client.resizeMachine({ id: "dev", cpu: 2 })
@@ -3470,7 +3436,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       yield* eventually(row("dev"), ({ resize: owed }) => owed !== undefined);
       yield* pause;
-      yield* resuming.release;
+      yield* stopping.release;
 
       const resized = yield* Fiber.join(resize);
       const rest = yield* machine("dev");

@@ -129,15 +129,9 @@ export const Step = Schema.Union([
   Schema.TaggedStruct("start", {
     machine: MachineRef,
     keep: Schema.Array(Handle),
-    ...pinned,
     ...others,
   }),
-  Schema.TaggedStruct("stop", {
-    machine: MachineRef,
-    ...pinned,
-    ...others,
-    ...hooked,
-  }),
+  Schema.TaggedStruct("stop", { machine: MachineRef, ...hooked }),
   Schema.TaggedStruct("pause", { machine: MachineRef, ...hooked }),
   Schema.TaggedStruct("remove", {
     machine: Ref,

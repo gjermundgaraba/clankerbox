@@ -32,7 +32,7 @@ const noLoginBecause = ({
   const unprepared =
     "its host has no SSH host key on record for it, as for a machine made from a base the host didn't prepare";
 
-  if ((state === "stopped" || state === "paused") && desired === state) {
+  if (state === "stopped" && (desired === "stopped" || desired === "paused")) {
     const start = `its VM doesn't run, so start it with clankerbox start ${id}`;
 
     return hostKey === undefined && template === undefined

@@ -56,9 +56,8 @@ export const copied = (
 export const restingAs = (
   found: MachineRow,
   seen: MachineState
-): "running" | "stopped" | "paused" | undefined =>
-  isResting(phaseOf(found.state)) &&
-  (seen === "running" || seen === "stopped" || seen === "paused")
+): "running" | "stopped" | undefined =>
+  isResting(phaseOf(found.state)) && (seen === "running" || seen === "stopped")
     ? seen
     : undefined;
 
@@ -77,18 +76,13 @@ export const uncopiable = (
   if (
     resting === undefined ||
     resting === captureFrom ||
-    (captureFrom === "either" && resting !== "paused")
+    captureFrom === "either"
   ) {
     return undefined;
   }
 
-  const fix =
-    captureFrom === "either"
-      ? "a running or stopped machine: start or stop it"
-      : `a machine only running${whyRunning === undefined ? "" : `, as ${whyRunning}`}: start it`;
-
   return new WrongState({
-    message: `machine ${source.name} is ${seen}, and its host copies ${fix}, then ${action} it`,
+    message: `machine ${source.name} is ${seen}, and its host copies a machine only running${whyRunning === undefined ? "" : `, as ${whyRunning}`}: start it, then ${action} it`,
     machine: source.name,
     state: seen,
   });

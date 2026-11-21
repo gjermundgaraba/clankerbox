@@ -346,7 +346,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(runtime.version).toBe("2.41.1");
         expect(runtime.pin).toBeUndefined();
-        expect(runtime.traits.stop).toBe("discards");
 
         expect(mac.spawner.calls.map(({ file }) => file)).toStrictEqual([
           binary,
@@ -958,33 +957,23 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a fork's source and a capture's machine must be running or stopped: a paused or missing one is refused before a clone",
+    "a fork's source and a capture's machine that are missing are refused before a clone",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
         const [source, copy] = [machineOn("src"), machineOn("copy")];
         const checkpoint = snapOf();
 
-        mac.vms.set(vmOf(source), "suspended");
-
-        const paused = yield* Effect.flip(
+        const fork = yield* Effect.flip(
           runtime.make(copy, fromMachine(source), sshPort)
         );
 
-        const capture = yield* Effect.flip(runtime.capture(source, checkpoint));
-
-        mac.vms.delete(vmOf(source));
-
         const missing = yield* Effect.flip(runtime.capture(source, checkpoint));
 
-        expect([paused, capture, missing].map(failure)).toStrictEqual([
+        expect([fork, missing].map(failure)).toStrictEqual([
           [
-            "WrongState",
-            "a Tart fork copies a running or stopped machine's disk, and src is paused: start or stop it first",
-          ],
-          [
-            "WrongState",
-            "a Tart checkpoint copies a running or stopped machine's disk, and src is paused: start or stop it first",
+            "Missing",
+            "machine src is missing from the tart runtime; delete it",
           ],
           [
             "Missing",
@@ -1619,22 +1608,22 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
 
-        const [up, paused, gone] = [
+        const [up, down, gone] = [
           machineOn("up"),
-          machineOn("paused"),
+          machineOn("down"),
           machineOn("gone"),
         ];
 
         mac.vms.set(vmOf(up), "running");
-        mac.vms.set(vmOf(paused), "suspended");
+        mac.vms.set(vmOf(down), "stopped");
 
         const before = mac.spawner.calls.length;
-        const observed = yield* runtime.observe([up, paused, gone]);
+        const observed = yield* runtime.observe([up, down, gone]);
 
         expect(observed).toStrictEqual(
           new Map([
             [up.name, { state: "running" }],
-            [paused.name, { state: "paused" }],
+            [down.name, { state: "stopped" }],
             [gone.name, { state: "missing" }],
           ])
         );
@@ -1891,33 +1880,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ])
         );
         expect(calls(mac).slice(before)).toStrictEqual([]);
-      })
-  );
-
-  it.effect(
-    "start of a VM an older host paused boots its job, which resumes it",
-    () =>
-      Effect.gen(function* () {
-        const { mac, runtime } = yield* runtimeOn();
-        const machine = machineOn("dev");
-        const vm = vmOf(machine);
-
-        yield* runtime.make(machine, fromImage("base"), sshPort);
-        yield* runtime.stop(machine);
-        mac.vms.set(vm, "suspended");
-
-        const before = calls(mac).length;
-
-        yield* runtime.start(machine, new Set());
-
-        expect(calls(mac).slice(before)).toStrictEqual([
-          `launchctl kickstart gui/501/${vm}`,
-          `tart exec ${vm} true`,
-          `tart exec ${vm} sudo -n settle <now>`,
-        ]);
-        expect(yield* runtime.observe([machine])).toStrictEqual(
-          new Map([[machine.name, { state: "running" }]])
-        );
       })
   );
 
@@ -2357,29 +2319,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "Capacity",
           `createMachine c would run 3 macOS VMs on this Mac, and Apple allows 2: ${[vmOf(a), vmOf(b), vmOf(c)].toSorted().join(", ")}`,
         ]);
-      })
-  );
-
-  it.effect(
-    "stop of a VM an older host paused discards its saved state with tart stop, booting nothing",
-    () =>
-      Effect.gen(function* () {
-        const { mac, runtime } = yield* runtimeOn();
-        const machine = machineOn("dev");
-        const vm = vmOf(machine);
-
-        yield* runtime.make(machine, fromImage("base"), sshPort);
-        yield* runtime.stop(machine);
-        mac.vms.set(vm, "suspended");
-
-        const before = calls(mac).length;
-
-        yield* runtime.stop(machine);
-
-        expect(calls(mac).slice(before)).toStrictEqual([`tart stop ${vm}`]);
-        expect(yield* runtime.observe([machine])).toStrictEqual(
-          new Map([[machine.name, { state: "stopped" }]])
-        );
       })
   );
 });

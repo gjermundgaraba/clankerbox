@@ -110,7 +110,6 @@ export const fixed: RuntimeTraits = {
   runtime: RuntimeName.make("fixed"),
   images: "named",
   captureFrom: "either",
-  stop: "discards",
   copies: "any",
   resize: { running: "none", stopped: "any" },
   sizes: {
@@ -472,6 +471,7 @@ type Injection<O extends Operation> =
       readonly entered: Deferred.Deferred<undefined>;
       readonly until: Deferred.Deferred<undefined>;
       readonly runsOn: boolean;
+      readonly fails: FailureOf<O> | undefined;
     };
 
 type Injections = { readonly [O in Operation]: Array<Injection<O>> };
@@ -624,12 +624,23 @@ export const fakeRuntime = (options: FakeOptions) => {
         }
 
         if (injection.kind === "hold") {
+          const { fails } = injection;
+
+          const ending: Effect.Effect<A, E | FailureOf<O>, R> =
+            fails === undefined
+              ? body
+              : Effect.suspend(() => {
+                  leftByFailure?.();
+
+                  return Effect.fail(fails);
+                });
+
           const held = Effect.andThen(
             Effect.andThen(
               Deferred.succeed(injection.entered, undefined),
               Deferred.await(injection.until)
             ),
-            body
+            ending
           );
 
           return injection.runsOn ? held : restore(held);
@@ -1415,14 +1426,6 @@ export const fakeRuntime = (options: FakeOptions) => {
     root: (name: string) => byName.get(name)?.root,
     images,
     machines: byName,
-    pausedByOlderHost: (name: string) =>
-      Effect.sync(() => {
-        const found = byName.get(name);
-
-        if (found !== undefined) {
-          found.state = "paused";
-        }
-      }),
     hold: (machine: Omit<FakeMachine, "marked" | "sizes">) => {
       machines.set(machine.handle, {
         ...machine,
@@ -1516,7 +1519,10 @@ export const fakeRuntime = (options: FakeOptions) => {
         entered: Deferred.await(entered),
       };
     },
-    holdNext: (operation: Operation, hold?: { readonly runsOn?: boolean }) => {
+    holdNext: <O extends Operation>(
+      operation: O,
+      hold?: { readonly runsOn?: boolean; readonly fails?: FailureOf<O> }
+    ) => {
       const until = Deferred.makeUnsafe<undefined>();
       const entered = Deferred.makeUnsafe<undefined>();
 
@@ -1525,6 +1531,7 @@ export const fakeRuntime = (options: FakeOptions) => {
         entered,
         until,
         runsOn: hold?.runsOn ?? false,
+        fails: hold?.fails,
       });
 
       return {

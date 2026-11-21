@@ -143,7 +143,6 @@ export interface Made {
 export type Booting =
   | "createMachine"
   | "startMachine"
-  | "stopMachine"
   | "resizeMachine"
   | "forkMachine"
   | "restoreMachine";
@@ -302,9 +301,8 @@ export interface Interface {
     tailnet?: boolean
   ) => Effect.Effect<Made, RoomError | StateError | Unsizable | Invalid>;
   /**
-   * Starts a stopped machine, or resumes a paused one. A runtime that holds checkpoints through its
-   * machine deletes, once the machine runs, each of them whose handle `keep` lacks, so a pause's own
-   * checkpoint goes only after the resume that read it.
+   * Starts a stopped machine. A runtime that holds checkpoints through its machine deletes, once
+   * the machine runs, each of them whose handle `keep` lacks.
    */
   readonly start: (
     machine: Target,

@@ -59,7 +59,7 @@ const events: ReadonlyArray<readonly [string, MachineEvent]> = [
   ["ask:stopped", { type: "ask", desired: "stopped" }],
   ["ask:paused", { type: "ask", desired: "paused" }],
   ["delete", { type: "delete" }],
-  ...(["running", "stopped", "paused", "missing", "unknown"] as const).map(
+  ...(["running", "stopped", "missing", "unknown"] as const).map(
     (seen) =>
       [
         `read:${seen}`,

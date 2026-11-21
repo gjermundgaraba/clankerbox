@@ -803,7 +803,7 @@ export const make = (
 
       switch (step._tag) {
         case "start": {
-          const { pin, machines } = step;
+          const { machines } = step;
           const keep = new Set(step.keep);
 
           return Effect.gen(function* () {
@@ -812,10 +812,6 @@ export const make = (
 
             if (seen === "missing") {
               return yield* missing(traits.runtime, machine);
-            }
-
-            if (seen === "paused") {
-              yield* pinned({ resume: machine.name }, pin);
             }
 
             const { port } = step.machine;
@@ -847,38 +843,18 @@ export const make = (
         }
 
         case "stop": {
-          const { pin, machines, hook } = step;
+          const { hook } = step;
 
           return Effect.gen(function* () {
             const machine = yield* machineTarget(step.machine);
-            const stopped = runtime.stop(machine);
 
-            if (traits.stop === "discards") {
-              yield* beforeLeaving(
-                machine,
-                "stop",
-                hook,
-                stateNow(machine, "given its stop hook")
-              );
-
-              return yield* stopped;
-            }
-
-            const seen = yield* stateNow(machine, "stopped");
-
-            if (seen === "paused") {
-              yield* pinned({ resume: machine.name }, pin);
-
-              return yield* withRoom(
-                "stopMachine",
-                { ...step.machine, handle: machine.handle },
-                machines,
-                stopped
-              );
-            }
-
-            yield* beforeLeaving(machine, "stop", hook, Effect.succeed(seen));
-            yield* stopped;
+            yield* beforeLeaving(
+              machine,
+              "stop",
+              hook,
+              stateNow(machine, "given its stop hook")
+            );
+            yield* runtime.stop(machine);
           });
         }
 

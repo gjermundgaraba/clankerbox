@@ -24,7 +24,6 @@ export const traits = (
   captureFrom: "running",
   whyRunning:
     "smol cloud has no way to copy a stopped machine's disk that doesn't leave storage in the account which nothing can delete",
-  stop: "resumes",
   copies: "same",
   resize: { running: "grow", stopped: "grow" },
   sizes: { _tag: "free" },

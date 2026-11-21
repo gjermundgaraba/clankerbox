@@ -134,7 +134,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: reading,
       description:
-        "Ask for a machine to run: start it, or resume it when it is paused, and prepare it again, also when it runs already. A paused machine resumes only under the runtime pin it booted under; a start that can't resume it fails, saying why, and leaves it paused with its saved state.",
+        "Ask for a machine to run: start it, booting it fresh from its disk, and prepare it again, also when it runs already.",
       input: ById,
       success: Machine,
     }),
@@ -142,7 +142,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: reading,
       description:
-        "Ask for a machine to stay stopped: a power-off that keeps its disk and ends its processes. A start under way is cut short; a machine still being made is made first, and its create answers Superseded. A paused machine is resumed to end its processes where its runtime resumes one to stop it, and then needs room as a start does and the runtime pin it booted under, and has its saved state discarded where its runtime discards it.",
+        "Ask for a machine to stay stopped: a power-off that keeps its disk and ends its processes. A start under way is cut short; a machine still being made is made first, and its create answers Superseded.",
       input: ById,
       success: Machine,
     }),
@@ -159,7 +159,7 @@ export const Http = ActionHttp.make(
         Internal,
       ] as const,
       description:
-        "Ask for a machine to stay paused, which stops it on every runtime, keeping its disk and none of its memory; a start boots it fresh. A machine that is stopped stays stopped, and one an older host paused, keeping its RAM, stays paused until a start resumes it. With `capture`, a checkpoint of that name is captured too, as captureCheckpoint would, as its host answers now, and a host that can't be read is Unavailable, recording nothing. Where its runtime copies a running or stopped machine, the pause comes first and the capture takes the stopped machine it leaves. Where it copies only a running machine, the running machine is captured first and the pause begins once the capture has ended, however it ended, and a machine that isn't running is refused before anything is recorded.",
+        "Ask for a machine to stay paused, which stops it on every runtime, keeping its disk and none of its memory; a start boots it fresh. A machine that is stopped stays stopped. With `capture`, a checkpoint of that name is captured too, as captureCheckpoint would, as its host answers now, and a host that can't be read is Unavailable, recording nothing. Where its runtime copies a running or stopped machine, the pause comes first and the capture takes the stopped machine it leaves. Where it copies only a running machine, the running machine is captured first and the pause begins once the capture has ended, however it ended, and a machine that isn't running is refused before anything is recorded.",
       input: PauseRequest,
       success: Machine,
     }),

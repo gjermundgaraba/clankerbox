@@ -329,16 +329,11 @@ const alive: ReadonlySet<RecordState> = new Set([
   "frozen",
 ]);
 
-// https://github.com/smol-machines/smolvm/blob/v1.34.1/src/embedded/runtime.rs#L412
-const resumable: ReadonlySet<RecordState> = new Set(["pausing", "paused"]);
-
-export const stateOf = (state: RecordState): MachineState => {
-  if (state === "paused") {
-    return "paused";
-  }
-
-  return alive.has(state) ? "running" : "stopped";
-};
+// smolvm pauses a machine only when asked to, or from its `serve` daemon's memory guard, and a host
+// does neither, so a machine reads `paused` or `pausing` only where something else paused it:
+// https://github.com/smol-machines/smolvm/blob/v1.34.1/src/api/memory_pressure.rs#L268
+export const stateOf = (state: RecordState): MachineState =>
+  alive.has(state) ? "running" : "stopped";
 
 /**
  * A VM as `observe` tells it: one smolvm reads unreachable, its VM manager alive but its agent not
@@ -520,13 +515,13 @@ export const make = (
         Effect.map(status(machine.handle), sightingOf)
       );
 
+    // What admission counts: a VM smolvm reads unreachable `observe` tells stopped, as nothing runs
+    // in it for its owner, but its VM manager still holds its RAM:
+    // https://github.com/smol-machines/smolvm/blob/v1.34.1/src/config.rs#L52-L60
     const holdingRam = (machines: readonly Target[]) =>
       observeEach(machines, (machine) =>
         Effect.map(state(machine.handle), (seen): Sighting => ({ state: seen }))
       );
-
-    const resume = (native: string) =>
-      call(["machine", "resume", "--name", native], `machine resume ${native}`);
 
     const copyable = (machine: Target) =>
       Effect.flatMap(
@@ -540,7 +535,7 @@ export const make = (
             return Effect.fail(missing(traits.runtime, machine));
           }
 
-          if (!alive.has(recorded) && !resumable.has(recorded)) {
+          if (!alive.has(recorded)) {
             return Effect.succeed("stopped");
           }
 
@@ -588,13 +583,7 @@ export const make = (
 
     const stopped = (native: string, recorded: RecordState | "missing") =>
       Effect.gen(function* () {
-        if (recorded === "missing") {
-          return;
-        }
-
-        if (resumable.has(recorded)) {
-          yield* resume(native);
-        } else if (!alive.has(recorded)) {
+        if (recorded === "missing" || !alive.has(recorded)) {
           return;
         }
 
@@ -1223,21 +1212,8 @@ export const make = (
         }
 
         yield* leftBehind(
-          "settle what smolvm calls cut short left behind",
-          Effect.gen(function* () {
-            const vms = yield* listed;
-
-            yield* removeSeedBuilds(vms, ended);
-
-            for (const { name, state: recorded } of vms) {
-              if (recorded === "pausing") {
-                yield* Effect.logWarning(
-                  `resuming ${name}, which a pause cut short left half-paused`
-                );
-                yield* leftBehind(`resume ${name}`, resume(name));
-              }
-            }
-          })
+          "remove the image seed builds smolvm calls cut short left behind",
+          Effect.flatMap(listed, (vms) => removeSeedBuilds(vms, ended))
         );
         yield* Effect.forkIn(settle, layerScope);
       }),
@@ -1314,12 +1290,6 @@ export const make = (
 
           if (recorded === "missing") {
             return yield* missing(traits.runtime, machine);
-          }
-
-          if (resumable.has(recorded)) {
-            yield* resume(native);
-
-            return;
           }
 
           // https://github.com/smol-machines/smolvm/blob/v1.34.1/src/cli/vm_common.rs#L1637

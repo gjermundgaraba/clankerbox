@@ -94,7 +94,6 @@ const moves: Readonly<Record<Goal, Readonly<Record<string, Move>>>> = {
     running: "done",
     stopped: "start",
     created: "start",
-    paused: "resume",
     missing: "missing",
     deleted: "missing",
   },
@@ -103,7 +102,6 @@ const moves: Readonly<Record<Goal, Readonly<Record<string, Move>>>> = {
     running: "stop",
     stopped: "done",
     created: "done",
-    paused: "resume",
     missing: "done",
     deleted: "done",
   },
@@ -161,14 +159,14 @@ const stateOf = (record: MachineRecord | undefined): MachineState => {
       return "running";
     }
 
+    // smol cloud pauses a machine only when asked, and a host never asks: a start or stop of one
+    // something else paused is stuck, saying so:
+    // https://smolmachines.com/docs/cloud/api-reference#machines
     case "stopped":
     case "created":
-    case "error": {
-      return "stopped";
-    }
-
+    case "error":
     case "paused": {
-      return "paused";
+      return "stopped";
     }
 
     default: {

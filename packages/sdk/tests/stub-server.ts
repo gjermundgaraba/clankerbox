@@ -180,9 +180,11 @@ const atRest = (row: Machine): Machine => {
     return { ...row, phase: "settled" };
   }
 
-  const stays = row.desired === "paused" && row.state === "stopped";
-
-  return { ...row, state: stays ? row.state : row.desired, phase: "settled" };
+  return {
+    ...row,
+    state: row.desired === "paused" ? "stopped" : row.desired,
+    phase: "settled",
+  };
 };
 
 const nextStep = <S>(

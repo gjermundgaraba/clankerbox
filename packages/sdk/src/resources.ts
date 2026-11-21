@@ -100,8 +100,7 @@ export const labelledWith = (
  * control plane can't read the machine's host, so it tells nothing of a request, which stays saved
  * and acts when it can, and a wait reads on through it as through an outage. `creating` makes or
  * copies the machine, and a machine whose create fails is deleted, its row kept `failed` to say
- * why. `starting` starts the machine, also when it runs already, resumes a paused one, and
- * prepares it.
+ * why. `starting` starts the machine, also when it runs already, and prepares it.
  */
 export const Phase = Schema.Literals([
   "observing",
@@ -233,8 +232,7 @@ export const Unasked = Schema.Struct({
 export type Unasked = typeof Unasked.Type;
 
 /**
- * `state` is what the runtime reports: `paused` while it holds the machine's saved execution,
- * `missing` when it doesn't have the machine, and `unknown` when it couldn't be read. `desired` is
+ * `state` is what the runtime reports: `missing` when it doesn't have the machine, and `unknown` when it couldn't be read. `desired` is
  * what the last request asked for, `phase` what the control plane is doing about it, and `error`
  * why the last step failed, until the next request. A request takes the row out of rest in the
  * write that records it, so a resting `phase` read after a request has seen it. `template` is the
@@ -266,13 +264,7 @@ export const Machine = Schema.Struct({
   template: Schema.optionalKey(BuildId),
   ...labelled,
   ...Sizes.fields,
-  state: Schema.Literals([
-    "running",
-    "stopped",
-    "paused",
-    "missing",
-    "unknown",
-  ]),
+  state: Schema.Literals(["running", "stopped", "missing", "unknown"]),
   desired: Desired,
   phase: Phase,
   error: Schema.optionalKey(HostError),

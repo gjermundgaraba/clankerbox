@@ -78,7 +78,6 @@ const stopping = (sequence: number): Omit<Operation, "boot"> => ({
   step: {
     _tag: "stop",
     machine: { name: "dev", instance, ...sizes },
-    machines: [],
   },
 });
 

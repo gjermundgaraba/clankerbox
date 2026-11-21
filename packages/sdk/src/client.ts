@@ -169,7 +169,7 @@ export interface Interface extends Calls {
     options?: CreateOptions
   ) => Effect.Effect<Machine, WaitErrorOf<"createMachine">>;
   /**
-   * A machine of `name` that runs: the one that exists, started, or resumed when paused; else one
+   * A machine of `name` that runs: the one that exists, started; else one
    * restored from `checkpoint` when that is ready; else one created from `spec`. Each waits as the
    * request would. A failed create's row that still answers `Conflict`, as its VM is still going,
    * is deleted and the make tried once more, and a make whose reply or wait was cut reads the

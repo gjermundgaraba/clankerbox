@@ -571,7 +571,7 @@ describe("machines", () => {
           expect(runs.map(({ code }) => code)).toStrictEqual([0, 0, 0, 0]);
           expect(runs.map(({ stdout }) => stdout)).toStrictEqual([
             "dev running",
-            "dev paused",
+            "dev stopped",
             "dev stopped",
             "copy",
           ]);
@@ -985,7 +985,7 @@ describe("machines", () => {
           const hour =
             DateTime.toEpochMillis(expiresAt) - DateTime.toEpochMillis(before);
 
-          expect(paused).toMatchObject({ code: 0, stdout: "dev paused" });
+          expect(paused).toMatchObject({ code: 0, stdout: "dev stopped" });
           expect([source, labels]).toStrictEqual(["dev", { app: "web" }]);
           expect(hour).toBeGreaterThanOrEqual(3_600_000);
           expect(hour).toBeLessThan(3_660_000);

@@ -83,8 +83,7 @@ export class Conflict extends Schema.TaggedError<
 
 /**
  * What the operator asked a machine to be. `paused` stops it, as `stopped` does, on every runtime,
- * keeping its disk and none of its memory; a machine an older host paused keeping its RAM stays so
- * until a start resumes it.
+ * keeping its disk and none of its memory.
  */
 export const Desired = Schema.Literals([
   "running",
@@ -218,9 +217,9 @@ export class Missing extends Schema.TaggedError<
 }
 
 /**
- * The checkpoint or paused machine `id` holds RAM state saved under another runtime pin than the
- * one the host runs, and restores or resumes only under that one; or machine `id` runs a VM booted
- * under another one, and is captured or forked only after a stop and a start.
+ * The checkpoint `id` holds RAM state saved under another runtime pin than the one the host runs,
+ * and restores only under that one; or machine `id` runs a VM booted under another one, and is
+ * captured or forked only after a stop and a start.
  */
 export class PinMismatch extends Schema.TaggedError<
   PinMismatch,

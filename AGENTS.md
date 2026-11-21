@@ -366,11 +366,9 @@ the run.
   before its host forgets it. A step acts on its row's handle, or on what the
   runtime finds of the row's instance, never on a VM by its name alone, and a
   remove or a delete of a checkpoint that finds nothing is done, while one whose
-  search fails fails. A runtime's stop, and smolvm's and Tart's pause, mask
+  search fails fails. A runtime's stop, which a pause also runs, masks
   interruption from the command that halts a running VM until it has, so a step
   cut short reports `cancelled` only once the VM is where that command takes it.
-  A smolvm host that starts resumes a machine a killed pause left `pausing`, so
-  no step runs a hook in a frozen guest.
 - **A delete answers for its instance for good.** Once a runtime's `delete`
   has answered for an instance, anything of that instance that appears later is
   deleted, and the control plane never makes that instance again. A `remove`
@@ -429,15 +427,12 @@ the run.
   on that host, with the same error: a build's copy so failed is cleared and
   fetched again where a build store has it, and a user's checkpoint reads
   `failed`, saying to delete it.
-- **A start starts the machine, also when it runs already, or resumes it when it
-  is paused, and prepares it.** A pause leaves a stopped machine stopped. On a
-  runtime whose `pause` trait `saves`, it saves a running machine and stops its
-  VM, and stops one it can't save: a VM booted under another pin, or one Tart
-  can't suspend. On one whose `pause` `stops`, as boat's, it stops the machine
-  and saves nothing. A paused machine resumes
-  only under the pin it booted under, for a start, and for a stop on a runtime
-  whose `stop` trait `resumes` it, and a capture or fork copies only a VM booted under the
-  host's pin; the step carries the pin and the host compares. A resize is a step
+- **A start starts the machine, also when it runs already, and prepares it.** A
+  pause stops the machine on every runtime, as a stop does, and leaves a stopped
+  machine stopped. A capture or fork of a running machine copies only a VM booted
+  under the host's pin, and a restore restores only under the pin its checkpoint
+  was saved under, as smolvm copies a running machine through its RAM; the step
+  carries the pin and the host compares. A resize is a step
   too, and the row keeps the sizes the runtime reads after it, also after one
   that failed part way. A checkpoint is usable only `ready`, and never changes
   but to fail when its host no longer holds it; a

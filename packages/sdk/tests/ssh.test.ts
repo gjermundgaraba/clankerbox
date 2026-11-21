@@ -62,22 +62,22 @@ layer(NodeServices.layer)((it) => {
             }),
           ],
           [
-            machine("dev", { state: "paused", desired: "paused", hostKey }),
+            machine("dev", { state: "stopped", desired: "paused", hostKey }),
             new WrongState({
               message:
-                "dev has no SSH login (paused): its VM doesn't run, so start it with clankerbox start dev",
+                "dev has no SSH login (stopped): its VM doesn't run, so start it with clankerbox start dev",
               machine: "dev",
-              state: "paused",
+              state: "stopped",
             }),
           ],
           ...(["stopped", "paused"] as const).map(
-            (state) =>
+            (desired) =>
               [
-                machine("dev", { state, desired: state }),
+                machine("dev", { state: "stopped", desired }),
                 new WrongState({
-                  message: `dev has no SSH login (${state}): its VM doesn't run, so start it with clankerbox start dev; its host has no SSH host key on record for it, as for a machine made from a base the host didn't prepare, so then reach it with clankerbox exec, or create it from a template`,
+                  message: `dev has no SSH login (stopped): its VM doesn't run, so start it with clankerbox start dev; its host has no SSH host key on record for it, as for a machine made from a base the host didn't prepare, so then reach it with clankerbox exec, or create it from a template`,
                   machine: "dev",
-                  state,
+                  state: "stopped",
                 }),
               ] as const
           ),

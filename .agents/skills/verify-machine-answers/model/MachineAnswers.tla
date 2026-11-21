@@ -73,7 +73,7 @@ Wants(r) == r.desired \in Wanted[r.op.kind]
 Matches(d, v) ==
   CASE d = "running" -> v = "running"
     [] d = "stopped" -> v = "stopped"
-    [] d = "paused" -> v \in {"paused", "stopped"}
+    [] d = "paused" -> v = "stopped"
     [] d = "deleted" -> v = "missing"
 
 Shown == IF ~linked /\ Phase(row) # "failed" THEN "waiting" ELSE Phase(row)
@@ -282,17 +282,10 @@ HostStep ==
             ELSE /\ vm' = "running"
                  /\ runs' = [runs EXCEPT !.status = "done"]
                  /\ Ran(runs.id)
-       [] k = "stop" ->
+       [] k \in {"stop", "pause"} ->
             /\ vm' = IF vm = "missing" THEN vm ELSE "stopped"
             /\ runs' = [runs EXCEPT !.status = "done"]
             /\ Ran(runs.id)
-       [] k = "pause" ->
-            IF vm \in {"running", "paused"}
-            THEN /\ vm' = "paused"
-                 /\ runs' = [runs EXCEPT !.status = "done"]
-                 /\ Ran(runs.id)
-            ELSE /\ runs' = [runs EXCEPT !.status = "failed"]
-                 /\ UNCHANGED <<vm, applied>>
        [] k = "remove" ->
             /\ vm' = "missing"
             /\ runs' = [runs EXCEPT !.status = "done"]

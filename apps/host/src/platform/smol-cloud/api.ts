@@ -121,7 +121,7 @@ export type Frame =
   | { readonly _tag: "exit"; readonly exitCode: number }
   | { readonly _tag: "error"; readonly data: string };
 
-export type Verb = "start" | "stop" | "resume";
+export type Verb = "start" | "stop";
 
 const problemOf = Schema.decodeUnknownOption(Schema.fromJsonString(Problem));
 

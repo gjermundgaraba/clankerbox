@@ -436,7 +436,6 @@ export const stubInfo = {
     checkpoint: "ram",
     captureFrom: "running",
     pause: "saves",
-    stop: "resumes",
     copies: "grow",
     resize: { running: "grow", stopped: "any" },
     sizes: { _tag: "free" },

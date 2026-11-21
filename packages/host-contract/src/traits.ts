@@ -40,9 +40,6 @@ const Live = Schema.Struct({
  *   `running`.
  * - `whyRunning`: where `captureFrom` is `running`, why the runtime copies no stopped machine,
  *   which a refusal of one gives, so the caller learns more than the state it should be in.
- * - `stop`: what a stop does to a machine an older host paused, keeping its RAM: `resumes` it
- *   first, to end its processes, which takes room as a start does and the runtime pin it booted
- *   under; or `discards` its saved state.
  * - `copies`: a fork's or restore's vCPUs and RAM against its source's: `grow`, the source's or
  *   larger; `any`; or `same`, the source's sizes alone, its disk's included.
  * - `resize`: what a running and what a stopped machine take of a resize of vCPUs and RAM: `grow`,
@@ -63,7 +60,6 @@ export const RuntimeTraits = Schema.Struct({
   images: Schema.Literals(["named", "references"]),
   captureFrom: Schema.Literals(["running", "either"]),
   whyRunning: Schema.optionalKey(Schema.String),
-  stop: Schema.Literals(["resumes", "discards"]),
   copies: Schema.Literals(["grow", "any", "same"]),
   resize: Schema.Struct({
     running: Growth,
@@ -229,14 +225,13 @@ export const liveRefusal = (
  * Why a runtime refuses a resize of machine `name` from `from` to `to`, none where it takes it: a
  * disk that would shrink, but where the runtime's `classes` each give their own disk, which its
  * provider takes where the machine's data fits, and sizes it doesn't give; where the machine's
- * `state` is known, also a state it takes no resize in, which a paused machine is in on every
- * runtime, and vCPUs or RAM that shrink where it only grows them.
+ * `state` is known, also a state it takes no resize in, and vCPUs or RAM that shrink where it only grows them.
  * The control plane asks it before it records the resize, and the host before it runs the step.
  */
 export const resizeRefusal = (
   traits: RuntimeTraits,
   name: string,
-  state: "running" | "stopped" | "paused" | undefined,
+  state: "running" | "stopped" | undefined,
   from: Sizes,
   to: Sizes
 ): WrongState | Unsizable | undefined => {
@@ -256,7 +251,7 @@ export const resizeRefusal = (
     return fitted(traits, to) ? undefined : unfitted;
   }
 
-  const takes = state === "paused" ? "none" : traits.resize[state];
+  const takes = traits.resize[state];
 
   if (takes === "none") {
     return new WrongState({
@@ -346,16 +341,12 @@ export const fetchable = (from: RuntimeName, to: RuntimeTraits): boolean =>
 
 /**
  * Why a host running runtime pin `runs` refuses what was made under `under`, none where they are
- * the same: a running machine is copied, a checkpoint restored and a paused machine resumed only
- * under the pin its VM booted or its state was saved under, as each goes through the VM's own
- * saved state. A stopped machine's copy is of its disk alone, so its callers ask none for it. A checkpoint's restore is asked whichever way it was captured, as its row doesn't record whether its source ran, and a running machine's smolvm checkpoint holds VM state only its smolvm build restores. The
+ * the same: a running machine is copied and a checkpoint restored only under the pin its VM booted
+ * or its state was saved under, as each goes through the VM's own saved state. A stopped machine's copy is of its disk alone, so its callers ask none for it. A checkpoint's restore is asked whichever way it was captured, as its row doesn't record whether its source ran, and a running machine's smolvm checkpoint holds VM state only its smolvm build restores. The
  * control plane asks it before it writes a row, and the host before it runs the step.
  */
 export const pinRefusal = (
-  of:
-    | { readonly copy: string }
-    | { readonly restore: string }
-    | { readonly resume: string },
+  of: { readonly copy: string } | { readonly restore: string },
   under: string | undefined,
   runs: string | undefined
 ): PinMismatch | undefined => {
@@ -371,14 +362,8 @@ export const pinRefusal = (
     });
   }
 
-  if ("restore" in of) {
-    return new PinMismatch({
-      message: `checkpoint ${of.restore} holds RAM state saved under ${under ?? "no pin"}, and this host runs ${host}; it restores only under the same one`,
-    });
-  }
-
   return new PinMismatch({
-    message: `machine ${of.resume} was paused under ${under ?? "no pin"}, and this host runs ${host}; it resumes only under the same one: delete it, or resume it under that one`,
+    message: `checkpoint ${of.restore} holds RAM state saved under ${under ?? "no pin"}, and this host runs ${host}; it restores only under the same one`,
   });
 };
 
