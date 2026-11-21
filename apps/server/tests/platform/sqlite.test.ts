@@ -1286,12 +1286,48 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
+    "a machine at an unknown chart leaf is refused without inserting a row",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* open({ stateDir: yield* stateIn });
+
+        const invalid = Object.defineProperty(row("dev"), "state", {
+          value: "made.nowhere",
+        });
+
+        const error = yield* Effect.flip(store.insertMachine(invalid));
+
+        expect(error._tag).toBe("Internal");
+        expect(error.message).toContain("insert machine dev");
+        expect(yield* store.machines).toStrictEqual([]);
+      })
+  );
+
+  it.effect(
+    "a checkpoint at an unknown chart leaf is refused without inserting a row",
+    () =>
+      Effect.gen(function* () {
+        const badLeaf = "capturing.nowhere";
+        expectTypeOf<typeof badLeaf>().not.toExtend<CheckpointRow["state"]>();
+
+        const store = yield* open({ stateDir: yield* stateIn });
+
+        const invalid = Object.defineProperty(checkpoint("snap"), "state", {
+          value: badLeaf,
+        });
+
+        const error = yield* Effect.flip(store.insertCheckpoint(invalid));
+
+        expect(error._tag).toBe("Internal");
+        expect(error.message).toContain("insert checkpoint snap");
+        expect(yield* store.checkpoints).toStrictEqual([]);
+      })
+  );
+
+  it.effect(
     "a machine or checkpoint stored at an unknown chart leaf cannot be read",
     () =>
       Effect.gen(function* () {
-        expectTypeOf<"capturing.nowhere">().not.toExtend<
-          CheckpointRow["state"]
-        >();
         const stateDir = yield* stateIn;
 
         yield* withStore(stateDir, (store) =>

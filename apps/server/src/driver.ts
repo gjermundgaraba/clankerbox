@@ -32,11 +32,13 @@ export interface Resource<R extends { readonly state: string }> {
   readonly find: (name: string) => Effect.Effect<Option.Option<R>, Internal>;
   readonly store: Pick<Store, "operationOn" | "watch">;
   readonly activityOf: (state: R["state"]) => Activity;
+  /** A sweep newer than `sweepAtRest` may stand in for a host read. Otherwise read the host. */
   readonly looking: (
     row: R,
     sweepAtRest: number | undefined
   ) => Effect.Effect<Advanced<R>, Internal | Unreachable>;
   readonly polling: (row: R, op: Operation) => Effect.Effect<Polled, Internal>;
+  /** No wake cuts it short, so a stored report is always collected. */
   readonly following: (
     row: R,
     op: Operation,
@@ -220,6 +222,17 @@ interface Loop {
   pendingSweep: number;
 }
 
+/**
+ * A write precedes its wake, and each turn reads after closing the latch. A wake before that
+ * close is covered by the next read; a wake after it stays visible to this turn or the next.
+ * The loop retires only when no wake landed in its last turn.
+ *
+ * `beginSweep` assigns an ID before each sweep reads the host. A loop records the latest ID at
+ * the start of the turn that finds it at rest: only the loop moves the row into rest, and a
+ * request moves it out. A sweep with a higher ID therefore reads the VM after its last step;
+ * an older sweep may have read before that step ended. A swept loop falls back to its own
+ * read after `sweptFallback` recheck intervals without a fresh sweep.
+ */
 export const driver = <R extends { readonly state: string }>(
   recheck: Duration.Duration,
   resource: Resource<R>,

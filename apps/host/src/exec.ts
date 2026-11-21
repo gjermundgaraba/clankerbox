@@ -129,8 +129,10 @@ const launcher = [
 ].join("\n");
 
 /**
- * The launcher leaves faults (ILL, TRAP, BUS, FPE, SEGV) untrapped. zsh names ABRT IOT,
- * and KILL cannot be caught.
+ * The launcher waits instead of becoming the command, so its mark remains in the process tree
+ * even if the command clears its environment. It traps portable termination signals so the
+ * runtime does not report the launcher gone while the command still runs. The subshell resets
+ * those traps before executing the command; see POSIX Shell Command Language, "trap".
  */
 export const guestCommand = (
   { argv, env, user, stdin }: Invocation,

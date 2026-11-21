@@ -135,6 +135,11 @@ export interface Activation {
   readonly machines: readonly Held[];
 }
 
+/**
+ * Pass the launcher's arguments and stdin through unchanged. The command's own arguments and
+ * environment are carried in stdin so they do not appear in the host process arguments.
+ * With no `user`, run the command as the guest's root.
+ */
 export interface Command {
   readonly argv: readonly string[];
   readonly user?: string | undefined;
@@ -206,6 +211,16 @@ export const unshared = (runtime: RuntimeName): Builds => ({
     ),
 });
 
+/**
+ * Each adapter keeps two rules. A provider call that can't be cut short runs masked and is polled
+ * to its end, so a step cut short ends only once its call has. An answer that leaves the outcome
+ * unknown, such as a dropped connection, never ends a step: the adapter reads the resource by its
+ * instance before it answers. `prepares` is `always` where the runtime's images lack the login
+ * user, so every machine made from a base is prepared, and `with-setup` where only a machine with
+ * a setup is. `kernel` is `own` where each machine boots its own kernel and a new identity must
+ * reseed a copied random generator, and `shared` where containers share their node's kernel and
+ * cannot reseed it.
+ */
 export interface Interface {
   readonly traits: RuntimeTraits;
   readonly guest: "debian" | "macos";
@@ -226,6 +241,11 @@ export interface Interface {
   readonly find: (
     machine: Identity
   ) => Effect.Effect<Handle | undefined, RuntimeError>;
+  /**
+   * Derives the same handle that capture and install return, from the checkpoint identity and
+   * host ID alone, without a search. A step uses this if its row has no handle. Returns undefined
+   * if the provider mints the handle, in which case the row records it.
+   */
   readonly checkpointHandle: (checkpoint: Identity) => Handle | undefined;
   readonly observe: (
     machines: readonly Target[]
@@ -233,12 +253,23 @@ export interface Interface {
   readonly capacity: (
     machines: readonly Held[]
   ) => Effect.Effect<readonly Reading[], RuntimeError>;
+  /**
+   * Makes a machine from an image or copy. A published runtime forwards `hostSshPort` to guest
+   * port 22; a relayed one leaves it to the relay. `requestsTailnet` lets the runtime enable guest
+   * support such as a TUN device. Refuse an invalid VM name with `Invalid`, and a checkpoint
+   * the runtime no longer holds with `Missing` naming the checkpoint, without making anything.
+   */
   readonly make: (
     machine: Identity & Sizes,
     origin: Origin,
     hostSshPort: number,
     requestsTailnet?: boolean
   ) => Effect.Effect<Made, RoomError | StateError | Unsizable | Invalid>;
+  /**
+   * Starts or resumes the machine. A runtime that holds checkpoints through its machine prunes
+   * any outside `keepCheckpoints` only once the machine runs, so it can read the pause checkpoint
+   * before deleting it.
+   */
   readonly start: (
     machine: Target,
     keepCheckpoints: ReadonlySet<Handle>
@@ -247,6 +278,12 @@ export interface Interface {
   readonly pause: (
     machine: Target
   ) => Effect.Effect<void, RuntimeError | StateError>;
+  /**
+   * Deletes this instance and its checkpoints outside `keepCheckpoints`. Remove calls this even
+   * if find returned no handle. Once delete answers, anything that later appears for the same
+   * instance must also be deleted. The control plane will not make that instance again; adapters
+   * whose provider can complete a make after its answer was lost must handle late arrivals.
+   */
   readonly delete: (
     machine: Identity & { readonly handle: Handle | undefined },
     keepCheckpoints: ReadonlySet<Handle>
@@ -261,9 +298,14 @@ export interface Interface {
     running: boolean
   ) => Effect.Effect<void, RuntimeError | Unsizable>;
   readonly sizes: (machine: Target) => Effect.Effect<Sizing, RuntimeError>;
+  /** Fails `Conflict` where the provider keeps the checkpoint while something depends on it. */
   readonly deleteCheckpoint: (
     checkpoint: Target
   ) => Effect.Effect<void, RuntimeError | Conflict>;
+  /**
+   * Closing the scope ends what the exec holds on the host. The guest process may outlive it,
+   * depending on the runtime; `exec.ts` ends a cut command in the guest through another exec.
+   */
   readonly exec: (
     machine: Target,
     command: Command
