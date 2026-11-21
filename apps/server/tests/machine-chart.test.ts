@@ -1166,6 +1166,59 @@ const factsWritten: readonly Write[] = [
     },
   ],
   [
+    "a start done that booted its machine leaves no reboot mark, so the mark its runtime gives after the boot counts none",
+    rowAt("made.stepping.starting", {
+      booting: true,
+      boots: 2,
+      reboot: "first",
+    }),
+    done,
+    {
+      state: "made.observing",
+      prepared: true,
+      booting: false,
+      boots: 3,
+      reboot: undefined,
+    },
+  ],
+  [
+    "a start that fails to boot its machine leaves no reboot mark either, as its runtime may have booted it",
+    rowAt("made.stepping.starting", {
+      booting: true,
+      boots: 2,
+      reboot: "first",
+    }),
+    failed,
+    { state: "made.failed", error, booting: false, reboot: undefined },
+  ],
+  [
+    "a start its host lost while it booted its machine leaves no reboot mark, as the boot may have run",
+    rowAt("made.stepping.starting", {
+      booting: true,
+      boots: 2,
+      reboot: "first",
+    }),
+    gone,
+    { state: "made.observing", reboot: undefined },
+  ],
+  [
+    "a start done of a machine that ran keeps its reboot mark",
+    rowAt("made.stepping.starting", { boots: 2, reboot: "first" }),
+    done,
+    { state: "made.observing", prepared: true, booting: false },
+  ],
+  [
+    "a machine at rest stopped that runs unasked with a new reboot mark is recorded started, counting one boot",
+    rowAt("made.settled", { desired: "stopped", boots: 2, reboot: "first" }),
+    { ...read("running"), reboot: "second" },
+    {
+      state: "made.stepping.stopping",
+      boots: 3,
+      reboot: "second",
+      unasked: { what: "started", at },
+    },
+  ],
+  [
     "the first reboot mark a runtime gives counts no boot",
     rowAt("made.settled", { ...prepared, boots: 2 }),
     { ...read("running"), reboot: "first" },

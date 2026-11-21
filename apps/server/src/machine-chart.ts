@@ -249,19 +249,17 @@ const noticed = (atRest: boolean) => (args: On<"read">) => {
       return "lost";
     }
 
+    if (started) {
+      return "started";
+    }
+
     if (rebooted) {
       return "rebooted";
     }
 
-    if (!atRest) {
-      return undefined;
-    }
-
-    if (seen === "stopped" && context.desired === "running") {
-      return "stopped";
-    }
-
-    return started ? "started" : undefined;
+    return atRest && seen === "stopped" && context.desired === "running"
+      ? "stopped"
+      : undefined;
   })();
 
   const why = what === "stopped" || what === "lost" ? event.why : undefined;
@@ -409,7 +407,10 @@ export const machine = setup({
             ask: (args) => ({ context: asked(args) }),
             resize: (args) => ({ context: owed(args) }),
             delete: { target: "#machine.deleting.draining" },
-            lost: { target: "#machine.made.observing" },
+            lost: ({ context }) => ({
+              target: "#machine.made.observing",
+              context: context.booting ? { reboot: undefined } : {},
+            }),
           },
           states: {
             starting: {
@@ -431,6 +432,7 @@ export const machine = setup({
                       ...next.context,
                       booting: false,
                       boots,
+                      ...(context.booting ? { reboot: undefined } : {}),
                       marked:
                         done?.outcome.marked === true ? boots : context.marked,
                       ...(why === undefined || done === undefined
