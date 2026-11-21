@@ -11,7 +11,8 @@ interface Armed {
 
 /**
  * The provider calls a fixture counts for `Faults.stall`: `stall` arms the call `after` calls on,
- * and `next` answers, for each call made, where to hold it, which only the armed call does.
+ * and `next` answers, for each call made, where to hold it, which only the armed call does. A call
+ * `next` is told isn't `counted` is never held and moves no stall on.
  */
 export const callStalls = () => {
   let armed: Armed | undefined;
@@ -51,8 +52,8 @@ export const callStalls = () => {
           ),
         };
       }),
-    next: (): ((at: StallAt) => Effect.Effect<void>) => {
-      if (armed === undefined) {
+    next: (counted = true): ((at: StallAt) => Effect.Effect<void>) => {
+      if (armed === undefined || !counted) {
         return held(undefined);
       }
 
