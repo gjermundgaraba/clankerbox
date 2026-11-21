@@ -113,7 +113,7 @@ const passedOver = ["dev", "proc", "sys", "run", "tmp", "boot"];
 
 const diskMount = "/clankerbox-disk";
 
-// A seed pod's copy is I/O bound; its limits give a namespace's compute quota what to count, which
+// A fill pod's copy is I/O bound; its limits give a namespace's compute quota what to count, which
 // it requires of every pod: https://kubernetes.io/docs/concepts/policy/resource-quotas/#compute-resource-quota
 const fillResources = {
   requests: { cpu: "100m", memory: "128Mi" },
@@ -1123,29 +1123,28 @@ export const make = (
         { discard: true }
       );
 
-    const checkpointsOf = (selector: Readonly<Record<string, string>>) =>
-      Effect.map(
-        Effect.all([
-          claims.list({ ...selector, [kindLabel]: "checkpoint" }),
-          snapshots.list({ ...selector, [kindLabel]: "checkpoint" }),
-        ]),
-        (found) => found.flat()
-      );
-
     const prune = (machine: Target, keep: ReadonlySet<Handle>) =>
       Effect.gen(function* () {
-        const held = yield* checkpointsOf({
+        const selector = {
           ...mark,
+          [kindLabel]: "checkpoint",
           [sourceLabel]: machine.instance,
-        });
+        };
+
+        const held = yield* Effect.all([
+          claims.list(selector),
+          snapshots.list(selector),
+        ]);
 
         yield* Effect.forEach(
           new Set(
-            held.flatMap(({ metadata }) =>
-              keep.has(Handle.make(metadata.name))
-                ? []
-                : (metadata.labels?.[instanceLabel] ?? [])
-            )
+            held
+              .flat()
+              .flatMap(({ metadata }) =>
+                keep.has(Handle.make(metadata.name))
+                  ? []
+                  : (metadata.labels?.[instanceLabel] ?? [])
+              )
           ),
           dropped,
           { discard: true }
@@ -1167,7 +1166,9 @@ export const make = (
       const kindOf = ({
         metadata,
       }: {
-        readonly metadata: Sandbox["metadata"];
+        readonly metadata: {
+          readonly labels?: Readonly<Record<string, string>>;
+        };
       }) => metadata.labels?.[kindLabel];
 
       const checkpoints = [...held, ...taken].filter(
