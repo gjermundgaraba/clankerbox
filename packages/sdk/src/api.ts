@@ -243,7 +243,7 @@ export const Http = ActionHttp.make(
         Internal,
       ] as const,
       description:
-        "Capture a checkpoint of a machine, a copy of its disk as a fork takes one. Its kind is `disk`; a checkpoint an older host captured may be `ram`, and a restore of it boots fresh too. A machine is captured running or stopped, or only running where its runtime copies no stopped machine, and a running one only when its VM booted under the runtime pin its host runs. A machine at rest that its host reads in another state is refused with WrongState, and a running one whose VM booted under another runtime pin than its host runs with PinMismatch, before anything is recorded; one its host can't read, or that is still moving, is recorded, and a capture its host then refuses ends `failed`, its `error` saying why. One given `expiresAt` is deleted once that time has passed.",
+        "Capture a checkpoint of a machine, a copy of its disk as a fork takes one. A machine is captured running or stopped, or only running where its runtime copies no stopped machine, and a running one only when its VM booted under the runtime pin its host runs. A machine at rest that its host reads in another state is refused with WrongState, and a running one whose VM booted under another runtime pin than its host runs with PinMismatch, before anything is recorded; one its host can't read, or that is still moving, is recorded, and a capture its host then refuses ends `failed`, its `error` saying why. One given `expiresAt` is deleted once that time has passed.",
       input: CaptureRequest,
       success: Checkpoint,
     }),

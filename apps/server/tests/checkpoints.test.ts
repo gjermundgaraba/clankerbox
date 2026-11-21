@@ -460,7 +460,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a capture of a running machine is disk, with the source's spec, the runtime's pin and the handle its host's capture answered",
+    "a capture of a running machine has the source's spec, the runtime's pin and the handle its host's capture answered",
     () =>
       Effect.gen(function* () {
         const { client, store } = yield* withSource(copiesRunning);
@@ -476,7 +476,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           id: "hot",
           createdAt: ram.createdAt,
           machine: "dev",
-          kind: "disk",
           phase: "ready",
           base: "ubuntu",
           cpu: 1,
@@ -513,7 +512,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
-  it.effect("a mac capture of a stopped machine is disk, with no pin", () =>
+  it.effect("a mac capture of a stopped machine has no pin", () =>
     Effect.gen(function* () {
       const { client, store } = yield* withSource(on("tart"));
 
@@ -526,7 +525,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       const rows = yield* captured(store);
 
-      expect(disk).toMatchObject({ id: "cold", kind: "disk", phase: "ready" });
+      expect(disk).toMatchObject({ id: "cold", phase: "ready" });
       expect(rows.map(({ name, pin }) => [name, pin])).toStrictEqual([
         ["cold", undefined],
       ]);

@@ -236,6 +236,8 @@ export const migrations: readonly string[] = [
   ALTER TABLE machines ADD COLUMN reboot TEXT;
   ALTER TABLE machines ADD COLUMN unasked TEXT;
   UPDATE machines SET boots = 1 WHERE state LIKE 'made.%'`,
+  `ALTER TABLE machines DROP COLUMN captures;
+  ALTER TABLE checkpoints DROP COLUMN kind`,
 ];
 
 const isSqliteError = (

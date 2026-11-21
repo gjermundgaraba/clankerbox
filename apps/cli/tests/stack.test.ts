@@ -523,13 +523,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(forked).toMatchObject({ code: 0, stdout: "copy" });
         expect(captured).toMatchObject({ code: 0, stdout: "snap" });
-        expect(listed.stdout).toMatch(/^snap\s+ready\s+disk\s+dev\s/mu);
+        expect(listed.stdout).toMatch(/^snap\s+ready\s+dev\s/mu);
         expect(
           yield* decodeJson(
             Schema.Struct({
               id: Schema.String,
               machine: Schema.String,
-              kind: Schema.String,
               phase: Schema.String,
             }),
             got.stdout
@@ -537,7 +536,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         ).toStrictEqual({
           id: "snap",
           machine: "dev",
-          kind: "disk",
           phase: "ready",
         });
         expect(fieldsOf(fields.stdout)).toStrictEqual(

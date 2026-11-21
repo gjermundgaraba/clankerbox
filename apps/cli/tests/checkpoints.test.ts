@@ -26,7 +26,7 @@ const Listed = Schema.Struct({
   checkpoints: Schema.Array(Schema.Struct({ id: Schema.String })),
 });
 
-const other = checkpoint("other", { machine: "dev", kind: "ram" });
+const other = checkpoint("other", { machine: "dev" });
 
 layer(NodeServices.layer)((it) => {
   afterEach(async () => {
@@ -159,7 +159,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "checkpoint list shows every checkpoint in any phase with its kind, machine and error",
+    "checkpoint list shows every checkpoint in any phase with its machine and error",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
@@ -191,23 +191,20 @@ layer(NodeServices.layer)((it) => {
         expect(rows[0]).toStrictEqual([
           "ID",
           "PHASE",
-          "KIND",
           "MACHINE",
           "BASE",
           "AGE",
           "ERROR",
         ]);
-        expect(rows[1]?.slice(0, 5)).toStrictEqual([
+        expect(rows[1]?.slice(0, 4)).toStrictEqual([
           "snap",
           "ready",
-          "disk",
           "dev",
           "ubuntu",
         ]);
-        expect(rows[2]?.slice(0, 5)).toStrictEqual([
+        expect(rows[2]?.slice(0, 4)).toStrictEqual([
           "other",
           "ready",
-          "ram",
           "dev",
           "ubuntu",
         ]);
@@ -245,7 +242,6 @@ layer(NodeServices.layer)((it) => {
           expect.arrayContaining([
             ["ID", "other"],
             ["PHASE", "ready"],
-            ["KIND", "ram"],
             ["MACHINE", "dev"],
             ["CPU", "1"],
             ["RAM", "1G"],

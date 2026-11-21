@@ -342,7 +342,7 @@ export const fetchable = (from: RuntimeName, to: RuntimeTraits): boolean =>
 /**
  * Why a host running runtime pin `runs` refuses what was made under `under`, none where they are
  * the same: a running machine is copied and a checkpoint restored only under the pin its VM booted
- * or its state was saved under, as each goes through the VM's own saved state. A stopped machine's copy is of its disk alone, so its callers ask none for it. A checkpoint's restore is asked whichever way it was captured, as its row doesn't record whether its source ran, and a running machine's smolvm checkpoint holds VM state only its smolvm build restores. The
+ * or its state was saved under, as each goes through the VM's own saved state. A stopped machine's copy is of its disk alone, so its callers ask none for it. A checkpoint's restore is asked whichever way it was captured, as its row doesn't record whether its source ran, and a running machine's smolvm checkpoint holds VM state only its smolvm build restores. So a restore of one captured stopped is refused too: stamping a checkpoint's pin only where its capture went through RAM would end that. The
  * control plane asks it before it writes a row, and the host before it runs the step.
  */
 export const pinRefusal = (

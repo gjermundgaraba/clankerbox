@@ -216,12 +216,8 @@ const dumped = (stateDir: string) =>
       .map(({ name }) => tableRows(db, String(name))),
   }));
 
-const madeOnOf = (rows: readonly SqlRow[]) =>
-  rows.map((row) =>
-    row["kind"] === "mac"
-      ? { runtime: "tart", captures: "disk" }
-      : { runtime: "smolvm", captures: "ram" }
-  );
+const runtimesOf = (rows: readonly SqlRow[]) =>
+  rows.map((row) => (row["kind"] === "mac" ? "tart" : "smolvm"));
 
 const without =
   (...columns: readonly string[]) =>
@@ -238,7 +234,6 @@ const row = (name: string, fields?: Partial<MachineRow>): MachineRow => ({
   instance: "0123456789abcdef0123456789abcdef",
   createdAt: DateTime.makeUnsafe("2026-10-04T12:00:00Z"),
   runtime: presets.smolvm.traits.runtime,
-  captures: "ram",
   base: "ubuntu",
   cpu: 1,
   ramMib: 1024,
@@ -277,7 +272,6 @@ const checkpoint = (
   machine: "dev",
   host: "linux",
   runtime: presets.smolvm.traits.runtime,
-  kind: "ram",
   pin: "smolvm 0.0.0-test linux-x64",
   handle: undefined,
   base: "ubuntu",
@@ -434,7 +428,6 @@ layer(NodeServices.layer)((it) => {
         const rows = [
           row("dev", {
             runtime: presets.tart.traits.runtime,
-            captures: "disk",
             handle: Handle.make("dev-handle"),
             endpoint: { host: "127.0.0.1", port: 10_000 },
             hostKey: "ssh-ed25519 AAAA",
@@ -561,7 +554,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a store at 0.40.1's schema opens with each row's runtime, and what its captures keep, from its kind, its other columns as they were, and opens again unchanged",
+    "a store at 0.40.1's schema opens with each row's runtime, from its kind, its other columns as they were, and opens again unchanged",
     () =>
       Effect.gen(function* () {
         const stateDir = yield* schema6Store;
@@ -587,18 +580,17 @@ layer(NodeServices.layer)((it) => {
           "linux",
           "mac",
         ]);
-        expect(
-          read[0].map(({ runtime, captures }) => ({ runtime, captures }))
-        ).toStrictEqual(madeOnOf(before.machines));
-        expect(
-          read[1].map(({ runtime, kind }) => ({ runtime, captures: kind }))
-        ).toStrictEqual(madeOnOf(before.checkpoints));
+        expect(read[0].map(({ runtime }) => runtime)).toStrictEqual(
+          runtimesOf(before.machines)
+        );
+        expect(read[1].map(({ runtime }) => runtime)).toStrictEqual(
+          runtimesOf(before.checkpoints)
+        );
         expect(after.user_version).toBe(migrations.length);
         expect(
           after.machines.map(
             without(
               "runtime",
-              "captures",
               "handle",
               "endpoint",
               "tailnet",
@@ -621,7 +613,7 @@ layer(NodeServices.layer)((it) => {
           portsOf(before.machines)
         );
         expect(
-          after.checkpoints.map(without("runtime", "kind", "handle", "tailnet"))
+          after.checkpoints.map(without("runtime", "handle", "tailnet"))
         ).toStrictEqual(before.checkpoints.map(without("kind", "port")));
         expect({
           ...after.rest,
@@ -854,7 +846,6 @@ layer(NodeServices.layer)((it) => {
 
         const dev = row("dev", {
           runtime: presets.tart.traits.runtime,
-          captures: "disk",
           cpu: 2,
           ramMib: 2048,
           diskGib: 20,
@@ -1271,7 +1262,6 @@ layer(NodeServices.layer)((it) => {
         instance: "abcd",
         createdAt: DateTime.makeUnsafe("2026-10-04T12:01:00Z"),
         runtime: presets.tart.traits.runtime,
-        captures: "disk",
         base: "macos",
         cpu: 8,
         ramMib: 2048,
@@ -1867,7 +1857,6 @@ layer(NodeServices.layer)((it) => {
               ? {
                   pin: undefined,
                   runtime: presets.tart.traits.runtime,
-                  kind: "disk",
                 }
               : {}),
             ...(state === "capturing.due" ? { build: "web@1" } : {}),

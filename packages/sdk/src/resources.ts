@@ -18,9 +18,6 @@ import {
 } from "./ids.ts";
 import { Size, Sizes } from "./sizes.ts";
 
-/** What a checkpoint holds: a running machine's memory and disk, or its disk alone. */
-export const CheckpointKind = Schema.Literals(["ram", "disk"]);
-
 /**
  * The user a machine with an SSH login is logged in as: the user a host's preparation creates, or a
  * base ships, for whom the host installs the operator's keys; never root.
@@ -300,16 +297,14 @@ export const stateLabel = ({ state, desired, phase }: Machine): string => {
 };
 
 /**
- * `kind` is its machine's runtime's `checkpoint` trait: `ram` holds RAM and disks, and `disk` the
- * disks alone. A client waits on `phase`: a checkpoint is usable only `ready`,
- * and never changes after. A capture that failed stays `failed` to say why, holding no copy. One
+ * A copy of a machine's disk, as a fork takes one. A client waits on `phase`: a checkpoint is
+ * usable only `ready`, and never changes after. A capture that failed stays `failed` to say why, holding no copy. One
  * with `expiresAt` is deleted by the control plane once that time has passed.
  */
 export const Checkpoint = Schema.Struct({
   id: Name,
   createdAt: Schema.DateTimeUtcFromString,
   machine: Name,
-  kind: CheckpointKind,
   phase: Schema.Literals(["capturing", "ready", "deleting", "failed"]),
   error: Schema.optionalKey(HostError),
   base: Schema.String,

@@ -1552,7 +1552,6 @@ describe("the chart", () => {
       host: "other",
       instance: "moved-instance",
       runtime: presets.tart.traits.runtime,
-      captures: "disk",
       pin: "other pin",
       source: { kind: "checkpoint", name: "built" },
     } as const;

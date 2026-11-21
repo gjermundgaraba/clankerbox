@@ -2,7 +2,6 @@ import { Handle, Step } from "@clankerbox/host-contract";
 import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
 import {
   Build,
-  Checkpoint,
   Desired,
   HostError,
   Labels,
@@ -12,7 +11,12 @@ import {
   Sizing,
   Unasked,
 } from "@gjermundgaraba/clankerbox-sdk";
-import type { Conflict, Internal, Phase } from "@gjermundgaraba/clankerbox-sdk";
+import type {
+  Checkpoint,
+  Conflict,
+  Internal,
+  Phase,
+} from "@gjermundgaraba/clankerbox-sdk";
 import { Context, Effect, Schema, SchemaGetter } from "effect";
 import type {
   Array as Arr,
@@ -100,22 +104,16 @@ export type MachinePhase = Exclude<Phase, "waiting">;
 
 /**
  * What a machine's row keeps of the runtime it was made on, the one way a host's traits reach a
- * row: its `runtime`, which a client is shown and a copy of the machine stays on, and what a capture
- * of it `captures`, its checkpoint's `kind`: `disk` for every row this release writes, and `ram`
- * only on a row an older release wrote, whose checkpoints kept RAM. Every
- * decision about what a host does reads the host's traits as it answers now, so a trait a release
- * adds or changes migrates no row.
+ * row: its `runtime`, which a client is shown and a copy of the machine stays on. Every decision
+ * about what a host does reads the host's traits as it answers now, so a trait a release adds or
+ * changes migrates no row.
  */
-export const MadeOn = Schema.Struct({
-  runtime: RuntimeName,
-  captures: Checkpoint.fields.kind,
-});
+export const MadeOn = Schema.Struct({ runtime: RuntimeName });
 
 export type MadeOn = typeof MadeOn.Type;
 
 export const madeOn = (traits: RuntimeTraits): MadeOn => ({
   runtime: traits.runtime,
-  captures: "disk",
 });
 
 const made = {
@@ -174,7 +172,6 @@ export type ShownPhase = Checkpoint["phase"];
 export const CheckpointFacts = Schema.Struct({
   ...made,
   runtime: RuntimeName,
-  kind: Checkpoint.fields.kind,
   machine: Schema.String,
   failedAt: UndefinedFromNull(Schema.DateTimeUtcFromString),
   /** When the control plane deletes it, once ready. */

@@ -1127,7 +1127,6 @@ export const make = (
       Effect.all(
         [
           removed(pods, fillName(instance), instance),
-          removed(claims, checkpointName(instance), instance),
           removed(snapshots, checkpointName(instance), instance),
         ],
         { discard: true }
@@ -1141,20 +1140,15 @@ export const make = (
           [sourceLabel]: machine.instance,
         };
 
-        const held = yield* Effect.all([
-          claims.list(selector),
-          snapshots.list(selector),
-        ]);
+        const held = yield* snapshots.list(selector);
 
         yield* Effect.forEach(
           new Set(
-            held
-              .flat()
-              .flatMap(({ metadata }) =>
-                keep.has(Handle.make(metadata.name))
-                  ? []
-                  : (metadata.labels?.[instanceLabel] ?? [])
-              )
+            held.flatMap(({ metadata }) =>
+              keep.has(Handle.make(metadata.name))
+                ? []
+                : (metadata.labels?.[instanceLabel] ?? [])
+            )
           ),
           dropped,
           { discard: true }
@@ -1181,9 +1175,7 @@ export const make = (
         };
       }) => metadata.labels?.[kindLabel];
 
-      const checkpoints = [...held, ...taken].filter(
-        (each) => kindOf(each) === "checkpoint"
-      );
+      const checkpoints = taken.filter((each) => kindOf(each) === "checkpoint");
 
       const instances = new Set(
         [
@@ -1240,33 +1232,19 @@ export const make = (
         case "checkpoint": {
           const { checkpoint } = origin;
 
-          return Effect.all([
-            snapshots.get(checkpoint.handle),
-            claims.get(checkpoint.handle),
-          ]).pipe(
+          return snapshots.get(checkpoint.handle).pipe(
             Effect.mapError(
               internal(`couldn't read checkpoint ${checkpoint.name}`)
             ),
-            Effect.flatMap(([snapshot, claim]) => {
+            Effect.flatMap((snapshot) => {
               const taken: Snapshot | undefined = live(
                 owned(snapshot, checkpoint.instance)
               );
 
-              if (taken?.status?.readyToUse === true) {
-                return Effect.succeed<DiskSource>({
-                  _tag: "snapshot",
-                  name: checkpoint.handle,
-                });
-              }
-
-              const held = live(owned(claim, checkpoint.instance));
-              const diskGib = diskGibOf(held);
-
-              return held !== undefined && filled(held) && diskGib !== undefined
+              return taken?.status?.readyToUse === true
                 ? Effect.succeed<DiskSource>({
-                    _tag: "claim",
-                    claim: held,
-                    diskGib,
+                    _tag: "snapshot",
+                    name: checkpoint.handle,
                   })
                 : Effect.fail(missingCheckpoint(traits.runtime, checkpoint));
             })

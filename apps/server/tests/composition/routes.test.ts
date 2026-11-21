@@ -271,7 +271,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(captured).toMatchObject({
           id: "snap",
           machine: "dev",
-          kind: "disk",
           phase: "ready",
         });
         expect(listed).toStrictEqual([captured]);

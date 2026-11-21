@@ -115,7 +115,6 @@ export const checkpoint = (
   id,
   createdAt: DateTime.makeUnsafe("2026-10-01T00:00:00Z"),
   machine: id,
-  kind: "disk",
   phase: "ready",
   base: "ubuntu",
   cpu: 1,
