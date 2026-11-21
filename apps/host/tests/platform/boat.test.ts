@@ -1134,7 +1134,7 @@ describe("the boat runtime over fake boat", () => {
   );
 
   it.live(
-    "a read of several machines reads a running sandbox's own record for its reboot mark, as boat's list answers it null, only when first seen, run afresh or its updatedAt moved, and again after a read boat throttled",
+    "a read of several machines reads a running sandbox's own record for its reboot mark, as boat's list answers it null, only when first seen, run afresh or its updatedAt moved, once more after a move that showed no new mark, and again after a read boat throttled",
     () =>
       onBoat(({ boat, runtime }) =>
         Effect.gen(function* () {
@@ -1188,12 +1188,24 @@ describe("the boat runtime over fake boat", () => {
 
           const runAfresh = yield* read;
 
+          yield* boat.touch(a.handle, "2026-11-21T00:02:00Z");
+
+          const moved = yield* read;
+
+          yield* boat.reboot(a.handle, "2026-11-21T00:02:30Z");
+
+          const owed = yield* read;
+          const settled = yield* read;
+
           expect({
             first,
             steady,
             throttled,
             retried,
             runAfresh,
+            moved,
+            owed,
+            settled,
           }).toStrictEqual({
             first: {
               seen: {
@@ -1222,6 +1234,26 @@ describe("the boat runtime over fake boat", () => {
             runAfresh: {
               seen: { a: "running", b: "running", c: "running" },
               ownReads: [c.handle],
+            },
+            moved: {
+              seen: {
+                a: "running 2026-11-21T00:00:00Z",
+                b: "running",
+                c: "running",
+              },
+              ownReads: [a.handle],
+            },
+            owed: {
+              seen: {
+                a: "running 2026-11-21T00:02:30Z",
+                b: "running",
+                c: "running",
+              },
+              ownReads: [a.handle],
+            },
+            settled: {
+              seen: { a: "running", b: "running", c: "running" },
+              ownReads: [],
             },
           });
         })

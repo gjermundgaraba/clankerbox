@@ -76,6 +76,8 @@ export interface FakeSandbox {
   stoppedAt: number | undefined;
   /** When its kernel last restarted on its machine, which boat answers as `lastReboot`. */
   rebootedAt: string | undefined;
+  /** An `updatedAt` boat answers apart from a reboot, which then leaves it where it is. */
+  touchedAt?: string | undefined;
   relay: Relay;
 }
 
@@ -606,7 +608,7 @@ export const fakeBoat = (
       type: sandbox.type,
       labels: sandbox.labels,
       createdAt: sandbox.createdAt,
-      updatedAt: sandbox.rebootedAt ?? sandbox.createdAt,
+      updatedAt: sandbox.touchedAt ?? sandbox.rebootedAt ?? sandbox.createdAt,
       dataExpiredAt: sandbox.dataExpired ? sandbox.createdAt : null,
       hydrated: sandbox.hydratingFor === 0,
       error: sandbox.failed ? "fake boat failed its sandbox" : null,
@@ -1671,6 +1673,14 @@ export const fakeBoat = (
             sandbox.failed = true;
           }
         }),
+      touch: (id: string, at: string) =>
+        Effect.sync(() => {
+          const sandbox = sandboxes.get(id);
+
+          if (sandbox !== undefined) {
+            sandbox.touchedAt = at;
+          }
+        }),
       throttleReads: (on: boolean) =>
         Effect.sync(() => {
           readsThrottled = on;
@@ -1755,6 +1765,8 @@ export interface FakeBoat {
   readonly fail: (id: string) => Effect.Effect<void>;
   /** Answers each read of one sandbox by its ID 429, as boat's per-IP rate limit does. */
   readonly throttleReads: (on: boolean) => Effect.Effect<void>;
+  /** Moves a sandbox's `updatedAt` to `at` with no reboot, after which a reboot leaves it there, as boat would where it moved it before setting `lastReboot`. */
+  readonly touch: (id: string, at: string) => Effect.Effect<void>;
   /** Restarts a running sandbox's kernel in place, as boat does on its own, which it answers in `lastReboot` by its ID, and as null in its list, as the real one does. */
   readonly reboot: (id: string, at: string) => Effect.Effect<void>;
   /** Stops a sandbox, which then reads `archiving` for this many reads of it. */

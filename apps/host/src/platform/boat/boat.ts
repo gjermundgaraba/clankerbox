@@ -559,16 +559,27 @@ export const make = (
      * mark from the list, until a live run shows boat fills it there.
      *
      * It rests on `updatedAt`, which the list does fill: a sandbox's own record is read the first
-     * time a list finds it running, and again only once its `updatedAt` differs from the one its
-     * last read of its own record saw. On that account on 2026-11-21, a running sandbox's
-     * `updatedAt` held still through 5 idle minutes, its minutely snapshots included, and moved
-     * 15 s after a `systemctl reboot` set `lastReboot`, to the same value in the list and the
-     * record. That is one reboot of one sandbox, and boat documents neither. Should boat stop moving
-     * `updatedAt` on a reboot, or move it before it sets `lastReboot`, a host of two or more boat
-     * machines misses each reboot in place; should it move it more often, the host only reads more.
+     * time a list finds it running, and again only once its `updatedAt` in the list differs from the
+     * one the list gave at its last own read. It is the list's `updatedAt` the host keeps, as the
+     * record's can trail the list's by about a second. On that account on 2026-11-21, a running
+     * sandbox's `updatedAt` held still through 5 idle minutes, its minutely snapshots and an exec
+     * included, and moved 10 to 25 s after each of five `systemctl reboot`s, a stop, and twice on a
+     * resume. In none of the five did the list's `updatedAt` move before the record held the new
+     * `lastReboot`, read about every 1.2 s; boat documents neither. Should boat stop moving
+     * `updatedAt` on a reboot, a host of two or more boat machines misses each reboot in place;
+     * should it move it more often, the host only reads more.
      *
-     * A list that finds a sandbox not running forgets it, so its next run is read afresh, as the
-     * control plane takes a new reboot mark after each start that boots a machine. A read that
+     * Should boat ever move `updatedAt` before it sets `lastReboot`, by less than those reads could
+     * see, a read the move made would find no new mark, and the reboot would land later with no
+     * move left to read it by. So a read made because `updatedAt` moved that finds the mark it last
+     * saw owes one more read of that record at the next check, about 30 s later, before the sandbox
+     * goes back to the list alone. That costs one read per move, which a stop, a resume or a reboot
+     * makes, and catches a reboot boat records within a check of moving `updatedAt`; one it records
+     * later than that is still missed.
+     *
+     * A list that finds a sandbox not running, or lacks it, forgets it, so its next run is read
+     * afresh, as the control plane takes a new reboot mark after each start that boots a machine,
+     * and a host that makes and deletes many machines keeps none of the deleted. A read that
      * fails, that boat throttles with a 429, or that `rebootReadBudget` cuts short, inside the 9 s
      * a host's read is bounded to, records nothing, so the next list reads it again: the observe
      * answers the list's state meanwhile, the control plane keeps the mark it last read, and the
@@ -576,36 +587,72 @@ export const make = (
      * starts reads every running sandbox once, about 300 within the budget, and the rest at the
      * checks after.
      */
-    const ownRead = new Map<string, string | undefined>();
-
-    const remember = (sandbox: Sandbox | undefined, handle: string) => {
-      if (sandbox !== undefined && heldOf(sandbox) === "running") {
-        ownRead.set(handle, sandbox.updatedAt ?? undefined);
-      } else {
-        ownRead.delete(handle);
+    const ownRead = new Map<
+      string,
+      {
+        readonly updatedAt: string | undefined;
+        readonly reboot: string | undefined;
+        readonly owed: boolean;
       }
+    >();
+
+    const remember = (
+      sandbox: Sandbox | undefined,
+      handle: string,
+      updatedAt: string | undefined
+    ) => {
+      if (sandbox === undefined || heldOf(sandbox) !== "running") {
+        ownRead.delete(handle);
+
+        return;
+      }
+
+      const last = ownRead.get(handle);
+      const reboot = sandbox.lastReboot?.at;
+
+      ownRead.set(handle, {
+        updatedAt,
+        reboot,
+        owed:
+          last !== undefined &&
+          last.updatedAt !== updatedAt &&
+          last.reboot === reboot,
+      });
     };
 
-    const rebootsOf = (inList: readonly Sandbox[]) =>
+    const rebootsOf = (
+      inList: readonly Sandbox[],
+      hostListed: readonly Sandbox[]
+    ) =>
       Effect.gen(function* () {
         const found = new Map<string, string>();
 
-        for (const sandbox of inList) {
-          if (heldOf(sandbox) !== "running") {
-            ownRead.delete(sandbox.id);
+        const runningNow = new Set(
+          hostListed.flatMap((sandbox) =>
+            heldOf(sandbox) === "running" ? [sandbox.id] : []
+          )
+        );
+
+        for (const handle of ownRead.keys()) {
+          if (!runningNow.has(handle)) {
+            ownRead.delete(handle);
           }
         }
 
-        const due = inList.filter(
-          (sandbox) =>
+        const due = inList.filter((sandbox) => {
+          const last = ownRead.get(sandbox.id);
+
+          return (
             heldOf(sandbox) === "running" &&
-            (!ownRead.has(sandbox.id) ||
-              ownRead.get(sandbox.id) !== (sandbox.updatedAt ?? undefined))
-        );
+            (last === undefined ||
+              last.owed ||
+              last.updatedAt !== (sandbox.updatedAt ?? undefined))
+          );
+        });
 
         yield* Effect.forEach(
           due,
-          ({ id }) =>
+          ({ id, updatedAt }) =>
             api.sandbox(id).pipe(
               Effect.tap((own) =>
                 Effect.sync(() => {
@@ -615,7 +662,7 @@ export const make = (
                     found.set(id, at);
                   }
 
-                  remember(own, id);
+                  remember(own, id, updatedAt ?? undefined);
                 })
               ),
               Effect.catch((error) =>
@@ -843,7 +890,7 @@ export const make = (
         if (machines.length === 1 && only !== undefined) {
           return api.sandbox(only.handle).pipe(
             Effect.map((sandbox): Observed => {
-              remember(sandbox, only.handle);
+              remember(sandbox, only.handle, sandbox?.updatedAt ?? undefined);
 
               return new Map([[only.name, sightingOf(sandbox)]]);
             }),
@@ -869,7 +916,8 @@ export const make = (
                   const found = byId.get(handle);
 
                   return found === undefined ? [] : [found];
-                })
+                }),
+                sandboxes
               ),
               (reboots): Observed =>
                 new Map(
