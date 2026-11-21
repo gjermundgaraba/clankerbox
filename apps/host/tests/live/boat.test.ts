@@ -451,7 +451,10 @@ describe.runIf(live)("boat, against the real account", () => {
         note("snapshot", snapshot);
         yield* boat.save(first.id, snapshot);
 
-        for (let tries = 0; tries < 240; tries += 1) {
+        // boat's save ran over 120 s here on 2026-11-21, and it answers a create from a snapshot
+        // still saving with a sandbox, so a wait cut short can't be told from a finished one.
+        // https://docs.boat.dev/openapi/boat-v1.yaml (`SavedSnapshot.status`)
+        for (let tries = 0; tries < 1800; tries += 1) {
           const state = yield* boat.saved(snapshot);
 
           if (state?.status !== "saving") {

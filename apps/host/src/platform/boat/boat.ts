@@ -60,7 +60,7 @@ import * as Api from "./api.ts";
 import type { ApiError, ListedSnapshot, Sandbox, SshKey } from "./api.ts";
 import * as Ssh from "./ssh.ts";
 import type { Pin } from "./ssh.ts";
-import { traits as traitsOf, typeOf, types } from "./traits.ts";
+import { filesBytes, traits as traitsOf, typeOf, types } from "./traits.ts";
 
 export const BoatSettings = Schema.Struct({
   apiKeyFile: Schema.String,
@@ -242,6 +242,19 @@ const isType = Schema.is(Api.BoatType);
 const pollEvery = Duration.millis(500);
 
 const listedWithin = Duration.seconds(5);
+
+/**
+ * The bound on boat's save of a sandbox, a fork's or a capture's, which is longer than a step's
+ * 10 minutes: boat's fresh save of a running sandbox runs minutes, and measured live on 2026-11-21
+ * took 694 s and 906 s for a large sandbox holding 90 GiB of random data, against 177 s and 332 s
+ * for 100 GiB of sparse file. An xlarge holds up to 251 GB, so this allows it the same rate with room to spare.
+ * It is a total cap, not a stall bound, because nothing boat shows moves while a save runs: the
+ * saved snapshot reads `saving` throughout, and the sandbox's `updatedAt` and
+ * `lastSnapshotAttemptAt` stand still, both seen live through a 15-minute save. A save cut by it
+ * leaves its snapshot, which the source's next start or delete deletes.
+ * https://docs.boat.dev/openapi/boat-v1.yaml (`SavedSnapshot.status`, `Sandbox.lastSnapshotAttemptAt`)
+ */
+const savingWithin = Duration.minutes(45);
 
 const internal =
   (what: string) =>
@@ -516,6 +529,8 @@ export const make = (
     // A save of a running sandbox is a fresh capture, which can run minutes, where a fork reads the
     // newest automatic snapshot, up to a minute old:
     // https://docs.boat.dev/snapshots/resume-and-fork
+    // A create from a saved snapshot that is still saving is answered with a sandbox, seen live on
+    // 2026-11-21, so a save is waited out to `ready` before anything is made from it.
     const savedAs = (machine: Target, name: string, what: string) =>
       Effect.gen(function* () {
         yield* api.save(machine.handle, name).pipe(
@@ -538,6 +553,52 @@ export const make = (
         if (snapshot?.status !== "ready") {
           return yield* new Internal({
             message: `boat's save of ${machine.name} as ${name} failed: ${snapshot?.error ?? "it is gone"}`,
+          });
+        }
+
+        return snapshot;
+      });
+
+    /**
+     * Fails `Unsizable` where the data saved in `snapshot` is more than `type` holds, which boat's
+     * create from a saved snapshot doesn't check, where its `/fork` and resume do. A save whose size
+     * boat doesn't say goes only to a type that holds at least as much as its source's.
+     * https://docs.boat.dev/machines/change-size.md
+     */
+    const fits = (
+      source: Target,
+      snapshot: Api.SavedSnapshot,
+      type: Api.BoatType,
+      name: string
+    ): Effect.Effect<void, Internal | Unsizable> =>
+      Effect.gen(function* () {
+        const summaries = yield* api
+          .snapshotsOf(source.handle)
+          .pipe(
+            Effect.mapError(
+              internal(`couldn't read the snapshots of ${source.name}`)
+            )
+          );
+
+        const held = summaries.find(
+          ({ id }) => id === snapshot.snapshotId
+        )?.contentSizeBytes;
+
+        if (held === undefined || held === null) {
+          const from = (yield* read(source))?.type;
+
+          if (isType(from) && filesBytes[from] <= filesBytes[type]) {
+            return;
+          }
+
+          return yield* new Unsizable({
+            message: `boat didn't say how much data ${source.name} holds, so ${name} isn't made at boat's ${type} type, which may hold less than its source's ${from ?? "type"}`,
+          });
+        }
+
+        if (held > filesBytes[type]) {
+          return yield* new Unsizable({
+            message: `machine ${name}'s source ${source.name} holds ${(held / 1e9).toFixed(1)} GB of data, more than the ${filesBytes[type] / 1e9} GB boat's ${type} type takes`,
           });
         }
       });
@@ -963,69 +1024,100 @@ export const make = (
               : undefined;
 
           if (origin._tag === "machine" && through !== undefined) {
-            yield* savedAs(origin.machine, through, "fork");
-          }
+            const source = origin.machine;
 
-          if (origin._tag === "checkpoint") {
-            const { checkpoint } = origin;
+            yield* Effect.gen(function* () {
+              const snapshot = yield* savedAs(source, through, "fork");
 
-            const snapshot = yield* api
-              .saved(checkpoint.handle)
-              .pipe(
-                Effect.mapError(
-                  internal(`couldn't read snapshot ${checkpoint.handle}`)
+              yield* fits(source, snapshot, type, machine.name).pipe(
+                Effect.tapError(() =>
+                  api
+                    .unsave(through)
+                    .pipe(
+                      Effect.catch((error) =>
+                        Effect.logWarning(
+                          `make ${machine.name}: couldn't delete snapshot ${through} after refusing the fork, so it bills until ${source.name}'s next start or delete deletes it: ${error.message}`
+                        )
+                      )
+                    )
                 )
               );
-
-            if (snapshot === undefined) {
-              return yield* missingCheckpoint(traits.runtime, checkpoint);
-            }
+            }).pipe(
+              bounded(
+                "boat",
+                `make ${machine.name}'s save of ${source.name}`,
+                savingWithin
+              )
+            );
           }
 
-          const fromMachine = (source: Target) =>
-            through === undefined
-              ? api.fork(source.handle, { type, labels }, key)
-              : api.create(
-                  { type, labels, name: machine.name, from: through },
-                  key
-                );
+          return yield* Effect.gen(function* () {
+            if (origin._tag === "checkpoint") {
+              const { checkpoint } = origin;
 
-          const sent =
-            origin._tag === "machine"
-              ? fromMachine(origin.machine)
-              : api.create(
-                  { type, labels, name: machine.name, ...createdFrom(origin) },
-                  key
-                );
-
-          const sandbox = yield* landed(machine, sent).pipe(
-            Effect.mapError((error) =>
-              error._tag === "Refused" && error.code === "type_too_small"
-                ? new Unsizable({
-                    message: `machine ${machine.name}'s source holds more data than boat's ${type} type takes: ${error.message}`,
-                  })
-                : failure(`make ${machine.name}`)(error)
-            )
-          );
-
-          const handle = Handle.make(sandbox.id);
-
-          yield* ready({ ...machine, handle }, "make");
-
-          if (through !== undefined) {
-            yield* api
-              .unsave(through)
-              .pipe(
-                Effect.catch((error) =>
-                  Effect.logWarning(
-                    `make ${machine.name}: couldn't delete snapshot ${through}, which its source's next start or delete deletes: ${error.message}`
+              const snapshot = yield* api
+                .saved(checkpoint.handle)
+                .pipe(
+                  Effect.mapError(
+                    internal(`couldn't read snapshot ${checkpoint.handle}`)
                   )
-                )
-              );
-          }
+                );
 
-          return { handle, sizes: types[type] };
-        }).pipe(bounded("boat", `make ${machine.name}`)),
+              if (snapshot === undefined) {
+                return yield* missingCheckpoint(traits.runtime, checkpoint);
+              }
+            }
+
+            const fromMachine = (source: Target) =>
+              through === undefined
+                ? api.fork(source.handle, { type, labels }, key)
+                : api.create(
+                    { type, labels, name: machine.name, from: through },
+                    key
+                  );
+
+            const sent =
+              origin._tag === "machine"
+                ? fromMachine(origin.machine)
+                : api.create(
+                    {
+                      type,
+                      labels,
+                      name: machine.name,
+                      ...createdFrom(origin),
+                    },
+                    key
+                  );
+
+            const sandbox = yield* landed(machine, sent).pipe(
+              Effect.mapError((error) =>
+                error._tag === "Refused" && error.code === "type_too_small"
+                  ? new Unsizable({
+                      message: `machine ${machine.name}'s source holds more data than boat's ${type} type takes: ${error.message}`,
+                    })
+                  : failure(`make ${machine.name}`)(error)
+              )
+            );
+
+            const handle = Handle.make(sandbox.id);
+
+            yield* ready({ ...machine, handle }, "make");
+
+            if (through !== undefined) {
+              yield* api
+                .unsave(through)
+                .pipe(
+                  Effect.catch((error) =>
+                    Effect.logWarning(
+                      `make ${machine.name}: couldn't delete snapshot ${through}, which its source's next start or delete deletes: ${error.message}`
+                    )
+                  )
+                );
+            }
+
+            return { handle, sizes: types[type] };
+          }).pipe(bounded("boat", `make ${machine.name}`));
+        }),
       start: (machine, keep) =>
         Effect.gen(function* () {
           yield* sentUntilHeld({
@@ -1091,7 +1183,7 @@ export const make = (
           yield* savedAs(machine, name, "capture");
 
           return Handle.make(name);
-        }).pipe(bounded("boat", `capture ${machine.name}`)),
+        }).pipe(bounded("boat", `capture ${machine.name}`, savingWithin)),
       resize: (machine, to) =>
         Effect.gen(function* () {
           const type = yield* typeFor(sizedBy(machine, to), machine.name);

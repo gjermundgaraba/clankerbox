@@ -74,9 +74,24 @@ const SavedSnapshot = Schema.Struct({
   status: Schema.String,
   sourceSandboxId: Schema.optionalKey(Schema.String),
   error: Schema.optionalKey(Schema.String),
+  snapshotId: Schema.optionalKey(Schema.String),
 });
 
 export type SavedSnapshot = typeof SavedSnapshot.Type;
+
+/**
+ * One of a sandbox's own snapshots. `contentSizeBytes` is the user's data it restores, without the
+ * base image's, which is what a type's disk figure bounds: https://docs.boat.dev/openapi/boat-v1.yaml
+ * (`SnapshotSummary`).
+ */
+const SnapshotSummary = Schema.Struct({
+  id: Schema.String,
+  contentSizeBytes: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
+});
+
+export type SnapshotSummary = typeof SnapshotSummary.Type;
+
+const Summaries = Schema.Struct({ snapshots: Schema.Array(Schema.Unknown) });
 
 const ListedSnapshot = Schema.Struct({
   name: Schema.String,
@@ -374,6 +389,21 @@ export const make = (url: string, key: Redacted.Redacted) =>
         Effect.map(
           found(HttpClientRequest.get(`/saved-snapshots/${name}`), SavedOne),
           (answer) => answer?.snapshot
+        ),
+      snapshotsOf: (id: string) =>
+        Effect.map(
+          done(
+            HttpClientRequest.get(`/sandboxes/${id}/snapshots`).pipe(
+              HttpClientRequest.setUrlParam("limit", "20")
+            ),
+            Summaries
+          ),
+          ({ snapshots }) =>
+            snapshots.flatMap((record) =>
+              Option.toArray(
+                Schema.decodeUnknownOption(SnapshotSummary)(record)
+              )
+            )
         ),
       savedSnapshots: (namePrefix: string, ours: (name: string) => boolean) =>
         Effect.flatMap(

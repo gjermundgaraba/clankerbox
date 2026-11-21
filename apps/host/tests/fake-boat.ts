@@ -87,6 +87,9 @@ export interface FakeSnapshot {
   readonly createdAt: string;
   readonly type: Offered;
   readonly root: string;
+  /** The id of the snapshot behind the name, and the GB of data it restores. */
+  readonly snapshotId: string;
+  readonly dataGb: number;
   status: "saving" | "ready";
   readonly readyAt: number;
 }
@@ -633,6 +636,9 @@ export const fakeBoat = (
       sourceSandboxId: snapshot.sourceSandboxId,
       createdAt: snapshot.createdAt,
       type: snapshot.type,
+      ...(snapshot.status === "ready"
+        ? { snapshotId: snapshot.snapshotId }
+        : {}),
     });
 
     const settled = (snapshot: FakeSnapshot) => {
@@ -1088,6 +1094,8 @@ export const fakeBoat = (
         createdAt: new Date().toISOString(),
         type: source.type,
         root,
+        snapshotId: minted("snap"),
+        dataGb: source.dataGb,
         status: before === undefined ? "saving" : "ready",
         readyAt: Date.now() + Duration.toMillis(lasts),
       };
@@ -1324,6 +1332,25 @@ export const fakeBoat = (
 
         case "stop": {
           return await stop(sandbox);
+        }
+
+        case "snapshots": {
+          return {
+            status: 200,
+            body: {
+              snapshots: [...snapshots.values()].flatMap((snapshot) =>
+                snapshot.sourceSandboxId === sandbox.id &&
+                settled(snapshot).status === "ready"
+                  ? [
+                      {
+                        id: snapshot.snapshotId,
+                        contentSizeBytes: snapshot.dataGb * 1e9,
+                      },
+                    ]
+                  : []
+              ),
+            },
+          };
         }
 
         case "sshkey": {

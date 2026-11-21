@@ -21,6 +21,20 @@ export const types: Readonly<Record<BoatType, Sizes>> = {
   xlarge: { cpu: 16, ramMib: 32 * gib, diskGib: 251 },
 };
 
+/**
+ * The most of the user's own files each type holds, boat's "Disk" column, in bytes: 51, 51, 111
+ * and 251 GB. boat refuses `type_too_small` against these on a resume and a `/fork`, but not on a
+ * create from a saved snapshot, which a fork of a running sandbox goes through: measured live on
+ * 2026-11-21, a large sandbox holding 90 GiB saved and created as a small came up holding all 90.
+ * https://docs.boat.dev/machines
+ */
+export const filesBytes: Readonly<Record<BoatType, number>> = {
+  small: 51e9,
+  default: 51e9,
+  large: 111e9,
+  xlarge: 251e9,
+};
+
 export const typeOf = (
   offered: readonly BoatType[],
   sizes: Sizes
@@ -36,9 +50,9 @@ export const typeOf = (
   });
 
 /**
- * A fork of a running sandbox saves a fresh snapshot first. Its save and fill, and their time
- * against a step's 10-minute bound, are checked against the fake alone; the live suite against an
- * account is owed.
+ * A fork of a running sandbox saves a fresh snapshot first, timed live on 2026-11-21 at up to 694 s
+ * for 90 GiB. Its check of the save's size against the fork's type is checked against the fake
+ * alone.
  */
 export const traits = (
   offered: Arr.NonEmptyReadonlyArray<BoatType>
