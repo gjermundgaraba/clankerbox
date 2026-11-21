@@ -1,4 +1,4 @@
-import type { Adopted, MachineState } from "@clankerbox/host-contract";
+import type { Adopted } from "@clankerbox/host-contract";
 import type {
   Internal,
   Unreported,
@@ -12,6 +12,8 @@ import { unread } from "./hosts.ts";
 import type { Fresh, Interface as Hosts } from "./hosts.ts";
 import { machineChart, stageOf } from "./machine-chart.ts";
 import type { MachineRow } from "./machine-chart.ts";
+import { heardOf } from "./machine-view.ts";
+import type { Seen } from "./machine-view.ts";
 import { identityOf, mayHoldVm, refOf } from "./steps.ts";
 import type { Interface as Store } from "./store.ts";
 
@@ -165,11 +167,7 @@ export const recheckHosts = (
 export interface Swept {
   readonly host: string;
   readonly info: Fresh;
-  readonly seen: MachineState | undefined;
-  /** The runtime's mark of the VM's last reboot in place, where its runtime keeps one. */
-  readonly reboot?: string | undefined;
-  /** Why the runtime says the VM is stopped or missing, where it says. */
-  readonly why?: string | undefined;
+  readonly heard: Seen | undefined;
 }
 
 /** At most this many machines in one read of a host, which bounds the whole read by `readTimeout`. */
@@ -195,7 +193,7 @@ export const sweep = (
 
         yield* Effect.forEach(
           unmade,
-          (found) => each(found, { host, info, seen: undefined }),
+          (found) => each(found, { host, info, heard: undefined }),
           { discard: true }
         );
 
@@ -209,7 +207,7 @@ export const sweep = (
               .pipe(
                 Effect.flatMap((answers) => {
                   const read = new Map(
-                    answers.map((answer) => [answer.name, answer])
+                    answers.map((answer) => [answer.name, heardOf(answer)])
                   );
 
                   return Effect.forEach(
@@ -218,9 +216,7 @@ export const sweep = (
                       each(found, {
                         host,
                         info,
-                        seen: read.get(found.name)?.state ?? "unknown",
-                        reboot: read.get(found.name)?.reboot,
-                        why: read.get(found.name)?.why,
+                        heard: read.get(found.name) ?? { seen: "unknown" },
                       }),
                     { discard: true }
                   );

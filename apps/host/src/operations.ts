@@ -748,9 +748,12 @@ export const make = (
       Effect.gen(function* () {
         const { machine, source, machines, authorizedKeys, join, taken } = step;
 
-        yield* source._tag === "base"
-          ? runtime.sizable(machine, machine, machine, false)
-          : runtime.sizable(machine, sourceSizes(source), machine, false);
+        yield* runtime.sizable(
+          machine,
+          source._tag === "base" ? machine : sourceSizes(source),
+          machine,
+          false
+        );
 
         const origin = yield* originOf(source);
 

@@ -132,9 +132,6 @@ const stateOf = (runtime: Runtime, machine: Sized) =>
     stateIn(observed, machine)
   );
 
-const outOfCaptureState = (runtime: Runtime, machine: Sized) =>
-  runtime.stop(machine);
-
 const shell = (runtime: Runtime, machine: Sized, script: string) =>
   Effect.flatMap(
     runtime.exec(machine, {
@@ -269,7 +266,7 @@ export const runtimeContract = (subject: Subject): void => {
               captureFrom === "either"
                 ? undefined
                 : yield* Effect.gen(function* () {
-                    yield* outOfCaptureState(runtime, machine);
+                    yield* runtime.stop(machine);
 
                     const refusal = yield* Effect.flip(
                       runtime.capture(machine, snap)

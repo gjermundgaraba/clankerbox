@@ -15,6 +15,16 @@ export interface Seen {
   readonly why?: string | undefined;
 }
 
+export const heardOf = ({
+  state,
+  reboot,
+  why,
+}: {
+  readonly state: MachineState;
+  readonly reboot?: string;
+  readonly why?: string;
+}): Seen => ({ seen: state, reboot, why });
+
 /** What each machine's VM is doing, from each host that answers. An undone row's VM is gone. */
 export const readMachines = (
   hosts: Hosts,
@@ -42,10 +52,7 @@ export const readMachines = (
       ...undone.map((name) => [name, { seen: "missing" }] as const),
       ...answers
         .flat()
-        .map(
-          ({ name, state, reboot, why }) =>
-            [name, { seen: state, reboot, why }] as const
-        ),
+        .map((answer) => [answer.name, heardOf(answer)] as const),
     ]);
   });
 

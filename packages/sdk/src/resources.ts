@@ -249,10 +249,12 @@ export type Unasked = typeof Unasked.Type;
  * (`state` `unknown`) and it was last read running and is asked to run still. `tailnet` is on a
  * machine that requests the tailnet, as a create from a base asks, its template's build asked, or
  * the source of its fork or restore asked. `boots` counts the cold boots the machine ran in that the
- * control plane knows of: its first, each start that booted it from stopped, and each reboot in
- * place its runtime reported. While it holds, its memory and processes are those of one boot; a
- * boot a host makes inside another step that leaves the machine stopped, as a fork may, counts
- * none, as nothing ran in it for the machine's owner. A copy counts its own from its first.
+ * control plane knows of: its first, each start that booted it from stopped, each reboot in place
+ * its runtime reported, and each read that found it running while asked to stay stopped. While it
+ * holds, its memory and processes are those of one boot, but for a stop and start its runtime made
+ * by itself between two reads, which only a runtime that reports its reboots shows; a boot a host
+ * makes inside another step that leaves the machine stopped, as a fork may, counts none, as nothing
+ * ran in it for the machine's owner. A copy counts its own from its first.
  * `unasked` is the last change no request asked for, kept until another replaces it.
  */
 export const Machine = Schema.Struct({

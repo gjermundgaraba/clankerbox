@@ -634,14 +634,9 @@ export const make = (
           return yield* applying(name, { type: "refused", error: refused });
         }
 
-        const sweptSeen: Seen | undefined =
-          swept?.seen === undefined
-            ? undefined
-            : { seen: swept.seen, reboot: swept.reboot, why: swept.why };
-
         const heard: Seen =
           stageOf(found.state) === "made"
-            ? (sweptSeen ?? (yield* seenOf(hosts, found)))
+            ? (swept?.heard ?? (yield* seenOf(hosts, found)))
             : { seen: "unknown" };
 
         const { seen } = heard;
