@@ -2276,6 +2276,38 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a boot no step readied, as a start its runtime made unasked, leaves the disk's mark where it was, so the next start finds no rollback",
+    () =>
+      Effect.gen(function* () {
+        const { client, fake, machine } = yield* served({
+          recheck: Duration.millis(200),
+        });
+
+        yield* client.create("dev", request("dev"));
+        yield* client.stopMachine({ id: "dev" });
+
+        const held = fake.machines.get("dev");
+
+        if (held !== undefined) {
+          held.state = "running";
+        }
+
+        const noticed = yield* eventually(
+          machine("dev"),
+          ({ unasked, state }) =>
+            unasked?.what === "started" && state === "stopped"
+        );
+
+        const started = yield* client.startMachine({ id: "dev" });
+
+        expect({
+          noticed: noticed.boots,
+          started: [started.boots, started.unasked?.what],
+        }).toStrictEqual({ noticed: 2, started: [3, "started"] });
+      })
+  );
+
+  it.effect(
     "a pause is asked for, so the stop it makes records no change unasked",
     () =>
       Effect.gen(function* () {

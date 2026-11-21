@@ -106,7 +106,7 @@ const marked = {
  * `taken`, every port the host's other machines hold, and answers that machine when it finds its
  * instance made. A make or a start's `mark` is the boot mark it writes on the machine's disk as it
  * readies it, `writes` the count of this boot, and checks there first where it gives `expect`, the
- * count its last boot wrote, answering `rolledBack` in its outcome where the disk holds another. A
+ * count its host last wrote there, answering `rolledBack` in its outcome where the disk holds another. A
  * step that acts by what its VM is doing reads it from the runtime as it begins. A make's
  * `authorizedKeys` go to the login user once the machine is made, after its setup if it has one,
  * beside the keys already there. A make's `tailnet` says its machine requests the tailnet, so a base

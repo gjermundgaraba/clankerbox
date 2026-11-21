@@ -262,7 +262,7 @@ const row = (name: string, fields?: Partial<MachineRow>): MachineRow => ({
   after: undefined,
   boots: 0,
   booting: false,
-  marked: false,
+  marked: 0,
   reboot: undefined,
   unasked: undefined,
   ...fields,

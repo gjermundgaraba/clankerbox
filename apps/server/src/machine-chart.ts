@@ -360,7 +360,7 @@ export const machine = setup({
                       ...told(context, event),
                       prepared: event.outcome.prepared === true,
                       boots: 1,
-                      marked: event.outcome.marked === true,
+                      marked: event.outcome.marked === true ? 1 : 0,
                     },
                   }
                 : {
@@ -421,15 +421,18 @@ export const machine = setup({
                   const done = event.status === "done" ? event : undefined;
                   const why = done?.outcome.rolledBack;
 
+                  const boots =
+                    context.boots +
+                    (done !== undefined && context.booting ? 1 : 0);
+
                   return {
                     ...next,
                     context: {
                       ...next.context,
                       booting: false,
-                      boots:
-                        context.boots +
-                        (done !== undefined && context.booting ? 1 : 0),
-                      marked: context.marked || done?.outcome.marked === true,
+                      boots,
+                      marked:
+                        done?.outcome.marked === true ? boots : context.marked,
                       ...(why === undefined || done === undefined
                         ? {}
                         : {

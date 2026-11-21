@@ -589,7 +589,8 @@ export const identify = (
 /**
  * The boot mark a start writes on a machine's disk, beside the instance its identity keeps, and in
  * `/workspace` where the guest has one: `writes`, the count of the boot it is, and `expect`, the
- * count the disk should hold from the last one, on a machine whose disk the host marked before.
+ * count the disk should hold from the last start that marked it, on a machine whose disk the host
+ * marked before.
  */
 export interface DiskMark {
   readonly writes: number;

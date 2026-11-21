@@ -155,8 +155,12 @@ export const Facts = Schema.Struct({
   boots: Schema.Int,
   /** Whether the start under way boots a machine last read stopped, which `boots` counts once it is done. */
   booting: Schema.BooleanFromBit,
-  /** Whether its host wrote a boot mark on the machine's disk, which each start then checks. */
-  marked: Schema.BooleanFromBit,
+  /**
+   * The boot count its host last wrote in the boot mark on the machine's disk, which the next start
+   * expects there, and 0 where it wrote none. It lags `boots` after a boot no step readied, such as
+   * a reboot in place or a start its runtime made unasked.
+   */
+  marked: Schema.Int,
   /** The runtime's mark of the machine's last reboot in place, as its last read answered it. */
   reboot: UndefinedFromNull(Schema.String),
   unasked: UndefinedFromNull(Schema.fromJsonString(Unasked)),

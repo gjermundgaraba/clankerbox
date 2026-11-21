@@ -188,7 +188,7 @@ export const machineStep = (
           ...pinned(found.pin),
           mark: {
             writes: found.boots + (found.booting ? 1 : 0),
-            ...(found.marked ? { expect: found.boots } : {}),
+            ...(found.marked > 0 ? { expect: found.marked } : {}),
           },
           machines,
         };
