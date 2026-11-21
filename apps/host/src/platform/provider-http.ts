@@ -49,18 +49,17 @@ export const stepWithin = Duration.minutes(10);
 
 /**
  * Runs a step on a provider whole, its calls billed and uncut by a later request, which waits for
- * it, and ends it failed `Internal` once it has taken `within`, `stepWithin` unless the step names
- * a provider's work that runs longer.
+ * it, and ends it failed `Internal` once it has taken `stepWithin`.
  */
 export const bounded =
-  (provider: string, what: string, within: Duration.Duration = stepWithin) =>
+  (provider: string, what: string) =>
   <A, E, R>(step: Effect.Effect<A, E, R>): Effect.Effect<A, E | Internal, R> =>
     step.pipe(
       timeoutFail(
-        within,
+        stepWithin,
         () =>
           new Internal({
-            message: `${what} didn't end at ${provider} within ${Duration.format(within)}`,
+            message: `${what} didn't end at ${provider} within ${Duration.format(stepWithin)}`,
           })
       ),
       Effect.uninterruptible
