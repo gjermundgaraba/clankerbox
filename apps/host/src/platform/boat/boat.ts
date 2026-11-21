@@ -58,7 +58,13 @@ import {
 import { rented } from "../tombstones.ts";
 import type { Found, MarkedMachine } from "../tombstones.ts";
 import * as Api from "./api.ts";
-import type { ApiError, ListedSnapshot, Sandbox, SshKey } from "./api.ts";
+import type {
+  ApiError,
+  ListedSnapshot,
+  OwnSandbox,
+  Sandbox,
+  SshKey,
+} from "./api.ts";
 import * as Ssh from "./ssh.ts";
 import type { Pin } from "./ssh.ts";
 import { filesBytes, traits as traitsOf, typeOf, types } from "./traits.ts";
@@ -173,21 +179,45 @@ const whyOf = (held: Held, error: string | undefined): string | undefined => {
 };
 
 /**
- * A sandbox as `observe` reads it. `reboot` is when its kernel last restarted on its machine, and
- * `why` boat's `error`, which https://docs.boat.dev/openapi/boat-v1.yaml's `Sandbox.error` gives
- * for a sandbox stopped, failed or cancelled, or its dropped data.
+ * A sandbox as `observe` reads it, with `why` boat's `error`, which
+ * https://docs.boat.dev/openapi/boat-v1.yaml's `Sandbox.error` gives for a sandbox stopped, failed
+ * or cancelled, or its dropped data. It gives no reboot mark: only a sandbox's own record holds
+ * one, as `rebootIn` reads it.
  */
 const sightingOf = (sandbox: Sandbox | undefined): Sighting => {
   const held = heldOf(sandbox);
-  const reboot = sandbox?.lastReboot?.at;
-
   const why = whyOf(held, sandbox?.error ?? undefined);
 
   return {
     state: readAs[held],
-    ...(reboot === undefined ? {} : { reboot }),
     ...(why === undefined || readAs[held] === "running" ? {} : { why }),
   };
+};
+
+const neverRebooted = "never";
+
+/**
+ * The reboot mark of a sandbox's own record, `GET /sandboxes/{id}`: when its kernel last restarted
+ * on its machine, as https://docs.boat.dev/openapi/boat-v1.yaml's `Sandbox.lastReboot` gives it, and
+ * `never` where boat answers `lastReboot: null`, a sandbox that never rebooted in place. That is a
+ * mark like any other, so its first reboot differs from it and counts a boot, where no mark would
+ * only have become the baseline its next reboot is counted from: a live account on 2026-11-21 lost
+ * each sandbox's first reboot so. No mark at all stays what a host gives where it has no own record
+ * to read: from a list, whose `lastReboot` is always null, or from an own read that failed, was
+ * throttled, cut short or not due. The control plane keeps the mark it last read through those.
+ * Were a list's null read as `never`, each list read after a reboot would change the mark back,
+ * and the control plane would count a reboot at each read that then found the real one again; so
+ * a list decodes to `Sandbox`, which holds no `lastReboot`, and this takes only an `OwnSandbox`.
+ */
+const rebootIn = (own: OwnSandbox): string =>
+  own.lastReboot?.at ?? neverRebooted;
+
+const ownSightingOf = (own: OwnSandbox | undefined): Sighting => {
+  const seen = sightingOf(own);
+
+  return own === undefined || seen.state !== "running"
+    ? seen
+    : { ...seen, reboot: rebootIn(own) };
 };
 
 const rebootReads = 8;
@@ -685,7 +715,7 @@ export const make = (
     >();
 
     const remember = (
-      sandbox: Sandbox | undefined,
+      sandbox: OwnSandbox | undefined,
       handle: string,
       updatedAt: string | undefined
     ) => {
@@ -696,7 +726,7 @@ export const make = (
       }
 
       const last = ownRead.get(handle);
-      const reboot = sandbox.lastReboot?.at;
+      const reboot = rebootIn(sandbox);
 
       ownRead.set(handle, {
         updatedAt,
@@ -744,10 +774,8 @@ export const make = (
             api.sandbox(id).pipe(
               Effect.tap((own) =>
                 Effect.sync(() => {
-                  const at = own?.lastReboot?.at;
-
-                  if (at !== undefined) {
-                    found.set(id, at);
+                  if (own !== undefined) {
+                    found.set(id, rebootIn(own));
                   }
 
                   remember(own, id, updatedAt ?? undefined);
@@ -993,7 +1021,7 @@ export const make = (
             Effect.map((sandbox): Observed => {
               remember(sandbox, only.handle, sandbox?.updatedAt ?? undefined);
 
-              return new Map([[only.name, sightingOf(sandbox)]]);
+              return new Map([[only.name, ownSightingOf(sandbox)]]);
             }),
             Effect.mapError(internal(`couldn't read ${only.name}`))
           );

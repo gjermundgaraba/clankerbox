@@ -513,7 +513,7 @@ describe("the boat runtime over fake boat", () => {
           yield* boat.reboot(machine.handle, "2026-11-21T00:00:00Z");
 
           expect([unmarked, yield* runtime.observe([machine])]).toStrictEqual([
-            new Map([[machine.name, { state: "running" }]]),
+            new Map([[machine.name, { state: "running", reboot: "never" }]]),
             new Map([
               [
                 machine.name,
@@ -760,7 +760,9 @@ describe("the boat runtime over fake boat", () => {
             starts: 1,
             marker: "fresh\n",
             saves: [],
-            source: new Map([[source.name, { state: "running" }]]),
+            source: new Map([
+              [source.name, { state: "running", reboot: "never" }],
+            ]),
           });
         })
       ),
@@ -912,7 +914,7 @@ describe("the boat runtime over fake boat", () => {
           expect(boat.starts() - from).toBe(0);
           expect([...boat.snapshots.keys()]).toStrictEqual([]);
           expect(yield* runtime.observe([source])).toStrictEqual(
-            new Map([[source.name, { state: "running" }]])
+            new Map([[source.name, { state: "running", reboot: "never" }]])
           );
 
           const fitting = yield* forkAt("fits", types.large);
@@ -1196,9 +1198,9 @@ describe("the boat runtime over fake boat", () => {
             const observed = yield* runtime.observe(machines);
 
             expect(Object.fromEntries(observed)).toStrictEqual({
-              a: { state: "running" },
-              b: { state: "running" },
-              c: { state: "running" },
+              a: { state: "running", reboot: "never" },
+              b: { state: "running", reboot: "never" },
+              c: { state: "running", reboot: "never" },
             });
           }),
         { pageSize: 1 }
@@ -1232,7 +1234,7 @@ describe("the boat runtime over fake boat", () => {
           yield* runtime.observe([a, b]);
 
           expect(Object.fromEntries(one)).toStrictEqual({
-            a: { state: "running" },
+            a: { state: "running", reboot: "never" },
           });
           expect(single).toStrictEqual([`GET /sandboxes/${a.handle}`]);
           expect(several).toStrictEqual([
@@ -1322,7 +1324,7 @@ describe("the boat runtime over fake boat", () => {
             first: {
               seen: {
                 a: "running 2026-11-21T00:00:00Z",
-                b: "running",
+                b: "running never",
                 c: "stopped",
               },
               ownReads: [a.handle, b.handle].toSorted(),
@@ -1344,7 +1346,7 @@ describe("the boat runtime over fake boat", () => {
               ownReads: [b.handle],
             },
             runAfresh: {
-              seen: { a: "running", b: "running", c: "running" },
+              seen: { a: "running", b: "running", c: "running never" },
               ownReads: [c.handle],
             },
             moved: {
@@ -1554,7 +1556,7 @@ describe("each boat goal from each state boat holds", () => {
 
           expect(Object.fromEntries(found)).toStrictEqual({
             running: {
-              observe: { state: "running" },
+              observe: { state: "running", reboot: "never" },
               find: "found",
               capture: "done",
               start: "done",

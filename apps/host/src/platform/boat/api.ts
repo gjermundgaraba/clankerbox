@@ -31,12 +31,24 @@ export const Sandbox = Schema.Struct({
   hydrated: Schema.optionalKey(Schema.Boolean),
   updatedAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
   error: Schema.optionalKey(Schema.NullOr(Schema.String)),
+});
+
+export type Sandbox = typeof Sandbox.Type;
+
+/**
+ * A sandbox as `GET /sandboxes/{id}` answers it, with `lastReboot`, which
+ * https://docs.boat.dev/openapi/boat-v1.yaml's `Sandbox` holds, but which its list,
+ * `GET /sandboxes`, answers null for every sandbox, rebooted or not, as a live account showed on
+ * 2026-11-21. So `Sandbox`, which a list decodes to, has no `lastReboot`, and only this has one.
+ */
+export const OwnSandbox = Schema.Struct({
+  ...Sandbox.fields,
   lastReboot: Schema.optionalKey(
     Schema.NullOr(Schema.Struct({ at: Schema.String }))
   ),
 });
 
-export type Sandbox = typeof Sandbox.Type;
+export type OwnSandbox = typeof OwnSandbox.Type;
 
 const Window = Schema.NullOr(
   Schema.Struct({ limit: Schema.Int, used: Schema.Int })
@@ -101,6 +113,8 @@ const ListedSnapshot = Schema.Struct({
 export type ListedSnapshot = typeof ListedSnapshot.Type;
 
 const Created = Schema.Struct({ sandbox: Sandbox });
+
+const Own = Schema.Struct({ sandbox: OwnSandbox });
 
 const Listed = Schema.Struct({
   sandboxes: Schema.Array(Sandbox),
@@ -339,7 +353,7 @@ export const make = (url: string, key: Redacted.Redacted) =>
         ),
       sandbox: (id: string) =>
         Effect.map(
-          found(HttpClientRequest.get(`/sandboxes/${id}`), Created),
+          found(HttpClientRequest.get(`/sandboxes/${id}`), Own),
           (answer) => answer?.sandbox
         ),
       sandboxes: list,

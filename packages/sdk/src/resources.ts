@@ -248,7 +248,9 @@ export type Unasked = typeof Unasked.Type;
  * by itself between two reads, which only a runtime that reports its reboots shows. A reboot in
  * place between a start's boot and the next read isn't counted either, as that read takes the
  * runtime's reboot mark afresh; it costs little, as it comes right after a cold boot already
- * counted, and the first read after a make was always so. A boot a host makes inside another step
+ * counted, and the first read after a make was always so. A runtime that reports reboots reports
+ * a machine that never rebooted in place as such, so its first reboot counts as each later one does.
+ * A boot a host makes inside another step
  * that leaves the machine stopped, as a fork may, counts none, as nothing ran in it for the
  * machine's owner. A copy counts its own from its first.
  * `unasked` is the last change no request asked for, kept until another replaces it.
