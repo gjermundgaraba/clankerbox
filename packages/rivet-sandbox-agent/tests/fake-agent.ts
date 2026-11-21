@@ -42,12 +42,6 @@ const json = (reply: ServerResponse, status: number, value: unknown) => {
   reply.end(JSON.stringify(value));
 };
 
-/**
- * A stand-in Sandbox Agent server: its health check and one agent's ACP endpoint. A file in `dir`
- * sets how it answers: `unhealthy` fails the health check, `hold-health` never answers it, `hold-replies` sends each answer on the
- * event stream and never on its POST, `cut-prompts` cuts a prompt's POST, and `hold-prompts` never
- * answers a prompt, writing `prompted` once one comes.
- */
 export const fakeAgent = (dir: string) => {
   const flagged = (flag: string) => existsSync(path.join(dir, flag));
   const streams = new Set<ServerResponse>();

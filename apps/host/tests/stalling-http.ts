@@ -3,10 +3,6 @@ import { HttpClient } from "effect/http";
 
 import { callStalls } from "./call-stalls.ts";
 
-/**
- * `base`, each request a provider call `Faults.stall` counts: one held at its start is never sent,
- * and one held at its end was answered, and its answer is never read.
- */
 export const stallingHttp = <E, R>(
   base: Layer.Layer<HttpClient.HttpClient, E, R>
 ) => {

@@ -99,10 +99,6 @@ const agent = new Agent({ keepAlive: true });
  * on a sandbox takes up the connections the last one left, which the agent's server keeps open as
  * long as they last. Nothing ends that agent: a socket it keeps between requests holds no process
  * alive, and ends with its tunnel.
- *
- * It sends only to `held()`, the origin of the port the provider holds for the sandbox now, and
- * fails a request to any other as one sent while the tunnel is down: once the provider lets a port
- * go, any program may listen there.
  */
 export const agentFetch = (
   sandbox: string,

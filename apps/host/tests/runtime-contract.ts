@@ -19,28 +19,16 @@ export type Dropped = "make" | "delete";
 
 export interface Faults {
   readonly drift: (instance: string) => Effect.Effect<void>;
-  /** Fails the next make, whose machine lands all the same once the effect it answers runs. */
   readonly landLate: Effect.Effect<Effect.Effect<void>>;
   readonly quota: (on: boolean) => Effect.Effect<void>;
   readonly dropAnswer: (dropping: Dropped) => Effect.Effect<void>;
-  /**
-   * Holds the provider call `after` calls from now at its start, before it does its work, or at
-   * its end, once it has, where a case cuts short what made it, as a later request or the host's
-   * end does; the call never answers. A case asks the step's fiber to end and then releases the
-   * call, which ends a step that masks the request as the host's end would.
-   */
   readonly stall?: (after: number, at: StallAt) => Effect.Effect<Stalled>;
 }
 
 export type Fault = keyof Faults;
 
-/** Where a stalled call is held: before it does its work, or once it has done it. */
 export type StallAt = "start" | "end";
 
-/**
- * A held call: `reached` once it is held, and `release`, which ends it as a host that ends does,
- * or disarms the stall when no call reached it.
- */
 export interface Stalled {
   readonly reached: Effect.Effect<void>;
   readonly release: Effect.Effect<void>;
@@ -51,11 +39,6 @@ const stallsAt: readonly StallAt[] = ["start", "end"];
 export interface Fixture {
   readonly runtime: Runtime;
   readonly faults: Partial<Faults>;
-  /**
-   * Puts a machine, with a checkpoint it holds, in the provider's account without this host's mark,
-   * as another host or user of the account would, and answers whether each is still there. Every
-   * rented runtime, whose provider holds a checkpoint through its machine, gives it.
-   */
   readonly unmarked: Effect.Effect<Effect.Effect<boolean>> | undefined;
 }
 
@@ -63,16 +46,9 @@ export interface Subject {
   readonly name: string;
   readonly image: string;
   readonly sizes: Sizes;
-  /** Each fault its fixture can't give, with why, so each case that needs it is skipped saying so. */
   readonly lacks?: Readonly<Partial<Record<Fault, string>>>;
-  /** Why its guest runs no processes of the commands it is given, if it runs none. */
   readonly runsNoGuest?: string | undefined;
-  /**
-   * Why nothing of a machine lands after its call answered, where its machines lie on the host's
-   * own disk, so a provider holds no checkpoint through a machine and no tombstone is kept.
-   */
   readonly ownDisk?: string | undefined;
-  /** How long, in milliseconds, a case that cuts each provider call of a step short may run. */
   readonly stallTimeout?: number | undefined;
   readonly fixture: Effect.Effect<Fixture, never, Scope.Scope>;
 }

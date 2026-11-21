@@ -11,7 +11,6 @@ export const failure = new Internal({ message: "krun busy" });
 
 export const when = DateTime.makeUnsafe(7);
 
-/** What the chart's table and its tests take a row to hold, but for what each sets. */
 export const facts = (fields?: Partial<Facts>): Facts => ({
   name: "dev",
   instance: "1",
@@ -41,7 +40,6 @@ export const facts = (fields?: Partial<Facts>): Facts => ({
   ...fields,
 });
 
-/** An operation in flight, for a row's write to read. */
 export const flight = (
   kind: Operation["kind"],
   fields?: Partial<Operation>
@@ -58,7 +56,6 @@ export const flight = (
   ...fields,
 });
 
-/** What the checkpoint chart's tests take a row to hold, but for what each sets. */
 export const checkpointFacts = (
   fields?: Partial<CheckpointFacts>
 ): CheckpointFacts => ({

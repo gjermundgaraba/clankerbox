@@ -20,7 +20,6 @@ export interface CapacityRead {
   readonly unreported: readonly Unreported[];
 }
 
-/** What each host reports its machines use, and which hosts couldn't say. */
 export const capacity = (
   store: Store,
   hosts: Hosts
@@ -134,7 +133,6 @@ const adopted = (store: Store, hosts: Hosts, host: string, boot: string) =>
     }
   });
 
-/** A tick of the recheck: it gives each restarted host its machines, and ends old failures. */
 export const recheckHosts = (
   store: Store,
   hosts: Hosts,
@@ -161,21 +159,14 @@ export const recheckHosts = (
     )
   );
 
-/** What a sweep saw of a row: its host, and its VM where the row is made. */
 export interface Swept {
   readonly host: string;
   readonly info: Fresh;
   readonly seen: MachineState | undefined;
 }
 
-/** At most this many machines in one read of a host, which bounds the whole read by `readTimeout`. */
 export const sweepBatch = 100;
 
-/**
- * Reads each host of `rows` once, and the VMs of its made rows a batch at a time, telling `each`
- * what it saw of each row as its host answers. The hosts are read at once. A host that doesn't
- * answer, or a batch it fails, tells nothing of those rows.
- */
 export const sweep = (
   hosts: Hosts,
   rows: readonly MachineRow[],

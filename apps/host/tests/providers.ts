@@ -15,7 +15,6 @@ import { image, writeTailscaleStubs } from "./support.ts";
 
 const smolCloudKey = "fake-smol-cloud-key";
 
-/** smol cloud, `guestPath` an exec's `PATH` after its fake's own stubs, the runner's own unless given. */
 export const smolCloud = (guestPath?: string): Provider<FakeSmolCloud> => ({
   name: "smol-cloud",
   image,

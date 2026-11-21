@@ -96,7 +96,6 @@ const tailLines = 20;
 
 const tailCharacters = 4000;
 
-/** The end of a command's output, as an error or a log quotes it. */
 export const lastLines = (text: string): string =>
   text
     .trimEnd()
@@ -107,7 +106,6 @@ export const lastLines = (text: string): string =>
 
 export type Sized = Target & Sizes;
 
-/** A machine as admission and capacity count it: found, unread because its search failed, or booting on this host. */
 export type Held =
   | { readonly _tag: "found"; readonly machine: Sized }
   | { readonly _tag: "unread"; readonly machine: MachineRef }
@@ -138,10 +136,9 @@ export interface Activation {
 }
 
 /**
- * A command in a guest, as `guest.ts` alone makes one: `argv` is the same `/bin/sh` launcher on
- * every call but for its last word, the exec's mark, and what it runs, with its environment, rides
- * at the head of `stdin`, which is text. An adapter hands both on as they are, so no value a caller
- * gave shows in a process's arguments, and runs it as `user`, or as the guest's root without one.
+ * Pass the launcher's arguments and stdin through unchanged. The command's own arguments and
+ * environment are carried in stdin so they do not appear in the host process arguments.
+ * With no `user`, run the command as the guest's root.
  */
 export interface Command {
   readonly argv: readonly string[];
@@ -188,16 +185,8 @@ export interface Admission {
   readonly admit: (activation: Activation) => Effect.Effect<void, RoomError>;
 }
 
-/**
- * How a host shares the template builds its runtime holds with the other hosts of that runtime,
- * which the control plane reads as its `builds`: `publish` makes a build's checkpoint fetchable by
- * its name, `fetch` makes `checkpoint` of what was published as `from`, of template build `build`,
- * and `unpublish` removes what was published as `name`. Each runtime keeps them itself, smolvm and
- * Tart through the bucket their settings name. On a host whose builds stay on it, `shared` is false:
- * the control plane sends it no publish or fetch, which fail, and its `unpublish` only logs.
- */
-export interface Builds {
-  readonly shared: boolean;
+export interface SharedBuilds {
+  readonly shared: true;
   readonly publish: (checkpoint: Target) => Effect.Effect<void, RuntimeError>;
   readonly fetch: (
     checkpoint: Identity,
@@ -207,36 +196,30 @@ export interface Builds {
   readonly unpublish: (name: string) => Effect.Effect<void, RuntimeError>;
 }
 
-/** The builds of a host that keeps its builds to itself. */
-export const unshared = (runtime: RuntimeName): Builds => {
-  const refused = (what: string) =>
-    Effect.fail(
-      new Internal({
-        message: `this host's ${runtime} runtime shares no template builds, so it can't ${what}`,
-      })
-    );
+export type Builds =
+  | SharedBuilds
+  | {
+      readonly shared: false;
+      readonly unpublish: SharedBuilds["unpublish"];
+    };
 
-  return {
-    shared: false,
-    publish: (checkpoint) => refused(`publish ${checkpoint.name}`),
-    fetch: (_, __, build) => refused(`fetch build ${build}`),
-    unpublish: (name) =>
-      Effect.logWarning(
-        `unpublish ${name}: this host's ${runtime} runtime shares no template builds, so what it published stays in the build store`
-      ),
-  };
-};
+export const unshared = (runtime: RuntimeName): Builds => ({
+  shared: false,
+  unpublish: (name) =>
+    Effect.logWarning(
+      `unpublish ${name}: this host's ${runtime} runtime shares no template builds, so what it published stays in the build store`
+    ),
+});
 
 /**
- * A runtime, as every host drives it. Each adapter keeps two rules. A provider call that can't be
- * cut short runs masked and is polled to its end, so a step cut short ends only once its call has.
- * An answer that leaves the outcome unknown, such as a dropped connection, never ends a step: the
- * adapter reads the resource by its instance before it answers. `prepares` is `always` where the
- * runtime's images lack the login user, so every machine made from a base is prepared, and
- * `with-setup` where only a machine with a setup is. `kernel` is `own` where each machine boots its
- * own kernel, whose random generator a copy of its RAM would share with its source, so a new
- * identity reseeds it, and `shared` where machines are containers on their node's kernel, which
- * refuses a guest that reseed.
+ * Each adapter keeps two rules. A provider call that can't be cut short runs masked and is polled
+ * to its end, so a step cut short ends only once its call has. An answer that leaves the outcome
+ * unknown, such as a dropped connection, never ends a step: the adapter reads the resource by its
+ * instance before it answers. `prepares` is `always` where the runtime's images lack the login
+ * user, so every machine made from a base is prepared, and `with-setup` where only a machine with
+ * a setup is. `kernel` is `own` where each machine boots its own kernel and a new identity must
+ * reseed a copied random generator, and `shared` where containers share their node's kernel and
+ * cannot reseed it.
  */
 export interface Interface {
   readonly traits: RuntimeTraits;
@@ -259,10 +242,9 @@ export interface Interface {
     machine: Identity
   ) => Effect.Effect<Handle | undefined, RuntimeError>;
   /**
-   * The handle a checkpoint of `checkpoint`'s identity has on this host, a pure function of it and
-   * the host's ID, with no search: the handle its capture and its install answer. A step whose
-   * checkpoint carries no handle reaches it by this. It is undefined where the provider mints the
-   * handle, which every row of such a runtime holds.
+   * Derives the same handle that capture and install return, from the checkpoint identity and
+   * host ID alone, without a search. A step uses this if its row has no handle. Returns undefined
+   * if the provider mints the handle, in which case the row records it.
    */
   readonly checkpointHandle: (checkpoint: Identity) => Handle | undefined;
   readonly observe: (
@@ -272,42 +254,39 @@ export interface Interface {
     machines: readonly Held[]
   ) => Effect.Effect<readonly Reading[], RuntimeError>;
   /**
-   * Makes the machine, from an image or a copy. `port` is the host's port its sshd is reached at,
-   * which a published runtime forwards to the guest's port 22 and a relayed one leaves to the relay.
-   * A name the runtime can't give a VM is `Invalid`, and a checkpoint it no longer holds is
-   * `Missing`, naming the checkpoint, with nothing made. `tailnet` is whether the machine requests
-   * the tailnet, for a runtime whose guest must be made able to join it, as with a TUN device.
+   * Makes a machine from an image or copy. A published runtime forwards `hostSshPort` to guest
+   * port 22; a relayed one leaves it to the relay. `requestsTailnet` lets the runtime enable guest
+   * support such as a TUN device. Refuse an invalid VM name with `Invalid`, and a checkpoint
+   * the runtime no longer holds with `Missing` naming the checkpoint, without making anything.
    */
   readonly make: (
     machine: Identity & Sizes,
     origin: Origin,
-    port: number,
-    tailnet?: boolean
+    hostSshPort: number,
+    requestsTailnet?: boolean
   ) => Effect.Effect<Made, RoomError | StateError | Unsizable | Invalid>;
   /**
-   * Starts a stopped machine, or resumes a paused one. A runtime that holds checkpoints through its
-   * machine deletes, once the machine runs, each of them whose handle `keep` lacks, so a pause's own
-   * checkpoint goes only after the resume that read it.
+   * Starts or resumes the machine. A runtime that holds checkpoints through its machine prunes
+   * any outside `keepCheckpoints` only once the machine runs, so it can read the pause checkpoint
+   * before deleting it.
    */
   readonly start: (
     machine: Target,
-    keep: ReadonlySet<Handle>
+    keepCheckpoints: ReadonlySet<Handle>
   ) => Effect.Effect<void, RoomError | StateError>;
   readonly stop: (machine: Target) => Effect.Effect<void, RuntimeError>;
   readonly pause: (
     machine: Target
   ) => Effect.Effect<void, RuntimeError | StateError>;
   /**
-   * Deletes the machine of `machine`'s instance, and each checkpoint it holds whose handle `keep`
-   * lacks. A remove calls it whatever its search found, with no handle where the runtime holds
-   * nothing of the instance. Once it has answered, anything of that instance that appears later is
-   * deleted, and the control plane never makes that instance again: a runtime whose provider may
-   * land a make after its answer was lost keeps that itself, and one whose machines lie on the
-   * host's own disk keeps it with nothing more.
+   * Deletes this instance and its checkpoints outside `keepCheckpoints`. Remove calls this even
+   * if find returned no handle. Once delete answers, anything that later appears for the same
+   * instance must also be deleted. The control plane will not make that instance again; adapters
+   * whose provider can complete a make after its answer was lost must handle late arrivals.
    */
   readonly delete: (
     machine: Identity & { readonly handle: Handle | undefined },
-    keep: ReadonlySet<Handle>
+    keepCheckpoints: ReadonlySet<Handle>
   ) => Effect.Effect<void, RuntimeError>;
   readonly capture: (
     machine: Target,
@@ -324,9 +303,8 @@ export interface Interface {
     checkpoint: Target
   ) => Effect.Effect<void, RuntimeError | Conflict>;
   /**
-   * Runs `command` beside any other of the machine while the scope is open. Closing the scope ends
-   * what the exec holds on this host; what that leaves running in the guest differs by runtime, so
-   * `guest.ts` ends a cut command there itself, through another exec.
+   * Closing the scope ends what the exec holds on the host. The guest process may outlive it,
+   * depending on the runtime; `exec.ts` ends a cut command in the guest through another exec.
    */
   readonly exec: (
     machine: Target,

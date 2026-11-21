@@ -17,11 +17,6 @@ export const machineDomain = ".cbx";
 
 const keepaliveSeconds = 30;
 
-/**
- * The ssh options that end a session whose endpoint goes silent once it has sent its banner, which
- * no other bound covers: a relay whose host stops answering may hold the connection open. A session
- * rides out a network that drops for as long as a wait rides out an outage.
- */
 export const sshKeepalive = [
   ["ServerAliveInterval", keepaliveSeconds],
   [

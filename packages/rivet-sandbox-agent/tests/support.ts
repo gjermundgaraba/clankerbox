@@ -86,7 +86,6 @@ type Call = typeof Call.Type;
 
 const decodeCall = Schema.decodeSync(Schema.fromJsonString(Call));
 
-/** Points fake-ssh at `dir`, answering what puts back the directory it was pointed at before. */
 export const fakeSshIn = (dir: string): (() => void) => {
   const before = process.env["FAKE_SSH_DIR"];
 
@@ -101,7 +100,6 @@ export const fakeSshIn = (dir: string): (() => void) => {
   };
 };
 
-/** The ssh calls fake-ssh recorded in `dir`, in the order they started. */
 export const callsIn = async (dir: string): Promise<Call[]> => {
   const recorded = await readFile(path.join(dir, "calls"), "utf-8").catch(
     () => ""
@@ -176,10 +174,6 @@ export const setup = async (
   return { dir, stub, sandbox, calls, dispose };
 };
 
-/**
- * Ends this test program once the test that runs it lets go of its stdin, as its worker does when
- * it ends, without keeping the program running otherwise.
- */
 export const endsWithParent = () => {
   process.stdin.once("end", () => process.exit(1));
   process.stdin.resume();
@@ -199,12 +193,10 @@ export const gone = (pid: number) => {
   }
 };
 
-/** The calls whose ssh still runs. */
 export const live = <A extends { readonly pid: number }>(
   made: readonly A[]
 ): A[] => made.filter(({ pid }) => !gone(pid));
 
-/** The one call whose ssh still runs, failing the test when there is none or more than one. */
 export const liveTunnel = <A extends { readonly pid: number }>(
   made: readonly A[]
 ): A => {
@@ -218,7 +210,6 @@ export const liveTunnel = <A extends { readonly pid: number }>(
   return tunnel;
 };
 
-/** The loopback port of a URL `getUrl` gave out. */
 export const portOf = (given: string) => Number(new URL(given).port);
 
 export const promptFor = (id: number) => ({
@@ -232,10 +223,6 @@ export const promptFor = (id: number) => ({
   }),
 });
 
-/**
- * Another program trying to listen on `port`, which answers everything as healthy: whether it
- * could, and each request it heard.
- */
 export const stranger = async (port: number) => {
   const heard: string[] = [];
 
@@ -269,7 +256,6 @@ export const stranger = async (port: number) => {
   return { bound, heard };
 };
 
-/** Whether another program could listen on `port` now, the probe of who holds it. */
 export const free = async (port: number) => {
   const tried = Promise.withResolvers<boolean>();
   const server = createServer();
@@ -298,7 +284,6 @@ export const until = async (what: string, check: () => Promise<boolean>) => {
   }
 };
 
-/** Waits for the stand-in agent in `dir` to hold a prompt. */
 export const prompted = async (dir: string) => {
   await until(
     "the agent to hold a prompt",
@@ -310,7 +295,6 @@ export const prompted = async (dir: string) => {
   );
 };
 
-/** A directory of the test's own, removed when it ends. */
 export const scratch = async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "clankerbox-swept-"));
 
@@ -321,14 +305,12 @@ export const scratch = async () => {
   return directory;
 };
 
-/** Two minutes ago, past the age the sweep waits for. */
 export const past = () => new Date(Date.now() - 120_000);
 
 export const aged = async (made: string) => {
   await utimes(made, past(), past());
 };
 
-/** A directory as a tunnel leaves it, its known-hosts file in it, named `name` under `under`. */
 export const leftIn = async (under: string, name: string) => {
   const made = path.join(under, name);
 

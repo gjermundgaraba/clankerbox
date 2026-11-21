@@ -141,7 +141,6 @@ export type Services =
   | Path.Path
   | ChildProcessSpawner.ChildProcessSpawner;
 
-/** Refuses, as `Invalid`, `sshArguments` a tunnel can't take. */
 export const make = (options: Options, ssh = "ssh") => {
   const extra = options.sshArguments ?? [];
   const refused = refusal(extra);

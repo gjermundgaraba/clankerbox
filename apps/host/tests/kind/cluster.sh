@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# Makes a kind cluster running the agent-sandbox controller, with a namespace whose service account
-# holds what an agent-sandbox host is granted, writes what the kind tests read into
-# $CLANKERBOX_KIND: the API server's URL, its CA, the host's token, a tester's token, which may do
-# anything in the namespace, and the namespace, then runs its arguments with that exported.
-# Needs docker, kind and kubectl. Run again, it keeps the cluster it made.
 set -euo pipefail
 
 out=${CLANKERBOX_KIND:-${TMPDIR:-/tmp}/clankerbox-kind}

@@ -8,7 +8,6 @@ import type { Interface, RuntimeError, Target } from "../src/runtime.ts";
 
 const poll = Schedule.spaced("20 millis");
 
-/** What `file` holds once something writes it. */
 export const written = (file: string) =>
   Effect.repeat(
     Effect.sync(() => (existsSync(file) ? readFileSync(file, "utf8") : "")),
@@ -25,7 +24,6 @@ export const holdsPid = (pid: number) => {
   }
 };
 
-/** Ends once no process holds `pid`. */
 export const gone = (pid: number) =>
   Effect.repeat(
     Effect.sync(() => holdsPid(pid)),
@@ -37,11 +35,6 @@ const shell = (script: string) => ({
   stdin: "",
 });
 
-/**
- * Cuts an exec short while its command waits for the test, and has the test let it on: a provider
- * leaves the command running, so it goes on to write `ran`, holding the status of a write to its
- * stdout after the cut, and runs until `end` ends it.
- */
 export const cutAndLeftRunning = <E, R>(
   runtime: Interface,
   machine: Target,
@@ -79,7 +72,6 @@ export const cutAndLeftRunning = <E, R>(
     return ran;
   });
 
-/** Runs an exec that leaves a command in the background, its stdio its own, and answers its PID once the exec and its scope end. */
 export const leftInTheBackground = (
   runtime: Interface,
   machine: Target,

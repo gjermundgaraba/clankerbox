@@ -82,11 +82,9 @@ const sifted = <K, A>(
 export interface Ask {
   readonly sizes: Sizes;
   readonly host: string | undefined;
-  /** Whether the machine requests the tailnet, which only a host that joins machines to it takes. */
   readonly tailnet: boolean;
 }
 
-/** Why a host that joins no machine to the tailnet can't take one that requests it. */
 export const unjoined = (
   info: HostInfo,
   { tailnet }: Pick<Ask, "tailnet">
@@ -95,10 +93,6 @@ export const unjoined = (
     ? missed("joins no machine to the tailnet")
     : undefined;
 
-/**
- * Why a fork or restore, which lands on its source's host, can't: its source requests the tailnet,
- * as the copy will, and that host joins no machine to it.
- */
 export const unjoinedCopy = (
   info: HostInfo,
   from: { readonly base: string; readonly tailnet: boolean },
@@ -131,16 +125,6 @@ const among = (
     : Result.succeed(named);
 };
 
-/**
- * The hosts of `runtime` that can take a create of `base` at the sizes asked, and that join
- * machines to the tailnet where it asks for one, in config order, to try in turn: a later one only
- * after a definite `Capacity`, so a create never moves to another runtime. With none, a host not
- * draining that gave no reply might have taken it, as its runtime is unknown, so that is
- * `Unavailable`; a host that offers the base at other sizes makes it `Unsizable`; and
- * `NotOffered` is the rest, each saying why each host was passed over. An ask that
- * names a host is placed as if that host were the only one, and one the control plane doesn't know
- * is `NotOffered`.
- */
 export const placing = (
   reached: readonly Reached[],
   base: string,
@@ -226,7 +210,6 @@ export const builtUnder = (
   diskGib,
 });
 
-/** The image a host gives a base: the one it names there, else the base itself, a reference. */
 export const imageOf = (info: HostInfo, base: string): string =>
   info.images[base] ?? base;
 
@@ -256,16 +239,6 @@ const unreadyCopy = (
       }
     : missed(`holds a copy of ${made.id} that isn't ready yet`);
 
-/**
- * The hosts that hold one of `copies`, of `build` of `template`, by host, and can take a clone of
- * it at the sizes asked, and join machines to the tailnet where it asks for one, in config order, each with its copy, to try in turn as `placing`'s are. An
- * outdated copy is passed over, as is a host whose copy is one of `unready`, saying it isn't ready
- * yet or failed. With none, a holder not draining that gave no reply is `Unavailable`, and
- * `NotBuilt` otherwise, saying why each host was passed over, and to build the template again
- * where a host lacks a copy or holds an outdated or failed one. An ask that names a host is
- * placed as if that host were the only one, a build included, and one the control plane doesn't
- * know is `NotOffered`.
- */
 export const holding = <A>(
   reached: readonly Reached[],
   copies: ReadonlyMap<string, A>,
@@ -351,7 +324,6 @@ export const holding = <A>(
   );
 };
 
-/** Where a create may go, and what that host would make it from. */
 export interface Candidate {
   readonly host: string;
   readonly source: Source;

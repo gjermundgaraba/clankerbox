@@ -89,11 +89,6 @@ const baseScript = (guest: Runtime["guest"]) =>
 
 const baseTimeout = Duration.minutes(10);
 
-/**
- * Makes a base what a setup starts on, by the guest's script: on Debian, the login user with
- * passwordless `sudo` and sshd that refuses root; on macOS, the guest's DNS servers and clock; on
- * both, `tailscale` where the machine requests the tailnet.
- */
 export const prepareBase = (
   runtime: Runtime,
   machine: Target,
@@ -616,7 +611,6 @@ export const checkTailnet = (
     tailnetTimeout
   ).pipe(Effect.map(tailnetIn));
 
-/** Keeps what the guest resolves names with, so `scrubNode` can put it back after a join. */
 export const rememberDns = (
   runtime: Runtime,
   machine: Target
@@ -631,10 +625,6 @@ export const rememberDns = (
     )
   );
 
-/**
- * Logs the guest's node out of the tailnet, drops its state, and on linux puts back the DNS
- * `rememberDns` kept, answering what it couldn't do cleanly.
- */
 export const scrubNode = (
   runtime: Runtime,
   machine: Target
@@ -658,10 +648,6 @@ const flushScript = ["root=${CLANKERBOX_ROOT-}", guestPath, "sync"].join("\n");
 
 const flushTimeout = Duration.minutes(1);
 
-/**
- * Writes what a running guest holds of its files to its disk, as root, before a copy of its disk,
- * so the copy holds every write that ended before it was asked.
- */
 export const flush = (
   runtime: Runtime,
   machine: Target
@@ -693,10 +679,6 @@ const leaveScript = [
   "",
 ].join("\n");
 
-/**
- * Runs the guest's hook for what is about to happen to its VM, if it has one, as root, but only in a
- * guest that has taken this machine's identity: until then a copy is still its source.
- */
 export const leave = (
   runtime: Runtime,
   machine: Target,

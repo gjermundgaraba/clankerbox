@@ -4,18 +4,13 @@ import type { PlatformError } from "effect";
 import { Hex } from "effect/encoding";
 
 import type {
-  Builds,
+  SharedBuilds,
   Handle,
   Identity,
   RuntimeError,
   Target,
 } from "../../runtime.ts";
 
-/**
- * The bucket a smolvm or Tart host copies template builds to and from, shared by every host of its
- * runtime: objects by key. A key names the same bytes for good, so a put of a key that is there
- * changes nothing.
- */
 export interface Store {
   readonly list: (prefix: string) => Effect.Effect<readonly string[], Internal>;
   readonly get: (key: string) => Effect.Effect<Uint8Array, Internal>;
@@ -23,31 +18,21 @@ export interface Store {
     key: string,
     body: Uint8Array
   ) => Effect.Effect<void, Internal>;
-  /** Removes each key, also one that isn't there. */
   readonly remove: (keys: readonly string[]) => Effect.Effect<void, Internal>;
 }
 
-/**
- * A file of a checkpoint, as the bucket copies it: `path` within the checkpoint, and `file` where it
- * lies on this host. A runtime that names a file by its content gives that name as `key`, which
- * `held` finds again on any host that holds it; any other file is copied in pieces.
- */
 export interface CheckpointFile {
   readonly path: string;
   readonly file: string;
   readonly key?: string | undefined;
 }
 
-/** A runtime's checkpoints as the files the bucket copies. */
 export interface CheckpointFiles {
   readonly checkpointFiles: (
     checkpoint: Target
   ) => Effect.Effect<readonly CheckpointFile[], RuntimeError>;
-  /** Where a file of `key` lies on this host, in any of its checkpoints, if one does. */
   readonly held: (key: string) => Effect.Effect<string | undefined>;
-  /** Where a copy of `checkpoint` is put together, on the filesystem it will lie on. */
   readonly staging: (checkpoint: Identity) => string;
-  /** Makes `checkpoint` of the files put together in `staged`, which it takes. */
   readonly install: (
     checkpoint: Identity,
     staged: string
@@ -221,10 +206,6 @@ const readManifest = (store: Store, name: string) =>
     )
   );
 
-/**
- * Uploads `checkpoint`'s files under its name, each object only when the store lacks it, and the
- * manifest last, so whatever reads the manifest finds every object it names.
- */
 export const publish = (
   store: Store,
   local: CheckpointFiles,
@@ -302,10 +283,6 @@ export const publish = (
     );
   });
 
-/**
- * Makes `checkpoint` from what was published as `from`, of template build `build`: a file this host
- * holds by its key is linked from where it lies, and only the rest is downloaded.
- */
 export const fetch = (
   store: Store,
   local: CheckpointFiles,
@@ -421,10 +398,6 @@ export const fetch = (
     return installed;
   });
 
-/**
- * Removes what was published as `name`: its manifest, then every object no other manifest names,
- * which also clears what a publish that never ended left.
- */
 export const unpublish = (
   store: Store,
   name: string
@@ -450,11 +423,10 @@ export const unpublish = (
     );
   });
 
-/** The builds of a runtime whose checkpoints are files, shared through `store`. */
 export const throughBucket = (
   store: Store,
   local: CheckpointFiles
-): Effect.Effect<Builds, never, FileSystem.FileSystem | Path.Path> =>
+): Effect.Effect<SharedBuilds, never, FileSystem.FileSystem | Path.Path> =>
   Effect.map(Effect.context<FileSystem.FileSystem | Path.Path>(), (files) => ({
     shared: true,
     publish: (checkpoint) =>

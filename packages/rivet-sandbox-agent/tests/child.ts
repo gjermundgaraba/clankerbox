@@ -5,17 +5,10 @@ import { fileURLToPath } from "node:url";
 
 import { onTestFinished } from "vite-plus/test";
 
-/** How long a test program may run: well below `testLimit`, so the test reads how it ended. */
 export const childLimit = 20_000;
 
-/** The limit of a test that runs a test program. */
 export const testLimit = childLimit + 10_000;
 
-/**
- * Runs the test program `program`, beside this file, under Node, with at most `files` descriptors
- * open if given, and ends it past `childLimit` and when the test ends, whatever way it ends. Its stdin is this process's, so a program that calls
- * `endsWithParent` ends with this process too.
- */
 export const run = async (
   program: string,
   args: readonly string[],

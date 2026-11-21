@@ -65,7 +65,7 @@ const settingsOf = () => ({
 const tester = Effect.gen(function* () {
   const settings = settingsOf();
 
-  const http = yield* Layer.build(AgentSandbox.httpLayer(settings));
+  const http = yield* Layer.build(AgentSandbox.http1Layer(settings));
 
   const api = yield* Api.make(
     settings.api,
@@ -115,7 +115,7 @@ const hosted = Effect.gen(function* () {
   const cluster = yield* tester;
   const settings = settingsOf();
   const id = `kind-${hex(4)}`;
-  const http = faultyHttp(AgentSandbox.httpLayer(settings));
+  const http = faultyHttp(AgentSandbox.http1Layer(settings));
 
   yield* sweptAfter(cluster, id);
 

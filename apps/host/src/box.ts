@@ -3,7 +3,6 @@ import type { Effect } from "effect";
 
 import type { ReservedPorts } from "./settings.ts";
 
-/** What the box a host runs on tells it beside its config. */
 export interface Facts {
   readonly uid: number | undefined;
   readonly ended: (pid: number) => Effect.Effect<boolean>;

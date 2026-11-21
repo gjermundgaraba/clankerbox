@@ -32,19 +32,10 @@ interface Failed {
   readonly logOnly?: string;
 }
 
-/** A host gave no usable answer, so nothing can tell what became of a mutation it was sent. */
 export class Unanswered extends Data.TaggedError("Unanswered")<Failed> {}
 
-/**
- * A host answers, but of another release than the control plane's or in another contract, so
- * nothing it says can be used, and nothing can tell what became of a mutation it was sent.
- */
 export class Incompatible extends Data.TaggedError("Incompatible")<Failed> {}
 
-/**
- * A call refused before it left: its host isn't in the config, or the last read found it
- * incompatible, and only a read, which may find it upgraded, reaches it.
- */
 export class Unsent extends Data.TaggedError("Unsent")<Failed> {}
 
 export type Unreachable = Unanswered | Incompatible | Unsent;
@@ -71,7 +62,6 @@ export type Reached =
       readonly problem: Unreachable;
     };
 
-/** What an operator is shown of a host whose read or call failed with `problem`. */
 export const unread = (problem: {
   readonly _tag: string;
 }): "incompatible" | "unreachable" =>
@@ -79,20 +69,12 @@ export const unread = (problem: {
 
 export interface Interface {
   readonly members: readonly Member[];
-  /**
-   * One call to a host, bounded by `readTimeout` unless `within` says otherwise, as a command runs
-   * as long as its request does. A call or a read that gets no answer logs at warn, with what the HTTP client said, the first
-   * time since the host last answered one, and at debug after; the next answer logs that the host
-   * answers again.
-   */
   readonly call: <A, E>(
     host: string,
     run: (api: HostApi) => Effect.Effect<A, E>,
     within?: Duration.Duration
   ) => Effect.Effect<A, Extract<E, HostError> | Unreachable>;
-  /** Reads the host, and checks it calls itself what the config says. */
   readonly read: (host: string) => Effect.Effect<Fresh, Unreachable>;
-  /** What the host last said, read or not since, unless a read since found it incompatible. */
   readonly known: (host: string) => HostInfo | undefined;
   readonly reachAll: Effect.Effect<readonly Reached[]>;
 }
@@ -118,7 +100,6 @@ export const listed = ({ member, info, problem }: Reached): Host =>
         bases: info.bases,
       };
 
-/** Reads a host for a caller to whom a host that doesn't answer is a read that may yet succeed. */
 export const answering = (
   hosts: Interface,
   host: string

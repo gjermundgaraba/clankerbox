@@ -128,11 +128,6 @@ export interface Interface {
   readonly create: (
     request: CreateRequest
   ) => Effect.Effect<Machine, Declared<"createMachine">>;
-  /**
-   * A machine for a template's build to capture, deleted if the control plane restarts: on the
-   * first of `hosts`, and on `Capacity` on the next, as a create moves. `sending` is told each host
-   * its make is sent to, as the read that sends it found that host, before the make goes.
-   */
   readonly build: (
     name: string,
     spec: Spec & { readonly setup: Setup },
@@ -145,7 +140,6 @@ export interface Interface {
   readonly stop: (
     id: string
   ) => Effect.Effect<Machine, Declared<"stopMachine">>;
-  /** `after` names a checkpoint whose capture, once recorded, begins before the pause does. */
   readonly pause: (
     id: string,
     after?: string
@@ -162,19 +156,10 @@ export interface Interface {
   readonly restore: (
     request: RestoreRequest & Sizing
   ) => Effect.Effect<Machine, Declared<"restoreMachine">>;
-  /**
-   * Runs a command in a machine, through its host, once a step on it has ended, and for as long
-   * as the request does. Nothing of it is stored.
-   */
   readonly exec: (
     request: ExecRequest
   ) => Effect.Effect<Executed, Declared<"execMachine">>;
   readonly capacity: Effect.Effect<CapacityRead, Internal>;
-  /**
-   * Waits until a machine rests or is gone, for a template build's own steps, reading its VM only once
-   * its row rests, and answers that row, failing with its error. A host that can't be reached for a
-   * whole recheck ends the wait as `Unavailable`, whatever step the machine is in.
-   */
   readonly rest: (
     name: string
   ) => Effect.Effect<Option.Option<MachineRow>, HostError>;
@@ -367,7 +352,7 @@ export const make = (
     const scope = yield* Effect.scope;
 
     const creates = new Map<string, CreateHeldInMemory>();
-    const readings = new Map<string, Swept & { readonly taken: number }>();
+    const readings = new Map<string, Swept & { readonly sweepId: number }>();
     const tailnets = new Map<string, TailnetCheck>();
     const tailnet = yield* Effect.serviceOption(Tailnet);
 
@@ -594,21 +579,24 @@ export const make = (
         );
       });
 
-    const sweptSince = (found: MachineRow, rested: number | undefined) => {
-      const swept = rested === undefined ? undefined : readings.get(found.name);
+    const sweptSince = (found: MachineRow, sweepAtRest: number | undefined) => {
+      if (sweepAtRest === undefined) {
+        return undefined;
+      }
+
+      const swept = readings.get(found.name);
 
       return swept !== undefined &&
-        rested !== undefined &&
-        swept.taken > rested &&
+        swept.sweepId > sweepAtRest &&
         swept.host === found.host
         ? swept
         : undefined;
     };
 
-    const looking = (found: MachineRow, rested: number | undefined) =>
+    const looking = (found: MachineRow, sweepAtRest: number | undefined) =>
       Effect.gen(function* () {
         const { name } = found;
-        const swept = sweptSince(found, rested);
+        const swept = sweptSince(found, sweepAtRest);
         const info = swept?.info ?? (yield* hosts.read(found.host));
 
         const refused =
@@ -659,7 +647,7 @@ export const make = (
         return answer;
       });
 
-    const { drive, reading, rechecking } = yield* driver(
+    const { drive, beginSweep, rechecking } = yield* driver(
       settings.recheck,
       {
         kind: "machine",
@@ -1089,7 +1077,7 @@ export const make = (
     const tick = recheckHosts(store, hosts, settings.failedRowsLast);
 
     const sweeping = Effect.gen(function* () {
-      const taken = yield* reading;
+      const sweepId = yield* beginSweep;
 
       const resting = (yield* store.machines).filter(
         ({ state }) => activityOf(state) === "recheck"
@@ -1097,13 +1085,13 @@ export const make = (
 
       yield* sweep(hosts, resting, (found, swept) =>
         Effect.andThen(
-          Effect.sync(() => readings.set(found.name, { ...swept, taken })),
-          rechecking(found.name, taken)
+          Effect.sync(() => readings.set(found.name, { ...swept, sweepId })),
+          rechecking(found.name, sweepId)
         )
       );
 
       for (const [name, swept] of readings) {
-        if (swept.taken < taken) {
+        if (swept.sweepId < sweepId) {
           readings.delete(name);
         }
       }

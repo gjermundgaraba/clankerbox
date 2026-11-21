@@ -65,10 +65,6 @@ export const allotted = (
       );
 };
 
-/**
- * Refuses an activation past the budget. Each machine counts its whole RAM; `heldMib` is what the
- * runtime holds beside them, such as smolvm's parked bases, counted by what it uses.
- */
 export const checkRamBudget = (
   budgetMib: number,
   activation: Activation,

@@ -75,7 +75,6 @@ export interface Settings {
   readonly stateDir: string;
   readonly uid: number | undefined;
   readonly tartHome: string | undefined;
-  /** The bucket the host shares template builds through, if it shares them. */
   readonly bucket?: Store | undefined;
 }
 
@@ -124,13 +123,6 @@ const forcedStopWait = Duration.seconds(10);
 
 const settleWait = Duration.seconds(30);
 
-/**
- * What a Tart guest needs from its host at each boot, run as root with the host's UTC time
- * (`dateStamp`) as its one argument: the host's clock, as a base boots weeks behind and a resumed VM
- * goes on from its save, and public resolvers on each network service that names none, as Softnet
- * blocks the gateway's resolver a guest gets by DHCP. A service whose resolvers were set, by a
- * template's setup, its user or a tailnet's client, keeps them.
- */
 export const settleScript = [
   "set -eu",
   `root=\${CLANKERBOX_ROOT-}`,
@@ -237,7 +229,6 @@ const sizeFlags = ({ cpu, ramMib, diskGib }: Sizing): readonly string[] => [
   ...(diskGib === undefined ? [] : ["--disk-size", String(diskGb(diskGib))]),
 ];
 
-/** The oldest Tart a mac host starts under; the `bump-tart` skill owns it. */
 export const minimumVersion = "2.41.1";
 
 /**
@@ -257,7 +248,6 @@ const releases = (floor: string, tested: string): string =>
     ? `Tart ${floor} alone, the release`
     : `Tart ${floor} to ${tested}, the releases`;
 
-/** The releases a mac host starts under, as README names them. */
 export const qualified = releases(minimumVersion, testedVersion);
 
 const refusal = (binary: string, reported: string): string =>

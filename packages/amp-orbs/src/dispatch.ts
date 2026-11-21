@@ -12,7 +12,6 @@ export const typeLabel = "amp-orb-type";
 
 export const snapshotLabel = "amp-snapshot";
 
-/** How long starting `amp orb bootstrap` may take: it is detached at once. */
 export const bootstrapTimeoutSeconds = 60;
 
 export class BootstrapFailed extends Schema.TaggedError<
@@ -20,15 +19,7 @@ export class BootstrapFailed extends Schema.TaggedError<
   { readonly brand: unique symbol }
 >()("BootstrapFailed", { message: Schema.String }) {}
 
-/**
- * Starts `amp orb bootstrap` detached from the command, so it runs for the life of the orb. It
- * fails at once when the login user has no `amp`, which the detached start would only log. One
- * already running is ended first: a resumed or restored machine keeps the processes it paused with,
- * and that bootstrap holds the previous job's token. The script goes to the shell on stdin, so no
- * command line carries its text for the pattern to match, and the bracket keeps the pattern from
- * matching the pkill itself.
- */
-export const bootstrapScript = [
+export const replaceBootstrapScript = [
   "set -eu",
   'HOME=$(getent passwd "$(id -un)" | cut -d: -f6)',
   "export HOME",
@@ -105,7 +96,7 @@ const spawn = Effect.fn("spawn")(function* (
       }),
     },
     argv: ["sh"],
-    stdin: bootstrapScript,
+    stdin: replaceBootstrapScript,
     timeoutSeconds: bootstrapTimeoutSeconds,
   });
 

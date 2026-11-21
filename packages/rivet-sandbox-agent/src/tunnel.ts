@@ -23,7 +23,6 @@ const closeWait = Duration.seconds(5);
 
 const drainWait = Duration.seconds(1);
 
-/** How much of what a guest or its agent said an error quotes. */
 export const quoted = 600;
 
 const prefix = "clankerbox-tunnel-";
@@ -45,7 +44,6 @@ export interface Tunnel {
   readonly socket: string;
 }
 
-/** A tunnel's own directory, under the temporary directory, which only this user can enter. */
 export const tunnelDirectory: Effect.Effect<
   string,
   PlatformError.PlatformError,
@@ -76,12 +74,6 @@ const refuses = (socket: string): Effect.Effect<boolean> =>
     })
   );
 
-/**
- * Removes each directory under `under` that a tunnel of user `uid` left and that is surely dead:
- * older than twice the open wait, so no open still runs in it, and whose socket is missing or
- * refuses a connection, as ssh's is once it has ended. A program ended by a signal runs no exit hook
- * and leaves its tunnels'.
- */
 export const sweep = (under: string, uid: number): Effect.Effect<void> =>
   Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
@@ -119,11 +111,6 @@ export const sweepLeft: Effect.Effect<void> = Effect.suspend(() => {
   return uid === undefined ? Effect.void : sweep(tmpdir(), uid);
 });
 
-/**
- * Where a tunnel's ssh listens: a unix socket in `directory`, which only this user can enter, so
- * no other program can take it. ssh's `-L` reads `:` as a separator, and a socket's path has a
- * bound, so a directory that breaks either is refused before ssh runs.
- */
 export const socketIn = (
   directory: string,
   machine: string
@@ -210,8 +197,7 @@ export const refusal = (extra: readonly string[]): string | undefined => {
 /**
  * These precede `extra`: OpenSSH keeps the first value of an option given with `-o` or in a config
  * file, so neither can clear the forward, fork it, leave out its session or the session's input,
- * hand it to a connection master or replace its command. `cat` holds the session open and echoes
- * `answer`, so the echo comes only once the forward is bound.
+ * hand it to a connection master or replace its command.
  */
 export const forwarding = (
   socket: string,
