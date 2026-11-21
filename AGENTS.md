@@ -210,7 +210,13 @@ provider's API over loopback, for its adapter's tests and for the verify skill,
 and `tests/live/smol-cloud.test.ts` and `tests/live/boat.test.ts`, run by
 `vp run test:live` in `apps/host` with `SMOL_MACHINES_API_KEY` or
 `BOAT_API_KEY`, and `TAILSCALE_AUTHKEY`, set and never in CI, check the real
-accounts. `tests/kind/`, run by `vp run test:kind` in `apps/host` and in CI,
+accounts. A fake of a provider is written from what we believe of it, so a
+test against it proves only that the code does what we believed. A signal read
+from a provider's undocumented behaviour, such as boat's reboot mark, which its
+list omits and its own record holds, is proven only by driving the real adapter
+against the account and replaying what it read through the real chart: that is
+how a boat machine's first reboot in place was found uncounted, which every fake
+test had passed. `tests/kind/`, run by `vp run test:kind` in `apps/host` and in CI,
 makes a kind cluster with the agent-sandbox controller through `cluster.sh`,
 and runs the runtime contract and a guest's SSH there, with the faults a fake
 provider would give injected at the adapter's HTTP client. Its
