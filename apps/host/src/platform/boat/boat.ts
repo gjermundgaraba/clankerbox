@@ -189,6 +189,10 @@ const sightingOf = (sandbox: Sandbox | undefined): Sighting => {
   };
 };
 
+const rebootReads = 8;
+
+const rebootReadBudget = Duration.seconds(4);
+
 type Goal = "running" | "stopped" | "gone";
 
 const ends = {
@@ -547,6 +551,85 @@ export const make = (
         found.find((sandbox) => heldOf(sandbox) !== "cancelled")
       );
 
+    /**
+     * The reboot marks of the sandboxes a list read finds running, from their own records, read
+     * only where boat may have set one since. boat's list answers `lastReboot: null` where
+     * `GET /sandboxes/{id}` holds one, though https://docs.boat.dev/openapi/boat-v1.yaml types both
+     * as `Sandbox`, as a live account showed three times on 2026-11-21; so a host never reads the
+     * mark from the list, until a live run shows boat fills it there.
+     *
+     * It rests on `updatedAt`, which the list does fill: a sandbox's own record is read the first
+     * time a list finds it running, and again only once its `updatedAt` differs from the one its
+     * last read of its own record saw. On that account on 2026-11-21, a running sandbox's
+     * `updatedAt` held still through 5 idle minutes, its minutely snapshots included, and moved
+     * 15 s after a `systemctl reboot` set `lastReboot`, to the same value in the list and the
+     * record. That is one reboot of one sandbox, and boat documents neither. Should boat stop moving
+     * `updatedAt` on a reboot, or move it before it sets `lastReboot`, a host of two or more boat
+     * machines misses each reboot in place; should it move it more often, the host only reads more.
+     *
+     * A list that finds a sandbox not running forgets it, so its next run is read afresh, as the
+     * control plane takes a new reboot mark after each start that boots a machine. A read that
+     * fails, that boat throttles with a 429, or that `rebootReadBudget` cuts short, inside the 9 s
+     * a host's read is bounded to, records nothing, so the next list reads it again: the observe
+     * answers the list's state meanwhile, the control plane keeps the mark it last read, and the
+     * reboot counts a check later. Steady, that is the list alone; a host's first read after it
+     * starts reads every running sandbox once, about 300 within the budget, and the rest at the
+     * checks after.
+     */
+    const ownRead = new Map<string, string | undefined>();
+
+    const remember = (sandbox: Sandbox | undefined, handle: string) => {
+      if (sandbox !== undefined && heldOf(sandbox) === "running") {
+        ownRead.set(handle, sandbox.updatedAt ?? undefined);
+      } else {
+        ownRead.delete(handle);
+      }
+    };
+
+    const rebootsOf = (inList: readonly Sandbox[]) =>
+      Effect.gen(function* () {
+        const found = new Map<string, string>();
+
+        for (const sandbox of inList) {
+          if (heldOf(sandbox) !== "running") {
+            ownRead.delete(sandbox.id);
+          }
+        }
+
+        const due = inList.filter(
+          (sandbox) =>
+            heldOf(sandbox) === "running" &&
+            (!ownRead.has(sandbox.id) ||
+              ownRead.get(sandbox.id) !== (sandbox.updatedAt ?? undefined))
+        );
+
+        yield* Effect.forEach(
+          due,
+          ({ id }) =>
+            api.sandbox(id).pipe(
+              Effect.tap((own) =>
+                Effect.sync(() => {
+                  const at = own?.lastReboot?.at;
+
+                  if (at !== undefined) {
+                    found.set(id, at);
+                  }
+
+                  remember(own, id);
+                })
+              ),
+              Effect.catch((error) =>
+                Effect.logDebug(
+                  `couldn't read ${id}'s reboot mark, so this read keeps the last: ${error.message}`
+                )
+              )
+            ),
+          { concurrency: rebootReads, discard: true }
+        ).pipe(Effect.timeoutOption(rebootReadBudget));
+
+        return found;
+      });
+
     const markedMachines = Effect.gen(function* () {
       const sandboxes = yield* api.sandboxes(mark);
       const saved = yield* snapshots;
@@ -759,27 +842,48 @@ export const make = (
 
         if (machines.length === 1 && only !== undefined) {
           return api.sandbox(only.handle).pipe(
-            Effect.map(
-              (sandbox): Observed => new Map([[only.name, sightingOf(sandbox)]])
-            ),
+            Effect.map((sandbox): Observed => {
+              remember(sandbox, only.handle);
+
+              return new Map([[only.name, sightingOf(sandbox)]]);
+            }),
             Effect.mapError(internal(`couldn't read ${only.name}`))
           );
         }
 
         return api.sandboxes(mark).pipe(
-          Effect.map((sandboxes): Observed => {
+          Effect.mapError(internal("couldn't list this host's machines")),
+          Effect.flatMap((sandboxes) => {
             const byId = new Map(
               sandboxes.map((sandbox) => [sandbox.id, sandbox])
             );
 
-            return new Map(
-              machines.map((machine) => [
-                machine.name,
-                sightingOf(byId.get(machine.handle)),
-              ])
+            const seen = machines.map(
+              (machine) =>
+                [machine, sightingOf(byId.get(machine.handle))] as const
             );
-          }),
-          Effect.mapError(internal("couldn't list this host's machines"))
+
+            return Effect.map(
+              rebootsOf(
+                machines.flatMap(({ handle }) => {
+                  const found = byId.get(handle);
+
+                  return found === undefined ? [] : [found];
+                })
+              ),
+              (reboots): Observed =>
+                new Map(
+                  seen.map(([machine, sighting]) => {
+                    const reboot = reboots.get(machine.handle);
+
+                    return [
+                      machine.name,
+                      reboot === undefined ? sighting : { ...sighting, reboot },
+                    ];
+                  })
+                )
+            );
+          })
         );
       },
 

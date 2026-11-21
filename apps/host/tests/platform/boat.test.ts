@@ -1114,11 +1114,116 @@ describe("the boat runtime over fake boat", () => {
 
           yield* runtime.observe([a, b]);
 
+          const several = asked().slice(middle);
+          const after = boat.requests.length;
+
+          yield* runtime.observe([a, b]);
+
           expect(Object.fromEntries(one)).toStrictEqual({
             a: { state: "running" },
           });
           expect(single).toStrictEqual([`GET /sandboxes/${a.handle}`]);
-          expect(asked().slice(middle)).toStrictEqual(["GET /sandboxes?"]);
+          expect(several).toStrictEqual([
+            "GET /sandboxes?",
+            `GET /sandboxes/${b.handle}`,
+          ]);
+          expect(asked().slice(after)).toStrictEqual(["GET /sandboxes?"]);
+        })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a read of several machines reads a running sandbox's own record for its reboot mark, as boat's list answers it null, only when first seen, run afresh or its updatedAt moved, and again after a read boat throttled",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          const a = yield* made(runtime, "a");
+          const b = yield* made(runtime, "b");
+          const c = yield* made(runtime, "c");
+          const machines = [a, b, c];
+
+          yield* runtime.stop(c);
+          yield* boat.reboot(a.handle, "2026-11-21T00:00:00Z");
+
+          const ownReads = (from: number) =>
+            boat.requests
+              .slice(from)
+              .flatMap(({ method, path: at }) =>
+                method === "GET" && at.startsWith("/sandboxes/")
+                  ? [at.slice("/sandboxes/".length)]
+                  : []
+              )
+              .filter((id, at, all) => all.indexOf(id) === at)
+              .toSorted();
+
+          const read = Effect.gen(function* () {
+            const from = boat.requests.length;
+            const observed = yield* runtime.observe(machines);
+
+            return {
+              seen: Object.fromEntries(
+                [...observed].map(([name, { state, reboot }]) => [
+                  name,
+                  reboot === undefined ? state : `${state} ${reboot}`,
+                ])
+              ),
+              ownReads: ownReads(from),
+            };
+          });
+
+          const first = yield* read;
+          const steady = yield* read;
+
+          yield* boat.reboot(b.handle, "2026-11-21T00:01:00Z");
+          yield* boat.throttleReads(true);
+
+          const throttled = yield* read;
+
+          yield* boat.throttleReads(false);
+
+          const retried = yield* read;
+
+          yield* runtime.start(c, new Set());
+
+          const runAfresh = yield* read;
+
+          expect({
+            first,
+            steady,
+            throttled,
+            retried,
+            runAfresh,
+          }).toStrictEqual({
+            first: {
+              seen: {
+                a: "running 2026-11-21T00:00:00Z",
+                b: "running",
+                c: "stopped",
+              },
+              ownReads: [a.handle, b.handle].toSorted(),
+            },
+            steady: {
+              seen: { a: "running", b: "running", c: "stopped" },
+              ownReads: [],
+            },
+            throttled: {
+              seen: { a: "running", b: "running", c: "stopped" },
+              ownReads: [b.handle],
+            },
+            retried: {
+              seen: {
+                a: "running",
+                b: "running 2026-11-21T00:01:00Z",
+                c: "stopped",
+              },
+              ownReads: [b.handle],
+            },
+            runAfresh: {
+              seen: { a: "running", b: "running", c: "running" },
+              ownReads: [c.handle],
+            },
+          });
         })
       ),
     30_000

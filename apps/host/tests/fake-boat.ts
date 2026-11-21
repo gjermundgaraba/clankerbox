@@ -572,6 +572,7 @@ export const fakeBoat = (
     );
 
     let quotaOn = false;
+    let readsThrottled = false;
     let starts = 0;
     let queue = Promise.resolve();
 
@@ -605,6 +606,7 @@ export const fakeBoat = (
       type: sandbox.type,
       labels: sandbox.labels,
       createdAt: sandbox.createdAt,
+      updatedAt: sandbox.rebootedAt ?? sandbox.createdAt,
       dataExpiredAt: sandbox.dataExpired ? sandbox.createdAt : null,
       hydrated: sandbox.hydratingFor === 0,
       error: sandbox.failed ? "fake boat failed its sandbox" : null,
@@ -1160,7 +1162,9 @@ export const fakeBoat = (
       return {
         status: 200,
         body: {
-          sandboxes: matching.slice(from, from + limit).map(sandboxJson),
+          sandboxes: matching
+            .slice(from, from + limit)
+            .map((sandbox) => ({ ...sandboxJson(sandbox), lastReboot: null })),
           pageInfo: { nextCursor: next, hasMore: next !== null, limit },
         },
       };
@@ -1287,6 +1291,14 @@ export const fakeBoat = (
 
       switch (action) {
         case undefined: {
+          if (readsThrottled && method === "GET") {
+            return refused(
+              429,
+              "IP_RATE_LIMIT_EXCEEDED",
+              "fake boat throttles reads"
+            );
+          }
+
           if (sandbox.cancelled) {
             removed(sandbox);
           }
@@ -1659,6 +1671,10 @@ export const fakeBoat = (
             sandbox.failed = true;
           }
         }),
+      throttleReads: (on: boolean) =>
+        Effect.sync(() => {
+          readsThrottled = on;
+        }),
       reboot: (id: string, at: string) =>
         Effect.sync(() => {
           const sandbox = sandboxes.get(id);
@@ -1737,7 +1753,9 @@ export interface FakeBoat {
   /** `vanish` at once, for an `onCall` hook. */
   readonly vanishNow: (id: string) => void;
   readonly fail: (id: string) => Effect.Effect<void>;
-  /** Restarts a running sandbox's kernel in place, as boat does on its own, which it answers in `lastReboot`. */
+  /** Answers each read of one sandbox by its ID 429, as boat's per-IP rate limit does. */
+  readonly throttleReads: (on: boolean) => Effect.Effect<void>;
+  /** Restarts a running sandbox's kernel in place, as boat does on its own, which it answers in `lastReboot` by its ID, and as null in its list, as the real one does. */
   readonly reboot: (id: string, at: string) => Effect.Effect<void>;
   /** Stops a sandbox, which then reads `archiving` for this many reads of it. */
   readonly archiveSlowly: (id: string, reads: number) => Effect.Effect<void>;
