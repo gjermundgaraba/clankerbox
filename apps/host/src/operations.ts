@@ -57,7 +57,7 @@ import {
   scrubNode,
   tailnetTimeout,
 } from "./guest.ts";
-import type { DiskMark, TailnetReport } from "./guest.ts";
+import type { TailnetReport } from "./guest.ts";
 import { Reaches } from "./reach.ts";
 import * as Recheck from "./recheck.ts";
 import {
@@ -611,21 +611,15 @@ export const make = (
         )
       );
 
-    const readied = (
-      progress: Progress,
-      machine: Target,
-      mark: DiskMark | undefined
-    ) =>
+    const readied = (progress: Progress, machine: Target) =>
       Effect.gen(function* () {
         yield* identify(runtime, machine);
 
-        const { hostKey, rolledBack } = yield* prepare(runtime, machine, mark);
+        const hostKey = yield* prepare(runtime, machine);
 
         progress.outcome = {
           ...progress.outcome,
           ...(hostKey === undefined ? {} : { hostKey }),
-          ...(mark === undefined ? {} : { marked: true }),
-          ...(rolledBack === undefined ? {} : { rolledBack }),
         };
       });
 
@@ -794,7 +788,7 @@ export const make = (
         }
 
         if (source._tag !== "base") {
-          yield* readied(progress, ref, step.mark);
+          yield* readied(progress, ref);
           progress.outcome = { ...progress.outcome, prepared: true };
         }
       });
@@ -848,7 +842,7 @@ export const make = (
                   started
                 );
 
-            yield* readied(progress, machine, step.mark);
+            yield* readied(progress, machine);
           });
         }
 

@@ -1046,43 +1046,6 @@ const factsWritten: readonly Write[] = [
     { state: "made.failed", error, booting: false },
   ],
   [
-    "a make done that marked its machine's disk says so",
-    rowAt("making.sent"),
-    report("done", { ...reach, marked: true }),
-    {
-      state: "made.observing",
-      prepared: false,
-      boots: 1,
-      marked: 1,
-      ...reach,
-    },
-  ],
-  [
-    "a start done that marked the disk of a machine made before marks says so",
-    rowAt("made.stepping.starting", { booting: true, boots: 2 }),
-    report("done", { marked: true }),
-    {
-      state: "made.observing",
-      prepared: true,
-      booting: false,
-      boots: 3,
-      marked: 3,
-    },
-  ],
-  [
-    "a start done whose disk its marks find gone back records it unasked, with why, and counts the boot",
-    rowAt("made.stepping.starting", { booting: true, boots: 2, marked: 2 }),
-    report("done", { marked: true, rolledBack: "it came back blank" }),
-    {
-      state: "made.observing",
-      prepared: true,
-      booting: false,
-      boots: 3,
-      marked: 3,
-      unasked: { what: "rolledBack", at, why: "it came back blank" },
-    },
-  ],
-  [
     "a machine at rest running that its runtime stopped unasked rests failed saying so, and isn't started again",
     rowAt("made.settled", { ...prepared, boots: 2 }),
     read("stopped"),

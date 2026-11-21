@@ -418,7 +418,7 @@ describe.runIf(dir !== "")("agent-sandbox, on kind", () => {
         yield* prepareBase(runtime, dev, false);
         yield* identify(runtime, dev);
 
-        const { hostKey } = yield* prepare(runtime, dev);
+        const hostKey = yield* prepare(runtime, dev);
 
         yield* addMissingKeys(runtime, dev, publicKey);
         yield* runCommand(runtime, {
@@ -489,7 +489,7 @@ describe.runIf(dir !== "")("agent-sandbox, on kind", () => {
 
         yield* identify(runtime, copy);
 
-        const forkKey = (yield* prepare(runtime, copy)).hostKey;
+        const forkKey = yield* prepare(runtime, copy);
 
         expect(forkKey).not.toBe(hostKey);
         expect(

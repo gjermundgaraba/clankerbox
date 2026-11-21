@@ -260,8 +260,6 @@ export const addMissingKeys = (
 
 const hostKeyMarker = "clankerbox-host-key: ";
 
-const markMarker = "clankerbox-mark: ";
-
 const tailnetDir = `${stateDir}/tailscale`;
 
 const nodeProcess = [
@@ -524,18 +522,6 @@ export const startScript = [
   `if [ -e "$root/etc/clankerbox/start" ]; then`,
   `  "$root/etc/clankerbox/start" </dev/null`,
   "fi",
-  'if [ -n "${2-}" ]; then',
-  `  mkdir -p "${stateDir}"`,
-  `  printf '${markMarker}disk %s\\n' "$(cat "${stateDir}/boots" 2>/dev/null || true)"`,
-  `  if [ -d "$root/workspace" ]; then`,
-  `    printf '${markMarker}workspace %s\\n' "$(cat "$root/workspace/.clankerbox-boots" 2>/dev/null || true)"`,
-  `    printf '%s %s\\n' "$1" "$2" >"$root/workspace/.clankerbox-boots"`,
-  `    printf '%s %s workspace\\n' "$1" "$2" >"${stateDir}/boots.new"`,
-  "  else",
-  `    printf '%s %s\\n' "$1" "$2" >"${stateDir}/boots.new"`,
-  "  fi",
-  `  mv "${stateDir}/boots.new" "${stateDir}/boots"`,
-  "fi",
   "for type in ed25519 ecdsa rsa; do",
   '  key="$root/etc/ssh/ssh_host_${type}_key.pub"',
   `  if [ -r "$key" ]; then`,
@@ -586,99 +572,17 @@ export const identify = (
     )
   );
 
-/**
- * The boot mark a start writes on a machine's disk, beside the instance its identity keeps, and in
- * `/workspace` where the guest has one: `writes`, the count of the boot it is, and `expect`, the
- * count the disk should hold from the last start that marked it, on a machine whose disk the host
- * marked before.
- */
-export interface DiskMark {
-  readonly writes: number;
-  readonly expect?: number | undefined;
-}
-
-export interface Prepared {
-  readonly hostKey: string | undefined;
-  /** Why the disk isn't as the last boot left it, where its marks say it isn't. */
-  readonly rolledBack: string | undefined;
-}
-
-const marksIn = (output: string): ReadonlyMap<string, string> =>
-  new Map(
-    output.split("\n").flatMap((line) => {
-      if (!line.startsWith(markMarker)) {
-        return [];
-      }
-
-      const [where = "", ...found] = line.slice(markMarker.length).split(" ");
-
-      return [[where, found.join(" ")] as const];
-    })
-  );
-
-/**
- * Whether a disk's marks show it went back after the last boot: a mark of an earlier boot is a
- * disk restored from older files, no mark or another machine's a disk come back blank or foreign,
- * and a `/workspace` without the mark its disk says it wrote one emptied. It tells only after the
- * fact, at the next start, and nothing of a machine whose host never marked its disk.
- */
-export const rollbackIn = (
-  output: string,
-  instance: string,
-  expect: number
-): string | undefined => {
-  const marks = marksIn(output);
-
-  const [held = "", count = "", workspace] = (marks.get("disk") ?? "").split(
-    " "
-  );
-
-  if (held === "") {
-    return `its disk holds no mark of boot ${expect}, which its host wrote: it came back blank`;
-  }
-
-  if (held !== instance) {
-    return `its disk holds another machine's mark, not that of its boot ${expect}`;
-  }
-
-  if (Number(count) < expect) {
-    return `its disk is as boot ${count} left it, not boot ${expect}: it went back to older files`;
-  }
-
-  return workspace === "workspace" &&
-    marks.get("workspace") !== `${held} ${count}`
-    ? `its /workspace lacks the mark of boot ${count}, which its host wrote there: it was emptied`
-    : undefined;
-};
-
 export const prepare = (
   runtime: Runtime,
-  machine: Target,
-  mark?: DiskMark
-): Effect.Effect<Prepared, RuntimeError | ScriptFailed> =>
+  machine: Target
+): Effect.Effect<string | undefined, RuntimeError | ScriptFailed> =>
   runInGuest(
     runtime,
     "preparation",
     machine,
-    {
-      argv: [
-        "/bin/sh",
-        "-c",
-        startScript,
-        "clankerbox-start",
-        ...(mark === undefined ? [] : [machine.instance, String(mark.writes)]),
-      ],
-    },
+    { argv: ["/bin/sh", "-c", startScript, "clankerbox-start"] },
     preparationTimeout
-  ).pipe(
-    Effect.map((output) => ({
-      hostKey: hostKeyIn(output),
-      rolledBack:
-        mark?.expect === undefined
-          ? undefined
-          : rollbackIn(output, machine.instance, mark.expect),
-    }))
-  );
+  ).pipe(Effect.map(hostKeyIn));
 
 export const tailnetTimeout = Duration.seconds(90);
 

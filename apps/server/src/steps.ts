@@ -166,7 +166,6 @@ export const machineStep = (
         _tag: "make",
         machine: ref,
         source: yield* sourceStep(store, found, held),
-        mark: { writes: 1 },
         ...(found.ephemeral || found.template !== undefined
           ? { authorizedKeys }
           : {}),
@@ -186,10 +185,6 @@ export const machineStep = (
           machine: ref,
           keep: yield* keptOn(store, found.host),
           ...pinned(found.pin),
-          mark: {
-            writes: found.boots + (found.booting ? 1 : 0),
-            ...(found.marked > 0 ? { expect: found.marked } : {}),
-          },
           machines,
         };
       }

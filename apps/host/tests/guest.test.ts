@@ -33,7 +33,6 @@ import {
   prepare as prepareGuest,
   prepareBase,
   rememberDns,
-  rollbackIn,
   startScript,
   runSetup,
   scrubNode,
@@ -1098,76 +1097,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(code, output).toBe(0);
       expect(yield* other.settled).not.toContain("hup");
     })
-  );
-
-  it.effect(
-    "a start's boot mark finds a disk gone back to older files, come back blank or another machine's, or a /workspace emptied, and nothing in a disk a failed start marked ahead",
-    () =>
-      Effect.gen(function* () {
-        const where = yield* guest();
-        const marks = path.join(where.root, "var/lib/clankerbox/boots");
-
-        const started = (instance: string, writes: number) =>
-          Effect.map(
-            outputOf(
-              "/bin/sh",
-              ["-c", startScript, "start", instance, String(writes)],
-              { env: { CLANKERBOX_ROOT: where.root }, extendEnv: true }
-            ),
-            ({ code, stdout, stderr }) => {
-              expect(code, stderr).toBe(0);
-
-              return stdout;
-            }
-          );
-
-        yield* started("aaaa1111", 1);
-
-        yield* mkdir(path.join(where.root, "workspace"));
-
-        const clean = yield* started("aaaa1111", 2);
-        const atBoot2 = yield* read(where.root, "var/lib/clankerbox/boots");
-        const ahead = yield* started("aaaa1111", 3);
-
-        yield* write(marks, atBoot2);
-
-        const older = yield* started("aaaa1111", 4);
-
-        yield* remove(marks);
-
-        const blank = yield* started("aaaa1111", 5);
-
-        yield* write(marks, "bbbb2222 5 workspace\n");
-
-        const foreign = yield* started("aaaa1111", 6);
-
-        yield* remove(path.join(where.root, "workspace"));
-        yield* mkdir(path.join(where.root, "workspace"));
-
-        const emptied = yield* started("aaaa1111", 7);
-
-        expect({
-          clean: rollbackIn(clean, "aaaa1111", 1),
-          ahead: rollbackIn(ahead, "aaaa1111", 1),
-          older: rollbackIn(older, "aaaa1111", 3),
-          blank: rollbackIn(blank, "aaaa1111", 4),
-          foreign: rollbackIn(foreign, "aaaa1111", 5),
-          emptied: rollbackIn(emptied, "aaaa1111", 6),
-          after: yield* read(where.root, "var/lib/clankerbox/boots"),
-        }).toStrictEqual({
-          clean: undefined,
-          ahead: undefined,
-          older:
-            "its disk is as boot 2 left it, not boot 3: it went back to older files",
-          blank:
-            "its disk holds no mark of boot 4, which its host wrote: it came back blank",
-          foreign:
-            "its disk holds another machine's mark, not that of its boot 5",
-          emptied:
-            "its /workspace lacks the mark of boot 6, which its host wrote there: it was emptied",
-          after: "aaaa1111 7 workspace\n",
-        });
-      })
   );
 
   it("hostKeyIn takes the last marker line and refuses anything that isn't a key", () => {

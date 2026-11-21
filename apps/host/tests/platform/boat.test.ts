@@ -303,7 +303,7 @@ describe("the boat runtime over fake boat", () => {
           const after = hostKeyOf(boat, machine.handle);
 
           expect(after).not.toBe(before);
-          expect((yield* prepare(runtime, machine)).hostKey).toBe(after);
+          expect(yield* prepare(runtime, machine)).toBe(after);
           expect(
             boat.calls.filter((line) => line.includes("/sshkey 200"))
           ).toHaveLength(2);

@@ -88,15 +88,6 @@ const hooked = {
   hook: Schema.optionalKey(Schema.Struct({ timeoutSeconds: Size })),
 };
 
-const marked = {
-  mark: Schema.optionalKey(
-    Schema.Struct({
-      writes: Schema.Int,
-      expect: Schema.optionalKey(Schema.Int),
-    })
-  ),
-};
-
 /**
  * What a host runs. `pin` is the runtime pin a VM booted under, compared with the host's own, and
  * `machines` the host's other machines, which admission counts beside the one a step boots. A step
@@ -104,10 +95,8 @@ const marked = {
  * finds by its `instance` and the checkpoint whose handle the runtime derives from its identity; a
  * remove or a delete of a checkpoint that finds none is done. A make gives its machine a port off
  * `taken`, every port the host's other machines hold, and answers that machine when it finds its
- * instance made. A make or a start's `mark` is the boot mark it writes on the machine's disk as it
- * readies it, `writes` the count of this boot, and checks there first where it gives `expect`, the
- * count its host last wrote there, answering `rolledBack` in its outcome where the disk holds another. A
- * step that acts by what its VM is doing reads it from the runtime as it begins. A make's
+ * instance made. A step
+ * that acts by what its VM is doing reads it from the runtime as it begins. A make's
  * `authorizedKeys` go to the login user once the machine is made, after its setup if it has one,
  * beside the keys already there. A make's `tailnet` says its machine requests the tailnet, so a base
  * it prepares gets `tailscale`, and later `join` steps put it on the tailnet. A make's `join` puts
@@ -135,14 +124,12 @@ export const Step = Schema.Union([
       Schema.Struct({ hostname: Schema.String, key: TailnetKey })
     ),
     taken: Schema.Array(Port),
-    ...marked,
     ...others,
   }),
   Schema.TaggedStruct("start", {
     machine: MachineRef,
     keep: Schema.Array(Handle),
     ...pinned,
-    ...marked,
     ...others,
   }),
   Schema.TaggedStruct("stop", {
@@ -227,10 +214,6 @@ export const Outcome = Schema.Struct({
   prepared: Schema.optionalKey(Schema.Literal(true)),
   /** A capture that failed and left nothing on its host, so a delete would find nothing. */
   cleared: Schema.optionalKey(Schema.Literal(true)),
-  /** A make or a start that wrote its boot mark on the machine's disk. */
-  marked: Schema.optionalKey(Schema.Literal(true)),
-  /** Why the machine's disk isn't as its last boot left it, as its marks tell. */
-  rolledBack: Schema.optionalKey(Schema.String),
 });
 
 export type Outcome = typeof Outcome.Type;

@@ -233,7 +233,6 @@ export const migrations: readonly string[] = [
   ALTER TABLE builds ADD COLUMN tailnet INTEGER NOT NULL DEFAULT 0`,
   `ALTER TABLE machines ADD COLUMN boots INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE machines ADD COLUMN booting INTEGER NOT NULL DEFAULT 0;
-  ALTER TABLE machines ADD COLUMN marked INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE machines ADD COLUMN reboot TEXT;
   ALTER TABLE machines ADD COLUMN unasked TEXT;
   UPDATE machines SET boots = 1 WHERE state LIKE 'made.%'`,

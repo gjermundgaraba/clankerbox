@@ -758,7 +758,6 @@ export const make = (
           after: undefined,
           boots: 0,
           booting: false,
-          marked: 0,
           reboot: undefined,
           unasked: undefined,
         };
