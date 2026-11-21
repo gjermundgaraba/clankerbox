@@ -334,10 +334,10 @@ export const copyRefusal = (
     : new Unsizable({ message: refused });
 };
 
-/** Where a pause with a capture takes it, as `pauseMachine`'s description states the rule. */
-export const pauseCapture = (traits: RuntimeTraits): "before" | "after" =>
-  traits.captureFrom === "running" ? "before" : "after";
-
+/**
+ * Whether a copy of a machine waits for it to stop: a pause with a capture pauses first and a
+ * template build stops its builder first, as `pauseMachine`'s description states the rule.
+ */
 export const stopsBeforeCapture = (traits: RuntimeTraits): boolean =>
   traits.captureFrom !== "running";
 

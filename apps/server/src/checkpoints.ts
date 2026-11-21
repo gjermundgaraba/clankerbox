@@ -1,7 +1,7 @@
 import type { Report } from "@clankerbox/host-contract";
 import {
   newId,
-  pauseCapture,
+  stopsBeforeCapture,
   pinRefusal,
 } from "@clankerbox/host-contract/traits";
 import {
@@ -59,11 +59,11 @@ export interface Interface {
     request: CaptureRequest
   ) => Effect.Effect<Checkpoint, Declared<"captureCheckpoint">>;
   /**
-   * Asks a machine to pause, capturing it too if `capture` says so, where `pauseCapture` of its
-   * host's traits, as the host answers now, says: `before` records the capture first and the pause
-   * waits for it to begin, so the checkpoint holds the machine as it ran; `after` records the pause
-   * first, and the capture waits for the machine to rest; `never` is refused, recording nothing. A
-   * host that can't be read is `Unavailable`, recording nothing.
+   * Asks a machine to pause, capturing it too if `capture` says so. Where `stopsBeforeCapture` of
+   * its host's traits, as the host answers now, holds, the pause is recorded first and the capture
+   * waits for the machine to rest; else the capture is recorded first and the pause waits for it to
+   * begin, so the checkpoint holds the machine as it ran. A host that can't be read is
+   * `Unavailable`, recording nothing.
    */
   readonly pause: (
     request: PauseRequest
@@ -390,28 +390,21 @@ export const make = (settings: {
         const found = yield* madeMachine(store, id);
 
         const { traits, pin } = yield* answering(hosts, found.host);
-        const unpinnedRefusal = pinRefusal({ copy: id }, found.pin, pin);
 
-        switch (pauseCapture(traits)) {
-          case "after": {
-            return yield* Effect.uninterruptible(
-              Effect.gen(function* () {
-                const record = yield* recorded({ machine: id, ...capture });
+        if (stopsBeforeCapture(traits)) {
+          return yield* Effect.uninterruptible(
+            Effect.gen(function* () {
+              const record = yield* recorded({ machine: id, ...capture });
 
-                const paused = yield* machines
-                  .pause(id)
-                  .pipe(Effect.tapError(() => discarded(record)));
+              const paused = yield* machines
+                .pause(id)
+                .pipe(Effect.tapError(() => discarded(record)));
 
-                yield* driven(record);
+              yield* driven(record);
 
-                return paused;
-              })
-            );
-          }
-
-          case "before": {
-            break;
-          }
+              return paused;
+            })
+          );
         }
 
         const seen = yield* stateOf(hosts, found);
@@ -431,8 +424,10 @@ export const make = (settings: {
           });
         }
 
-        if (unpinnedRefusal !== undefined) {
-          return yield* unpinnedRefusal;
+        const unpinned = pinRefusal({ copy: id }, found.pin, pin);
+
+        if (unpinned !== undefined) {
+          return yield* unpinned;
         }
 
         return yield* Effect.uninterruptibleMask((restore) =>

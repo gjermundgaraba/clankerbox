@@ -7,7 +7,6 @@ import {
   fitted,
   offered,
   offers,
-  pauseCapture,
   pinRefusal,
   resizeRefusal,
   RuntimeTraits,
@@ -271,19 +270,6 @@ describe("copyRefusal", () => {
           anyDisk,
           equal && gives(given, to),
         ]);
-      })
-  );
-});
-
-describe("pauseCapture", () => {
-  it.effect.prop(
-    "a pause captures its machine after it, stopped, where a capture takes a stopped machine, else before it",
-    { traits: RuntimeTraits },
-    ({ traits }) =>
-      Effect.sync(() => {
-        expect(pauseCapture(traits)).toBe(
-          traits.captureFrom === "either" ? "after" : "before"
-        );
       })
   );
 });
