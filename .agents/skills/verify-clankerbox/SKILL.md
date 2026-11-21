@@ -184,8 +184,9 @@ times out while it keeps its machines and steps, and `fault.sh <run> thaw-host
 dies, as the fake's captures are too quick for a kill to catch one.
 `fault.sh <run> drift <id> <machine>` has a fixed or boat host's fake stop that
 running machine on its own, as `drift <machine>` in `runtime-calls.txt` on
-fixed; the control plane starts it again, a `start <machine>`, at the next
-recheck that reads it.
+fixed; the next recheck that reads it finds it stopped, and the row rests
+`failed`, `unasked` `stopped`, until a `start`. Nothing is started again, so
+`runtime-calls.txt` shows no `start <machine>` until one is asked.
 `fault.sh <run> land-late <id>` has the host's fake fail its next make and
 make the machine anyway 5 seconds later, as `landed <machine>` on fixed. The
 failed make's undo searches for the machine well within that and finds nothing,

@@ -44,8 +44,9 @@ export type StateError = Missing | WrongState;
 
 /**
  * What a runtime reads of a machine beyond its state, where it tells it: `reboot`, a mark that
- * changes each time the machine boots again in place while it runs and at no other time, and `why`,
- * the cause in the provider's words of a machine stopped or missing.
+ * changes each time the machine boots again in place while it runs, and may also change when a
+ * start boots it, as `readMachines` states, and `why`, the cause in the provider's words of a
+ * machine stopped or missing.
  */
 export interface Sighting {
   readonly state: MachineState;

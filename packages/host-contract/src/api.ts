@@ -295,7 +295,7 @@ export const HostHttp = ActionHttp.make(
       ...read,
       error: [Invalid, Internal] as const,
       description:
-        "Read each machine's state from the runtime. A machine it couldn't read is unknown. `reboot` is on a machine whose runtime reports when it last booted again in place, while it ran: a mark that changes at each such reboot and at no other time. `why` is on a machine stopped or missing whose runtime says why, in its own words.",
+        "Read each machine's state from the runtime. A machine it couldn't read is unknown. `reboot` is on a machine whose runtime reports when it last booted again in place, while it ran: a mark its runtime changes at such a reboot. A runtime may also change it when it boots the machine for a start, as boat doesn't say whether a resume counts, so the control plane takes it afresh after each start that boots a machine. `why` is on a machine stopped or missing whose runtime says why, in its own words.",
       input: Schema.Struct({ machines: Schema.Array(Ref) }),
       success: Schema.Array(
         Schema.Struct({

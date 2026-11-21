@@ -213,8 +213,9 @@ export const templateRef = (
  * - `lost`: one its runtime no longer has, which can only be deleted.
  *
  * A disk its runtime put back to older files, or a `/workspace` it emptied, as smol cloud may to a
- * machine that loses its node, is none of these, and nothing detects it: where the same loss
- * stopped a running machine, `stopped` records the stop alone.
+ * machine that loses its node, is none of these, and nothing detects it: a machine the loss left
+ * stopped where it ran records `stopped` alone, and one that comes back running records nothing at
+ * all.
  *
  * `at` is the read that found it, so the change came at or before it. `why` is the cause, on a
  * `stopped` or `lost` machine, in its runtime's own words where it names one, such as an idle stop
