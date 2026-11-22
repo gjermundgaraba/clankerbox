@@ -165,8 +165,8 @@ settings:
 catalogs:
   default:
     '@clanker-stuff/oxlint-config':
-      specifier: 0.5.0
-      version: 0.5.0
+      specifier: 0.5.1
+      version: 0.5.1
     '@effect/platform-node':
       specifier: 4.1.4
       version: 4.1.4
@@ -217,7 +217,7 @@ importers:
     devDependencies:
       '@clanker-stuff/oxlint-config':
         specifier: 'catalog:'
-        version: 0.5.0(@effect/tsgo@0.67.7)(ultracite@8.3.0(oxfmt@0.76.0(vite-plus@1.5.1(@types/node@26.6.6)(@vitest/ui@5.1.0)(typescript@7.0.2)(yaml@2.9.1)))(oxlint@1.91.0(oxlint-tsgolint@7.0.2005)(vite-plus@1.5.1(@types/node@26.6.6)(@vitest/ui@5.1.0)(typescript@7.0.2)(yaml@2.9.1))))(vite-plus@1.5.1(@types/node@26.6.6)(@vitest/ui@5.1.0)(typescript@7.0.2)(yaml@2.9.1))
+        version: 0.5.1(@effect/tsgo@0.67.7)(ultracite@8.3.0(oxfmt@0.76.0(vite-plus@1.5.1(@types/node@26.6.6)(@vitest/ui@5.1.0)(typescript@7.0.2)(yaml@2.9.1)))(oxlint@1.91.0(oxlint-tsgolint@7.0.2005)(vite-plus@1.5.1(@types/node@26.6.6)(@vitest/ui@5.1.0)(typescript@7.0.2)(yaml@2.9.1))))(vite-plus@1.5.1(@types/node@26.6.6)(@vitest/ui@5.1.0)(typescript@7.0.2)(yaml@2.9.1))
       '@effect/tsgo':
         specifier: 'catalog:'
         version: 0.67.7
@@ -552,11 +552,11 @@ packages:
     resolution: {integrity: sha512-dlT1m5e/0yUL0kRNcQn7yGLVThkgbB0Ga/1AmfDDC/8ik6AIiSf2QLQO2zPYvefsHP0aFgxO93cVLCCfDp7kzQ==}
     engines: {node: '>= 20.12.0'}
 
-  '@clanker-stuff/oxlint-config@0.5.0':
-    resolution: {integrity: sha512-3W8hDm2WXzlNu6MYU4omY7oXnvRPXX1c3LP4ppa2I9tdM5RiQJkXjTtsMzk4piT6FJRS9FDPq1Arown+i5uXVQ==}
+  '@clanker-stuff/oxlint-config@0.5.1':
+    resolution: {integrity: sha512-xD5UDpz9YqMO08iEbfUj3I9Mn0UjQtn/gKpZ0CwRJAnMynt7qZVOW8eiMYeZeNXXh2sEWh8m6Gddd4fB/5/Ssw==}
     engines: {node: '>=26.13.0'}
     peerDependencies:
-      '@effect/tsgo': ^0.67.1
+      '@effect/tsgo': '>=0.67.1 <0.74.0'
       ultracite: ^8.1.1
       vite-plus: ^1.5.0
 
@@ -2079,7 +2079,7 @@ snapshots:
       fast-wrap-ansi: 0.2.2
       sisteransi: 1.0.5
 
-  '@clanker-stuff/oxlint-config@0.5.0(@effect/tsgo@0.67.7)(ultracite@8.3.0(oxfmt@0.76.0(vite-plus@1.5.1(@types/node@26.6.6)(@vitest/ui@5.1.0)(typescript@7.0.2)(yaml@2.9.1)))(oxlint@1.91.0(oxlint-tsgolint@7.0.2005)(vite-plus@1.5.1(@types/node@26.6.6)(@vitest/ui@5.1.0)(typescript@7.0.2)(yaml@2.9.1))))(vite-plus@1.5.1(@types/node@26.6.6)(@vitest/ui@5.1.0)(typescript@7.0.2)(yaml@2.9.1))':
+  '@clanker-stuff/oxlint-config@0.5.1(@effect/tsgo@0.67.7)(ultracite@8.3.0(oxfmt@0.76.0(vite-plus@1.5.1(@types/node@26.6.6)(@vitest/ui@5.1.0)(typescript@7.0.2)(yaml@2.9.1)))(oxlint@1.91.0(oxlint-tsgolint@7.0.2005)(vite-plus@1.5.1(@types/node@26.6.6)(@vitest/ui@5.1.0)(typescript@7.0.2)(yaml@2.9.1))))(vite-plus@1.5.1(@types/node@26.6.6)(@vitest/ui@5.1.0)(typescript@7.0.2)(yaml@2.9.1))':
     dependencies:
       '@effect/tsgo': 0.67.7
       ultracite: 8.3.0(oxfmt@0.76.0(vite-plus@1.5.1(@types/node@26.6.6)(@vitest/ui@5.1.0)(typescript@7.0.2)(yaml@2.9.1)))(oxlint@1.91.0(oxlint-tsgolint@7.0.2005)(vite-plus@1.5.1(@types/node@26.6.6)(@vitest/ui@5.1.0)(typescript@7.0.2)(yaml@2.9.1)))
