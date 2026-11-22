@@ -50,7 +50,7 @@ The npm packages are `@gjermundgaraba/clankerbox` (the CLI), `@gjermundgaraba/cl
 
 ## Install
 
-Each package needs Node 26.13 or later. The CLI bundles everything it runs. The control plane and the host bundle the SDK and the host contract, and install `effect`, `@effect/platform-node` and `@gjermundgaraba/effect-actions` from npm, the control plane `xstate` too, with what those depend on. The SDK takes `effect`, `@effect/platform-node` and `@gjermundgaraba/effect-actions` as peers, from the program that uses it.
+Each package needs Node 26.13.1 or later. The CLI bundles everything it runs. The control plane and the host bundle the SDK and the host contract, and install `effect`, `@effect/platform-node` and `@gjermundgaraba/effect-actions` from npm, the control plane `xstate` too, with what those depend on. The SDK takes `effect`, `@effect/platform-node` and `@gjermundgaraba/effect-actions` as peers, from the program that uses it.
 
 ```sh
 npm install --global @gjermundgaraba/clankerbox          # where you run commands
@@ -213,6 +213,17 @@ clankerbox-server --config /etc/clankerbox/server.json
 The control plane exits 130 on SIGINT or SIGTERM and 1 when it fails. It stops at once: a write it began commits whole, a request still open, an `exec` or a held read, is cut as a crash would cut it, and one that comes while it stops reaches no host and answers 503 at once, until the requests the stop cut have ended, milliseconds later, and then meets its connection closed, unanswered. It then closes every connection it still holds, one whose request never finishes arriving included, so no client holds its stop, and a mutation it cut or turned away answers `Unavailable` saying it may have run, and a read `Unavailable`, which a wait reads on through until it is back. A client reads a reverse proxy's 502, 503 or 504 in front of the control plane the same way. Its log holds what an operator acts on: a host that stops answering, with what its HTTP client said, its URL included, and answers again, a step a host refuses, a request that answers `Internal` or fails as no action declares, a loop, recheck or build that fails, and an expiry. A client never reads a host's URL: a request that meets a host with no usable answer is `Unavailable`, saying `host <id> didn't answer` and why, such as a status the host contract doesn't declare, or `host <id> is stopping` for the 503 a host's server answers while it stops. Each line of a machine's or checkpoint's own work names it, and the step it follows. An answered request, a refusal or a path no route takes included, logs at debug, which `--log-level debug` shows, and a request its client abandons or the stop cuts logs nothing.
 
 ### Upgrading from 0.41
+
+Before any 0.42 program runs, an operator must:
+
+1. Delete every machine, checkpoint and template build, on every host. 0.42 can't decode what 0.41 made.
+2. Add `runtime:` to every template file: the recipes', and every copy of one, such as the smol cloud copy of `recipes/agent.yaml`, whose `runtime` is `smol-cloud`.
+3. Add `"runtime"` to the Amp orbs settings.
+4. In each host config, replace a `tailnet` object with `tailnet: true` and move the object to the server config, and move a smolvm or Tart host's top-level `builds` into its runtime's settings. A host config that still has either refuses to start.
+5. Give each agent-sandbox host's cluster the snapshot controller, a storage class that snapshots with a default `VolumeSnapshotClass`, and its service account `volumesnapshots`. A host on a cluster without the `VolumeSnapshot` API refuses to start.
+6. Run Node 26.13.1 or later wherever a 0.42 package runs.
+
+Then upgrade the control plane, every host and every client together, as each refuses a peer of another `major.minor`. The rest of this section says why each step is needed, and what else changed.
 
 - 0.42 needs an empty fleet. Delete every machine, checkpoint and template build, so the control plane and every host start 0.42 with nothing a 0.41 host made. 0.42 can't read what only 0.41 made: a machine an older host paused keeping its RAM, which no 0.42 host resumes, a machine whose desired state is `paused`, a checkpoint of kind `ram`, and an agent-sandbox checkpoint kept as a filled claim rather than a volume snapshot. One left behind fails to start, decode or restore, rather than being refused with a reason.
 - A create from a base and a template build name their runtime: `runtime` in the API, `--runtime` on `create --base`, and `runtime:` in a template file, which fails without it, as does a create from a base without `--runtime`. Add `runtime:` to each template file, the recipes' own included, and `"runtime"` to the Amp orbs settings. Only a host of that runtime takes the create or build, and one with no room moves it to the next host of the same runtime, never to another, so a create's `runtime` no longer changes as it moves. A create from a template takes no runtime: its clone runs on its build's, as before.
@@ -459,7 +470,7 @@ A create from a template's build adds each key of `authorizedKeys` that the buil
 
 ## Deploy
 
-Install each package in a versioned prefix; VMs never reference it, so a release replaces it while machines run. Its bin runs the `node` on the service's `PATH`, which must be Node 26.13 or later.
+Install each package in a versioned prefix; VMs never reference it, so a release replaces it while machines run. Its bin runs the `node` on the service's `PATH`, which must be Node 26.13.1 or later.
 
 ```sh
 npm install --global --prefix /opt/clankerbox/<version> @gjermundgaraba/clankerbox-host@<version>
