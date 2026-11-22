@@ -109,18 +109,11 @@ const startOn = <F>(provider: Provider<F>, dir: string, id: string) =>
     };
   });
 
-/**
- * A host over the real adapter of a rented runtime, driving that provider's fake API in this
- * process, with `ubuntu` as the provider's image. It ends with the scope, or at `dispose`. Its
- * machine ports are a block of the run's `suitePorts.rented` after a guard port it listens on while
- * it runs, so two hosts of the run, in test files side by side, never take the same ones.
- */
 export const startRentedHost = (
   dir: string,
   options: {
     readonly runtime: RentedRuntime;
     readonly id: string;
-    /** On smol cloud, an exec's `PATH` after the fake's own stubs, the runner's own unless given. */
     readonly guestPath?: string | undefined;
   }
 ) =>

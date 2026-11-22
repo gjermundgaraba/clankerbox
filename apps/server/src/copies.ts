@@ -21,7 +21,6 @@ import type { MachineRow } from "./machine-chart.ts";
 import { notFound } from "./store.ts";
 import type { Interface as Store } from "./store.ts";
 
-/** What a machine is made as: its base, its sizes, and whether it requests the tailnet, which a copy inherits. */
 export interface Spec {
   readonly base: string;
   readonly cpu: number;
@@ -48,11 +47,6 @@ export const copied = (
   return refusal === undefined ? Effect.succeed(spec) : Effect.fail(refusal);
 };
 
-/**
- * The state a step meets in machine `found`, its VM read `seen`, where the server can refuse the
- * step before a row is written: none where the VM's state isn't known or the machine is still
- * moving, as the host then decides.
- */
 export const restingAs = (
   found: MachineRow,
   seen: MachineState
@@ -61,10 +55,6 @@ export const restingAs = (
     ? seen
     : undefined;
 
-/**
- * Why a fork or capture of a machine at rest, its VM read `seen`, is refused by a host whose
- * runtime copies a machine only in `captureFrom`, before a row is written.
- */
 export const uncopiable = (
   source: MachineRow,
   seen: MachineState,
@@ -88,10 +78,6 @@ export const uncopiable = (
   });
 };
 
-/**
- * A template's clone of `build`, sized `from`, at the sizes asked: at least the build's, and as a
- * copy of it on a runtime of `traits`, a restore of its checkpoint.
- */
 export const cloned = (
   name: string,
   build: string,

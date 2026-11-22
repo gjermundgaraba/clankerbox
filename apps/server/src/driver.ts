@@ -32,14 +32,10 @@ export interface Resource<R extends { readonly state: string }> {
   readonly find: (name: string) => Effect.Effect<Option.Option<R>, Internal>;
   readonly store: Pick<Store, "operationOn" | "watch">;
   readonly activityOf: (state: R["state"]) => Activity;
-  /**
-   * On a recheck, `rested` is the reading count when the loop came to rest: a reading begun after
-   * it, with a higher count, saw the row's resource while the row rested, so it may stand in for a
-   * read of the host. Any other look reads the host.
-   */
+  /** A sweep newer than `sweepAtRest` may stand in for a host read. Otherwise read the host. */
   readonly looking: (
     row: R,
-    rested: number | undefined
+    sweepAtRest: number | undefined
   ) => Effect.Effect<Advanced<R>, Internal | Unreachable>;
   readonly polling: (row: R, op: Operation) => Effect.Effect<Polled, Internal>;
   /** No wake cuts it short, so a stored report is always collected. */
@@ -68,10 +64,10 @@ const looked = <R extends { readonly state: string }>(
   resource: Resource<R>,
   found: R,
   latch: Latch.Latch,
-  rested: number | undefined
+  sweepAtRest: number | undefined
 ) =>
   Effect.gen(function* () {
-    const answer = yield* resource.looking(found, rested);
+    const answer = yield* resource.looking(found, sweepAtRest);
 
     switch (answer.at) {
       case "absent": {
@@ -147,7 +143,7 @@ const turn = <R extends { readonly state: string }>(
   resource: Resource<R>,
   name: string,
   latch: Latch.Latch,
-  rested: number | undefined
+  sweepAtRest: number | undefined
 ): Effect.Effect<Turned, Internal> =>
   Effect.gen(function* () {
     const present = yield* resource.find(name);
@@ -170,9 +166,9 @@ const turn = <R extends { readonly state: string }>(
       }
 
       case "recheck": {
-        return rested === undefined
+        return sweepAtRest === undefined
           ? ("rest" as const)
-          : yield* looked(resource, found, latch, rested);
+          : yield* looked(resource, found, latch, sweepAtRest);
       }
 
       case "none": {
@@ -181,10 +177,6 @@ const turn = <R extends { readonly state: string }>(
     }
   });
 
-/**
- * Work that outlives the request that began it, such as a loop or a build, logs under its own
- * annotations alone, so none of its lines carries a request that ended long ago.
- */
 export const apart =
   (annotations: Readonly<Record<string, string>>) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
@@ -193,12 +185,6 @@ export const apart =
       Effect.provideService(References.CurrentLogSpans, [])
     );
 
-/**
- * Looks until `rests` answers true, again at each write of `resource`'s row `name`, and each second
- * between, as a look also reads a host that may stop answering with no write. A look that fails with
- * `Unavailable` tells of a host's fault, which may pass, so it is tried again, and ends the wait
- * once it has failed for `bound` on end.
- */
 export const untilRest = <E extends { readonly _tag: string }>(
   store: Pick<Store, "watch">,
   resource: Lease["resource"],
@@ -223,38 +209,29 @@ export const untilRest = <E extends { readonly _tag: string }>(
   ).pipe(Effect.asVoid);
 
 export interface Driven {
-  /** Starts a name's loop, or wakes the one running. */
   readonly drive: (name: string) => Effect.Effect<void>;
-  /** Counts a reading that begins now, for `rechecking` to tell the loops that rested before it. */
-  readonly reading: Effect.Effect<number>;
-  /**
-   * Has a name's loop, if it rested before reading `taken` began, look again at once as at a
-   * recheck, which may use that reading. A loop that isn't running stays so.
-   */
-  readonly rechecking: (name: string, taken: number) => Effect.Effect<void>;
+  readonly beginSweep: Effect.Effect<number>;
+  readonly rechecking: (name: string, sweepId: number) => Effect.Effect<void>;
 }
 
-/** How long a swept loop rests with no recheck before it looks on its own, as a sweep may fail. */
 export const sweptFallback = 3;
 
 interface Loop {
   readonly latch: Latch.Latch;
-  rested: number;
-  pending: number;
+  sweepAtRest: number;
+  pendingSweep: number;
 }
 
 /**
- * The loops of one resource, at most one per name, each moving its row a whole step at a time. The
- * activity of its leaf picks each turn. `drive` starts a name's loop, or wakes the one running.
- * A write always comes before its wake, and a turn reads after the latch closes, so a wake is seen
- * by the turn it lands in or by the next. A loop ends only when no wake landed in its last turn.
+ * A write precedes its wake, and each turn reads after closing the latch. A wake before that
+ * close is covered by the next read; a wake after it stays visible to this turn or the next.
+ * The loop retires only when no wake landed in its last turn.
  *
- * A resting loop looks again at each recheck. Unless `swept`, that is `recheck` after it rested,
- * and a loop's first turn is one. A `swept` loop is told its rechecks by `rechecking`, from a
- * sweep that reads every resting row at once, and looks on its own only once `sweptFallback`
- * rechecks pass with none. A loop rested at the count of readings when the turn that rested began,
- * as only its own turns move a row into a resting leaf, and a request moves it out: so a reading
- * counted after that saw the VM after the last step on it, and one counted before may not have.
+ * `beginSweep` assigns an ID before each sweep reads the host. A loop records the latest ID at
+ * the start of the turn that finds it at rest: only the loop moves the row into rest, and a
+ * request moves it out. A sweep with a higher ID therefore reads the VM after its last step;
+ * an older sweep may have read before that step ended. A swept loop falls back to its own
+ * read after `sweptFallback` recheck intervals without a fresh sweep.
  */
 export const driver = <R extends { readonly state: string }>(
   recheck: Duration.Duration,
@@ -264,7 +241,7 @@ export const driver = <R extends { readonly state: string }>(
   Effect.gen(function* () {
     const scope = yield* Effect.scope;
     const loops = new Map<string, Loop>();
-    let readings = 0;
+    let latestSweep = 0;
 
     const rest = swept ? Duration.times(recheck, sweptFallback) : recheck;
 
@@ -287,17 +264,17 @@ export const driver = <R extends { readonly state: string }>(
         for (;;) {
           yield* latch.close;
 
-          const began = readings;
+          const sweepAtTurnStart = latestSweep;
 
           if (rechecked) {
-            loop.pending = 0;
+            loop.pendingSweep = 0;
           }
 
           const at = yield* turn(
             resource,
             name,
             latch,
-            rechecked ? loop.rested : undefined
+            rechecked ? loop.sweepAtRest : undefined
           ).pipe(
             Effect.withSpan(`${resource.kind}.turn`, {
               root: true,
@@ -316,13 +293,13 @@ export const driver = <R extends { readonly state: string }>(
           rechecked = false;
 
           if (at === "rest") {
-            loop.rested = began;
+            loop.sweepAtRest = sweepAtTurnStart;
 
             const timedOut =
-              loop.pending <= loop.rested &&
+              loop.pendingSweep <= loop.sweepAtRest &&
               Option.isNone(yield* Effect.timeoutOption(latch.await, rest));
 
-            rechecked = timedOut || loop.pending > loop.rested;
+            rechecked = timedOut || loop.pendingSweep > loop.sweepAtRest;
           } else if (at === "over" && (yield* leaving(name, loop))) {
             return;
           }
@@ -342,8 +319,8 @@ export const driver = <R extends { readonly state: string }>(
 
           const loop: Loop = {
             latch: Latch.makeUnsafe(false),
-            rested: readings,
-            pending: 0,
+            sweepAtRest: latestSweep,
+            pendingSweep: 0,
           };
 
           loops.set(name, loop);
@@ -355,21 +332,21 @@ export const driver = <R extends { readonly state: string }>(
             )
           );
         }),
-      reading: Effect.sync(() => {
-        readings += 1;
+      beginSweep: Effect.sync(() => {
+        latestSweep += 1;
 
-        return readings;
+        return latestSweep;
       }),
-      rechecking: (name, taken) =>
+      rechecking: (name, sweepId) =>
         Effect.sync(() => {
           const loop = loops.get(name);
 
           if (
             loop !== undefined &&
-            taken > loop.rested &&
-            taken > loop.pending
+            sweepId > loop.sweepAtRest &&
+            sweepId > loop.pendingSweep
           ) {
-            loop.pending = taken;
+            loop.pendingSweep = sweepId;
             loop.latch.openUnsafe();
           }
         }),

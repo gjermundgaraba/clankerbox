@@ -96,14 +96,6 @@ const flagged = (rest: readonly string[], flag: string, had: number) => {
   return at === -1 ? had : Number(rest[at + 1]);
 };
 
-/**
- * A Mac as a Tart host sees it. Each VM is a directory of the Tart home, as Tart lays one out, and
- * it runs while a `tart run` process does: `runs` holds those of this home, each its VM's launchd
- * job or one run some other way, and `elsewhere` the name and arguments `ps` shows of any other
- * process, such as a `tart run` of another Tart home. A job runs exactly while its `tart run` does:
- * `jobs` holds the labels launchd has loaded, and `starting` those it is starting, whose `tart run`
- * hasn't begun.
- */
 export const scriptedMac = (stateDir: string, tart = binary) => {
   const runs = new Map<string, Run>();
   const elsewhere = new Set<{ readonly name: string; readonly args: string }>();

@@ -26,10 +26,6 @@ const relayed = (socket: Socket, to: string | undefined) => {
   pipeline(socket, upstream, socket, Function.constVoid);
 };
 
-/**
- * `server` on a loopback port the OS picks, until the scope ends. An error the server meets once
- * it listens, as an accept that fails, costs at most that connection, and the port stays held.
- */
 export const listenOn = (
   machine: string,
   server: Server
@@ -72,12 +68,6 @@ export const listenOn = (
     })
   );
 
-/**
- * A sandbox's port on loopback, which the provider holds for the sandbox's whole life, so no other
- * program can listen there while its tunnel is down. Each connection goes to the socket `to` names
- * as it comes, that of a tunnel that is open, with each side's end of it, and one that comes while
- * `to` names none is reset. Neither the port nor a connection keeps the process running.
- */
 export const listen = (machine: string, to: () => string | undefined) =>
   Effect.suspend(() =>
     listenOn(

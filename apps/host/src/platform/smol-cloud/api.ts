@@ -58,7 +58,6 @@ const InUse = Schema.Struct({
   startedMemoryMb: Schema.Int,
 });
 
-/** What a listed record carries that tells whose it is, each read from any record that has it. */
 export interface Marks {
   readonly id?: string | undefined;
   readonly name?: string | null | undefined;
@@ -209,14 +208,6 @@ const refusal = (
     };
   });
 
-/**
- * smol cloud's API, the routes the adapter uses. Requests are encoded exactly; answers are read
- * leniently, keeping only the fields the adapter reads, and `state` and `status` stay open strings.
- * A read is asked again after a lost answer and after a refusal smol cloud marks retryable, as a
- * 429 is, and so is a checkpoint's delete, which does no more sent twice; any other change is sent
- * again only after a 429, its caller reading the provider first otherwise.
- * A list fails on a record it can't read only if `ours` claims it by its marks.
- */
 export const make = (url: string, key: Redacted.Redacted) =>
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient;

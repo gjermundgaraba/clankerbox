@@ -14,7 +14,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { Effect, Layer, Schema } from "effect";
-import { expect } from "vite-plus/test";
+import { assert, expect } from "vite-plus/test";
 
 import { PortProbe } from "../../../src/machine-ports.ts";
 import {
@@ -415,18 +415,18 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           writeFileSync(target, content);
         }
 
-        yield* (yield* smolvmIn(from, memory.store)).builds.publish({
+        const { builds: publishing } = yield* smolvmIn(from, memory.store);
+        assert(publishing.shared);
+        yield* publishing.publish({
           ...built,
           handle: nativeName(built),
         });
 
         const to = path.join(root, "to");
+        const { builds: fetching } = yield* smolvmIn(to, memory.store);
 
-        yield* (yield* smolvmIn(to, memory.store)).builds.fetch(
-          fetchedRef,
-          "built",
-          "web@1"
-        );
+        assert(fetching.shared);
+        yield* fetching.fetch(fetchedRef, "built", "web@1");
 
         const installed = checkpointIn(to, fetchedRef);
 

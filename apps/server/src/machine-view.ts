@@ -8,7 +8,6 @@ import { desiredOf, phaseOf } from "./machine-chart.ts";
 import type { MachineRow } from "./machine-chart.ts";
 import { identityOf } from "./steps.ts";
 
-/** What a host answers of a machine's VM: its state, its last reboot's mark, and why it is stopped. */
 export interface Seen {
   readonly seen: MachineState;
   readonly reboot?: string | undefined;
@@ -25,7 +24,6 @@ export const heardOf = ({
   readonly why?: string;
 }): Seen => ({ seen: state, reboot, why });
 
-/** What each machine's VM is doing, from each host that answers. An undone row's VM is gone. */
 export const readMachines = (
   hosts: Hosts,
   rows: readonly MachineRow[]
@@ -83,10 +81,6 @@ export const stateOf = (
 ): Effect.Effect<MachineState> =>
   Effect.map(readStates(hosts, [found]), (states) => stateIn(found, states));
 
-/**
- * `waiting` is no leaf: a read that finds the VM unknown tells it. A machine not read shows its
- * leaf's phase.
- */
 export const phaseShown = (
   found: MachineRow,
   seen: MachineState | undefined

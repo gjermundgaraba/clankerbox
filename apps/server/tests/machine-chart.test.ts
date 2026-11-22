@@ -8,6 +8,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { presets } from "@gjermundgaraba/clankerbox-host/testing";
 import { Desired, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime } from "effect";
+import { expectTypeOf } from "vite-plus/test";
 import { setup, transition, types } from "xstate";
 import type { SnapshotFrom } from "xstate";
 import { adjacencyMapToArray, getAdjacencyMap } from "xstate/graph";
@@ -763,10 +764,8 @@ describe("what a write begins and finishes", () => {
   });
 
   it("a leaf's path is a type, not any string", () => {
-    // @ts-expect-error a row can't name a leaf the chart hasn't
-    const nowhere: Leaf = "made.nowhere";
-
-    expect(leaves).not.toContain(nowhere);
+    expectTypeOf<"made.nowhere">().not.toExtend<Leaf>();
+    expect(leaves).not.toContain("made.nowhere");
   });
 });
 

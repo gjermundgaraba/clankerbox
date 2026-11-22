@@ -45,7 +45,6 @@ export const hasEndpoint = (
 ): row is MachineRow & { readonly endpoint: Endpoint } =>
   row.endpoint !== undefined;
 
-/** Whether a row's VM may be on its host, so its host counts it: a make reached it, and no undo has ended it. */
 export const mayHoldVm = (row: MachineRow): boolean =>
   hasEndpoint(row) && stageOf(row.state) !== "undone";
 
@@ -114,25 +113,12 @@ const sourceStep = (store: Store, found: MachineRow, held: Setup | undefined) =>
       : yield* new Unsendable({ why: `its checkpoint ${source.name} went` });
   });
 
-/** How a machine's step reaches the tailnet: `mint` makes a key for one join, `mintBuild` a builder's. */
 export interface Joining {
   readonly mint: Effect.Effect<Redacted.Redacted, Unsendable>;
   readonly mintBuild: Effect.Effect<Redacted.Redacted, Unsendable>;
-  /** Whether a join carries a key, which a node that needs a login takes. */
   readonly keyed: boolean;
 }
 
-/**
- * What a host is sent for a machine's operation, built afresh from the rows at each delivery, or
- * `Unsendable` when it can't be sent: its source went, the setup `held` in memory for a template's
- * builder did, or its tailnet key couldn't be minted. The keys go to a builder, so its build holds them, and to a clone of a build, which adds
- * any it lacks. A make tells the host whether its machine requests the tailnet, and a builder that
- * requests it joins it for its setup, with a key minted as the step is built, so no key outlives the
- * process that sent it. A stop, a pause and
- * every remove ask the host to run the guest's hook first, for at most `hookTimeoutSeconds`, but a
- * builder's: a build may stop its builder before the copy, so a stop hook's effects would land in
- * every clone, and a builder's delete has no user work to finish.
- */
 export const machineStep = (
   store: Store,
   found: MachineRow,
@@ -228,10 +214,6 @@ export const machineStep = (
     }
   });
 
-/**
- * What a host is sent for a checkpoint's operation, or `Unsendable` when its machine went. A delete of
- * the copy a build was published from also removes it from the build store.
- */
 export const checkpointStep = (
   store: Store,
   record: CheckpointRow,

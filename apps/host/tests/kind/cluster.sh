@@ -1,11 +1,5 @@
 #!/usr/bin/env bash
-# Makes a kind cluster running the agent-sandbox controller, with a namespace whose service account
-# holds what an agent-sandbox host is granted, writes what the kind tests read into
-# $CLANKERBOX_KIND: the API server's URL, its CA, the host's token, a tester's token, which may do
-# anything in the namespace, the namespace, and the storage class whose volumes snapshot, then runs
-# its arguments with that exported.
-# Needs docker, kind, kubectl and git: kind v0.33.0, as CI pins it, since v0.31 writes a kubeadm
-# config the pinned v1.37 node refuses. Run again, it keeps the cluster it made.
+# Needs kind v0.33.0, as CI pins it: v0.31 writes a kubeadm config the pinned v1.37 node refuses.
 set -euo pipefail
 
 out=${CLANKERBOX_KIND:-${TMPDIR:-/tmp}/clankerbox-kind}

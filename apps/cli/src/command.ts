@@ -240,10 +240,6 @@ export const pairsText = (
         .map(([key, value]) => `${key}=${value}`)
         .join(" ");
 
-/**
- * This command's stdin as text, which is what an exec carries: bytes that aren't UTF-8 are refused,
- * where decoding them would put U+FFFD in their place.
- */
 export const readStdin: Effect.Effect<string, Invalid, Stdio.Stdio> =
   Effect.gen(function* () {
     const stdio = yield* Stdio.Stdio;

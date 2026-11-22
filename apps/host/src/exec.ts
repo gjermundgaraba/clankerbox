@@ -50,7 +50,6 @@ export interface Invocation {
   readonly stdin?: string | undefined;
 }
 
-/** The name of the variable whose value, fresh for each guest command, marks every process it starts. */
 export const markName = "CLANKERBOX_EXEC";
 
 const markBytes = 16;
@@ -130,18 +129,10 @@ const launcher = [
 ].join("\n");
 
 /**
- * A guest command as the runtime runs it: one fixed `/bin/sh` launcher, with the command's env and
- * arguments at the head of its stdin, so no process's arguments on the host carry them: each value
- * is its count of lines, then its lines. `env` sets the env, whatever the guest's `/bin/sh` makes of its own special names. The mark is in the
- * environment of every process the command starts, so an end can find them. The launcher waits for
- * `env` rather than becoming it, so a process that holds the mark in its arguments stands above the
- * command for its whole life, also one that clears its environment, and exits as the command did,
- * with 128 and the signal's number for one a signal ended. It outlives each signal that ends a
- * process by default and that every shell names alike, as a runtime answers an exec once the
- * launcher exits, so the command, whose subshell and `exec` set each trapped signal back to its
- * default, would run on unended: https://pubs.opengroup.org/onlinepubs/9799919799/utilities/V3_chap02.html#tag_19_29
- * It traps none that a fault of its own raises, ILL, TRAP, BUS, FPE or SEGV, nor ABRT, which zsh
- * names IOT, nor those Linux or macOS lacks, and KILL can't be caught.
+ * The launcher waits instead of becoming the command, so its mark remains in the process tree
+ * even if the command clears its environment. It traps portable termination signals so the
+ * runtime does not report the launcher gone while the command still runs. The subshell resets
+ * those traps before executing the command; see POSIX Shell Command Language, "trap".
  */
 export const guestCommand = (
   { argv, env, user, stdin }: Invocation,
@@ -169,11 +160,6 @@ const graceGrowthKeepingGrace = 32;
 
 const endMargin = Duration.seconds(5);
 
-/**
- * How long an end may list and signal, from its first listing, and begins no listing after: 5 s
- * inside `endTimeout`, room for the runtime's exec of it, about 2 s on a rented host, and for the
- * one listing it may begin just before its deadline.
- */
 export const endDeadline = Duration.subtract(endTimeout, endMargin);
 
 const recordMinutes = 60;
@@ -246,23 +232,6 @@ END {
 }
 `;
 
-/**
- * Ends in the guest each process whose own arguments or environment hold the mark read from stdin,
- * the exec's or not, and what descends from one, within the deadline in seconds read with it. A
- * command more than 32 processes larger than when it was TERMed isn't winding down and would fill
- * a small guest, so it is STOPped and KILLed before its grace ends. A guest's `sleep` may take no
- * fraction of a second. Each process is signalled after its parent, so no parent of one thread sees
- * its child stop, as sudo, which then stops its own parent's group, would. A listing greps `/proc`,
- * given its paths by `xargs`, as zsh globs a path below each process slowly and a guest's processes
- * may name more paths than a command line holds, and `awk` picks out each line, where zsh's
- * patterns take time that grows with the square of the listing. Past its deadline, or when a TERM,
- * HUP or INT cuts it short, it sends KILL and then CONT to every process it last listed, so none is
- * left stopped, and exits 1, saying how many there were: only a listing that finds none confirms
- * the end. A process found once is held by its start time, so one whose parent ended while it
- * cleared its environment is still found. It signals each pid alone, never a group, pid 1 or
- * itself. It records the mark first, so a launcher of it that begins later runs nothing, lets that
- * record go once it has ended what it found, and removes each record older than an hour.
- */
 export const endScript = [
   "IFS=' ' read -r mark seconds || mark=",
   `case $mark in '' | *[!0-9a-f]*) echo "clankerbox: no mark to end" >&2; exit 2 ;; esac`,
@@ -630,7 +599,6 @@ export const executed = (
   }
 };
 
-/** What is about to happen to a running VM, each with its hook in `/etc/clankerbox`. */
 export type Leaving = "stop" | "pause" | "delete";
 
 const leavingPhase = {
@@ -639,11 +607,6 @@ const leavingPhase = {
   delete: "deleting",
 } as const satisfies Record<Leaving, string>;
 
-/**
- * Runs a caller's command, refusing one that sets the mark's variable, which is the exec's own, as
- * `Invalid`. Its limit covers the runtime's attach too. Once `left` answers, a step that leaves its
- * machine has begun, so it ends the command as a cut does and answers `WrongState` in that phase.
- */
 export const runCommand = (
   runtime: Pick<Runtime, "exec">,
   command: GuestCommand,

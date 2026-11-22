@@ -21,7 +21,6 @@ import type {
 
 export type Wish = Facts["desired"];
 
-/** What a client reads as `desired`, and what `wants` decides by. */
 export type Asked = Wish | "deleted";
 
 type HostError = NonNullable<Facts["error"]>;
@@ -34,7 +33,6 @@ type Endpoint = NonNullable<Facts["endpoint"]>;
 
 type Unasked = NonNullable<Facts["unasked"]>;
 
-/** What a step leaves that only its host can tell. */
 export interface Outcome {
   readonly handle?: Handle;
   readonly endpoint?: Endpoint;
@@ -51,14 +49,12 @@ export const toldNewReach = (row: Facts, told: Reach): boolean =>
     (told.endpoint.host !== row.endpoint?.host ||
       told.endpoint.port !== row.endpoint?.port));
 
-/** Where a create goes once a host had no room: another host, under a new instance, as an instance names one make on one host. */
 export type Move = Pick<Facts, "host" | "instance" | "pin" | "source"> & MadeOn;
 
 export interface Read extends Begins {
   readonly seen: MachineState;
   readonly pin: string | undefined;
   readonly joins: boolean;
-  /** Whether the capture a pause comes `after` is recorded but not yet begun. */
   readonly awaiting: boolean;
   /** When the read was taken. */
   readonly at: Unasked["at"];

@@ -793,6 +793,13 @@ export const make = (
         }
       });
 
+    const noBuildStore = (what: string) =>
+      Effect.fail(
+        new Internal({
+          message: `this host's ${runtime.traits.runtime} runtime shares no template builds, so it can't ${what}`,
+        })
+      );
+
     const perform = (
       progress: Progress,
       step: Exclude<Step, Make>
@@ -960,18 +967,24 @@ export const make = (
         }
 
         case "publish": {
-          return Effect.flatMap(
-            checkpointTarget(step.checkpoint),
-            runtime.builds.publish
+          const { builds } = runtime;
+
+          return Effect.flatMap(checkpointTarget(step.checkpoint), (target) =>
+            builds.shared
+              ? builds.publish(target)
+              : noBuildStore(`publish ${target.name}`)
           );
         }
 
         case "fetch": {
           const { checkpoint, from, build } = step;
+          const { builds } = runtime;
 
           return Effect.tapError(
             Effect.map(
-              runtime.builds.fetch(checkpoint, from, build),
+              builds.shared
+                ? builds.fetch(checkpoint, from, build)
+                : noBuildStore(`fetch build ${build}`),
               (handle) => {
                 progress.outcome = { ...progress.outcome, handle };
               }

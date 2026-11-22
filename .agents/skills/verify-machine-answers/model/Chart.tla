@@ -7,7 +7,6 @@ E(k, state, desired, prepared, err) ==
   [k |-> k, v |-> [state |-> state, desired |-> desired, prepared |-> prepared,
                    err |-> err]]
 
-(* state|desired|prepared|err|event, for each write that changes the row *)
 Entries == {
   E("making.due|running|0|0|ask:stopped", "making.due", "stopped", FALSE, FALSE),
   E("making.due|running|0|0|ask:paused", "making.due", "paused", FALSE, FALSE),
@@ -1442,10 +1441,8 @@ Wanted ==
   "pause" :> {"paused"} @@
   "remove" :> {"running", "stopped", "paused", "deleted"}
 
-(* The phases a client's wait ends on, but waiting, which only a read shows *)
 Resting == {"settled", "failed", "lost"}
 
-(* The leaves of a create that failed, where only a delete finds a machine *)
 FailedCreate == {"undoing.due", "undoing.sent", "undoing.held", "undone"}
 
 Undone == "undone"

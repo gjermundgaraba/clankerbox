@@ -79,11 +79,6 @@ export const RuntimeTraits = Schema.Struct({
 
 export type RuntimeTraits = typeof RuntimeTraits.Type;
 
-/**
- * A base holding a `/` is an image reference, such as `registry.example/team/image:tag`, which a
- * runtime whose `images` is `references` boots as it resolves it at the create; a host's own base
- * names hold none.
- */
 export const isImageReference = (base: string): boolean => base.includes("/");
 
 interface Offering {
@@ -95,7 +90,6 @@ export const offers = ({ bases, traits }: Offering, base: string): boolean =>
   bases.includes(base) ||
   (traits.images === "references" && isImageReference(base));
 
-/** What a host creates from, as a refusal names it. */
 export const offered = ({ bases, traits }: Offering): string =>
   [
     bases.length > 0 ? bases.join(", ") : "no bases",
@@ -127,7 +121,6 @@ const amount = (size: SizeName, value: number): string => {
   }
 };
 
-/** Sizes, or bounds on them, as a refusal names them: `1 vCPU, 1G of RAM and 10G of disk`. */
 export const formatSizes = (bounds: Bounds): string => {
   const each = sizeNames.flatMap((size) => {
     const bound = bounds[size];
@@ -152,7 +145,6 @@ export const fitted = (traits: RuntimeTraits, sizes: Sizes): boolean =>
   (traits.sizes._tag === "free" ||
     traits.sizes.classes.some((given) => same(given, sizes)));
 
-/** The sizes a runtime gives, as a refusal names them, with its limits. */
 export const givenSizes = (traits: RuntimeTraits): string => {
   if (traits.sizes._tag === "classes") {
     return `only its size classes ${traits.sizes.classes
@@ -185,11 +177,7 @@ const resizedStates = ({ resize }: RuntimeTraits): string => {
   return `${taking.length === 1 ? "only " : ""}a ${taking.join(" or ")} machine${resize.stopped === "none" ? "" : ": stop it first"}`;
 };
 
-/**
- * Why a runtime refuses to grow running machine `name` from `from` to `to` live, none where its
- * `live` takes it: RAM off its steps, past its growth in one resize, or vCPUs where it grows none.
- */
-export const liveRefusal = (
+export const liveGrowthRefusal = (
   { runtime, resize: { live } }: RuntimeTraits,
   name: string,
   from: Sizes,
@@ -221,13 +209,6 @@ export const liveRefusal = (
     : undefined;
 };
 
-/**
- * Why a runtime refuses a resize of machine `name` from `from` to `to`, none where it takes it: a
- * disk that would shrink, but where the runtime's `classes` each give their own disk, which its
- * provider takes where the machine's data fits, and sizes it doesn't give; where the machine's
- * `state` is known, also a state it takes no resize in, and vCPUs or RAM that shrink where it only grows them.
- * The control plane asks it before it records the resize, and the host before it runs the step.
- */
 export const resizeRefusal = (
   traits: RuntimeTraits,
   name: string,
@@ -271,16 +252,11 @@ export const resizeRefusal = (
     return unfitted;
   }
 
-  return state === "running" ? liveRefusal(traits, name, from, to) : undefined;
+  return state === "running"
+    ? liveGrowthRefusal(traits, name, from, to)
+    : undefined;
 };
 
-/**
- * Why a runtime of `traits` refuses a `fork` or `restore` `name` of a source sized `from` at `to`,
- * none where it takes it: it gives `to`, a disk only grows, but in a fork on a runtime of size
- * `classes`, each giving its own disk, which its provider takes where the source's data fits, a
- * runtime whose copies `grow` keeps the vCPUs and RAM it holds, and one whose copies are the
- * source's `same` takes no other sizes.
- */
 export const copyRefusal = (
   traits: RuntimeTraits,
   name: string,
@@ -329,10 +305,6 @@ export const copyRefusal = (
     : new Unsizable({ message: refused });
 };
 
-/**
- * Whether a copy of a machine waits for it to stop: a pause with a capture pauses first and a
- * template build stops its builder first, as `pauseMachine`'s description states the rule.
- */
 export const stopsBeforeCapture = (traits: RuntimeTraits): boolean =>
   traits.captureFrom !== "running";
 
@@ -340,10 +312,12 @@ export const fetchable = (from: RuntimeName, to: RuntimeTraits): boolean =>
   from === to.runtime;
 
 /**
- * Why a host running runtime pin `runs` refuses what was made under `under`, none where they are
- * the same: a running machine is copied and a checkpoint restored only under the pin its VM booted
- * or its state was saved under, as each goes through the VM's own saved state. A stopped machine's copy is of its disk alone, so its callers ask none for it. A checkpoint's restore is asked whichever way it was captured, as its row doesn't record whether its source ran, and a running machine's smolvm checkpoint holds VM state only its smolvm build restores. So a restore of one captured stopped is refused too: stamping a checkpoint's pin only where its capture went through RAM would end that. The
- * control plane asks it before it writes a row, and the host before it runs the step.
+ * Why a host running runtime pin `runs` refuses what was made under `under`. A running machine's
+ * copy and a checkpoint's restore go through the VM's saved state, so they need the pin it was
+ * saved under; a stopped machine's copy is of its disk alone and asks none. A restore is asked
+ * however the checkpoint was captured, as its row doesn't record whether its source ran, so a
+ * smolvm checkpoint of a stopped machine is refused too. Follow-up: stamp a checkpoint's pin only
+ * when its capture went through RAM.
  */
 export const pinRefusal = (
   of: { readonly copy: string } | { readonly restore: string },
@@ -369,7 +343,6 @@ export const pinRefusal = (
 
 const idPattern = /^[0-9a-f]{32}$/u;
 
-/** A runtime that marks its resources with an instance tells its own apart with `isId`. */
 export const newId = (): string =>
   Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (byte) =>
     byte.toString(16).padStart(2, "0")

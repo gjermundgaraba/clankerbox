@@ -1,7 +1,7 @@
 import { totalmem } from "node:os";
 import path from "node:path";
 
-import { liveRefusal } from "@clankerbox/host-contract/traits";
+import { liveGrowthRefusal } from "@clankerbox/host-contract/traits";
 import {
   formatMib,
   Internal,
@@ -91,7 +91,6 @@ export interface Settings {
   readonly ramBudgetMib: number;
   readonly stateDir: string;
   readonly arch: string;
-  /** The bucket the host shares template builds through, if it shares them. */
   readonly bucket?: Store | undefined;
 }
 
@@ -110,7 +109,6 @@ export const pathsIn = (stateDir: string) => ({
   forks: path.join(stateDir, "forks"),
 });
 
-/** The oldest smolvm a linux host starts under; the `bump-smolvm` skill owns it. */
 export const minimumVersion = "1.34.0";
 
 const supported = atLeast(minimumVersion);
@@ -694,10 +692,8 @@ export const make = (
     // guest wrote, and with --include-workspace its /workspace; the rest of the storage disk,
     // smolvm's layer cache and volumes, stays behind. It copies the whole disk rather than sharing
     // it, so a stopped machine's copy takes longer than a running one's.
-    // The helper takes up to 4G of the host's RAM for the length of the pack, outside the RAM
-    // budget admission counts, so a busy host can run short while it runs:
+    // The helper takes up to 4G of the host's RAM for the length of the pack:
     // https://github.com/smol-machines/smolvm/blob/v1.34.1/src/pack_export.rs#L326-L355
-    // Verified against the model alone, not yet on a Linux host with KVM.
     const packed = (machine: Target, directory: string) =>
       Effect.gen(function* () {
         const stub = path.join(directory, packStub);
@@ -724,7 +720,7 @@ export const make = (
       });
 
     // A create from a pack takes the sizes, network and ports a create from an image does, the
-    // pack's own sizes only its defaults; verified against smolvm's source, not yet on a host:
+    // pack's own sizes only its defaults:
     // https://github.com/smol-machines/smolvm/blob/v1.34.1/src/machine_spec.rs#L960-L1038
     const unpacked = (
       native: string,
@@ -831,7 +827,7 @@ export const make = (
       live: boolean
     ) => {
       const refusal = live
-        ? liveRefusal(traits, machine.name, from, to)
+        ? liveGrowthRefusal(traits, machine.name, from, to)
         : undefined;
 
       return refusal === undefined ? Effect.void : Effect.fail(refusal);

@@ -66,16 +66,13 @@ const refused = (said: string): Answer => ({ took: false, said });
 
 const fakeTailnetSetting = process.env["CLANKERBOX_FAKE_TAILNET"];
 
-/** Whether the host takes machines that request the tailnet, and gives its guests a fake `tailscale`. */
 export const fakeTailnet =
   fakeTailnetSetting === "1" || fakeTailnetSetting === "refuses";
 
-/** Whether its guests' `tailscale up` refuses every key, as a guest that can't reach Tailscale's control. */
 export const tailscaleRefuses = fakeTailnetSetting === "refuses";
 
 const landsLateBy = Duration.seconds(5);
 
-/** What a fake runtime or a fake provider API takes of `fault.sh`'s faults. */
 export interface Faulted {
   readonly name: string;
   readonly faults: Faults;
@@ -177,11 +174,6 @@ export interface Served {
   readonly take: (fault: Fault) => Effect.Effect<Answer>;
 }
 
-/**
- * Serves one host of a verify run until it is stopped or killed: `hosts/<id>.url` and `.pid` name
- * it, the `.pid` alone goes when it stops, so a host started again takes the port it had, and each
- * `USR2` answers the fault in `hosts/<id>.fault`.
- */
 export const serveHost = <E, R>(
   run: string,
   id: string,
@@ -235,7 +227,6 @@ export const serveHost = <E, R>(
     return yield* Effect.never;
   });
 
-/** Runs a serve program, scoped, over Node's services. */
 export const runServe = <E>(
   program: Effect.Effect<never, E, Scope.Scope | NodeServices.NodeServices>
 ) => {
@@ -255,18 +246,12 @@ export interface Recorder {
   readonly request: (logged: LoggedRequest) => void;
 }
 
-/** A provider's fake API, and what a fault takes of it. */
 export interface FakeApi<F> extends Omit<Faulted, "name" | "sweeps"> {
   readonly fake: F;
   readonly url: string;
   readonly key: string;
 }
 
-/**
- * A rented runtime as the tests and the verify skill run it: its fake API, which the verify skill
- * serves from a process of its own that outlives the hosts `fault.sh` kills, and its real adapter,
- * given that API and a key file.
- */
 export interface Provider<F = unknown> {
   readonly name: "smol-cloud" | "boat";
   readonly image: string;
@@ -472,10 +457,6 @@ const providerHost = (
     })
   );
 
-/**
- * The program `tests/<runtime>/serve.ts` runs: `serve.ts <run> <host-id> [runtime] [budget]` serves
- * a host over the provider's fake API, and `serve.ts <run> --api` serves that API.
- */
 export const serveProvider = (provider: Provider, program: string) => {
   const [runArg, second, , budget] = process.argv.slice(2);
 

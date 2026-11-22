@@ -24,7 +24,7 @@ import {
   Result,
   Schema,
 } from "effect";
-import { expect } from "vite-plus/test";
+import { expect, expectTypeOf } from "vite-plus/test";
 
 import { applied } from "../../src/chart.ts";
 import {
@@ -1299,52 +1299,78 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a row at a leaf the chart hasn't is refused, and nothing is written",
+    "a machine at an unknown chart leaf is refused without inserting a row",
     () =>
       Effect.gen(function* () {
-        const stateDir = yield* stateIn;
+        const store = yield* open({ stateDir: yield* stateIn });
 
-        const { error, rows } = yield* withStore(stateDir, (store) =>
-          Effect.gen(function* () {
-            const refused = yield* Effect.flip(
-              store.insertMachine(
-                // @ts-expect-error a row can't name a leaf the chart hasn't
-                row("dev", { state: "made.nowhere" })
-              )
-            );
+        const invalid = Object.defineProperty(row("dev"), "state", {
+          value: "made.nowhere",
+        });
 
-            return { error: refused, rows: yield* store.machines };
-          })
-        );
+        const error = yield* Effect.flip(store.insertMachine(invalid));
 
         expect(error._tag).toBe("Internal");
         expect(error.message).toContain("insert machine dev");
-        expect(rows).toStrictEqual([]);
+        expect(yield* store.machines).toStrictEqual([]);
       })
   );
 
   it.effect(
-    "a checkpoint at a leaf the chart hasn't is refused, and nothing is written",
+    "a checkpoint at an unknown chart leaf is refused without inserting a row",
+    () =>
+      Effect.gen(function* () {
+        const badLeaf = "capturing.nowhere";
+        expectTypeOf<typeof badLeaf>().not.toExtend<CheckpointRow["state"]>();
+
+        const store = yield* open({ stateDir: yield* stateIn });
+
+        const invalid = Object.defineProperty(checkpoint("snap"), "state", {
+          value: badLeaf,
+        });
+
+        const error = yield* Effect.flip(store.insertCheckpoint(invalid));
+
+        expect(error._tag).toBe("Internal");
+        expect(error.message).toContain("insert checkpoint snap");
+        expect(yield* store.checkpoints).toStrictEqual([]);
+      })
+  );
+
+  it.effect(
+    "a machine or checkpoint stored at an unknown chart leaf cannot be read",
     () =>
       Effect.gen(function* () {
         const stateDir = yield* stateIn;
 
-        const { error, rows } = yield* withStore(stateDir, (store) =>
+        yield* withStore(stateDir, (store) =>
           Effect.gen(function* () {
-            const refused = yield* Effect.flip(
-              store.insertCheckpoint(
-                // @ts-expect-error a row can't name a leaf the chart hasn't
-                checkpoint("snap", { state: "capturing.nowhere" })
-              )
-            );
-
-            return { error: refused, rows: yield* store.checkpoints };
+            yield* store.insertMachine(row("dev"));
+            yield* store.insertCheckpoint(checkpoint("snap"));
           })
         );
 
-        expect(error._tag).toBe("Internal");
-        expect(error.message).toContain("insert checkpoint snap");
-        expect(rows).toStrictEqual([]);
+        {
+          using db = new DatabaseSync(path.join(stateDir, databaseFile));
+          db.exec(`
+            UPDATE machines SET state = 'made.nowhere' WHERE name = 'dev';
+            UPDATE checkpoints SET state = 'capturing.nowhere' WHERE name = 'snap';
+          `);
+        }
+
+        const [machineError, checkpointError] = yield* withStore(
+          stateDir,
+          (store) =>
+            Effect.all([
+              Effect.flip(store.findMachine("dev")),
+              Effect.flip(store.findCheckpoint("snap")),
+            ])
+        );
+
+        expect(machineError._tag).toBe("Internal");
+        expect(machineError.message).toContain("read dev");
+        expect(checkpointError._tag).toBe("Internal");
+        expect(checkpointError.message).toContain("read checkpoint snap");
       })
   );
 

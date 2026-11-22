@@ -159,10 +159,6 @@ export class Refused extends Schema.TaggedError<
 
 export type ApiError = ProviderError<Refused>;
 
-/**
- * The codes that mean the account takes no such request now, which moves a create to the next
- * host: it has no room, or its plan no longer offers the machine type the host read at its start.
- */
 export const noRoom: ReadonlySet<string> = new Set([
   "limit_reached",
   "machine_class_plan_required",
@@ -244,14 +240,6 @@ const resumeOf = (id: string, type: BoatType | undefined) =>
     )
   );
 
-/**
- * boat's API, the routes the adapter uses. A call asks again after a refusal whose code says it
- * passes once waited out, and after a lost answer, but for a create, a fork, a resume and a save,
- * whose callers read what boat holds before they send one again. The saved-snapshot
- * list reads of each snapshot only its name and the sandbox it was saved from, and fails on one it
- * can't read only when `ours` claims its name: that snapshot may be held by a sandbox being
- * deleted, and a delete that went on past it would leave it billed with nothing to find it again.
- */
 export const make = (url: string, key: Redacted.Redacted) =>
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient;

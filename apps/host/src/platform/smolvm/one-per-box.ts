@@ -57,10 +57,6 @@ const bound = (
     });
   });
 
-/**
- * Holds `lock` for the scope's life, ending each connection to it at once, or refuses to start while
- * another process holds it. Its release closes the socket and waits on no one.
- */
 export const aloneOnBox = (
   lock: string
 ): Effect.Effect<void, CannotStart | Internal, Scope.Scope> =>

@@ -50,12 +50,6 @@ import type {
   Template,
 } from "../src/index.ts";
 
-/**
- * What one read of a resource sees: a phase, fields to write on its row, `gone` once it is deleted,
- * `down` when the read gets no reply, or `cut` when the control plane's stop cuts it, which
- * answers a 503 with no body. A script's last `down` or `waiting` repeats, so an outage of the
- * control plane or of a host can outlast the wait.
- */
 export type Step<Row, Stage> = Stage | Partial<Row> | "gone" | "down" | "cut";
 
 export type MachineStep = Step<Machine, Phase>;
@@ -71,7 +65,6 @@ export type Refusals = {
 export interface StubServerOptions {
   readonly bases?: readonly string[];
   readonly runtimeVersion?: string;
-  /** The clankerbox version the stub control plane runs, whose release it serves alone. */
   readonly version?: string;
   readonly hosts?: readonly Host[];
   readonly capacity?: CapacityReport;
@@ -79,7 +72,6 @@ export interface StubServerOptions {
   readonly checkpoints?: readonly Checkpoint[];
   readonly templates?: readonly Template[];
   readonly refuse?: Refusals;
-  /** How long the control plane takes over each action before it answers, on the caller's clock. */
   readonly answerAfter?: {
     readonly [N in Client.ServerAction]?: Duration.Duration;
   };
@@ -210,14 +202,6 @@ const noCheckpoint = (id: string) =>
 const noTemplate = (id: string) =>
   new NotFound({ message: `no template ${id}`, id });
 
-/**
- * The control plane, in memory. A mutation answers with the row it records, out of rest; the next
- * read rests it where the request asked, or removes it after a delete, unless `script`,
- * `scriptCheckpoint` or `scriptBuild` says what the next reads of an ID see, one step a read. A
- * build is read through its template, and `gone` deletes the template. As on the control plane, a
- * failed create's row whose VM is gone, `failed` and `missing`, is replaced by a create of its
- * name, cleared at once by a delete, and no machine to any other request.
- */
 export const stubServer = (options: StubServerOptions = {}) => {
   const bases = options.bases ?? ["ubuntu"];
   const machines = new Map<string, Machine>();
@@ -889,7 +873,6 @@ export class Silent {
   }
 }
 
-/** A reverse proxy in front of a control plane that doesn't answer it, as nginx answers. */
 export interface Gateway {
   readonly gateway: number;
 }
@@ -967,10 +950,6 @@ const fetching = (
   );
 };
 
-/**
- * Requests reach the endpoint of their URL's origin, and any other origin refuses them. An endpoint
- * runs on the caller's clock, so a read it holds passes on the test clock.
- */
 export const transport = (
   endpoints: ReadonlyMap<string, Endpoint>
 ): Layer.Layer<HttpClient.HttpClient> =>

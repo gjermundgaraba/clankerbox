@@ -49,7 +49,6 @@ export interface FakeSmolCloudOptions {
   readonly dir: string;
   readonly key: string;
   readonly onCall?: ((call: string) => void) | undefined;
-  /** An exec's `PATH` after the fake's `bin`, the runner's own unless given. */
   readonly guestPath?: string | undefined;
 }
 
@@ -57,28 +56,10 @@ export type Dropping = Dropped | "capture" | "exec" | "resize";
 
 export interface FakeFaults extends Faults {
   readonly dropAnswer: (dropping: Dropping) => Effect.Effect<void>;
-  /** Loses the next `times` resize requests before the provider takes them. */
   readonly loseResize: (times: number) => Effect.Effect<void>;
-  /**
-   * Has each start of a stopped machine read `creating` until the effect it answers runs, answering
-   * once it reads `started`, as smol cloud's start does.
-   */
   readonly holdStarts: Effect.Effect<Effect.Effect<void>>;
-  /**
-   * Has each capture read `creating` until the effect it answers runs, as smol cloud's capture can
-   * still run once the host has stopped waiting for it.
-   */
   readonly holdCaptures: Effect.Effect<Effect.Effect<void>>;
-  /**
-   * While on, has the first delete of each checkpoint that rests refused 409 as its capture's still
-   * is, as smol cloud's refusal can lag behind its checkpoint reading `available`.
-   */
   readonly lagCaptures: (on: boolean) => Effect.Effect<void>;
-  /**
-   * While on, holds each exec's response head until its command's first output, as a provider whose
-   * attach stalls would, so a silent command's exec never starts; off, the head comes at once, as
-   * smol cloud's does.
-   */
   readonly stallAttach: (on: boolean) => Effect.Effect<void>;
 }
 
@@ -86,17 +67,11 @@ export interface FakeSmolCloud {
   readonly url: string;
   readonly faults: FakeFaults;
   readonly holdCapture: Effect.Effect<void>;
-  /** Lists a machine whose `state` the provider answers null, under `id`, a fresh one by default. */
   readonly malformedMachine: (
     name: string,
     id?: string | number
   ) => Effect.Effect<void>;
-  /**
-   * Captures a machine as a capture whose answer was lost leaves it: smol cloud holds the
-   * checkpoint, and no row does.
-   */
   readonly capturedUnanswered: (id: string) => Effect.Effect<void>;
-  /** Holds a machine in `error`, answering `why` as its `error`. */
   readonly fail: (id: string, why: string) => Effect.Effect<void>;
   readonly calls: readonly string[];
   readonly machines: ReadonlyMap<string, FakeMachine>;
@@ -109,7 +84,6 @@ const machineLimit = 20;
 
 const perMachine = { cpus: 4, memoryMb: 16_384, diskGb: 200 };
 
-/** The traits of a smol cloud host over this fake, whose plan gives a machine `perMachine`. */
 export const traits = traitsOf({
   cpu: perMachine.cpus,
   ramMib: perMachine.memoryMb,
@@ -248,13 +222,6 @@ const echo = (request: HttpServerRequest.HttpServerRequest) =>
     Effect.orElseSucceed(() => HttpServerResponse.empty())
   );
 
-/**
- * smol cloud's API as the adapter uses it, served over loopback HTTP: machines are folders under
- * `dir`, exec runs `/bin/sh` with `CLANKERBOX_ROOT` set to the machine's folder, an argument under
- * the guest's `/dev/shm` naming that folder's `dev/shm`, and refuses a stdin over 1 MiB, and the tunnel
- * echoes what it is sent. It answers as the live suite measured the provider, and takes the
- * faults the contract suite drives.
- */
 export const fakeSmolCloud = (
   options: FakeSmolCloudOptions
 ): Effect.Effect<FakeSmolCloud, never, Scope.Scope> =>

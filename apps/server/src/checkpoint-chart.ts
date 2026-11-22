@@ -20,12 +20,10 @@ export interface NotDone {
   readonly error: HostError;
   readonly at: Done["at"];
   readonly handle?: Handle;
-  /** A failed capture left nothing on its host, so a delete would find nothing. */
   readonly cleared: boolean;
 }
 
 export interface CheckpointRead extends Read {
-  /** Whether the capture waits for its machine to rest, as no pause it follows waits for it. */
   readonly awaiting: boolean;
 }
 
@@ -204,20 +202,14 @@ export const { leaves, metaOf, phaseOf, activityOf, stageOf } = rowLeavesOf<
   ShownPhase
 >(checkpoint);
 
-/** Whether the row is the copy whose files the build store holds under its name, not one fetched from it. */
 export const isPublished = ({
   name,
   published,
 }: Pick<CheckpointRow, "name" | "published">): boolean => published === name;
 
-/** Whether the row is a template build's copy, which no client reads as a checkpoint. */
 export const fromBuild = ({ build }: Pick<CheckpointRow, "build">): boolean =>
   build !== undefined;
 
-/**
- * What every publish shares and a delete of what was published owns, so a delete that removes the
- * objects no other build holds never runs beside a publish that found one there and skipped it.
- */
 export const buildStoreLease = "builds/";
 
 const storeLease = (mode: Lease["mode"]): Lease => ({

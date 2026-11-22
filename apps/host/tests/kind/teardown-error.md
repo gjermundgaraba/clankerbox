@@ -13,11 +13,11 @@ Serialized Error: { code: 'UND_ERR_DESTROYED' }
 The last test to run before this error was "leaves a make cut short at any of its provider calls ..."
 ```
 
-It was never caught in the act with instrumentation, so its emitter is unknown. `httpLayer` in `src/platform/agent-sandbox/agent-sandbox.ts` now passes `allowH2: false`, a fix reasoned from what is below, not proven against a failing run. If the error comes back, start from "If it resurfaces".
+It was never caught in the act with instrumentation, so its emitter is unknown. `http1Layer` in `src/platform/agent-sandbox/agent-sandbox.ts` passes `allowH2: false`, a mitigation reasoned from what is below, not proven against a failing run. If the error comes back, start from "If it resurfaces".
 
 ## What the error is
 
-- The stack is where the error object was made, not where it was thrown. `makeDispatcherOptions` (`@effect/platform-node` 4.1.4, `NodeHttpClient.js:112`) releases its undici `Agent` with `destroy()` as the scope that built `httpLayer` closes, and `destroy()` with no error makes a `ClientDestroyedError` (undici 8.12.4, `dispatcher-base.js:143`). The runtime's fixture and the tester each own one such Agent.
+- The stack is where the error object was made, not where it was thrown. `makeDispatcherOptions` (`@effect/platform-node` 4.1.4, `NodeHttpClient.js:112`) releases its undici `Agent` with `destroy()` as the scope that built `http1Layer` closes, and `destroy()` with no error makes a `ClientDestroyedError` (undici 8.12.4, `dispatcher-base.js:143`). The runtime's fixture and the tester each own one such Agent.
 - Vitest says "Uncaught Exception" only for `uncaughtException`, and "Unhandled Rejection" for a rejected promise (`vitest/dist/chunks/init.*.js`), so the error was thrown out of a tick or callback. That rules out every promise route: `dispatcher.request()`, body consumption, `Promise.all` in the Agent's destroy.
 - Vitest names the test that was running when the throw happened, so it came from the make stall case's teardown, even though the report printed after the delete stall case.
 - The kube API negotiates HTTP/2, which undici 8 allows by default. At `Agent.destroy()` undici destroys each client's TLS socket with the error; Node's `socketOnError` destroys the HTTP/2 session with it, and `closeSession` (`lib/internal/http2/core.js`) passes it to every stream the session still tracks, then emits it on the session. An `'error'` emitted where nothing listens throws. That is the family of undici #5936 and #5586, and the likeliest route: 8.12.4 re-adds a `noop` listener to the streams it releases, but skips a stream that is `closed` and not yet `destroyed` (`client-h2.js`, `releaseRequestStream`), and Node's `Http2Stream._destroy` still emits on such a stream.

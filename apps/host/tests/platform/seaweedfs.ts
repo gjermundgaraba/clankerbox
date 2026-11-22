@@ -52,11 +52,6 @@ const runningWhileStdinOpen = (args: readonly string[]) =>
       })
   );
 
-/**
- * A SeaweedFS S3 store in a container of its own, with the bucket `templates`, removed when the
- * scope closes or the test process ends. Its settings are as a smolvm or Tart host's config holds
- * them under its runtime's `builds`.
- */
 export const seaweedfs: Effect.Effect<
   typeof BuildsSettings.Encoded,
   Internal,

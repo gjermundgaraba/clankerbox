@@ -9,11 +9,6 @@ interface Armed {
   readonly released: Deferred.Deferred<undefined>;
 }
 
-/**
- * The provider calls a fixture counts for `Faults.stall`: `stall` arms the call `after` calls on,
- * and `next` answers, for each call made, where to hold it, which only the armed call does. A call
- * `next` is told isn't `counted` is never held and moves no stall on.
- */
 export const callStalls = () => {
   let armed: Armed | undefined;
 

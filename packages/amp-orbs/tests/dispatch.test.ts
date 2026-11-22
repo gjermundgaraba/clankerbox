@@ -28,9 +28,9 @@ import { TestConsole } from "effect/testing";
 import { afterEach, describe, expect } from "vite-plus/test";
 
 import {
-  bootstrapScript,
   bootstrapTimeoutSeconds,
   orbLabel,
+  replaceBootstrapScript,
   snapshotLabel,
   typeLabel,
 } from "../src/dispatch.ts";
@@ -160,7 +160,7 @@ layer(NodeServices.layer)((it) => {
               user: "user",
               env: { ORB_TOKEN: "orb-token", AMP_URL: "https://amp.test" },
               argv: ["sh"],
-              stdin: bootstrapScript,
+              stdin: replaceBootstrapScript,
               timeoutSeconds: bootstrapTimeoutSeconds,
             },
           ]);

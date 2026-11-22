@@ -18,7 +18,6 @@ import { describe } from "./process.ts";
 
 const loopback = /^(?:localhost|\[::1\]|127(?:\.\d{1,3}){3})$/u;
 
-/** A provider's API URL, which its key rides on with every request: `https`, or `http` only to a loopback address. */
 export const KeyedApiUrl = Schema.String.check(
   Schema.makeFilter((text: string) => {
     const url = URL.parse(text);
@@ -31,12 +30,6 @@ export const KeyedApiUrl = Schema.String.check(
   })
 );
 
-/**
- * What a request asks of a provider's API, which bounds how long it may take to answer: a `read`, a
- * `change` it answers once it has taken it, or one it answers only once the machine has `settle`d,
- * as smol cloud's start and capture do. A request not answered in time is a lost answer, so a
- * stalled connection costs its step a read, not its whole deadline.
- */
 export type Asked = "read" | "change" | "settle";
 
 const answerWithin: Readonly<Record<Asked, Duration.Duration>> = {
@@ -47,10 +40,6 @@ const answerWithin: Readonly<Record<Asked, Duration.Duration>> = {
 
 export const stepWithin = Duration.minutes(10);
 
-/**
- * Runs a step on a provider whole, its calls billed and uncut by a later request, which waits for
- * it, and ends it failed `Internal` once it has taken `stepWithin`.
- */
 export const bounded =
   (provider: string, what: string) =>
   <A, E, R>(step: Effect.Effect<A, E, R>): Effect.Effect<A, E | Internal, R> =>
@@ -65,7 +54,6 @@ export const bounded =
       Effect.uninterruptible
     );
 
-/** No answer, a gateway's, or one that couldn't be read, so whether the request happened is unknown. */
 export class Unanswered extends Schema.TaggedError<
   Unanswered,
   { readonly brand: unique symbol }
@@ -73,7 +61,6 @@ export class Unanswered extends Schema.TaggedError<
   message: Schema.String,
 }) {}
 
-/** The provider asked to be waited out `wait`, so it didn't take the request, which is sent again. */
 export class Busy extends Schema.TaggedError<
   Busy,
   { readonly brand: unique symbol }
@@ -82,7 +69,6 @@ export class Busy extends Schema.TaggedError<
   wait: Schema.Duration,
 }) {}
 
-/** A list answered a record of this host's that the adapter can't read; asking again reads the same. */
 export class Unreadable extends Schema.TaggedError<
   Unreadable,
   { readonly brand: unique symbol }
@@ -90,10 +76,8 @@ export class Unreadable extends Schema.TaggedError<
   message: Schema.String,
 }) {}
 
-/** How a call to a provider's API fails besides the provider's own refusal. */
 export const providerErrors = [Unanswered, Busy, Unreadable] as const;
 
-/** How a call to a provider's API fails, with the provider's own `Refused`. */
 export type ProviderError<Refused> =
   | Refused
   | InstanceType<(typeof providerErrors)[number]>;
@@ -146,7 +130,6 @@ export const retryAfter = (
     )
   );
 
-/** The provider took nothing and asks to be waited out, unless its answer says there is no room. */
 export const tooManyRequests = 429;
 
 const askedToWait = (
@@ -208,11 +191,6 @@ const exchanged = <A, E>(
 
 const triesPerCall = 6;
 
-/**
- * Whether sending a call twice does no more than sending it once, as a read, or a delete, does.
- * Only such a call is sent again after a lost answer; any other only once the provider said it
- * took nothing, and its caller reads what the provider holds before it sends it again.
- */
 export type Repeats = "idempotent" | "once";
 
 const backoff = Schedule.exponential(Duration.millis(250)).pipe(
@@ -245,24 +223,12 @@ export const askedAgain =
       )
     );
 
-/** What an adapter reads of its provider's answer of HTTP 400 or more. */
 export interface Refusal<Refused> {
-  /** Whether the body is the provider's own answer, which a gateway's 5xx isn't. */
   readonly own: boolean;
-  /** Why the provider asks to be waited out, if it does. */
   readonly waits: string | undefined;
   readonly refused: Refused;
 }
 
-/**
- * The calls to a provider's API at `url` with the account's `key`, read afresh for each request,
- * whose read failing is a lost answer. A call sends its request asking
- * JSON, within the bound of what it `asked`, and answers what `answered` reads of a response under
- * 400; no answer, or one that couldn't be received, is a lost answer. Of any other response,
- * `refusal` reads the provider's own answer: a 5xx whose body is none is a gateway's, whatever that
- * body holds, and a lost answer; else one that asks to be waited out fails `Busy`; else the call
- * fails with the provider's refusal. It is sent again as `askedAgain` says.
- */
 export const sender =
   <Refused>(
     http: HttpClient.HttpClient,
@@ -332,18 +298,12 @@ export function untilRest<A, E, R>(
 
 export interface Change<A, S, E, F, G, R> {
   readonly send: Effect.Effect<S, E | Unanswered, R>;
-  /** A refusal that may still have been taken, which is read for as a lost answer is. */
   readonly lost?: ((error: E) => boolean) | undefined;
   readonly rested: Effect.Effect<A, F, R>;
   readonly holds: (rested: A) => boolean;
-  /** The failure once `triesAfterLoss` sends went unanswered and the resource rests without the change. */
   readonly unheld: (rested: A, last: E | Unanswered) => G;
 }
 
-/**
- * Sends a change that may be taken though its answer is lost, reading the resource after a lost
- * answer before sending it again, so a change the provider took is never sent twice.
- */
 export function sentUntilHeld<A, H extends A, S, E, F, G, R>(
   change: Change<A, S, E, F, G, R> & {
     readonly holds: (rested: A) => rested is H;
@@ -377,16 +337,10 @@ export interface Records<A> {
   readonly call: string;
   readonly what: string;
   readonly read: (record: unknown) => Option.Option<A>;
-  /** Whether a record `read` refused is still this host's, which then fails the list. */
   readonly ours: (record: unknown) => boolean;
   readonly label: (record: unknown) => string;
 }
 
-/**
- * Reads a list's records one at a time, as an account others share may hold records this host
- * can't read. One that `ours` claims fails the list `Unreadable`; any other is skipped, logged the
- * first time.
- */
 export const recordReader = () => {
   const skipped = new Set<string>();
 

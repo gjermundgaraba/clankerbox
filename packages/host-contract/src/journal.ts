@@ -15,15 +15,6 @@ const answer = (response: HttpServerResponse.HttpServerResponse) =>
     ? [new TextDecoder().decode(response.body.body)]
     : [];
 
-/**
- * What the control plane's journal and a host's hold of the requests each serves, in place of
- * Effect's response logger: a request whose answer is a 500, `Internal` or one Effect gives a failure
- * no action declares, logs at error, with that answer or that cause, and its method and path but
- * nothing it sent, its query string included. A request cut short, by its caller or by the stop,
- * logs nothing: Effect answers it with a response it adds to the cause, which is stripped. Any other
- * answer, a refusal or a path no route takes included, is its caller's, and logs at debug, which
- * `--log-level debug` shows.
- */
 export const journal = HttpMiddleware.make(
   <E, R>(
     app: Effect.Effect<

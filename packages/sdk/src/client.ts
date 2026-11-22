@@ -176,10 +176,7 @@ export interface Interface extends Calls {
    * machine and decides again, once. Every failure after that make names the machine it may have
    * made, and one whose second look sent nothing, as a spent timeout leaves it, answers as the cut
    * make did. Run no two ensures, or an ensure and a create, of one name at once: the `Conflict`
-   * one of them meets may be the other's new machine, which it then deletes by name. Reading the
-   * machine again at that `Conflict`, deleting only a row `isUndone` holds and starting any other,
-   * would narrow that to the time between that read and the delete; closing it takes a delete on
-   * the server of that one failed instance, not of the name.
+   * one of them meets may be the other's new machine, which it then deletes by name.
    */
   readonly ensure: (
     name: string,
@@ -411,7 +408,6 @@ export type Asked = Machine["desired"] | "resize";
 const awaited = (asked: Asked): string =>
   asked === "resize" ? "its resize rested" : `it got to ${asked}`;
 
-/** What a machine's rest says of a request. */
 export const answerOf = (
   machine: Machine,
   asked: Asked

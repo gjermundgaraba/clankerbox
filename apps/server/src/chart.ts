@@ -8,10 +8,8 @@ import type {
 import type { FreshBoot } from "./hosts.ts";
 import type { Decision, Facts, Lease, Operation } from "./store.ts";
 
-/** `read` and `recheck` read, and `follow` polls the operation; `none` waits for a request. */
 export type Activity = "read" | "follow" | "recheck" | "none";
 
-/** `any` keeps whichever step was in flight when the leaf was entered. */
 export type Step = Operation["kind"] | "any";
 
 export interface LeafMeta<Phase> {
@@ -20,13 +18,11 @@ export interface LeafMeta<Phase> {
   readonly activity: Activity;
 }
 
-/** A leaf's path from a chart's state value, as `{ made: "failed" }` is `made.failed`. */
 export type PathOf<Value> = Value extends string
   ? Value
   : { [K in keyof Value & string]: `${K}.${PathOf<Value[K]>}` }[keyof Value &
       string];
 
-/** `gone` isn't one: the row goes in the write that reaches it. */
 export type LeafOf<M extends AnyStateMachine> = Exclude<
   PathOf<SnapshotFrom<M>["value"]>,
   "gone"
@@ -34,7 +30,6 @@ export type LeafOf<M extends AnyStateMachine> = Exclude<
 
 export type Stated<C, L> = C & { readonly state: L };
 
-/** What a `read` carries for the operation it begins, when the leaf it enters has a step. */
 export interface Read {
   readonly boot: FreshBoot;
   readonly id: string;
@@ -48,11 +43,6 @@ interface Snapshot<L> {
   readonly matches: (leaf: L) => boolean;
 }
 
-/**
- * What `applied` needs of a machine. A chart's file writes `resolve` and `transition` over its own
- * machine, as they are typed only there. `begins` gives what an operation takes from the chart and
- * the `read` that begins it.
- */
 export interface Chart<
   S extends Snapshot<L>,
   L extends string,
@@ -82,10 +72,6 @@ interface Reported<D> {
   readonly event: D | Failed;
 }
 
-/**
- * The region a delete enters, with no edge out of it. `draining` follows the step in flight to its
- * end, then `step` runs until its host reports it done, again at each recheck while it fails.
- */
 export const deletingRegion = <
   const Id extends string,
   const Phase extends string,
@@ -134,10 +120,6 @@ export const deletingRegion = <
     },
   }) as const;
 
-/**
- * The region a failed make or capture enters: `step` deletes what it left, again at each recheck
- * while that fails, and `done` tells where its row goes once it has. A delete goes on as `deleting`.
- */
 export const undoingRegion = <
   const Id extends string,
   const Phase extends string,
@@ -201,7 +183,6 @@ export const leavesOf = (
 
 export type TopOf<L> = L extends `${infer Top}.${string}` ? Top : L;
 
-/** What a chart's leaves say of a row: every leaf a row can hold, each one's `meta`, and its top region. */
 export const rowLeavesOf = <L extends string, Phase>(
   machine: Pick<AnyStateMachine, "id" | "root"> & {
     readonly getStateNodeById: (id: string) => {
@@ -247,11 +228,6 @@ export const rowLeavesOf = <L extends string, Phase>(
 const isRead = <E extends EventObject>(event: E): event is ReadOf<E> =>
   event.type === "read";
 
-/**
- * One event on one row: the row rebuilds a snapshot, `transition` runs once, and the snapshot goes
- * with the call. A leaf with a `step` begins an operation when none is in flight, and one without
- * finishes the operation that is. An event the leaf doesn't take answers the same row.
- */
 export const applied = <
   S extends Snapshot<L>,
   L extends string,

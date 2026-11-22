@@ -32,11 +32,6 @@ import type { MachineRow } from "./machine-chart.ts";
 
 export type { MachineState } from "@clankerbox/host-contract";
 
-/**
- * Where a client reaches a machine's sshd: a port of its host, at the address its host answers. A
- * row migrated from schema 6, which kept only the port, has no `host` until its host's next adopt
- * answers it.
- */
 export const Endpoint = Schema.Struct({
   host: Schema.optionalKey(Schema.String),
   port: Port,
@@ -59,10 +54,6 @@ const UndefinedFromNull = <S extends Schema.Top>(schema: S) =>
     })
   );
 
-/**
- * Where a machine's disk comes from. Copies stay on their source's host, and hold what a setup did,
- * so only a base has one to run, and only on a template's builder, which holds it in memory.
- */
 export const Source = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("base") }),
   Schema.Struct({ kind: Schema.Literal("checkpoint"), name: Schema.String }),
@@ -82,7 +73,6 @@ export type Lease = typeof Lease.Type;
 export const notFound = (resource: Lease["resource"], name: string): NotFound =>
   new NotFound({ message: `no ${resource} ${name}`, id: name });
 
-/** One step on a host. Its row in the store is every lease there is: restarts lose none. */
 export const Operation = Schema.Struct({
   id: Schema.String,
   kind: Schema.Literals(
@@ -94,7 +84,6 @@ export const Operation = Schema.Struct({
   boot: Schema.String,
   sequence: Schema.Int,
   leases: Schema.fromJsonString(Schema.Array(Lease)),
-  /** What a resize gives, which left the row when the step began. */
   to: UndefinedFromNull(Schema.fromJsonString(Sizing)),
 });
 
@@ -102,12 +91,6 @@ export type Operation = typeof Operation.Type;
 
 export type MachinePhase = Exclude<Phase, "waiting">;
 
-/**
- * What a machine's row keeps of the runtime it was made on, the one way a host's traits reach a
- * row: its `runtime`, which a client is shown and a copy of the machine stays on. Every decision
- * about what a host does reads the host's traits as it answers now, so a trait a release adds or
- * changes migrates no row.
- */
 export const MadeOn = Schema.Struct({ runtime: RuntimeName });
 
 export type MadeOn = typeof MadeOn.Type;
@@ -131,7 +114,6 @@ const made = {
   labels: UndefinedFromNull(Schema.fromJsonString(Labels)),
 };
 
-/** What a machine's row holds but for its leaf: what no leaf can tell, and its chart's context. */
 export const Facts = Schema.Struct({
   ...made,
   ...MadeOn.fields,
@@ -145,16 +127,13 @@ export const Facts = Schema.Struct({
    * rest, and only a request to run boots it again.
    */
   prepared: Schema.BooleanFromBit,
-  /** The resize still owed. One that runs is on its operation. */
   resize: UndefinedFromNull(Schema.fromJsonString(Sizing)),
   ephemeral: Schema.BooleanFromBit,
-  /** Whether the machine requests the tailnet, which a copy of it inherits. */
   tailnet: Schema.BooleanFromBit,
   source: Schema.fromJsonString(Source),
   template: UndefinedFromNull(Schema.String),
   hostKey: UndefinedFromNull(Schema.String),
   undoneAt: UndefinedFromNull(Schema.DateTimeUtcFromString),
-  /** The checkpoint whose capture a pause lets begin before it does. */
   after: UndefinedFromNull(Schema.String),
   /** The cold boots of the machine the control plane knows of, as `Machine.boots` tells them. */
   boots: Schema.Int,
@@ -174,15 +153,9 @@ export const CheckpointFacts = Schema.Struct({
   runtime: RuntimeName,
   machine: Schema.String,
   failedAt: UndefinedFromNull(Schema.DateTimeUtcFromString),
-  /** When the control plane deletes it, once ready. */
   expiresAt: UndefinedFromNull(Schema.DateTimeUtcFromString),
   build: UndefinedFromNull(Schema.String),
-  /**
-   * The name a copy's files have in the build store: the builder's copy publishes them under its
-   * own name, and a copy on another host is fetched from it.
-   */
   published: UndefinedFromNull(Schema.String),
-  /** Whether its machine requested the tailnet, which a restore of it inherits. */
   tailnet: Schema.BooleanFromBit,
 });
 
@@ -201,7 +174,6 @@ export const BuildRow = Schema.Struct({
   ramMib: Schema.Int,
   diskGib: Schema.Int,
   setupTimeoutSeconds: UndefinedFromNull(Schema.Int),
-  /** Whether its setup runs on the tailnet, and each clone of it joins it. */
   tailnet: Schema.BooleanFromBit,
 });
 
@@ -212,7 +184,6 @@ export const TemplateFacts = Schema.Struct({
   createdAt: Schema.DateTimeUtcFromString,
 });
 
-/** A template is kept while it has a build, and its base, sizes and setup timeout are its builds'. */
 export type TemplateRow = typeof TemplateFacts.Type & {
   readonly builds: Arr.NonEmptyReadonlyArray<BuildRow>;
 };
@@ -222,11 +193,6 @@ export interface Rows {
   readonly checkpoint: CheckpointRow;
 }
 
-/**
- * What a write did. `written` also answers a `decide` that changed nothing: then `moved` is false
- * and `next` the row as it stands. `busy` wrote nothing, as the operation in flight `by` holds a
- * lease the one begun conflicts with.
- */
 export type Advanced<R> =
   | {
       readonly at: "written";
@@ -243,10 +209,6 @@ export interface Decision<R> {
 }
 
 export interface Interface {
-  /**
-   * The next write of a resource's row, from now on: an insert, a move of its leaf or facts, or
-   * the begin or end of its operation.
-   */
   readonly watch: (
     resource: Lease["resource"],
     name: string
@@ -255,28 +217,19 @@ export interface Interface {
   readonly findMachine: (
     name: string
   ) => Effect.Effect<Option.Option<MachineRow>, Internal>;
-  /** A create over a row left `undone` replaces it. */
   readonly insertMachine: (
     row: MachineRow
   ) => Effect.Effect<void, Conflict | Internal>;
-  /**
-   * One write of a resource's row, decided inside it: `decide` reads the row and its operation in
-   * the transaction that writes what it answers, so nothing can come between, and no write needs a
-   * fence. A `begin` takes its leases there, as what owns a resource excludes all else and what
-   * shares it excludes an owner, and when one is taken nothing is written.
-   */
   readonly advance: <K extends Lease["resource"]>(
     resource: K,
     name: string,
     decide: (row: Rows[K], op: Operation | undefined) => Decision<Rows[K]>
   ) => Effect.Effect<Advanced<Rows[K]>, Internal>;
-  /** Removes the rows of failed creates and captures older than `before`. */
   readonly expire: (before: DateTime.Utc) => Effect.Effect<void, Internal>;
   readonly checkpoints: Effect.Effect<readonly CheckpointRow[], Internal>;
   readonly findCheckpoint: (
     name: string
   ) => Effect.Effect<Option.Option<CheckpointRow>, Internal>;
-  /** A capture over a row left `failed` replaces it. */
   readonly insertCheckpoint: (
     row: CheckpointRow
   ) => Effect.Effect<void, Conflict | Internal>;
@@ -291,7 +244,6 @@ export interface Interface {
       lastBuild: number
     ) => Result.Result<A, E>
   ) => Effect.Effect<A, E | Internal>;
-  /** The oldest operation in flight on a resource. Every lease is an operation in flight here. */
   readonly operationOn: (
     resource: Lease["resource"],
     name: string
@@ -309,10 +261,6 @@ export class Store extends Context.Service<Store, Interface>()(
   "@clankerbox/server/Store"
 ) {}
 
-/**
- * Reads `read` until what it answers is `done`, again after each write of `resource`'s row `name`,
- * and, given `orEvery`, once that long passes with no write.
- */
 export const readUntil = <A, E>(
   store: Pick<Interface, "watch">,
   resource: Lease["resource"],

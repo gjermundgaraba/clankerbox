@@ -44,7 +44,6 @@ export interface RunnerOptions {
   readonly probe?: Probe;
   readonly relayed?: boolean;
   readonly runtime?: (fake: Runtime["Service"]) => Runtime["Service"];
-  /** Gives every guest `tailscale`, whose `up` signs in, or with `refuses` signs in with no key. */
   readonly tailscale?: boolean | "refuses";
 }
 

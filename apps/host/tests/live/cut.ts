@@ -48,7 +48,6 @@ const named = (seen: Seen, pids: readonly string[]) =>
       `other ${pid}`
   );
 
-/** What `endsACutCommand` answers when the end did its work. */
 export const ended = {
   exitCode: 124,
   withinEndTimeout: true,
@@ -58,12 +57,6 @@ export const ended = {
   besideEndsWithItsExec: true,
 };
 
-/**
- * Cuts, by its timeout, a guest command that starts a child and one that ignores TERM, and shows by
- * later execs that nothing carrying its exec's mark runs once it answers, while a command another
- * exec runs beside it still does until its own exec is cut. Each line it measures goes to `note`,
- * and it answers what `ended` holds when the end worked.
- */
 export const endsACutCommand = (
   runtime: Runtime,
   machine: Target,

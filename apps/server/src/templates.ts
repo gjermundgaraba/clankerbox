@@ -267,12 +267,6 @@ const begun =
 const holds = ({ state }: CheckpointRow) =>
   state !== "failed" && stageOf(state) !== "deleting";
 
-/**
- * The fetches due: of each ready build that was published, to each host its copy is fetchable to
- * that copies builds, offers its base, runs its pin, names its image, joins machines to the tailnet
- * where the build's clones join it, and holds no copy of it, each with the copies that failed
- * there, to clear first.
- */
 export const fetchesDue = (
   templates: readonly TemplateRow[],
   { records, reached }: Seen

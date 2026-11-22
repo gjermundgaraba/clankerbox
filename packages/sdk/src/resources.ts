@@ -478,7 +478,6 @@ export type CapacityReport = typeof CapacityReport.Type;
 
 const { host: _host, ...readingFields } = usageFields;
 
-/** A `Usage` row as a runtime reads it, before the control plane names its host on it. */
 export const Reading = Schema.Union([
   Schema.Struct({ ...readingFields, used: Schema.Int }),
   Schema.Struct({ ...readingFields, unread: Schema.Array(Name) }),

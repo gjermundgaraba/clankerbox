@@ -80,7 +80,7 @@ const harness = (start: Row | undefined, swept = false) =>
     const hooks: Hooks = {};
     const writes = yield* PubSub.unbounded<"written">();
 
-    const { drive, reading, rechecking } = yield* driver<Row>(
+    const { drive, beginSweep, rechecking } = yield* driver<Row>(
       recheck,
       {
         kind: "machine",
@@ -138,7 +138,7 @@ const harness = (start: Row | undefined, swept = false) =>
       held,
       hooks,
       drive,
-      reading,
+      beginSweep,
       rechecking,
       wrote: Effect.asVoid(PubSub.publish(writes, "written")),
     };
@@ -226,7 +226,7 @@ describe("a swept loop", () => {
     "rests until told of a reading begun after it rested, and looks with when it rested",
     () =>
       Effect.gen(function* () {
-        const { counts, drive, reading, rechecking } = yield* harness(
+        const { counts, drive, beginSweep, rechecking } = yield* harness(
           { state: "rechecking" },
           true
         );
@@ -236,9 +236,9 @@ describe("a swept loop", () => {
 
         expect(counts).toMatchObject({ reads: 1, looks: 0 });
 
-        const taken = yield* reading;
+        const sweepId = yield* beginSweep;
 
-        yield* rechecking("dev", taken);
+        yield* rechecking("dev", sweepId);
         yield* settled;
 
         expect(counts).toMatchObject({ reads: 2, looks: 1, rested: [0] });
@@ -249,14 +249,14 @@ describe("a swept loop", () => {
     "isn't told of a reading begun before it rested, which may have seen its VM before the step that ended",
     () =>
       Effect.gen(function* () {
-        const { counts, held, hooks, drive, reading, rechecking } =
+        const { counts, held, hooks, drive, beginSweep, rechecking } =
           yield* harness({ state: "following" }, true);
 
         let before = 0;
 
         hooks.following = () =>
           Effect.gen(function* () {
-            before = yield* reading;
+            before = yield* beginSweep;
             held.row = { state: "rechecking" };
           });
 
@@ -267,7 +267,7 @@ describe("a swept loop", () => {
 
         expect(counts.looks).toBe(0);
 
-        yield* rechecking("dev", yield* reading);
+        yield* rechecking("dev", yield* beginSweep);
         yield* settled;
 
         expect(counts).toMatchObject({ looks: 1, rested: [before] });
@@ -296,12 +296,12 @@ describe("a swept loop", () => {
 
   it.effect("isn't started by a reading", () =>
     Effect.gen(function* () {
-      const { counts, rechecking, reading } = yield* harness(
+      const { counts, rechecking, beginSweep } = yield* harness(
         { state: "rechecking" },
         true
       );
 
-      yield* rechecking("dev", yield* reading);
+      yield* rechecking("dev", yield* beginSweep);
       yield* settled;
 
       expect(counts.reads).toBe(0);

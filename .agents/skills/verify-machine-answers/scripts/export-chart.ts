@@ -185,7 +185,6 @@ E(k, state, desired, prepared, err) ==
   [k |-> k, v |-> [state |-> state, desired |-> desired, prepared |-> prepared,
                    err |-> err]]
 
-(* state|desired|prepared|err|event, for each write that changes the row *)
 Entries == {
   ${entries().join(",\n  ")}
 }
@@ -203,10 +202,8 @@ StepOf ==
 Wanted ==
   ${table(kinds.map((kind) => [kind, wanted(kind)]))}
 
-(* The phases a client's wait ends on, but waiting, which only a read shows *)
 Resting == ${set(resting)}
 
-(* The leaves of a create that failed, where only a delete finds a machine *)
 FailedCreate == ${set(failedLeaves)}
 
 Undone == ${string(undone)}
@@ -219,4 +216,3 @@ if (import.meta.main) {
 
   writeFileSync(out, chartModule());
 }
-

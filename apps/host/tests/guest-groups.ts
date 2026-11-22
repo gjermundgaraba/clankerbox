@@ -13,7 +13,6 @@ const leader = [
   "kill -s KILL 0",
 ].join("\n");
 
-/** A guest command's stdio, and the exit status its leader writes once it ends. */
 export interface Piped {
   readonly stdin: Writable;
   readonly stdout: Readable;
@@ -26,14 +25,6 @@ interface Started {
   readonly root: string;
 }
 
-/**
- * The guest commands a fake runs, as a provider's guest does: each in a process group of its own
- * that a cut caller leaves running, ended only when its machine stops or goes, or the fake ends.
- * The group's leader runs the command, writes its status and closes its own ends of the command's
- * stdio, and then holds the group, so its ID is this fake's for as long as the fake may signal
- * it. Once the pipe the fake holds on its fd 4 ends, the fake is gone, and the leader ends its
- * group itself.
- */
 export const guestGroups = () => {
   const groups = new Set<Started>();
 
