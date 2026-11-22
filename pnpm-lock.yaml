@@ -186,8 +186,8 @@ catalogs:
       specifier: 4.1.4
       version: 4.1.4
     sandbox-agent:
-      specifier: 0.5.6
-      version: 0.5.6
+      specifier: 0.5.7
+      version: 0.5.7
     typescript:
       specifier: 7.0.2
       version: 7.0.2
@@ -453,7 +453,7 @@ importers:
         version: 4.1.4
       sandbox-agent:
         specifier: 'catalog:'
-        version: 0.5.6(zod@4.6.5)
+        version: 0.5.7(zod@4.6.5)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -970,8 +970,8 @@ packages:
     peerDependencies:
       '@redis/client': ^6.3.0
 
-  '@sandbox-agent/cli-shared@0.5.6':
-    resolution: {integrity: sha512-oIZIw7m9mK7fzKqCxO3FmkF3zyapqpq7aOpG2DtqYfXi0ZMsrEuWMFS/q6nU+SfQHFwHt49IrxUO0gJXDKfKXw==}
+  '@sandbox-agent/cli-shared@0.5.7':
+    resolution: {integrity: sha512-8zhmP8EDFldRba40Slo5UyPCkHqYMeMSfBwPhZsDC93hy7IEzscXEBN4yg9MFOQRG87fQMXd7PMuHiNgv1bsPA==}
 
   '@sec-ant/readable-stream@0.4.1':
     resolution: {integrity: sha512-831qok9r2t8AlxLko40y2ebgSDhenenCatLVeW/uBtnHPyhHOvG0C7TvfgecV+wHzIm5KUICgzmVpWS+IMEAeg==}
@@ -1361,8 +1361,8 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  acp-http-client@0.5.6:
-    resolution: {integrity: sha512-tuN/1DbwDM8NT1wnwAYChtkTW4BxC/3MX0ORtSIS1fMAKa/+/oAzbrfXT/oJ0QhCi3jtbX35KwZWSQ9alSyNHA==}
+  acp-http-client@0.5.7:
+    resolution: {integrity: sha512-+rJnbBz/u8eETo8KPaQw9K/yrLJi/3x32W+sdYRc74Fp4nyau+MLC7KkK9jM/c9jV8dp6IASk52yVEM4xstS/w==}
 
   ansi-escapes@7.3.0:
     resolution: {integrity: sha512-BvU8nYgGQBxcmMuEeUEmNTvrMVjJNSH7RgW24vXexN4Ven6qCvy4TntnvlnwnMLTVlcRQQdbRY8NKnaIoeWDNg==}
@@ -1785,8 +1785,8 @@ packages:
   run-parallel@1.2.0:
     resolution: {integrity: sha512-5l4VyZR86LZ/lDxZTR6jqL8AFE2S0IFLMP26AbjsLVADxHdhB/c0GUsH+y39UfCi3dzz8OlQuPmnaJOMoDHQBA==}
 
-  sandbox-agent@0.5.6:
-    resolution: {integrity: sha512-yw1RGkVCyrvX5f2S6o9W9FXeJ5gber6OeT49YuF5JXhL+x4amiaU1fTGwHeCWDmFzydeK2n5DVns8l6qVE+e2Q==}
+  sandbox-agent@0.5.7:
+    resolution: {integrity: sha512-YvDkA3MKDFcvwA/volQA/veKvs22uKE2yN9CH8IpiadgtiFuLXRIgsRhFm1yxP8BSP8q5UVQwrXcDp4hL8NGVw==}
     peerDependencies:
       '@cloudflare/sandbox': '>=0.1.0'
       '@daytonaio/sdk': '>=0.12.0'
@@ -2323,7 +2323,7 @@ snapshots:
     dependencies:
       '@redis/client': 6.3.0
 
-  '@sandbox-agent/cli-shared@0.5.6': {}
+  '@sandbox-agent/cli-shared@0.5.7': {}
 
   '@sec-ant/readable-stream@0.4.1': {}
 
@@ -2576,7 +2576,7 @@ snapshots:
 
   acorn@8.19.0: {}
 
-  acp-http-client@0.5.6(zod@4.6.5):
+  acp-http-client@0.5.7(zod@4.6.5):
     dependencies:
       '@agentclientprotocol/sdk': 0.16.1(zod@4.6.5)
     transitivePeerDependencies:
@@ -2971,10 +2971,10 @@ snapshots:
     dependencies:
       queue-microtask: 1.2.3
 
-  sandbox-agent@0.5.6(zod@4.6.5):
+  sandbox-agent@0.5.7(zod@4.6.5):
     dependencies:
-      '@sandbox-agent/cli-shared': 0.5.6
-      acp-http-client: 0.5.6(zod@4.6.5)
+      '@sandbox-agent/cli-shared': 0.5.7
+      acp-http-client: 0.5.7(zod@4.6.5)
     transitivePeerDependencies:
       - zod
 
