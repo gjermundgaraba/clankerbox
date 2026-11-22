@@ -1,7 +1,7 @@
 import type { Report } from "@clankerbox/host-contract";
 import {
   newId,
-  pauseCapture,
+  stopsBeforeCapture,
   pinRefusal,
 } from "@clankerbox/host-contract/traits";
 import {
@@ -19,7 +19,7 @@ import type {
   HostError,
   ListFilter,
   Machine,
-  PauseRequest,
+  StopRequest,
   Conflict,
   Internal,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -57,9 +57,9 @@ export interface Interface {
   readonly capture: (
     request: CaptureRequest
   ) => Effect.Effect<Checkpoint, Declared<"captureCheckpoint">>;
-  readonly pause: (
-    request: PauseRequest
-  ) => Effect.Effect<Machine, Declared<"pauseMachine">>;
+  readonly stop: (
+    request: StopRequest
+  ) => Effect.Effect<Machine, Declared<"stopMachine">>;
   readonly delete: (
     id: string
   ) => Effect.Effect<void, Declared<"deleteCheckpoint">>;
@@ -83,7 +83,6 @@ const shown = (record: CheckpointRow): Checkpoint => ({
   id: record.name,
   createdAt: record.createdAt,
   machine: record.machine,
-  kind: record.kind,
   base: record.base,
   cpu: record.cpu,
   ramMib: record.ramMib,
@@ -234,7 +233,6 @@ export const make = (settings: {
           machine: source,
           host: machine.host,
           runtime: machine.runtime,
-          kind: machine.captures,
           pin: machine.pin,
           handle: undefined,
           base: machine.base,
@@ -289,7 +287,7 @@ export const make = (settings: {
           Effect.andThen(drive(name)),
           Effect.catchCause((cause) =>
             Effect.logWarning(
-              `couldn't discard checkpoint ${name}, whose pause was refused, so it stays a capture of its own, which runs now or at the next start of the control plane: ${Cause.pretty(cause)}`
+              `couldn't discard checkpoint ${name}, whose stop was refused, so it stays a capture of its own, which runs now or at the next start of the control plane: ${Cause.pretty(cause)}`
             )
           )
         );
@@ -353,7 +351,9 @@ export const make = (settings: {
             onNone: () => undefined,
             onSome: ({ traits, pin }) =>
               uncopiable(found, seen, traits, "capture") ??
-              pinRefusal({ copy: found.name }, found.pin, pin),
+              (seen === "running"
+                ? pinRefusal({ copy: found.name }, found.pin, pin)
+                : undefined),
           });
 
           if (refusal !== undefined) {
@@ -364,70 +364,53 @@ export const make = (settings: {
         return yield* capturing(request);
       });
 
-    const pausing = ({ id, capture }: PauseRequest) =>
+    const stopping = ({ id, capture }: StopRequest) =>
       Effect.gen(function* () {
         if (capture === undefined) {
-          return yield* machines.pause(id);
+          return yield* machines.stop(id);
         }
 
         const found = yield* madeMachine(store, id);
 
         const { traits, pin } = yield* answering(hosts, found.host);
-        const unpinnedRefusal = pinRefusal({ copy: id }, found.pin, pin);
 
-        switch (pauseCapture(traits)) {
-          case "never": {
-            return yield* new WrongState({
-              message: `machine ${id}'s host captures only a stopped machine, and its pause leaves it paused, so no pause captures it: stop it and capture it, or pause it without a capture`,
-              machine: id,
-              state: yield* stateOf(hosts, found),
-            });
-          }
+        if (stopsBeforeCapture(traits)) {
+          return yield* Effect.uninterruptible(
+            Effect.gen(function* () {
+              const record = yield* recorded({ machine: id, ...capture });
 
-          case "after": {
-            if (unpinnedRefusal !== undefined) {
-              return yield* unpinnedRefusal;
-            }
+              const stopped = yield* machines
+                .stop(id)
+                .pipe(Effect.tapError(() => discarded(record)));
 
-            return yield* Effect.uninterruptible(
-              Effect.gen(function* () {
-                const record = yield* recorded({ machine: id, ...capture });
+              yield* driven(record);
 
-                const paused = yield* machines
-                  .pause(id)
-                  .pipe(Effect.tapError(() => discarded(record)));
-
-                yield* driven(record);
-
-                return paused;
-              })
-            );
-          }
-
-          case "before": {
-            break;
-          }
+              return stopped;
+            })
+          );
         }
 
         const seen = yield* stateOf(hosts, found);
 
         if (seen === "unknown") {
           return yield* new Unavailable({
-            message: `machine ${id}'s host can't be reached, so it can't be captured before it pauses`,
+            message: `machine ${id}'s host can't be reached, so it can't be captured before it stops`,
             readOnly: true,
           });
         }
 
         if (seen !== "running") {
           return yield* new WrongState({
-            message: `machine ${id} is ${seen}, and its host captures only a running machine, so a pause captures it only running: start it, then capture it`,
+            message: `machine ${id} is ${seen}, and its host captures only a running machine, so a stop captures it only running: start it, then capture it`,
             machine: id,
             state: seen,
           });
         }
 
-        if (unpinnedRefusal !== undefined) {
-          return yield* unpinnedRefusal;
+        const unpinned = pinRefusal({ copy: id }, found.pin, pin);
+
+        if (unpinned !== undefined) {
+          return yield* unpinned;
         }
 
         return yield* Effect.uninterruptibleMask((restore) =>
@@ -438,7 +421,7 @@ export const make = (settings: {
             yield* Effect.exit(restore(begun(record.name)));
 
             return yield* machines
-              .pause(id, record.name)
+              .stop(id, record.name)
               .pipe(Effect.tapError(() => discarded(record)));
           })
         );
@@ -480,7 +463,7 @@ export const make = (settings: {
       ),
       get: Effect.fn("Checkpoints.get")((id) => Effect.map(row(id), shown)),
       capture: Effect.fn("Checkpoints.capture")(asked),
-      pause: Effect.fn("Checkpoints.pause")(pausing),
+      stop: Effect.fn("Checkpoints.stop")(stopping),
       delete: Effect.fn("Checkpoints.delete")((id) =>
         Effect.andThen(row(id), remove(id))
       ),

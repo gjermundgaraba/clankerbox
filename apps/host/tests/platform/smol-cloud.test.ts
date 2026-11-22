@@ -442,6 +442,28 @@ describe("the smol cloud runtime on its host", () => {
   );
 
   it.live(
+    "reads a machine smol cloud holds in error as stopped, with the error it gives as why",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { runtime, fake } = yield* onHost();
+          const dev = yield* made(runtime, "dev");
+
+          yield* fake.fail(dev.handle, "the node it ran on was lost");
+
+          expect(yield* runtime.observe([dev])).toStrictEqual(
+            new Map([
+              [
+                dev.name,
+                { state: "stopped", why: "the node it ran on was lost" },
+              ],
+            ])
+          );
+        })
+      )
+  );
+
+  it.live(
     "a remove cut short after the machine's delete finishes the checkpoints when sent again",
     () =>
       Effect.scoped(
@@ -454,12 +476,12 @@ describe("the smol cloud runtime on its host", () => {
             instance: "kept-1",
           });
 
-          yield* fake.pausedByOlderHost(dev.handle);
+          yield* fake.capturedUnanswered(dev.handle);
           yield* runtime.start(dev, new Set([kept]));
 
           expect(
             [...fake.checkpoints.keys()],
-            "the pause's own pruned"
+            "the unanswered capture's pruned"
           ).toStrictEqual([kept]);
 
           yield* runtime.capture(dev, { name: "lost", instance: "lost-1" });
@@ -475,31 +497,6 @@ describe("the smol cloud runtime on its host", () => {
   );
 
   it.live(
-    "starts a machine an older host paused by resuming it, and stops it the same way",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { runtime, fake } = yield* onHost();
-          const dev = yield* made(runtime, "dev");
-
-          yield* fake.pausedByOlderHost(dev.handle);
-          expect(fake.machines.get(dev.handle)?.state).toBe("paused");
-
-          yield* runtime.stop(dev);
-          expect(fake.machines.get(dev.handle)?.state).toBe("stopped");
-
-          yield* runtime.start(dev, new Set());
-          yield* fake.pausedByOlderHost(dev.handle);
-          yield* runtime.start(dev, new Set());
-          expect(fake.machines.get(dev.handle)?.state).toBe("started");
-          expect(
-            fake.calls.filter((call) => call.endsWith("/resume 200"))
-          ).toHaveLength(2);
-        })
-      )
-  );
-
-  it.live(
     "logs a start's prune that fails and leaves the start done, and fails a remove's, which finishes when sent again",
     () => {
       const logged: string[] = [];
@@ -509,7 +506,7 @@ describe("the smol cloud runtime on its host", () => {
           const { fake, runtime, failing } = yield* flaky;
           const dev = yield* made(runtime, "dev");
 
-          yield* fake.pausedByOlderHost(dev.handle);
+          yield* fake.capturedUnanswered(dev.handle);
 
           const [own = ""] = fake.checkpoints.keys();
 
@@ -548,7 +545,7 @@ describe("the smol cloud runtime on its host", () => {
   );
 
   it.live(
-    "a start or remove that meets a pause's checkpoint smol cloud still captures waits for the capture to end, then deletes it",
+    "a start or remove that meets an unanswered capture smol cloud still captures waits for the capture to end, then deletes it",
     () => {
       const logged: string[] = [];
 
@@ -560,7 +557,7 @@ describe("the smol cloud runtime on its host", () => {
             const dev = yield* made(runtime, `dev-${ending}`);
             const release = yield* fake.faults.holdCaptures;
 
-            yield* fake.pausedByOlderHost(dev.handle);
+            yield* fake.capturedUnanswered(dev.handle);
 
             const own =
               [...fake.checkpoints.values()].find(
@@ -599,7 +596,7 @@ describe("the smol cloud runtime on its host", () => {
   );
 
   it.live(
-    "a remove whose pause's checkpoint smol cloud refuses as still captured once more after it rests deletes it",
+    "a remove whose unanswered capture smol cloud refuses as still captured once more after it rests deletes it",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -608,7 +605,7 @@ describe("the smol cloud runtime on its host", () => {
           const release = yield* fake.faults.holdCaptures;
 
           yield* fake.faults.lagCaptures(true);
-          yield* fake.pausedByOlderHost(dev.handle);
+          yield* fake.capturedUnanswered(dev.handle);
 
           const own =
             [...fake.checkpoints.values()].find(
@@ -811,8 +808,8 @@ describe("the smol cloud runtime over an account without a card", () => {
           ).pipe(Effect.provide(Logger.layer([capturing(lines)])));
 
           expect(Object.fromEntries(observed)).toStrictEqual({
-            dev: "running",
-            web: "running",
+            dev: { state: "running" },
+            web: { state: "running" },
           });
           expect(
             lines.filter((line) =>

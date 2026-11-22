@@ -31,7 +31,7 @@ import {
   keptBuilds,
   ListFilter,
   Machine,
-  PauseRequest,
+  StopRequest,
   ResizeRequest,
   RestoreRequest,
   Sizing,
@@ -134,19 +134,11 @@ export const Http = ActionHttp.make(
       ...write,
       error: reading,
       description:
-        "Ask for a machine to run: start it, or resume it when it is paused, and prepare it again, also when it runs already. A paused machine resumes only under the runtime pin it booted under; a start that can't resume it fails, saying why, and leaves it paused with its saved state.",
+        "Ask for a machine to run: start it, booting it fresh from its disk, and prepare it again, also when it runs already.",
       input: ById,
       success: Machine,
     }),
     Action.make("stopMachine", {
-      ...write,
-      error: reading,
-      description:
-        "Ask for a machine to stay stopped: a power-off that keeps its disk and ends its processes. A start under way is cut short; a machine still being made is made first, and its create answers Superseded. A paused machine is resumed to end its processes where its runtime resumes one to stop it, and then needs room as a start does and the runtime pin it booted under, and has its saved state discarded where its runtime discards it.",
-      input: ById,
-      success: Machine,
-    }),
-    Action.make("pauseMachine", {
       ...write,
       error: [
         Invalid,
@@ -159,8 +151,8 @@ export const Http = ActionHttp.make(
         Internal,
       ] as const,
       description:
-        "Ask for a machine to stay paused: the runtime saves its RAM, processes and disks and stops its VM, and a start resumes it. A machine that is stopped stays stopped, and one whose VM the runtime can't save, booted under another runtime pin or in a way its runtime can't suspend, is stopped instead; on a runtime that saves no machine, every pause stops it. With `capture`, a checkpoint of that name is captured too, as captureCheckpoint would, in the state its runtime captures a machine in, as its host answers now, and a host that can't be read is Unavailable, recording nothing. Where its runtime captures a running machine, the running machine is captured first and the pause begins once the capture has ended, however it ended, and a machine that isn't running is refused before anything is recorded. Where it captures a stopped machine, or a running or stopped one, and a pause stops it, the pause comes first and the capture takes the stopped machine it leaves. Where it captures a stopped machine and a pause saves it, a pause leaves no machine a capture takes, so the request is refused with WrongState before anything is recorded. A capture of a machine whose VM booted under another runtime pin than its host runs now is refused with PinMismatch before anything is recorded.",
-      input: PauseRequest,
+        "Ask for a machine to stay stopped: a power-off that keeps its disk and ends its processes; a start boots it fresh. A start under way is cut short; a machine still being made is made first, and its create answers Superseded. With `capture`, a checkpoint of that name is captured too, as captureCheckpoint would, as its host answers now, and a host that can't be read is Unavailable, recording nothing. Where its runtime copies a running or stopped machine, the stop comes first and the capture takes the stopped machine it leaves. Where it copies only a running machine, the running machine is captured first and the stop begins once the capture has ended, however it ended, and a machine that isn't running is refused before anything is recorded.",
+      input: StopRequest,
       success: Machine,
     }),
     Action.make("resizeMachine", {
@@ -174,7 +166,7 @@ export const Http = ActionHttp.make(
         Internal,
       ] as const,
       description:
-        "Give a machine other vCPUs, RAM or disk. Its runtime says what a running and what a stopped machine take of vCPUs and RAM: any; only larger ones, live on a running machine, needing room for its RAM as a start does; or none, so stop a running one or start a stopped one first where the other state takes a resize. A paused machine is refused. Sizes past what its runtime gives a machine, or grows a running one to, are Unsizable, naming the limit, and a state its runtime takes no resize in WrongState: before anything is recorded where its host was read and the machine is at rest, and otherwise as the resize's error once its host decides. A disk only grows, and its guest grows its filesystem into it, at once on a machine resized while it runs and at the next boot otherwise. It waits for a step under way, and the next step waits for it; a resize that fails part way keeps what the runtime gave.",
+        "Give a machine other vCPUs, RAM or disk. Its runtime says what a running and what a stopped machine take of vCPUs and RAM: any; only larger ones, live on a running machine, needing room for its RAM as a start does; or none, so stop a running one or start a stopped one first where the other state takes a resize. Sizes past what its runtime gives a machine, or grows a running one to, are Unsizable, naming the limit, and a state its runtime takes no resize in WrongState: before anything is recorded where its host was read and the machine is at rest, and otherwise as the resize's error once its host decides. A disk only grows, and its guest grows its filesystem into it, at once on a machine resized while it runs and at the next boot otherwise. It waits for a step under way, and the next step waits for it; a resize that fails part way keeps what the runtime gave.",
       input: ResizeRequest,
       success: Machine,
     }),
@@ -189,7 +181,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: [...making, WrongState, PinMismatch, NotOffered] as const,
       description:
-        "Copy a machine to a new name, with its sizes or the ones given. A machine is copied only in the state its runtime captures a machine in, as a capture is, and only when its VM booted under the runtime pin its host runs. A machine at rest that its host reads in another state is refused with WrongState, and one whose VM booted under another pin with PinMismatch, before anything is recorded. A copy lands on its source's host and requests the tailnet as its source does, so a fork of one that requests it, on a host that joins no machine to the tailnet, is NotOffered, recording nothing. A fork takes its host's runtime and its source's sizes as the host answers now, so one whose host can't be read is Unavailable, recording nothing; one still moving is recorded, and its host decides. Its copy's vCPUs and RAM follow its runtime: the source's or larger ones, grown live once the copy runs, as far as the runtime grows a running machine; any; or only the source's sizes, its disk's included. A disk otherwise only grows. A copy that fails deletes the new VM and keeps its row, failed, to say why. Where its runtime copies a running or stopped machine, the copy is of the source's disk, after its guest runs sync when it runs, booted fresh, and the source runs on.",
+        "Copy a machine to a new name, with its sizes or the ones given. A machine is copied running or stopped, or only running where its runtime copies no stopped machine, which the refusal says why, as a capture is, and a running one only when its VM booted under the runtime pin its host runs. A machine at rest that its host reads in another state is refused with WrongState, and a running one whose VM booted under another pin with PinMismatch, before anything is recorded. A copy lands on its source's host and requests the tailnet as its source does, so a fork of one that requests it, on a host that joins no machine to the tailnet, is NotOffered, recording nothing. A fork takes its host's runtime and its source's sizes as the host answers now, so one whose host can't be read is Unavailable, recording nothing; one still moving is recorded, and its host decides. Its copy's vCPUs and RAM follow its runtime: the source's or larger ones, grown live once the copy runs, as far as the runtime grows a running machine; any; or only the source's sizes, its disk's included. A disk otherwise only grows. A copy that fails deletes the new VM and keeps its row, failed, to say why. Every copy is of the source's disk, after its guest runs sync when it runs, booted fresh with none of its memory or processes, and the source runs or rests on untouched. Writes the guest synced before the call are in the copy; what it writes after may or may not be. A copy takes longer as the disk grows, more so where the runtime copies a whole disk rather than copy-on-write, as smolvm does for a stopped machine.",
       input: Schema.Struct({ ...ForkRequest.fields, ...Sizing.fields }),
       success: Machine,
     }),
@@ -212,7 +204,7 @@ export const Http = ActionHttp.make(
         Unavailable,
         Internal,
       ] as const,
-      description: `Run a command in a running machine, as the user it names or root, with the environment given, and answer its exit code and output once it exits, whatever the code. It waits for a step under way on the machine before it begins, though not for a capture of it or a fork from it, which run beside it, and its timeout counts from then. It runs as long as the request does: ending the request, or its timeout, ends the command and what it started in the guest, and a timeout answers exit code ${timedOutExitCode} with the output once the host's end has finished, which the host waits for at most ${Duration.format(endTimeout)} past it, with mayStillRun saying why when the host couldn't confirm they had ended, so they may still run. A stop, pause or delete of the machine first ends it so, and it answers WrongState in the phase stopping, pausing or deleting, its message saying when the command may still run. Nothing of it is stored or logged.`,
+      description: `Run a command in a running machine, as the user it names or root, with the environment given, and answer its exit code and output once it exits, whatever the code. It waits for a step under way on the machine before it begins, though not for a capture of it or a fork from it, which run beside it, and its timeout counts from then. It runs as long as the request does: ending the request, or its timeout, ends the command and what it started in the guest, and a timeout answers exit code ${timedOutExitCode} with the output once the host's end has finished, which the host waits for at most ${Duration.format(endTimeout)} past it, with mayStillRun saying why when the host couldn't confirm they had ended, so they may still run. A stop or delete of the machine first ends it so, and it answers WrongState in the phase stopping or deleting, its message saying when the command may still run. Nothing of it is stored or logged.`,
       input: ExecRequest,
       success: Executed,
     }),
@@ -243,7 +235,7 @@ export const Http = ActionHttp.make(
         Internal,
       ] as const,
       description:
-        "Capture a checkpoint of a machine. Its kind is what its runtime's checkpoints keep, `ram` or `disk`. A machine is captured only in the state its runtime captures a machine in, `running`, `stopped` or either, and only when its VM booted under the runtime pin its host runs. A machine at rest that its host reads in another state is refused with WrongState, and one whose VM booted under another runtime pin than its host runs with PinMismatch, before anything is recorded; one its host can't read, or that is still moving, is recorded, and a capture its host then refuses ends `failed`, its `error` saying why. One given `expiresAt` is deleted once that time has passed.",
+        "Capture a checkpoint of a machine, a copy of its disk as a fork takes one. A machine is captured running or stopped, or only running where its runtime copies no stopped machine, and a running one only when its VM booted under the runtime pin its host runs. A machine at rest that its host reads in another state is refused with WrongState, and a running one whose VM booted under another runtime pin than its host runs with PinMismatch, before anything is recorded; one its host can't read, or that is still moving, is recorded, and a capture its host then refuses ends `failed`, its `error` saying why. One given `expiresAt` is deleted once that time has passed.",
       input: CaptureRequest,
       success: Checkpoint,
     }),

@@ -33,6 +33,7 @@ import {
   missing,
   missingCheckpoint,
   Runtime,
+  timeoutFail,
   unshared,
 } from "../../runtime.ts";
 import type {
@@ -42,6 +43,7 @@ import type {
   MachineState,
   Observed,
   Origin,
+  Sighting,
   Target,
 } from "../../runtime.ts";
 import type { HostSettings } from "../../settings.ts";
@@ -56,10 +58,16 @@ import {
 import { rented } from "../tombstones.ts";
 import type { Found, MarkedMachine } from "../tombstones.ts";
 import * as Api from "./api.ts";
-import type { ApiError, ListedSnapshot, Sandbox, SshKey } from "./api.ts";
+import type {
+  ApiError,
+  ListedSnapshot,
+  OwnSandbox,
+  Sandbox,
+  SshKey,
+} from "./api.ts";
 import * as Ssh from "./ssh.ts";
 import type { Pin } from "./ssh.ts";
-import { traits as traitsOf, typeOf, types } from "./traits.ts";
+import { filesBytes, traits as traitsOf, typeOf, types } from "./traits.ts";
 
 export const BoatSettings = Schema.Struct({
   apiKeyFile: Schema.String,
@@ -160,8 +168,61 @@ const readAs: Readonly<Record<Held, MachineState>> = {
   gone: "missing",
 };
 
-const stateOf = (sandbox: Sandbox | undefined): MachineState =>
-  readAs[heldOf(sandbox)];
+const whyOf = (held: Held, error: string | undefined): string | undefined => {
+  if (held === "expired") {
+    return "boat deleted its disk 14 days into a stop";
+  }
+
+  return held === "error"
+    ? (error ?? "boat holds it in error, saying nothing")
+    : error;
+};
+
+/**
+ * A sandbox as `observe` reads it, with `why` boat's `error`, which
+ * https://docs.boat.dev/openapi/boat-v1.yaml's `Sandbox.error` gives for a sandbox stopped, failed
+ * or cancelled, or its dropped data. It gives no reboot mark: only a sandbox's own record holds
+ * one, as `rebootIn` reads it.
+ */
+const sightingOf = (sandbox: Sandbox | undefined): Sighting => {
+  const held = heldOf(sandbox);
+  const why = whyOf(held, sandbox?.error ?? undefined);
+
+  return {
+    state: readAs[held],
+    ...(why === undefined || readAs[held] === "running" ? {} : { why }),
+  };
+};
+
+const neverRebooted = "never";
+
+/**
+ * The reboot mark of a sandbox's own record, `GET /sandboxes/{id}`: when its kernel last restarted
+ * on its machine, as https://docs.boat.dev/openapi/boat-v1.yaml's `Sandbox.lastReboot` gives it, and
+ * `never` where boat answers `lastReboot: null`, a sandbox that never rebooted in place. That is a
+ * mark like any other, so its first reboot differs from it and counts a boot, where no mark would
+ * only have become the baseline its next reboot is counted from: a live account on 2026-11-21 lost
+ * each sandbox's first reboot so. No mark at all stays what a host gives where it has no own record
+ * to read: from a list, whose `lastReboot` is always null, or from an own read that failed, was
+ * throttled, cut short or not due. The control plane keeps the mark it last read through those.
+ * Were a list's null read as `never`, each list read after a reboot would change the mark back,
+ * and the control plane would count a reboot at each read that then found the real one again; so
+ * a list decodes to `Sandbox`, which holds no `lastReboot`, and this takes only an `OwnSandbox`.
+ */
+const rebootIn = (own: OwnSandbox): string =>
+  own.lastReboot?.at ?? neverRebooted;
+
+const ownSightingOf = (own: OwnSandbox | undefined): Sighting => {
+  const seen = sightingOf(own);
+
+  return own === undefined || seen.state !== "running"
+    ? seen
+    : { ...seen, reboot: rebootIn(own) };
+};
+
+const rebootReads = 8;
+
+const rebootReadBudget = Duration.seconds(4);
 
 type Goal = "running" | "stopped" | "gone";
 
@@ -212,6 +273,21 @@ const isType = Schema.is(Api.BoatType);
 const pollEvery = Duration.millis(500);
 
 const listedWithin = Duration.seconds(5);
+
+/**
+ * The bound on boat's save of a sandbox, a fork's or a capture's, which is longer than a step's
+ * 10 minutes: boat's fresh save of a running sandbox runs minutes, and varies by more than three
+ * times on the same data. Measured live on 2026-11-21, a large sandbox holding 90 GiB of random data
+ * saved in 694 s, 906 s and 2807 s, and 100 GiB of sparse file in 177 s and 332 s. Two hours stands
+ * well clear of the slowest; the wait is reads, which hold up no other request, so a longer bound
+ * costs only how late a save that never ends is reported.
+ * It is a total cap, not a stall bound, because nothing boat shows moves while a save runs: the
+ * saved snapshot reads `saving` throughout, and the sandbox's `updatedAt` and
+ * `lastSnapshotAttemptAt` stand still, both seen live through a 15-minute save. A save cut by it
+ * leaves its snapshot, which the source's next start or delete deletes.
+ * https://docs.boat.dev/openapi/boat-v1.yaml (`SavedSnapshot.status`, `Sandbox.lastSnapshotAttemptAt`)
+ */
+const savingWithin = Duration.hours(2);
 
 const internal =
   (what: string) =>
@@ -486,16 +562,31 @@ export const make = (
     // A save of a running sandbox is a fresh capture, which can run minutes, where a fork reads the
     // newest automatic snapshot, up to a minute old:
     // https://docs.boat.dev/snapshots/resume-and-fork
+    // A create from a saved snapshot that is still saving is answered with a sandbox, seen live on
+    // 2026-11-21, so a save is waited out to `ready` before anything is made from it.
+    //
+    // Only the save's request runs whole, as a provider call: the wait for its snapshot after it
+    // is reads, which a later request cuts as on any runtime. A save cut so goes on at boat, under
+    // a name made from the instance, so a fork or capture asked again finds it and waits for it,
+    // and a snapshot already saved from the machine under that name stands for a new one: a POST
+    // over it would wait out its save inside the call's 10 minutes, then save afresh.
     const savedAs = (machine: Target, name: string, what: string) =>
       Effect.gen(function* () {
-        yield* api.save(machine.handle, name).pipe(
-          Effect.catchTag("Unanswered", (lost) =>
-            Effect.flatMap(api.saved(name), (found) =>
-              found === undefined ? Effect.fail(lost) : Effect.void
-            )
-          ),
-          Effect.mapError(failure(`${what} ${machine.name}`))
-        );
+        const before = yield* api
+          .saved(name)
+          .pipe(Effect.mapError(internal(`couldn't read snapshot ${name}`)));
+
+        if (before?.sourceSandboxId !== machine.handle) {
+          yield* api.save(machine.handle, name).pipe(
+            Effect.catchTag("Unanswered", (lost) =>
+              Effect.flatMap(api.saved(name), (found) =>
+                found === undefined ? Effect.fail(lost) : Effect.void
+              )
+            ),
+            Effect.mapError(failure(`${what} ${machine.name}`)),
+            bounded("boat", `${what} ${machine.name}'s save`)
+          );
+        }
 
         const snapshot = yield* untilRest(
           api
@@ -503,11 +594,68 @@ export const make = (
             .pipe(Effect.mapError(internal(`couldn't read snapshot ${name}`))),
           (found) => found === undefined || settled.has(found.status),
           pollEvery
+        ).pipe(
+          timeoutFail(
+            savingWithin,
+            () =>
+              new Internal({
+                message: `boat is still saving ${machine.name} as ${name} after ${Duration.format(savingWithin)}, so this ${what} failed though nothing is wrong with the machine: boat's saves of one disk have taken from 11 to 47 minutes. Asking for a ${what} again starts a fresh save, and may succeed. The save left running, ${name}, is billed as a snapshot until ${machine.name}'s next start or delete deletes it, and each ${what} asked again that also runs out leaves another`,
+              })
+          )
         );
 
         if (snapshot?.status !== "ready") {
           return yield* new Internal({
             message: `boat's save of ${machine.name} as ${name} failed: ${snapshot?.error ?? "it is gone"}`,
+          });
+        }
+
+        return snapshot;
+      });
+
+    /**
+     * Fails `Unsizable` where the data saved in `snapshot` is more than `type` holds, which boat's
+     * create from a saved snapshot doesn't check, where its `/fork` and resume do. Without it boat
+     * makes a silent partial copy: measured live on 2026-11-21, 90 GiB saved and made a small came
+     * up `idle` and healthy, `ls` showing every file at full size, and the files past its disk
+     * failed `Input/output error` on their first read. A save whose size boat doesn't say goes only
+     * to a type that holds at least as much as its source's.
+     * https://docs.boat.dev/machines/change-size.md
+     */
+    const fits = (
+      source: Target,
+      snapshot: Api.SavedSnapshot,
+      type: Api.BoatType,
+      name: string
+    ): Effect.Effect<void, Internal | Unsizable> =>
+      Effect.gen(function* () {
+        const summaries = yield* api
+          .snapshotsOf(source.handle)
+          .pipe(
+            Effect.mapError(
+              internal(`couldn't read the snapshots of ${source.name}`)
+            )
+          );
+
+        const held = summaries.find(
+          ({ id }) => id === snapshot.snapshotId
+        )?.contentSizeBytes;
+
+        if (held === undefined || held === null) {
+          const from = (yield* read(source))?.type;
+
+          if (isType(from) && filesBytes[from] <= filesBytes[type]) {
+            return;
+          }
+
+          return yield* new Unsizable({
+            message: `boat didn't say how much data ${source.name} holds, so ${name} isn't made at boat's ${type} type, which may hold less than its source's ${from ?? "type"}`,
+          });
+        }
+
+        if (held > filesBytes[type]) {
+          return yield* new Unsizable({
+            message: `machine ${name}'s source ${source.name} holds ${(held / 1e9).toFixed(1)} GB of data, more than the ${filesBytes[type] / 1e9} GB boat's ${type} type takes`,
           });
         }
       });
@@ -520,6 +668,130 @@ export const make = (
       Effect.map(api.sandboxes(labelsOf(machine)), (found) =>
         found.find((sandbox) => heldOf(sandbox) !== "cancelled")
       );
+
+    /**
+     * The reboot marks of the sandboxes a list read finds running, from their own records, read
+     * only where boat may have set one since. boat's list answers `lastReboot: null` where
+     * `GET /sandboxes/{id}` holds one, though https://docs.boat.dev/openapi/boat-v1.yaml types both
+     * as `Sandbox`, as a live account showed three times on 2026-11-21; so a host never reads the
+     * mark from the list, until a live run shows boat fills it there.
+     *
+     * It rests on `updatedAt`, which the list does fill: a sandbox's own record is read the first
+     * time a list finds it running, and again only once its `updatedAt` in the list differs from the
+     * one the list gave at its last own read. It is the list's `updatedAt` the host keeps, as the
+     * record's can trail the list's by about a second. On that account on 2026-11-21, a running
+     * sandbox's `updatedAt` held still through 5 idle minutes, its minutely snapshots and an exec
+     * included, and moved 10 to 25 s after each of five `systemctl reboot`s, a stop, and twice on a
+     * resume. In none of the five did the list's `updatedAt` move before the record held the new
+     * `lastReboot`, read about every 1.2 s; boat documents neither. Should boat stop moving
+     * `updatedAt` on a reboot, a host of two or more boat machines misses each reboot in place;
+     * should it move it more often, the host only reads more.
+     *
+     * Should boat ever move `updatedAt` before it sets `lastReboot`, by less than those reads could
+     * see, a read the move made would find no new mark, and the reboot would land later with no
+     * move left to read it by. So a read made because `updatedAt` moved that finds the mark it last
+     * saw owes one more read of that record at the next check, about 30 s later, before the sandbox
+     * goes back to the list alone. That costs one read per move, which a stop, a resume or a reboot
+     * makes, and catches a reboot boat records within a check of moving `updatedAt`; one it records
+     * later than that is still missed.
+     *
+     * A list that finds a sandbox not running, or lacks it, forgets it, so its next run is read
+     * afresh, as the control plane takes a new reboot mark after each start that boots a machine,
+     * and a host that makes and deletes many machines keeps none of the deleted. A read that
+     * fails, that boat throttles with a 429, or that `rebootReadBudget` cuts short, inside the 9 s
+     * a host's read is bounded to, records nothing, so the next list reads it again: the observe
+     * answers the list's state meanwhile, the control plane keeps the mark it last read, and the
+     * reboot counts a check later. Steady, that is the list alone; a host's first read after it
+     * starts reads every running sandbox once, about 300 within the budget, and the rest at the
+     * checks after.
+     */
+    const ownRead = new Map<
+      string,
+      {
+        readonly updatedAt: string | undefined;
+        readonly reboot: string | undefined;
+        readonly owed: boolean;
+      }
+    >();
+
+    const remember = (
+      sandbox: OwnSandbox | undefined,
+      handle: string,
+      updatedAt: string | undefined
+    ) => {
+      if (sandbox === undefined || heldOf(sandbox) !== "running") {
+        ownRead.delete(handle);
+
+        return;
+      }
+
+      const last = ownRead.get(handle);
+      const reboot = rebootIn(sandbox);
+
+      ownRead.set(handle, {
+        updatedAt,
+        reboot,
+        owed:
+          last !== undefined &&
+          last.updatedAt !== updatedAt &&
+          last.reboot === reboot,
+      });
+    };
+
+    const rebootsOf = (
+      inList: readonly Sandbox[],
+      hostListed: readonly Sandbox[]
+    ) =>
+      Effect.gen(function* () {
+        const found = new Map<string, string>();
+
+        const runningNow = new Set(
+          hostListed.flatMap((sandbox) =>
+            heldOf(sandbox) === "running" ? [sandbox.id] : []
+          )
+        );
+
+        for (const handle of ownRead.keys()) {
+          if (!runningNow.has(handle)) {
+            ownRead.delete(handle);
+          }
+        }
+
+        const due = inList.filter((sandbox) => {
+          const last = ownRead.get(sandbox.id);
+
+          return (
+            heldOf(sandbox) === "running" &&
+            (last === undefined ||
+              last.owed ||
+              last.updatedAt !== (sandbox.updatedAt ?? undefined))
+          );
+        });
+
+        yield* Effect.forEach(
+          due,
+          ({ id, updatedAt }) =>
+            api.sandbox(id).pipe(
+              Effect.tap((own) =>
+                Effect.sync(() => {
+                  if (own !== undefined) {
+                    found.set(id, rebootIn(own));
+                  }
+
+                  remember(own, id, updatedAt ?? undefined);
+                })
+              ),
+              Effect.catch((error) =>
+                Effect.logDebug(
+                  `couldn't read ${id}'s reboot mark, so this read keeps the last: ${error.message}`
+                )
+              )
+            ),
+          { concurrency: rebootReads, discard: true }
+        ).pipe(Effect.timeoutOption(rebootReadBudget));
+
+        return found;
+      });
 
     const markedMachines = Effect.gen(function* () {
       const sandboxes = yield* api.sandboxes(mark);
@@ -540,22 +812,35 @@ export const make = (
       });
     }).pipe(Effect.mapError(internal("couldn't list what this host marked")));
 
+    /**
+     * Unsaves each snapshot of `machine` that `keep` doesn't name, and answers those boat still
+     * saves, which it refuses to delete until they are saved: seen live on 2026-11-21 as
+     * `snapshot_not_ready`, https://docs.boat.dev/openapi/boat-v1.yaml (`SavedSnapshot.status`).
+     */
     const prune = (machine: Target, keep: ReadonlySet<Handle>) =>
       Effect.gen(function* () {
         const saved = yield* snapshots.pipe(
           Effect.mapError(internal("couldn't list saved snapshots"))
         );
 
+        const saving: Handle[] = [];
+
         yield* Effect.forEach(
           heldBy(saved, machine.handle).filter((handle) => !keep.has(handle)),
           (handle) =>
-            api
-              .unsave(handle)
-              .pipe(
-                Effect.mapError(internal(`couldn't delete snapshot ${handle}`))
+            api.unsave(handle).pipe(
+              Effect.catchIf(
+                (error) =>
+                  error._tag === "Refused" &&
+                  error.code === "snapshot_not_ready",
+                () => Effect.sync(() => saving.push(handle))
               ),
+              Effect.mapError(internal(`couldn't delete snapshot ${handle}`))
+            ),
           { discard: true }
         );
+
+        return saving;
       });
 
     const listed = (machine: Identity) =>
@@ -733,27 +1018,49 @@ export const make = (
 
         if (machines.length === 1 && only !== undefined) {
           return api.sandbox(only.handle).pipe(
-            Effect.map(
-              (sandbox): Observed => new Map([[only.name, stateOf(sandbox)]])
-            ),
+            Effect.map((sandbox): Observed => {
+              remember(sandbox, only.handle, sandbox?.updatedAt ?? undefined);
+
+              return new Map([[only.name, ownSightingOf(sandbox)]]);
+            }),
             Effect.mapError(internal(`couldn't read ${only.name}`))
           );
         }
 
         return api.sandboxes(mark).pipe(
-          Effect.map((sandboxes): Observed => {
+          Effect.mapError(internal("couldn't list this host's machines")),
+          Effect.flatMap((sandboxes) => {
             const byId = new Map(
               sandboxes.map((sandbox) => [sandbox.id, sandbox])
             );
 
-            return new Map(
-              machines.map((machine) => [
-                machine.name,
-                stateOf(byId.get(machine.handle)),
-              ])
+            const seen = machines.map(
+              (machine) =>
+                [machine, sightingOf(byId.get(machine.handle))] as const
             );
-          }),
-          Effect.mapError(internal("couldn't list this host's machines"))
+
+            return Effect.map(
+              rebootsOf(
+                machines.flatMap(({ handle }) => {
+                  const found = byId.get(handle);
+
+                  return found === undefined ? [] : [found];
+                }),
+                sandboxes
+              ),
+              (reboots): Observed =>
+                new Map(
+                  seen.map(([machine, sighting]) => {
+                    const reboot = reboots.get(machine.handle);
+
+                    return [
+                      machine.name,
+                      reboot === undefined ? sighting : { ...sighting, reboot },
+                    ];
+                  })
+                )
+            );
+          })
         );
       },
 
@@ -785,69 +1092,96 @@ export const make = (
               : undefined;
 
           if (origin._tag === "machine" && through !== undefined) {
-            yield* savedAs(origin.machine, through, "fork");
-          }
+            const source = origin.machine;
 
-          if (origin._tag === "checkpoint") {
-            const { checkpoint } = origin;
+            yield* Effect.gen(function* () {
+              const snapshot = yield* savedAs(source, through, "fork");
 
-            const snapshot = yield* api
-              .saved(checkpoint.handle)
-              .pipe(
-                Effect.mapError(
-                  internal(`couldn't read snapshot ${checkpoint.handle}`)
-                )
-              );
-
-            if (snapshot === undefined) {
-              return yield* missingCheckpoint(traits.runtime, checkpoint);
-            }
-          }
-
-          const fromMachine = (source: Target) =>
-            through === undefined
-              ? api.fork(source.handle, { type, labels }, key)
-              : api.create(
-                  { type, labels, name: machine.name, from: through },
-                  key
-                );
-
-          const sent =
-            origin._tag === "machine"
-              ? fromMachine(origin.machine)
-              : api.create(
-                  { type, labels, name: machine.name, ...createdFrom(origin) },
-                  key
-                );
-
-          const sandbox = yield* landed(machine, sent).pipe(
-            Effect.mapError((error) =>
-              error._tag === "Refused" && error.code === "type_too_small"
-                ? new Unsizable({
-                    message: `machine ${machine.name}'s source holds more data than boat's ${type} type takes: ${error.message}`,
-                  })
-                : failure(`make ${machine.name}`)(error)
-            )
-          );
-
-          const handle = Handle.make(sandbox.id);
-
-          yield* ready({ ...machine, handle }, "make");
-
-          if (through !== undefined) {
-            yield* api
-              .unsave(through)
-              .pipe(
-                Effect.catch((error) =>
-                  Effect.logWarning(
-                    `make ${machine.name}: couldn't delete snapshot ${through}, which its source's next start or delete deletes: ${error.message}`
+              yield* fits(source, snapshot, type, machine.name).pipe(
+                Effect.tapError(() =>
+                  api.unsave(through).pipe(
+                    bounded(
+                      "boat",
+                      `make ${machine.name}'s unsave of ${through}`
+                    ),
+                    Effect.catch((error) =>
+                      Effect.logWarning(
+                        `make ${machine.name}: couldn't delete snapshot ${through} after refusing the fork, so it bills until ${source.name}'s next start or delete deletes it: ${error.message}`
+                      )
+                    )
                   )
                 )
               );
+            });
           }
 
-          return { handle, sizes: types[type] };
-        }).pipe(bounded("boat", `make ${machine.name}`)),
+          return yield* Effect.gen(function* () {
+            if (origin._tag === "checkpoint") {
+              const { checkpoint } = origin;
+
+              const snapshot = yield* api
+                .saved(checkpoint.handle)
+                .pipe(
+                  Effect.mapError(
+                    internal(`couldn't read snapshot ${checkpoint.handle}`)
+                  )
+                );
+
+              if (snapshot === undefined) {
+                return yield* missingCheckpoint(traits.runtime, checkpoint);
+              }
+            }
+
+            const fromMachine = (source: Target) =>
+              through === undefined
+                ? api.fork(source.handle, { type, labels }, key)
+                : api.create(
+                    { type, labels, name: machine.name, from: through },
+                    key
+                  );
+
+            const sent =
+              origin._tag === "machine"
+                ? fromMachine(origin.machine)
+                : api.create(
+                    {
+                      type,
+                      labels,
+                      name: machine.name,
+                      ...createdFrom(origin),
+                    },
+                    key
+                  );
+
+            const sandbox = yield* landed(machine, sent).pipe(
+              Effect.mapError((error) =>
+                error._tag === "Refused" && error.code === "type_too_small"
+                  ? new Unsizable({
+                      message: `machine ${machine.name}'s source holds more data than boat's ${type} type takes: ${error.message}`,
+                    })
+                  : failure(`make ${machine.name}`)(error)
+              )
+            );
+
+            const handle = Handle.make(sandbox.id);
+
+            yield* ready({ ...machine, handle }, "make");
+
+            if (through !== undefined) {
+              yield* api
+                .unsave(through)
+                .pipe(
+                  Effect.catch((error) =>
+                    Effect.logWarning(
+                      `make ${machine.name}: couldn't delete snapshot ${through}, which its source's next start or delete deletes: ${error.message}`
+                    )
+                  )
+                );
+            }
+
+            return { handle, sizes: types[type] };
+          }).pipe(bounded("boat", `make ${machine.name}`));
+        }),
       start: (machine, keep) =>
         Effect.gen(function* () {
           yield* sentUntilHeld({
@@ -886,6 +1220,13 @@ export const make = (
           });
           yield* ready(machine, "start");
           yield* prune(machine, keep).pipe(
+            Effect.flatMap((saving) =>
+              saving.length === 0
+                ? Effect.void
+                : Effect.logInfo(
+                    `start ${machine.name}: boat is still saving ${saving.join(", ")}, which it deletes only once saved, so the machine's next start or delete deletes it`
+                  )
+            ),
             Effect.catch((error) =>
               Effect.logWarning(
                 `${error.message}, so the machine's next start or delete prunes it`
@@ -895,18 +1236,62 @@ export const make = (
         }).pipe(bounded("boat", `start ${machine.name}`)),
       stop: (machine) =>
         bounded("boat", `stop ${machine.name}`)(stopped(machine)),
-      pause: (machine) =>
-        bounded("boat", `pause ${machine.name}`)(stopped(machine)),
       delete: (machine, keep) =>
         Effect.gen(function* () {
-          yield* prune(machine, keep);
-          yield* api
-            .remove(machine.handle)
-            .pipe(Effect.mapError(internal(`couldn't delete ${machine.name}`)));
-          yield* toward(machine, "gone");
-          yield* prune(machine, keep);
+          const saving = yield* Effect.gen(function* () {
+            yield* prune(machine, keep);
+            yield* api
+              .remove(machine.handle)
+              .pipe(
+                Effect.mapError(internal(`couldn't delete ${machine.name}`))
+              );
+            yield* toward(machine, "gone");
+
+            return yield* prune(machine, keep);
+          }).pipe(bounded("boat", `delete ${machine.name}`));
+
           pins.delete(machine.handle);
-        }).pipe(bounded("boat", `delete ${machine.name}`)),
+
+          if (saving.length === 0) {
+            return;
+          }
+
+          yield* Effect.logInfo(
+            `delete ${machine.name}: boat is still saving ${saving.join(", ")} from it, and deletes a snapshot only once it is saved, so the delete waits for that save`
+          );
+          yield* Effect.forEach(
+            saving,
+            (name) =>
+              untilRest(
+                api
+                  .saved(name)
+                  .pipe(
+                    Effect.mapError(internal(`couldn't read snapshot ${name}`))
+                  ),
+                (found) => found === undefined || settled.has(found.status),
+                pollEvery
+              ),
+            { discard: true }
+          ).pipe(
+            timeoutFail(
+              savingWithin,
+              () =>
+                new Internal({
+                  message: `delete ${machine.name}: boat's save of ${saving.join(", ")} didn't end within ${Duration.format(savingWithin)}, so the snapshot is left until this delete runs again`,
+                })
+            )
+          );
+
+          const left = yield* prune(machine, keep).pipe(
+            bounded("boat", `delete ${machine.name}'s snapshots`)
+          );
+
+          if (left.length > 0) {
+            return yield* new Internal({
+              message: `delete ${machine.name}: boat still holds ${left.join(", ")} as saving after its save ended`,
+            });
+          }
+        }),
       capture: (machine, checkpoint) =>
         Effect.gen(function* () {
           const name = snapshotName(checkpoint);
@@ -915,7 +1300,7 @@ export const make = (
           yield* savedAs(machine, name, "capture");
 
           return Handle.make(name);
-        }).pipe(bounded("boat", `capture ${machine.name}`)),
+        }),
       resize: (machine, to) =>
         Effect.gen(function* () {
           const type = yield* typeFor(sizedBy(machine, to), machine.name);

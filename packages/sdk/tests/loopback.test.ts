@@ -217,7 +217,7 @@ describe("loopback", () => {
           });
 
           const error = yield* calling(url, (client) =>
-            Effect.flip(client.pauseMachine({ id: "dev" }))
+            Effect.flip(client.stopMachine({ id: "dev" }))
           );
 
           expect(error, `${status}`).toMatchObject(
@@ -227,8 +227,8 @@ describe("loopback", () => {
           );
           expect(error.message, `${status}`).toBe(
             status === 503
-              ? "no reply from the control plane to pauseMachine dev (HTTP 503); the action may have run: read dev to see"
-              : `the control plane answered pauseMachine dev unexpectedly: Decode error (${status} POST ${url}/api/pauseMachine)`
+              ? "no reply from the control plane to stopMachine dev (HTTP 503); the action may have run: read dev to see"
+              : `the control plane answered stopMachine dev unexpectedly: Decode error (${status} POST ${url}/api/stopMachine)`
           );
         }
       }).pipe(Effect.scoped)

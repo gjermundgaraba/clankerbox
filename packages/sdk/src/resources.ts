@@ -18,9 +18,6 @@ import {
 } from "./ids.ts";
 import { Size, Sizes } from "./sizes.ts";
 
-/** What a checkpoint holds: a running machine's memory and disk, or its disk alone. */
-export const CheckpointKind = Schema.Literals(["ram", "disk"]);
-
 /**
  * The user a machine with an SSH login is logged in as: the user a host's preparation creates, or a
  * base ships, for whom the host installs the operator's keys; never root.
@@ -91,13 +88,16 @@ export const labelledWith = (
 
 /**
  * What the control plane is doing about a machine. A client waits for a rest:
- * `settled`, at rest with what was asked; `failed`, after a step failed, until the next request;
+ * `settled`, at rest with what was asked; `failed`, after a step failed, or after its runtime
+ * stopped a machine asked to run (`Machine.unasked`), until the next request, as nothing is retried.
+ * A machine `failed` so, as a routine idle stop on boat or smol cloud leaves it, is intact, its
+ * disk kept, and waits to be started: answer it with a start, never a delete and a create again,
+ * which loses its disk;
  * and `lost`, one the runtime no longer has, which can only be deleted. `waiting` is no rest: the
  * control plane can't read the machine's host, so it tells nothing of a request, which stays saved
  * and acts when it can, and a wait reads on through it as through an outage. `creating` makes or
  * copies the machine, and a machine whose create fails is deleted, its row kept `failed` to say
- * why. `starting` starts the machine, also when it runs already, resumes a paused one, and
- * prepares it.
+ * why. `starting` starts the machine, also when it runs already, and prepares it.
  */
 export const Phase = Schema.Literals([
   "observing",
@@ -105,7 +105,6 @@ export const Phase = Schema.Literals([
   "creating",
   "starting",
   "stopping",
-  "pausing",
   "resizing",
   "deleting",
   "settled",
@@ -202,8 +201,34 @@ export const templateRef = (
 };
 
 /**
- * `state` is what the runtime reports: `paused` while it holds the machine's saved execution,
- * `missing` when it doesn't have the machine, and `unknown` when it couldn't be read. `desired` is
+ * A change to a machine that no request asked for, as a read of its runtime found it. A stop is
+ * asked for, so it is never one.
+ * - `stopped`: a machine asked to run that its runtime stopped, its memory and processes gone. The
+ *   control plane doesn't start it again: it rests `failed`, its `error` a `WrongState` saying so,
+ *   until a request asks it to run, and a start boots it cold.
+ * - `started`: one asked to stay stopped that runs, which the control plane stops again.
+ * - `rebooted`: one its runtime reports booted again in place while it ran.
+ * - `lost`: one its runtime no longer has, which can only be deleted.
+ *
+ * A disk its runtime put back to older files, or a `/workspace` it emptied, as smol cloud may to a
+ * machine that loses its node, is none of these, and nothing detects it: a machine the loss left
+ * stopped where it ran records `stopped` alone, and one that comes back running records nothing at
+ * all.
+ *
+ * `at` is the read that found it, so the change came at or before it. `why` is the cause, on a
+ * `stopped` or `lost` machine, in its runtime's own words where it names one, such as an idle stop
+ * or an out-of-memory kill, and without it the runtime didn't say.
+ */
+export const Unasked = Schema.Struct({
+  what: Schema.Literals(["stopped", "started", "rebooted", "lost"]),
+  at: Schema.DateTimeUtcFromString,
+  why: Schema.optionalKey(Schema.String),
+}).annotate({ identifier: "Unasked" });
+
+export type Unasked = typeof Unasked.Type;
+
+/**
+ * `state` is what the runtime reports: `missing` when it doesn't have the machine, and `unknown` when it couldn't be read. `desired` is
  * what the last request asked for, `phase` what the control plane is doing about it, and `error`
  * why the last step failed, until the next request. A request takes the row out of rest in the
  * write that records it, so a resting `phase` read after a request has seen it. `template` is the
@@ -213,7 +238,19 @@ export const templateRef = (
  * on a machine with a `hostKey` and an endpoint, while it runs, or while its host can't be read
  * (`state` `unknown`) and it was last read running and is asked to run still. `tailnet` is on a
  * machine that requests the tailnet, as a create from a base asks, its template's build asked, or
- * the source of its fork or restore asked.
+ * the source of its fork or restore asked. `boots` counts the cold boots the machine ran in that the
+ * control plane knows of: its first, each start that booted it from stopped, each reboot in place
+ * its runtime reported, and each read that found it running while asked to stay stopped. While it
+ * holds, its memory and processes are those of one boot, but for a stop and start its runtime made
+ * by itself between two reads, which only a runtime that reports its reboots shows. A reboot in
+ * place between a start's boot and the next read isn't counted either, as that read takes the
+ * runtime's reboot mark afresh; it costs little, as it comes right after a cold boot already
+ * counted, and the first read after a make was always so. A runtime that reports reboots reports
+ * a machine that never rebooted in place as such, so its first reboot counts as each later one does.
+ * A boot a host makes inside another step
+ * that leaves the machine stopped, as a fork may, counts none, as nothing ran in it for the
+ * machine's owner. A copy counts its own from its first.
+ * `unasked` is the last change no request asked for, kept until another replaces it.
  */
 export const Machine = Schema.Struct({
   id: Name,
@@ -223,16 +260,12 @@ export const Machine = Schema.Struct({
   template: Schema.optionalKey(BuildId),
   ...labelled,
   ...Sizes.fields,
-  state: Schema.Literals([
-    "running",
-    "stopped",
-    "paused",
-    "missing",
-    "unknown",
-  ]),
+  state: Schema.Literals(["running", "stopped", "missing", "unknown"]),
   desired: Desired,
   phase: Phase,
   error: Schema.optionalKey(HostError),
+  boots: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  unasked: Schema.optionalKey(Unasked),
   ssh: Schema.optionalKey(SshLogin),
   hostKey: Schema.optionalKey(Schema.String),
   tailnet: Schema.optionalKey(MachineTailnet),
@@ -263,16 +296,14 @@ export const stateLabel = ({ state, desired, phase }: Machine): string => {
 };
 
 /**
- * `kind` is its machine's runtime's `checkpoint` trait: `ram` holds RAM and disks, and `disk` the
- * disks alone. A client waits on `phase`: a checkpoint is usable only `ready`,
- * and never changes after. A capture that failed stays `failed` to say why, holding no copy. One
+ * A copy of a machine's disk, as a fork takes one. A client waits on `phase`: a checkpoint is
+ * usable only `ready`, and never changes after. A capture that failed stays `failed` to say why, holding no copy. One
  * with `expiresAt` is deleted by the control plane once that time has passed.
  */
 export const Checkpoint = Schema.Struct({
   id: Name,
   createdAt: Schema.DateTimeUtcFromString,
   machine: Name,
-  kind: CheckpointKind,
   phase: Schema.Literals(["capturing", "ready", "deleting", "failed"]),
   error: Schema.optionalKey(HostError),
   base: Schema.String,
@@ -614,17 +645,17 @@ export const CaptureRequest = Schema.Struct({
 export type CaptureRequest = typeof CaptureRequest.Type;
 
 /**
- * A pause of machine `id`. With `capture`, a checkpoint of that name is captured first, and the
- * pause begins once the capture has ended, however it ended: the checkpoint's row says how.
+ * A stop of machine `id`. With `capture`, a checkpoint of that name is captured too, before or after
+ * the stop as `stopMachine`'s description says.
  */
-export const PauseRequest = Schema.Struct({
+export const StopRequest = Schema.Struct({
   id: Name,
   capture: Schema.optionalKey(
     Schema.Struct({ name: CheckpointName, ...labelled, ...expiring })
   ),
 });
 
-export type PauseRequest = typeof PauseRequest.Type;
+export type StopRequest = typeof StopRequest.Type;
 
 const ArgumentText = Schema.String.check(
   Schema.makeFilter(

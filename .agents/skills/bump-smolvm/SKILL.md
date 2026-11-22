@@ -20,7 +20,7 @@ separately, and don't deploy, change production hosts, or commit unless asked.
   `smolvm --version` that isn't a `major.minor.patch` at or above it.
   `requirements.test.ts` fails until README states it. `pin` (`smolvm
   <version> <platform>-<arch>`) names the release the host's smolvm reports,
-  and is recorded on every `ram` checkpoint and every paused machine. The
+  and is recorded on every machine and checkpoint. The
   tested release appears in README (the install snippet, the
   `runtime.smolvm.prefix` example), Notation below and the permalinks: `git grep -n '<old version>'`
   finds every place. README pins the `ubuntu` base by digest.
@@ -189,10 +189,10 @@ as it is.
   alive, agent silent) has its VMM killed and its record cleared, then starts
   afresh (`cli_recover_if_unreachable` in `start_vm_named_with_db`,
   src/cli/vm_common.rs), and `frozen`, `paused` and `pausing` are refused. Ours:
-  `start` reads `machine status` first, leaves `running` as it is, boots
-  `unreachable` again, resumes `resumable` with `machine resume` and refuses
-  `frozen` before anything native. `copyable` takes only `running`, so an
-  unreachable source is refused, and the RAM budget counts `unreachable` as
+  `start` reads `machine status` first, leaves `running` as it is, refuses
+  `frozen` before anything native and otherwise runs `machine start`, so
+  smolvm refuses a machine something else paused. `copyable` takes `running` and any state
+  without a live VMM, so an unreachable source is refused, and the RAM budget counts `unreachable` as
   running. The ping's socket waits 3 s to read and 3 s to write
   (`connect_for_state_probe`, src/agent/client.rs), so `machine status` reads an
   unreachable machine within the host's 8 s `machineReadWait`.
@@ -238,9 +238,9 @@ as it is.
   `DeleteCmd`, src/cli/machine.rs). `exec` refuses a stopped machine. `delete`
   removes the record only after the process is dead and storage removed. A
   `machine stop` of an unknown name says "vm not found" but leaves an empty
-  `vms/<hash>/`. Ours: stop reads `machine status` first and stops only a
-  running machine, resuming a `resumable` one first, its workload given its
-  stop timeout; delete reads it first
+  `vms/<hash>/`. Ours: stop reads `machine status` first and stops only one
+  with a live VMM (`alive`), its workload given its stop timeout, so a
+  `paused` machine is left as it is; delete reads it first
   too, stops with `--timeout 0` (the guest still syncs and acks), kills a
   still-loaded scope with SIGKILL (the signal smolvm's own `kill_scope` sends,
   src/systemd_scope.rs), then `machine delete -f` and `systemctl
@@ -266,14 +266,9 @@ as it is.
   hard-links each backing layer another owner holds (the prefix's templates, a
   seed) into the machine's data dir and packs into its file one it can't link,
   such as one on another filesystem, and the next layer still pins
-  (`LayerPins`, src/portable_checkpoint.rs). Ours:
-  `resumable` (`paused`, `pausing`); `pause` reads `machine status` first,
-  leaves `paused` as it is, resumes `pausing` before it pauses and refuses
-  anything else not `running` with `WrongState`; the core records the release
-  pin a machine boots under and pauses only a machine booted under the host's,
-  stopping any other, so a paused machine resumes only under the smolvm build
-  that paused it; a pause works with the prefix and the state dir on
-  different filesystems, packing the templates into the pause file.
+  (`LayerPins`, src/portable_checkpoint.rs). Ours: the host never runs
+  `machine pause` or `machine resume`, and reads a machine something else
+  paused by `stateOf` below.
 - `machine status --name X --json` states are `created`, `running`, `stopped`,
   `paused`, `pausing`, `failed`, `unreachable` and `frozen` (`RecordState`,
   src/config.rs); an unknown name is "machine '<name>' not found"
@@ -328,8 +323,7 @@ as it is.
   `memory_mib` and `storage_gb`, null for the default 20 GiB
   (`machine_status_json`, src/cli/vm_common.rs; `DEFAULT_STORAGE_SIZE_GIB`,
   src/data/storage.rs). Ours: the traits' `resize.running` is `grow`, so the
-  core refuses a paused
-  machine, a smaller disk and a running machine's shrinks before anything
+  core refuses a smaller disk and a running machine's shrinks before anything
   native. `resize` sends a stopped machine one `machine update` with every size
   the request names, and a running one a `machine resize` per named size, RAM,
   then vCPUs, then disk (`grown`), also a size the record holds, so asking for
@@ -337,10 +331,12 @@ as it is.
   the machine keeps, and a size it keeps that `unfinishedRefusal` refuses goes
   on to the next. `sizes` and `decodeSizes` read the record back after every
   resize and at each host's start, which reads eight at once, reading
-  a null `storage_gb` as `defaultStorageGib`. A `ram` restore or fork comes up
-  with its source's vCPUs and RAM, so the core refuses a copy's smaller ones
-  before the copy, and `restoreRam` grows a larger copy live with the sizes
-  that differ from its source's once it boots. The limits are traits
+  a null `storage_gb` as `defaultStorageGib`. A copy made from a RAM
+  checkpoint, the restore of a running machine's capture or a running
+  machine's fork, comes up
+  with its source's vCPUs and RAM, so `rebootedFrom` boots it, stops it,
+  gives it the sizes that differ from its source's with `machine update`
+  and boots it again, and `copies` is `any`. The limits are traits
   (`platform/smolvm/traits.ts`). The control plane checks them before it
   records a create or a copy. It checks a resize before it records it only
   when it knows the machine's host and the machine is made. Otherwise it
@@ -544,8 +540,7 @@ as it is.
   `listen.address`; a make's claim probes the IPv4 address before the port
   is given, and `admit` probes a machine's port before every boot of it but
   a running resize's (`checkPort`, `machine-ports.ts`), answering
-  `Capacity` with no smolvm call where another program holds it, rather
-  than moving a port the VM of a paused machine can't leave.
+  `Capacity` with no smolvm call where another program holds it.
 - Setting `SMOLVM_PUBLISH_ADDR` makes the egress floor strict by default; the
   values are `strict`, `metadata` and `off` (`floor_mode`,
   crates/smolvm-network/src/egress.rs), and no per-machine flag weakens strict
@@ -575,7 +570,7 @@ as it is.
   empty `-p` keeping them (`resolve`, `SpecSource::Checkpoint`,
   src/machine_spec.rs, called in `run_from_smolmachine`, src/cli/machine.rs).
   Ours: the floor is 1.34.0 for it; a restore or fork passes `-p <port>:22`,
-  every machine's one forward, in the create (`createdFrom`, `restoreRam`), and
+  every machine's one forward, in the create (`createdFrom`, `unpacked`), and
   a base's park passes none and removes the forwards with `machine update
   --remove-port` before its first start.
 - smolvm's own fork ports come from 20000–31999: `CLONE_PORT_FLOOR` (20000) up
@@ -606,10 +601,10 @@ as it is.
   300 s) and hints its free pages, both best-effort
   (`release_free_guest_memory`). `machine resume` takes no `--branchable`,
   and resumes branchable only on x86_64 Linux (`resume_vm`,
-  src/embedded/control.rs). Ours: every start passes `--branchable`, and
-  README's smolvm hosts are amd64, so a resumed machine stays branchable; a
-  capture or fork of a stopped machine is `WrongState` before anything native;
-  no bound on capture.
+  src/embedded/control.rs). Ours: every start passes `--branchable`; a
+  capture or fork of a stopped machine packs its disk (`packed`) instead, and
+  one of a running machine takes a store capture (`captureRam`); no bound on
+  capture.
 - Capture is atomic (temp file, fsync, publish without clobbering,
   `pack_artifact_inner`, crates/smolvm-pack/src/packer.rs). A restore
   directory is built under a `-partial` name, marked pending, renamed into
@@ -638,9 +633,9 @@ as it is.
   nothing outside tests prunes. A checkpoint without a digest is unpacked
   there to learn one (`install_tar`). A resume, which keeps its identity, runs
   `/bin/true` in the guest before it returns (`probe_restored_guest`,
-  src/agent/fork.rs). Ours: `pin`, so a RAM state is restored only under the
-  release that saved it, and a machine is captured or forked only when its VM
-  booted under the host's (`pinned` and `pauseOrStop` in
+  src/agent/fork.rs). Ours: `pin`, so a checkpoint is restored only under the
+  release that saved it, and a running machine is captured or forked only
+  when its VM booted under the host's (`pinned` and `copiedPinned` in
   `apps/host/src/operations.ts`, over the host contract's `pinRefusal`); under it a
   restore's digest is the installed rootfs's, so the store stays empty. If
   smolvm starts enforcing the engine build itself, the pin could go.

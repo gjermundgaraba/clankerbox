@@ -33,7 +33,7 @@ import type {
 import * as Boat from "../../src/platform/boat/boat.ts";
 import { types } from "../../src/platform/boat/traits.ts";
 import { apiKey } from "../../src/platform/provider-http.ts";
-import { Runtime } from "../../src/runtime.ts";
+import { Runtime, sightingIn } from "../../src/runtime.ts";
 import type { Target } from "../../src/runtime.ts";
 import { ended, endsACutCommand } from "./cut.ts";
 import { runOfLabel } from "./marks.ts";
@@ -451,7 +451,10 @@ describe.runIf(live)("boat, against the real account", () => {
         note("snapshot", snapshot);
         yield* boat.save(first.id, snapshot);
 
-        for (let tries = 0; tries < 240; tries += 1) {
+        // boat's save ran over 120 s here on 2026-11-21, and it answers a create from a snapshot
+        // still saving with a sandbox, so a wait cut short can't be told from a finished one.
+        // https://docs.boat.dev/openapi/boat-v1.yaml (`SavedSnapshot.status`)
+        for (let tries = 0; tries < 1800; tries += 1) {
           const state = yield* boat.saved(snapshot);
 
           if (state?.status !== "saving") {
@@ -837,6 +840,156 @@ describe.runIf(live)("boat, against the real account", () => {
         expect(failed._tag).toBe("Unsizable");
       }).pipe(Effect.scoped, Effect.provide(services)),
     { timeout: 30 * 60 * 1000 }
+  );
+
+  // boat's list answers `lastReboot` null where its sandbox's own record holds it, so a read of
+  // two machines or more reads each mark only as the host reads that record, a behaviour no doc
+  // states and which a fake built from the same reading can only echo. The case keeps each
+  // machine's marks in the order its reads gave them, not as a set of distinct marks: a reading
+  // that flips back to an earlier mark, as a "never" from the list after a new mark would, adds
+  // nothing to a set, so the case would pass while the chart counted a false reboot on every flip.
+  // https://docs.boat.dev/openapi/boat-v1.yaml (`Sandbox.lastReboot`)
+  it.live(
+    "reads of three machines give a reboot in place of one, and only that one, a new mark: a fresh machine's first and second, and one rebooted before the host first read it",
+    () =>
+      Effect.gen(function* () {
+        const { api: boat, dir } = yield* client;
+
+        yield* finding(`host ${host}: the reboot mark run's mark`);
+        yield* swept(boat);
+
+        yield* Effect.addFinalizer(() =>
+          Effect.gen(function* () {
+            const left = yield* swept(boat);
+
+            yield* finding(
+              `left at the end: ${left.swept.machines.length} sandboxes and ${left.swept.copies.length} saved snapshots of this run or one over`
+            );
+          }).pipe(Effect.orDie)
+        );
+
+        const context = yield* Layer.build(
+          Boat.layer(
+            { apiKeyFile: path.join(dir, "boat-key"), api },
+            {
+              id: host,
+              stateDir: path.join(dir, "state"),
+              listen: { address: "127.0.0.1", port: 1 },
+            }
+          )
+        );
+
+        const runtime = Context.get(context, Runtime);
+
+        const machineNamed = (name: string) =>
+          Effect.gen(function* () {
+            const machine = { name, instance: liveInstance(), ...types.small };
+
+            const made = yield* runtime.make(
+              machine,
+              { _tag: "image", image: Boat.image },
+              10_022
+            );
+
+            note("sandbox", made.handle);
+
+            const target: Target = { ...machine, handle: made.handle };
+
+            yield* Effect.addFinalizer(() =>
+              Effect.ignore(runtime.delete(target, new Set()))
+            );
+
+            return target;
+          });
+
+        const rebooted = (machine: Target) =>
+          runCommand(runtime, {
+            machine,
+            argv: [
+              "/bin/sh",
+              "-c",
+              "(sleep 1; systemctl reboot) >/dev/null 2>&1 &",
+            ],
+          });
+
+        const fresh = yield* machineNamed("fresh");
+        const still = yield* machineNamed("still");
+        const older = yield* machineNamed("older");
+
+        yield* rebooted(older);
+
+        for (let tries = 0; tries < 60; tries += 1) {
+          if (
+            (yield* boat.sandbox(older.handle))?.lastReboot?.at !== undefined
+          ) {
+            break;
+          }
+
+          yield* Effect.sleep(Duration.seconds(3));
+        }
+
+        expect(
+          (yield* boat.sandbox(older.handle))?.lastReboot?.at,
+          "boat gave the older machine no reboot mark within 3 minutes, so the case can't check one rebooted before the host's first read"
+        ).toBeDefined();
+
+        const all = [fresh, still, older];
+
+        const markChangesInOrder = new Map<string, string[]>(
+          all.map(({ name }) => [name, []])
+        );
+
+        const reads = (what: string, seconds: number) =>
+          Effect.gen(function* () {
+            const end = Date.now() + seconds * 1000;
+
+            while (Date.now() < end) {
+              const seen = yield* runtime.observe(all);
+
+              for (const machine of all) {
+                const { reboot } = sightingIn(seen, machine);
+                const had = markChangesInOrder.get(machine.name) ?? [];
+
+                if (reboot !== undefined && had.at(-1) !== reboot) {
+                  had.push(reboot);
+                  yield* finding(`${what}: ${machine.name} reads ${reboot}`);
+                }
+              }
+
+              yield* Effect.sleep(Duration.seconds(3));
+            }
+          });
+
+        const counts = () =>
+          Object.fromEntries(
+            all.map(({ name }) => {
+              const had = markChangesInOrder.get(name) ?? [];
+
+              expect(
+                new Set(had).size,
+                `${name} went back to an earlier mark, which the chart counts as a reboot that never happened: ${had.join(", ")}`
+              ).toBe(had.length);
+
+              return [name, had.length];
+            })
+          );
+
+        yield* reads("first reads", 20);
+        expect(counts()).toStrictEqual({ fresh: 1, still: 1, older: 1 });
+
+        yield* rebooted(fresh);
+        yield* reads("after the fresh machine's first reboot", 60);
+        expect(counts()).toStrictEqual({ fresh: 2, still: 1, older: 1 });
+
+        yield* rebooted(fresh);
+        yield* reads("after the fresh machine's second reboot", 60);
+        expect(counts()).toStrictEqual({ fresh: 3, still: 1, older: 1 });
+
+        yield* rebooted(older);
+        yield* reads("after the older machine's reboot", 60);
+        expect(counts()).toStrictEqual({ fresh: 3, still: 1, older: 2 });
+      }).pipe(Effect.scoped, Effect.provide(services)),
+    { timeout: 20 * 60 * 1000 }
   );
 
   it.live(

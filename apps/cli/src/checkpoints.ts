@@ -36,7 +36,6 @@ const checkpointColumns: ReadonlyArray<
 > = [
   ["ID", (checkpoint) => checkpoint.id],
   ["PHASE", (checkpoint) => checkpoint.phase],
-  ["KIND", (checkpoint) => checkpoint.kind],
   ["MACHINE", (checkpoint) => checkpoint.machine],
   ["BASE", (checkpoint) => checkpoint.base],
   ["AGE", (checkpoint, now) => age(checkpoint.createdAt, now)],

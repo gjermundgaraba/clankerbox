@@ -16,7 +16,6 @@ export const facts = (fields?: Partial<Facts>): Facts => ({
   instance: "1",
   createdAt: DateTime.makeUnsafe(0),
   runtime: presets.smolvm.traits.runtime,
-  captures: "ram",
   base: "ubuntu",
   cpu: 1,
   ramMib: 1024,
@@ -37,6 +36,10 @@ export const facts = (fields?: Partial<Facts>): Facts => ({
   undoneAt: undefined,
   labels: undefined,
   after: undefined,
+  boots: 0,
+  booting: false,
+  reboot: undefined,
+  unasked: undefined,
   ...fields,
 });
 
@@ -65,7 +68,6 @@ export const checkpointFacts = (
   machine: "dev",
   host: "linux",
   runtime: presets.smolvm.traits.runtime,
-  kind: "ram",
   pin: "pin",
   handle: undefined,
   base: "ubuntu",

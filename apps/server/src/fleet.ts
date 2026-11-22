@@ -1,4 +1,4 @@
-import type { Adopted, MachineState } from "@clankerbox/host-contract";
+import type { Adopted } from "@clankerbox/host-contract";
 import type {
   Internal,
   Unreported,
@@ -12,6 +12,8 @@ import { unread } from "./hosts.ts";
 import type { Fresh, Interface as Hosts } from "./hosts.ts";
 import { machineChart, stageOf } from "./machine-chart.ts";
 import type { MachineRow } from "./machine-chart.ts";
+import { heardOf } from "./machine-view.ts";
+import type { Seen } from "./machine-view.ts";
 import { identityOf, mayHoldVm, refOf } from "./steps.ts";
 import type { Interface as Store } from "./store.ts";
 
@@ -162,7 +164,7 @@ export const recheckHosts = (
 export interface Swept {
   readonly host: string;
   readonly info: Fresh;
-  readonly seen: MachineState | undefined;
+  readonly heard: Seen | undefined;
 }
 
 export const sweepBatch = 100;
@@ -182,7 +184,7 @@ export const sweep = (
 
         yield* Effect.forEach(
           unmade,
-          (found) => each(found, { host, info, seen: undefined }),
+          (found) => each(found, { host, info, heard: undefined }),
           { discard: true }
         );
 
@@ -195,8 +197,8 @@ export const sweep = (
               )
               .pipe(
                 Effect.flatMap((answers) => {
-                  const states = new Map(
-                    answers.map(({ name, state }) => [name, state])
+                  const read = new Map(
+                    answers.map((answer) => [answer.name, heardOf(answer)])
                   );
 
                   return Effect.forEach(
@@ -205,7 +207,7 @@ export const sweep = (
                       each(found, {
                         host,
                         info,
-                        seen: states.get(found.name) ?? "unknown",
+                        heard: read.get(found.name) ?? { seen: "unknown" },
                       }),
                     { discard: true }
                   );

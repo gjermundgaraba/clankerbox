@@ -1,5 +1,4 @@
 import {
-  CheckpointKind,
   formatCpu,
   formatGib,
   formatMib,
@@ -35,15 +34,12 @@ const Live = Schema.Struct({
  *
  * - `images`: `named` creates only from the host's named bases; `references` also from an image
  *   reference.
- * - `checkpoint`: what a checkpoint keeps, `ram` (RAM and disks) or `disk`, and so its `kind`.
- * - `captureFrom`: the state, `running` or `stopped`, a machine is captured or forked in, or
- *   `either` of them, a copy of its disk; one in any other state fails the capture or the fork, and
- *   a template build stops its builder before its copy but where it is `running`.
+ * - `captureFrom`: the state a machine is captured or forked in, `either` running or stopped, or
+ *   `running` alone; one in any other state fails the capture or the fork. Every copy is of the
+ *   disk, booted fresh, and a template build stops its builder before its copy but where it is
+ *   `running`.
  * - `whyRunning`: where `captureFrom` is `running`, why the runtime copies no stopped machine,
  *   which a refusal of one gives, so the caller learns more than the state it should be in.
- * - `pause`: `saves` keeps the machine's RAM; `stops` stops it.
- * - `stop`: what a stop does to a paused machine: `resumes` it first, to end its processes, which
- *   takes room as a start does and the runtime pin it booted under; or `discards` its saved state.
  * - `copies`: a fork's or restore's vCPUs and RAM against its source's: `grow`, the source's or
  *   larger; `any`; or `same`, the source's sizes alone, its disk's included.
  * - `resize`: what a running and what a stopped machine take of a resize of vCPUs and RAM: `grow`,
@@ -62,11 +58,8 @@ const Live = Schema.Struct({
 export const RuntimeTraits = Schema.Struct({
   runtime: RuntimeName,
   images: Schema.Literals(["named", "references"]),
-  checkpoint: CheckpointKind,
-  captureFrom: Schema.Literals(["running", "stopped", "either"]),
+  captureFrom: Schema.Literals(["running", "either"]),
   whyRunning: Schema.optionalKey(Schema.String),
-  pause: Schema.Literals(["saves", "stops"]),
-  stop: Schema.Literals(["resumes", "discards"]),
   copies: Schema.Literals(["grow", "any", "same"]),
   resize: Schema.Struct({
     running: Growth,
@@ -219,7 +212,7 @@ export const liveGrowthRefusal = (
 export const resizeRefusal = (
   traits: RuntimeTraits,
   name: string,
-  state: "running" | "stopped" | "paused" | undefined,
+  state: "running" | "stopped" | undefined,
   from: Sizes,
   to: Sizes
 ): WrongState | Unsizable | undefined => {
@@ -239,7 +232,7 @@ export const resizeRefusal = (
     return fitted(traits, to) ? undefined : unfitted;
   }
 
-  const takes = state === "paused" ? "none" : traits.resize[state];
+  const takes = traits.resize[state];
 
   if (takes === "none") {
     return new WrongState({
@@ -312,27 +305,22 @@ export const copyRefusal = (
     : new Unsizable({ message: refused });
 };
 
-export const pauseCapture = (
-  traits: RuntimeTraits
-): "before" | "after" | "never" => {
-  if (traits.pause === "stops" && traits.captureFrom !== "running") {
-    return "after";
-  }
-
-  return traits.captureFrom === "stopped" ? "never" : "before";
-};
-
 export const stopsBeforeCapture = (traits: RuntimeTraits): boolean =>
   traits.captureFrom !== "running";
 
 export const fetchable = (from: RuntimeName, to: RuntimeTraits): boolean =>
   from === to.runtime;
 
+/**
+ * Why a host running runtime pin `runs` refuses what was made under `under`. A running machine's
+ * copy and a checkpoint's restore go through the VM's saved state, so they need the pin it was
+ * saved under; a stopped machine's copy is of its disk alone and asks none. A restore is asked
+ * however the checkpoint was captured, as its row doesn't record whether its source ran, so a
+ * smolvm checkpoint of a stopped machine is refused too. Follow-up: stamp a checkpoint's pin only
+ * when its capture went through RAM.
+ */
 export const pinRefusal = (
-  of:
-    | { readonly copy: string }
-    | { readonly restore: string }
-    | { readonly resume: string },
+  of: { readonly copy: string } | { readonly restore: string },
   under: string | undefined,
   runs: string | undefined
 ): PinMismatch | undefined => {
@@ -344,18 +332,12 @@ export const pinRefusal = (
 
   if ("copy" in of) {
     return new PinMismatch({
-      message: `machine ${of.copy}'s VM booted under ${under ?? "an older host"}, and this host runs ${host}, so a copy of its RAM would restore under the wrong one: stop it and start it again first`,
-    });
-  }
-
-  if ("restore" in of) {
-    return new PinMismatch({
-      message: `checkpoint ${of.restore} holds RAM state saved under ${under ?? "no pin"}, and this host runs ${host}; it restores only under the same one`,
+      message: `machine ${of.copy}'s VM booted under ${under ?? "an older host"}, and this host runs ${host}, so a copy of it running would restore its saved state under the wrong one: stop it, then copy it stopped, or start it again first`,
     });
   }
 
   return new PinMismatch({
-    message: `machine ${of.resume} was paused under ${under ?? "no pin"}, and this host runs ${host}; it resumes only under the same one: delete it, or resume it under that one`,
+    message: `checkpoint ${of.restore} holds RAM state saved under ${under ?? "no pin"}, and this host runs ${host}; it restores only under the same one`,
   });
 };
 

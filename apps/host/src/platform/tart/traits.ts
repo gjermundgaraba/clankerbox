@@ -12,10 +12,7 @@ export const diskGibOf = (gb: number): number =>
 export const traits: RuntimeTraits = {
   runtime: RuntimeName.make("tart"),
   images: "named",
-  checkpoint: "disk",
   captureFrom: "either",
-  pause: "stops",
-  stop: "discards",
   copies: "any",
   resize: { running: "none", stopped: "any" },
   sizes: { _tag: "free" },

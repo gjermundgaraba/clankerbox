@@ -107,7 +107,7 @@ const hooked = {
  * control plane mints for the one join, is never kept or logged. A `publish` copies a checkpoint's files to the build store under its name, and a
  * `fetch` makes a checkpoint from what was published as `from`, of template build `build`,
  * downloading only what this host doesn't hold. A delete that will `unpublish` also removes the
- * checkpoint from the build store, with every key no other published checkpoint holds. A stop, pause
+ * checkpoint from the build store, with every key no other published checkpoint holds. A stop
  * or remove with `hook` first runs the guest's hook for it, if its VM runs and its guest has taken the
  * machine's identity, for at most `timeoutSeconds`, and goes on whatever the hook does. A start's and
  * a remove's `keep` is every checkpoint handle the rows hold for its host: a runtime that holds a
@@ -129,16 +129,9 @@ export const Step = Schema.Union([
   Schema.TaggedStruct("start", {
     machine: MachineRef,
     keep: Schema.Array(Handle),
-    ...pinned,
     ...others,
   }),
-  Schema.TaggedStruct("stop", {
-    machine: MachineRef,
-    ...pinned,
-    ...others,
-    ...hooked,
-  }),
-  Schema.TaggedStruct("pause", { machine: MachineRef, ...pinned, ...hooked }),
+  Schema.TaggedStruct("stop", { machine: MachineRef, ...hooked }),
   Schema.TaggedStruct("remove", {
     machine: Ref,
     keep: Schema.Array(Handle),
@@ -295,9 +288,16 @@ export const HostHttp = ActionHttp.make(
       ...read,
       error: [Invalid, Internal] as const,
       description:
-        "Read each machine's state from the runtime. A machine it couldn't read is unknown.",
+        "Read each machine's state from the runtime. A machine it couldn't read is unknown. `reboot` is on a machine whose runtime reports when it last booted again in place, while it ran: a mark its runtime changes at such a reboot. A runtime may also change it when it boots the machine for a start, as boat doesn't say whether a resume counts, so the control plane takes it afresh after each start that boots a machine. `why` is on a machine stopped or missing whose runtime says why, in its own words.",
       input: Schema.Struct({ machines: Schema.Array(Ref) }),
-      success: Schema.Array(Schema.Struct({ name: Name, state: MachineState })),
+      success: Schema.Array(
+        Schema.Struct({
+          name: Name,
+          state: MachineState,
+          reboot: Schema.optionalKey(Schema.String),
+          why: Schema.optionalKey(Schema.String),
+        })
+      ),
     }),
     Action.make("readSizes", {
       ...read,
@@ -355,7 +355,7 @@ export const HostHttp = ActionHttp.make(
     Action.make("execMachine", {
       ...write,
       error: [Invalid, Missing, WrongState, Internal] as const,
-      description: `Run a command in a running machine, once any step in its scope has ended, while a capture of it or a fork from it runs beside it, and answer its exit code and output. It runs as long as the request does, or until its timeout, which also bounds the runtime's attach: either ends the command and what it started in the guest, and a timeout answers exit code ${timedOutExitCode} with the output once the end has finished, which the host waits for at most ${Duration.format(endTimeout)} past it, with mayStillRun saying why when their end couldn't be confirmed, so they may still run. A stop, pause or remove step on the machine first ends it so, before its hook and its runtime call, and it answers WrongState in the phase stopping, pausing or deleting. The command's environment can't set \`CLANKERBOX_EXEC\`, the host's mark of what it started. Nothing of it is kept.`,
+      description: `Run a command in a running machine, once any step in its scope has ended, while a capture of it or a fork from it runs beside it, and answer its exit code and output. It runs as long as the request does, or until its timeout, which also bounds the runtime's attach: either ends the command and what it started in the guest, and a timeout answers exit code ${timedOutExitCode} with the output once the end has finished, which the host waits for at most ${Duration.format(endTimeout)} past it, with mayStillRun saying why when their end couldn't be confirmed, so they may still run. A stop or remove step on the machine first ends it so, before its hook and its runtime call, and it answers WrongState in the phase stopping or deleting. The command's environment can't set \`CLANKERBOX_EXEC\`, the host's mark of what it started. Nothing of it is kept.`,
       input: ExecCommand,
       success: Executed,
     }),

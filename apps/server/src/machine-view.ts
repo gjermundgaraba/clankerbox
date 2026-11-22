@@ -8,10 +8,26 @@ import { desiredOf, phaseOf } from "./machine-chart.ts";
 import type { MachineRow } from "./machine-chart.ts";
 import { identityOf } from "./steps.ts";
 
-export const readStates = (
+export interface Seen {
+  readonly seen: MachineState;
+  readonly reboot?: string | undefined;
+  readonly why?: string | undefined;
+}
+
+export const heardOf = ({
+  state,
+  reboot,
+  why,
+}: {
+  readonly state: MachineState;
+  readonly reboot?: string;
+  readonly why?: string;
+}): Seen => ({ seen: state, reboot, why });
+
+export const readMachines = (
   hosts: Hosts,
   rows: readonly MachineRow[]
-): Effect.Effect<ReadonlyMap<string, MachineState>> =>
+): Effect.Effect<ReadonlyMap<string, Seen>> =>
   Effect.gen(function* () {
     const [kept, undone] = Arr.partition(rows, (found) =>
       found.state === "undone" ? Result.fail(found.name) : Result.succeed(found)
@@ -30,11 +46,29 @@ export const readStates = (
       { concurrency: "unbounded" }
     );
 
-    return new Map([
-      ...undone.map((name) => [name, "missing"] as const),
-      ...answers.flat().map(({ name, state }) => [name, state] as const),
+    return new Map<string, Seen>([
+      ...undone.map((name) => [name, { seen: "missing" }] as const),
+      ...answers
+        .flat()
+        .map((answer) => [answer.name, heardOf(answer)] as const),
     ]);
   });
+
+export const readStates = (
+  hosts: Hosts,
+  rows: readonly MachineRow[]
+): Effect.Effect<ReadonlyMap<string, MachineState>> =>
+  Effect.map(
+    readMachines(hosts, rows),
+    (heard) =>
+      new Map(Array.from(heard, ([name, { seen }]) => [name, seen] as const))
+  );
+
+export const seenOf = (hosts: Hosts, found: MachineRow): Effect.Effect<Seen> =>
+  Effect.map(
+    readMachines(hosts, [found]),
+    (heard) => heard.get(found.name) ?? { seen: "unknown" }
+  );
 
 export const stateIn = (
   found: MachineRow,
@@ -93,6 +127,8 @@ export const machineOf = (
     ...(found.labels === undefined ? {} : { labels: found.labels }),
     ...(found.template === undefined ? {} : { template: found.template }),
     ...(found.error === undefined ? {} : { error: found.error }),
+    boots: found.boots,
+    ...(found.unasked === undefined ? {} : { unasked: found.unasked }),
     ...(ssh === undefined ? {} : { ssh }),
     ...(found.hostKey === undefined ? {} : { hostKey: found.hostKey }),
     ...(found.tailnet

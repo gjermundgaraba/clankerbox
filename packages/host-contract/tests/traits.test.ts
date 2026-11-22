@@ -7,7 +7,6 @@ import {
   fitted,
   offered,
   offers,
-  pauseCapture,
   pinRefusal,
   resizeRefusal,
   RuntimeTraits,
@@ -25,7 +24,7 @@ const Base = Schema.Literals([
 
 const Bases = Schema.Array(Schema.Literals(["ubuntu", "macos"]));
 
-const State = Schema.Literals(["running", "stopped", "paused"]);
+const State = Schema.Literals(["running", "stopped"]);
 
 const Copy = Schema.Literals(["fork", "restore"]);
 
@@ -170,10 +169,7 @@ describe("resizeRefusal", () => {
           to
         );
 
-        const takes =
-          state === undefined || state === "paused"
-            ? "none"
-            : traits.resize[state];
+        const takes = state === undefined ? "none" : traits.resize[state];
 
         const unfitted =
           !gives(given, to) || (takes === "grow" && shrinks(from, to));
@@ -275,26 +271,6 @@ describe("copyRefusal", () => {
   );
 });
 
-describe("pauseCapture", () => {
-  it.effect.prop(
-    "a pause captures its machine after it where a capture takes what the pause leaves, else before it where a capture takes a running machine, else never",
-    { traits: RuntimeTraits },
-    ({ traits }) =>
-      Effect.sync(() => {
-        const left = traits.pause === "stops" ? "stopped" : "paused";
-
-        const takes = (state: string) =>
-          traits.captureFrom === "either"
-            ? state !== "paused"
-            : state === traits.captureFrom;
-
-        const before = takes("running") ? "before" : "never";
-
-        expect(pauseCapture(traits)).toBe(takes(left) ? "after" : before);
-      })
-  );
-});
-
 describe("pinRefusal", () => {
   const Pin = Schema.UndefinedOr(
     Schema.Literals(["smolvm 1 linux-x64", "smolvm 2 linux-x64"])
@@ -303,7 +279,6 @@ describe("pinRefusal", () => {
   const Of = Schema.Union([
     Schema.Struct({ copy: Schema.Literal("dev") }),
     Schema.Struct({ restore: Schema.Literal("dev") }),
-    Schema.Struct({ resume: Schema.Literal("dev") }),
   ]);
 
   it.effect.prop(

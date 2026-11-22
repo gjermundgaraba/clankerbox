@@ -599,11 +599,10 @@ export const executed = (
   }
 };
 
-export type Leaving = "stop" | "pause" | "delete";
+export type Leaving = "stop" | "delete";
 
 const leavingPhase = {
   stop: "stopping",
-  pause: "pausing",
   delete: "deleting",
 } as const satisfies Record<Leaving, string>;
 

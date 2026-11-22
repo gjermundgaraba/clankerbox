@@ -694,7 +694,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const { handle } = (yield* ended(host.url, "op-1")).outcome;
         const machine = { ...dev, ...(handle === undefined ? {} : { handle }) };
-        const stop = { _tag: "stop", machine, machines: [] } as const;
+        const stop = { _tag: "stop", machine } as const;
 
         yield* deliver(host.url, onDev("op-2", 2, stop));
         yield* ended(host.url, "op-2");

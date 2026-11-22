@@ -170,7 +170,6 @@ export const machineStep = (
           _tag: "start",
           machine: ref,
           keep: yield* keptOn(store, found.host),
-          ...pinned(found.pin),
           machines,
         };
       }
@@ -179,17 +178,6 @@ export const machineStep = (
         return {
           _tag: op.kind,
           machine: ref,
-          ...pinned(found.pin),
-          machines,
-          ...hook,
-        };
-      }
-
-      case "pause": {
-        return {
-          _tag: "pause",
-          machine: ref,
-          ...pinned(found.pin),
           ...hook,
         };
       }

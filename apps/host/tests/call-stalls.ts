@@ -47,8 +47,8 @@ export const callStalls = () => {
           ),
         };
       }),
-    next: (): ((at: StallAt) => Effect.Effect<void>) => {
-      if (armed === undefined) {
+    next: (counted = true): ((at: StallAt) => Effect.Effect<void>) => {
+      if (armed === undefined || !counted) {
         return held(undefined);
       }
 

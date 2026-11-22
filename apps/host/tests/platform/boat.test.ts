@@ -21,6 +21,7 @@ import {
   Duration,
   Effect,
   Exit,
+  Fiber,
   Layer,
   Logger,
   Option,
@@ -43,7 +44,7 @@ import {
 } from "../../src/platform/boat/boat.ts";
 import { types } from "../../src/platform/boat/traits.ts";
 import { SweepEvery } from "../../src/platform/tombstones.ts";
-import { Handle, Runtime } from "../../src/runtime.ts";
+import { Handle, Runtime, sightingIn, stateIn } from "../../src/runtime.ts";
 import type { Interface, RuntimeError, Target } from "../../src/runtime.ts";
 import { fakeBoat } from "../fake-boat.ts";
 import type { FakeBoat, FakeBoatOptions } from "../fake-boat.ts";
@@ -507,8 +508,22 @@ describe("the boat runtime over fake boat", () => {
 
           const machine = yield* made(runtime, "dev");
 
+          const unmarked = yield* runtime.observe([machine]);
+
+          yield* boat.reboot(machine.handle, "2026-11-21T00:00:00Z");
+
+          expect([unmarked, yield* runtime.observe([machine])]).toStrictEqual([
+            new Map([[machine.name, { state: "running", reboot: "never" }]]),
+            new Map([
+              [
+                machine.name,
+                { state: "running", reboot: "2026-11-21T00:00:00Z" },
+              ],
+            ]),
+          ]);
+
           yield* boat.faults.drift(machine.instance);
-          expect((yield* runtime.observe([machine])).get(machine.name)).toBe(
+          expect(stateIn(yield* runtime.observe([machine]), machine)).toBe(
             "stopped"
           );
 
@@ -557,7 +572,7 @@ describe("the boat runtime over fake boat", () => {
   );
 
   it.live(
-    "a capture whose name boat is still saving waits that save out, refused while it saves, and saves again over the ready name, which stays ready",
+    "a capture whose name boat is still saving from its machine joins that save, posting none, as a capture cut in its wait and sent again does",
     () =>
       onBoat(({ boat, runtime }) =>
         Effect.gen(function* () {
@@ -570,16 +585,9 @@ describe("the boat runtime over fake boat", () => {
 
           const handle = yield* runtime.capture(machine, checkpoint);
 
+          expect(handle).toBe(name);
           expect(boat.snapshots.get(handle)?.status).toBe("ready");
-          expect(posts(boat, "/saved-snapshots")).toStrictEqual([
-            "POST /saved-snapshots 409",
-            "POST /saved-snapshots 409",
-            "POST /saved-snapshots 202",
-          ]);
-
-          yield* boat.saveAs(machine.handle, name);
-
-          expect(boat.snapshots.get(name)?.status).toBe("ready");
+          expect(posts(boat, "/saved-snapshots")).toStrictEqual([]);
         })
       ),
     30_000
@@ -752,7 +760,9 @@ describe("the boat runtime over fake boat", () => {
             starts: 1,
             marker: "fresh\n",
             saves: [],
-            source: new Map([[source.name, "running"]]),
+            source: new Map([
+              [source.name, { state: "running", reboot: "never" }],
+            ]),
           });
         })
       ),
@@ -794,6 +804,124 @@ describe("the boat runtime over fake boat", () => {
             type: "large",
             running: false,
           });
+        })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a fork of a running machine cut while boat saves ends at once, and its source's delete waits for the save it left, then deletes it",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          const source = yield* made(runtime, "dev");
+
+          yield* boat.savesLast("3 seconds");
+
+          const forking = yield* Effect.forkChild(
+            runtime.make(
+              { name: "fork", instance: instanceOf("fork"), ...types.small },
+              { _tag: "machine", machine: source },
+              10_022
+            )
+          );
+
+          yield* Effect.sleep("1 second");
+
+          const cutAt = Date.now();
+
+          yield* Fiber.interrupt(forking);
+
+          expect(Date.now() - cutAt).toBeLessThan(1000);
+
+          const deletedAt = Date.now();
+
+          yield* runtime.delete(source, new Set());
+
+          expect(Date.now() - deletedAt).toBeGreaterThanOrEqual(1500);
+          expect([...boat.snapshots.keys()]).toStrictEqual([]);
+          expect(boat.sandboxes.size).toBe(0);
+        })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a fork of a running machine cut while boat saves, and asked again, waits for the save already running rather than saving afresh",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          const source = yield* made(runtime, "dev");
+
+          const machine = {
+            name: "fork",
+            instance: instanceOf("fork"),
+            ...types.small,
+          };
+
+          yield* boat.savesLast("3 seconds");
+
+          const forking = yield* Effect.forkChild(
+            runtime.make(machine, { _tag: "machine", machine: source }, 10_022)
+          );
+
+          yield* Effect.sleep("1 second");
+          yield* Fiber.interrupt(forking);
+
+          const from = boat.starts();
+
+          const fork = yield* runtime.make(
+            machine,
+            { _tag: "machine", machine: source },
+            10_022
+          );
+
+          expect(posts(boat, "/saved-snapshots")).toStrictEqual([
+            "POST /saved-snapshots 202",
+          ]);
+          expect(boat.starts() - from).toBe(1);
+          expect(boat.sandboxes.get(fork.handle)?.running).toBe(true);
+          expect([...boat.snapshots.keys()]).toStrictEqual([]);
+        })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a fork of a running machine to a type its data doesn't fit is Unsizable at no start, which boat's create from the save would have taken, and leaves no save behind",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          const source = yield* made(runtime, "dev");
+
+          yield* runtime.stop(source);
+          yield* runtime.resize(source, types.large, false);
+          yield* runtime.start(source, new Set());
+          yield* boat.fill(source.handle, 60);
+
+          const forkAt = (name: string, sizes: typeof types.small) =>
+            runtime.make(
+              { name, instance: instanceOf(name), ...sizes },
+              { _tag: "machine", machine: source },
+              10_022
+            );
+
+          const from = boat.starts();
+          const failed = yield* Effect.flip(forkAt("unfit", types.small));
+
+          expect(failed).toMatchObject({ _tag: "Unsizable" });
+          expect(failed.message).toContain("60.0 GB");
+          expect(boat.starts() - from).toBe(0);
+          expect([...boat.snapshots.keys()]).toStrictEqual([]);
+          expect(yield* runtime.observe([source])).toStrictEqual(
+            new Map([[source.name, { state: "running", reboot: "never" }]])
+          );
+
+          const fitting = yield* forkAt("fits", types.large);
+
+          expect(yield* runtime.sizes({ ...source, ...fitting })).toStrictEqual(
+            types.large
+          );
         })
       ),
     30_000
@@ -1070,9 +1198,9 @@ describe("the boat runtime over fake boat", () => {
             const observed = yield* runtime.observe(machines);
 
             expect(Object.fromEntries(observed)).toStrictEqual({
-              a: "running",
-              b: "running",
-              c: "running",
+              a: { state: "running", reboot: "never" },
+              b: { state: "running", reboot: "never" },
+              c: { state: "running", reboot: "never" },
             });
           }),
         { pageSize: 1 }
@@ -1100,9 +1228,148 @@ describe("the boat runtime over fake boat", () => {
 
           yield* runtime.observe([a, b]);
 
-          expect(Object.fromEntries(one)).toStrictEqual({ a: "running" });
+          const several = asked().slice(middle);
+          const after = boat.requests.length;
+
+          yield* runtime.observe([a, b]);
+
+          expect(Object.fromEntries(one)).toStrictEqual({
+            a: { state: "running", reboot: "never" },
+          });
           expect(single).toStrictEqual([`GET /sandboxes/${a.handle}`]);
-          expect(asked().slice(middle)).toStrictEqual(["GET /sandboxes?"]);
+          expect(several).toStrictEqual([
+            "GET /sandboxes?",
+            `GET /sandboxes/${b.handle}`,
+          ]);
+          expect(asked().slice(after)).toStrictEqual(["GET /sandboxes?"]);
+        })
+      ),
+    30_000
+  );
+
+  it.live(
+    "a read of several machines reads a running sandbox's own record for its reboot mark, as boat's list answers it null, only when first seen, run afresh or its updatedAt moved, once more after a move that showed no new mark, and again after a read boat throttled",
+    () =>
+      onBoat(({ boat, runtime }) =>
+        Effect.gen(function* () {
+          const a = yield* made(runtime, "a");
+          const b = yield* made(runtime, "b");
+          const c = yield* made(runtime, "c");
+          const machines = [a, b, c];
+
+          yield* runtime.stop(c);
+          yield* boat.reboot(a.handle, "2026-11-21T00:00:00Z");
+
+          const ownReads = (from: number) =>
+            boat.requests
+              .slice(from)
+              .flatMap(({ method, path: at }) =>
+                method === "GET" && at.startsWith("/sandboxes/")
+                  ? [at.slice("/sandboxes/".length)]
+                  : []
+              )
+              .filter((id, at, all) => all.indexOf(id) === at)
+              .toSorted();
+
+          const read = Effect.gen(function* () {
+            const from = boat.requests.length;
+            const observed = yield* runtime.observe(machines);
+
+            return {
+              seen: Object.fromEntries(
+                [...observed].map(([name, { state, reboot }]) => [
+                  name,
+                  reboot === undefined ? state : `${state} ${reboot}`,
+                ])
+              ),
+              ownReads: ownReads(from),
+            };
+          });
+
+          const first = yield* read;
+          const steady = yield* read;
+
+          yield* boat.reboot(b.handle, "2026-11-21T00:01:00Z");
+          yield* boat.throttleReads(true);
+
+          const throttled = yield* read;
+
+          yield* boat.throttleReads(false);
+
+          const retried = yield* read;
+
+          yield* runtime.start(c, new Set());
+
+          const runAfresh = yield* read;
+
+          yield* boat.touch(a.handle, "2026-11-21T00:02:00Z");
+
+          const moved = yield* read;
+
+          yield* boat.reboot(a.handle, "2026-11-21T00:02:30Z");
+
+          const owed = yield* read;
+          const settled = yield* read;
+
+          expect({
+            first,
+            steady,
+            throttled,
+            retried,
+            runAfresh,
+            moved,
+            owed,
+            settled,
+          }).toStrictEqual({
+            first: {
+              seen: {
+                a: "running 2026-11-21T00:00:00Z",
+                b: "running never",
+                c: "stopped",
+              },
+              ownReads: [a.handle, b.handle].toSorted(),
+            },
+            steady: {
+              seen: { a: "running", b: "running", c: "stopped" },
+              ownReads: [],
+            },
+            throttled: {
+              seen: { a: "running", b: "running", c: "stopped" },
+              ownReads: [b.handle],
+            },
+            retried: {
+              seen: {
+                a: "running",
+                b: "running 2026-11-21T00:01:00Z",
+                c: "stopped",
+              },
+              ownReads: [b.handle],
+            },
+            runAfresh: {
+              seen: { a: "running", b: "running", c: "running never" },
+              ownReads: [c.handle],
+            },
+            moved: {
+              seen: {
+                a: "running 2026-11-21T00:00:00Z",
+                b: "running",
+                c: "running",
+              },
+              ownReads: [a.handle],
+            },
+            owed: {
+              seen: {
+                a: "running 2026-11-21T00:02:30Z",
+                b: "running",
+                c: "running",
+              },
+              ownReads: [a.handle],
+            },
+            settled: {
+              seen: { a: "running", b: "running", c: "running" },
+              ownReads: [],
+            },
+          });
         })
       ),
     30_000
@@ -1262,13 +1529,12 @@ describe("each boat goal from each state boat holds", () => {
                 const read = yield* holdingFor("read");
                 const start = yield* holdingFor("start");
                 const stop = yield* holdingFor("stop");
-                const pause = yield* holdingFor("pause");
                 const remove = yield* holdingFor("delete");
 
                 return [
                   held,
                   {
-                    observe: (yield* runtime.observe([read])).get(read.name),
+                    observe: sightingIn(yield* runtime.observe([read]), read),
                     find:
                       (yield* runtime.find(read)) === read.handle
                         ? "found"
@@ -1281,7 +1547,6 @@ describe("each boat goal from each state boat holds", () => {
                     ),
                     start: yield* outcome(runtime.start(start, new Set())),
                     stop: yield* outcome(runtime.stop(stop)),
-                    pause: yield* outcome(runtime.pause(pause)),
                     delete: yield* outcome(runtime.delete(remove, new Set())),
                   },
                 ] as const;
@@ -1291,66 +1556,65 @@ describe("each boat goal from each state boat holds", () => {
 
           expect(Object.fromEntries(found)).toStrictEqual({
             running: {
-              observe: "running",
+              observe: { state: "running", reboot: "never" },
               find: "found",
               capture: "done",
               start: "done",
               stop: "done",
-              pause: "done",
               delete: "done",
             },
             archiving: {
-              observe: "stopped",
+              observe: { state: "stopped" },
               find: "found",
               capture: "done",
               start: "done",
               stop: "done",
-              pause: "done",
               delete: "done",
             },
             stopped: {
-              observe: "stopped",
+              observe: { state: "stopped" },
               find: "found",
               capture: "done",
               start: "done",
               stop: "done",
-              pause: "done",
               delete: "done",
             },
             expired: {
-              observe: "missing",
+              observe: {
+                state: "missing",
+                why: "boat deleted its disk 14 days into a stop",
+              },
               find: "found",
               capture: "Missing",
               start: "Missing",
               stop: "done",
-              pause: "done",
               delete: "done",
             },
             error: {
-              observe: "stopped",
+              observe: {
+                state: "stopped",
+                why: "fake boat failed its sandbox",
+              },
               find: "found",
               capture: "WrongState error",
               start: "done",
               stop: "done",
-              pause: "done",
               delete: "done",
             },
             cancelled: {
-              observe: "missing",
+              observe: { state: "missing" },
               find: "none",
               capture: "Missing",
               start: "Missing",
               stop: "done",
-              pause: "done",
               delete: "done",
             },
             gone: {
-              observe: "missing",
+              observe: { state: "missing" },
               find: "none",
               capture: "Missing",
               start: "Missing",
               stop: "done",
-              pause: "done",
               delete: "done",
             },
           });

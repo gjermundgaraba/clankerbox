@@ -20,7 +20,7 @@ import { Duration, Effect, Exit, Fiber, Option, Result, Scope } from "effect";
 import { expect } from "vite-plus/test";
 
 import {
-  saving,
+  copiesRunning,
   applying,
   at,
   clientOf,
@@ -59,7 +59,7 @@ const installsLeaveHooks = (dir: string, then = "") => ({
   script: [
     "#!/bin/sh",
     'mkdir -p "$CLANKERBOX_ROOT/etc/clankerbox"',
-    ...["stop", "pause", "delete"].flatMap((hook) => [
+    ...["stop", "delete"].flatMap((hook) => [
       `printf '#!/bin/sh\\necho %s >>"%s"\\n${then}\\n' ${hook} "${leftIn(dir)}" >"$CLANKERBOX_ROOT/etc/clankerbox/${hook}"`,
       `chmod 755 "$CLANKERBOX_ROOT/etc/clankerbox/${hook}"`,
     ]),
@@ -262,7 +262,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
   for (const as of ["smolvm", "tart"] as const) {
     it.effect(
-      `a ${as} machine runs its guest's hook before each stop, pause and delete, and a template's builder runs none`,
+      `a ${as} machine runs its guest's hook before each stop and delete, and a template's builder runs none`,
       () =>
         Effect.gen(function* () {
           const dir = yield* scratch;
@@ -276,16 +276,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           yield* client.create("dev", fromWeb);
           yield* client.stopMachine({ id: "dev" });
           yield* client.startMachine({ id: "dev" });
-          yield* client.pauseMachine({ id: "dev" });
-          yield* client.startMachine({ id: "dev" });
           yield* client.deleteMachine({ id: "dev" });
 
           expect(afterBuild).toStrictEqual([]);
-          expect(yield* hooksRun(dir)).toStrictEqual([
-            "stop",
-            "pause",
-            "delete",
-          ]);
+          expect(yield* hooksRun(dir)).toStrictEqual(["stop", "delete"]);
         })
     );
   }
@@ -992,13 +986,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const refused = yield* Effect.all([
           Effect.flip(client.startMachine({ id: "dev" })),
           Effect.flip(client.stopMachine({ id: "dev" })),
-          Effect.flip(client.pauseMachine({ id: "dev" })),
           Effect.flip(client.resizeMachine({ id: "dev", cpu: 2 })),
           Effect.flip(client.forkMachine({ machine: "dev", name: "copy" })),
         ]);
 
         expect(refused.map(({ _tag }) => _tag)).toStrictEqual(
-          Array.from({ length: 5 }, () => "NotFound")
+          Array.from({ length: 4 }, () => "NotFound")
         );
         expect(
           (yield* client.listMachines()).map(({ id }) => id)
@@ -1401,54 +1394,29 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     })
   );
 
-  it.effect("a start sent while a machine pauses cuts the pause short", () =>
-    Effect.gen(function* () {
-      const { asking, client, fake } = yield* served(saving);
-
-      yield* client.create("dev", request("dev", { runtime: runtimes.saving }));
-      fake.calls.length = 0;
-
-      const pausing = fake.holdNext("pause");
-
-      yield* asking.pauseMachine({ id: "dev" });
-      yield* pausing.entered;
-
-      const started = yield* client.startMachine({ id: "dev" });
-
-      expect(at(started)).toStrictEqual(["running", "running", "settled"]);
-      expect(fake.calls).toStrictEqual([
-        "exec dev",
-        "pause dev",
-        "start dev",
-        "exec dev",
-        "exec dev",
-      ]);
-    })
-  );
-
   it.effect(
-    "a machine keeps the pin it booted under through a pause and its resume",
+    "a machine keeps the pin it booted under through a stop and the start after",
     () =>
       Effect.gen(function* () {
-        const { client, fake, pins } = yield* served(saving);
+        const { client, fake, pins } = yield* served(copiesRunning);
 
         yield* client.create(
           "dev",
-          request("dev", { runtime: runtimes.saving })
+          request("dev", { runtime: runtimes.copiesRunning })
         );
         fake.calls.length = 0;
 
         const booted = yield* pins;
-        const paused = yield* client.pauseMachine({ id: "dev" });
+        const stopped = yield* client.stopMachine({ id: "dev" });
         const started = yield* client.startMachine({ id: "dev" });
 
         expect(booted).toStrictEqual(["fake 1"]);
-        expect(at(paused)).toStrictEqual(["paused", "paused", "settled"]);
+        expect(at(stopped)).toStrictEqual(["stopped", "stopped", "settled"]);
         expect(at(started)).toStrictEqual(["running", "running", "settled"]);
         expect(yield* pins).toStrictEqual(["fake 1"]);
         expect(fake.calls).toStrictEqual([
           "exec dev",
-          "pause dev",
+          "stop dev",
           "admit dev",
           "start dev",
           "exec dev",
@@ -1458,7 +1426,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a pause stops a machine booted under another pin, or none, and the next boot records the host's",
+    "a stop stops a machine booted under another pin, or none, and the next boot records the host's",
     () =>
       Effect.gen(function* () {
         const { bootedUnder, client, fake, pins } = yield* served();
@@ -1471,15 +1439,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           yield* bootedUnder("dev", pin);
           fake.calls.length = 0;
 
-          const paused = yield* client.pauseMachine({ id: "dev" });
+          const stopped = yield* client.stopMachine({ id: "dev" });
 
-          answers.push([at(paused), [...fake.calls]]);
+          answers.push([at(stopped), [...fake.calls]]);
           yield* client.startMachine({ id: "dev" });
         }
 
         expect(answers).toStrictEqual(
           Array.from({ length: 2 }, () => [
-            ["stopped", "paused", "settled"],
+            ["stopped", "stopped", "settled"],
             ["exec dev", "stop dev"],
           ])
         );
@@ -1499,50 +1467,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const started = yield* client.startMachine({ id: "dev" });
 
         expect(at(started)).toStrictEqual(["running", "running", "settled"]);
-        expect(yield* pins).toStrictEqual(["fake 0"]);
-      })
-  );
-
-  it.effect(
-    "a pause of a stopped machine leaves it stopped, and calls no runtime",
-    () =>
-      Effect.gen(function* () {
-        const { client, fake } = yield* served();
-
-        yield* client.create("dev", request("dev"));
-        yield* client.stopMachine({ id: "dev" });
-        fake.calls.length = 0;
-
-        const paused = yield* client.pauseMachine({ id: "dev" });
-
-        expect(at(paused)).toStrictEqual(["stopped", "paused", "settled"]);
-        expect(fake.calls).toStrictEqual([]);
-      })
-  );
-
-  it.effect(
-    "a machine paused under another runtime build is PinMismatch to a start or a stop, and never resumed",
-    () =>
-      Effect.gen(function* () {
-        const { bootedUnder, client, fake, pins } = yield* served(saving);
-
-        yield* client.create(
-          "dev",
-          request("dev", { runtime: runtimes.saving })
-        );
-        yield* client.pauseMachine({ id: "dev" });
-        yield* bootedUnder("dev", "fake 0");
-        fake.calls.length = 0;
-
-        const errors = [
-          yield* Effect.flip(client.startMachine({ id: "dev" })),
-          yield* Effect.flip(client.stopMachine({ id: "dev" })),
-        ];
-
-        expect(errors.map(({ _tag }) => _tag)).toStrictEqual([
-          "PinMismatch",
-          "PinMismatch",
-        ]);
         expect(yield* pins).toStrictEqual(["fake 0"]);
       })
   );
@@ -1630,34 +1554,33 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { client, fake, machine, machines, store } =
-          yield* served(saving);
+          yield* served(copiesRunning);
 
         yield* client.create(
           "dev",
-          request("dev", { runtime: runtimes.saving })
+          request("dev", { runtime: runtimes.copiesRunning })
         );
-        yield* client.pauseMachine({ id: "dev" });
         fake.calls.length = 0;
 
-        const resuming = fake.holdNext("admit");
-
-        fake.failNext("stop", new Internal({ message: "guest didn't flush" }));
+        const stopping = fake.holdNext("stop", {
+          fails: new Internal({ message: "guest didn't flush" }),
+        });
 
         const stop = yield* Effect.forkChild(
           Effect.flip(client.stopMachine({ id: "dev" }))
         );
 
-        yield* resuming.entered;
+        yield* stopping.entered;
         yield* applying(store, "dev", { type: "ask", desired: "running" });
         yield* machines.stop("dev");
         yield* pause;
-        yield* resuming.release;
+        yield* stopping.release;
 
         const failure = yield* Fiber.join(stop);
         const rest = yield* machine("dev");
 
         expect(failure.message).toBe("guest didn't flush");
-        expect(at(rest)).toStrictEqual(["paused", "stopped", "failed"]);
+        expect(at(rest)).toStrictEqual(["running", "stopped", "failed"]);
         expect(rest.error?.message).toBe("guest didn't flush");
         expect(fake.calls.filter((call) => call === "stop dev")).toHaveLength(
           1
@@ -2179,68 +2102,78 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
-  it.effect("the next recheck starts machines that stopped under them", () =>
-    Effect.gen(function* () {
-      const { client, fake } = yield* served({
-        recheck: Duration.millis(200),
-      });
-
-      yield* client.create("dev", request("dev"));
-      yield* client.create("other", request("other"));
-      fake.calls.length = 0;
-
-      for (const held of fake.machines.values()) {
-        held.state = "stopped";
-      }
-
-      yield* eventually(
-        Effect.sync(() => [...fake.calls]),
-        (calls) => calls.length >= 8
-      );
-
-      expect(fake.calls.toSorted()).toStrictEqual([
-        "admit dev",
-        "admit other",
-        "exec dev",
-        "exec dev",
-        "exec other",
-        "exec other",
-        "start dev",
-        "start other",
-      ]);
-    })
-  );
-
   it.effect(
-    "a machine its runtime stopped unasked is started again, where machines stop on their own",
+    "a machine its runtime stopped unasked rests failed saying so, is never started again by a recheck, and boots once a request starts it",
     () =>
       Effect.gen(function* () {
         const { client, fake, machine } = yield* served({
-          hosts: [{ id: "fixed", as: "fixed" }],
           recheck: Duration.millis(200),
         });
 
-        yield* client.create(
-          "dev",
-          request("dev", { runtime: runtimes.fixed })
-        );
-
+        yield* client.create("dev", request("dev"));
+        yield* client.create("other", request("other"));
         fake.calls.length = 0;
-        yield* fake.faults.drift(fake.machines.get("dev")?.instance ?? "");
 
-        const back = yield* eventually(
-          machine("dev"),
-          ({ state, phase }) =>
-            fake.calls.includes("start dev") &&
-            state === "running" &&
-            phase === "settled"
+        for (const held of fake.machines.values()) {
+          held.state = "stopped";
+        }
+
+        const rested = yield* Effect.forEach(["dev", "other"], (name) =>
+          eventually(machine(name), ({ phase }) => phase === "failed")
         );
 
-        expect(at(back)).toStrictEqual(["running", "running", "settled"]);
+        yield* Effect.sleep(Duration.millis(600));
+
+        const still = yield* machine("dev");
+        const started = yield* client.startMachine({ id: "dev" });
+
+        expect(
+          rested.map(({ state, desired, phase, error, unasked, boots }) => ({
+            at: [state, desired, phase],
+            error: error?._tag,
+            stopped: error?._tag === "WrongState" ? error.state : undefined,
+            unasked: unasked?.what,
+            boots,
+          }))
+        ).toStrictEqual(
+          ["dev", "other"].map(() => ({
+            at: ["stopped", "running", "failed"],
+            error: "WrongState",
+            stopped: "stopped",
+            unasked: "stopped",
+            boots: 1,
+          }))
+        );
+        expect(rested[0]?.error?.message).toContain(
+          "nothing will start it again"
+        );
+        expect(at(still)).toStrictEqual(["stopped", "running", "failed"]);
+        expect(at(started)).toStrictEqual(["running", "running", "settled"]);
+        expect(started.boots).toBe(2);
+        expect(started.error).toBeUndefined();
         expect(
           fake.calls.filter((call) => call.startsWith("start"))
         ).toStrictEqual(["start dev"]);
       })
+  );
+
+  it.effect("a stop is asked for, so it records no change unasked", () =>
+    Effect.gen(function* () {
+      const { client, machine } = yield* served({
+        hosts: [{ id: "fixed", as: "fixed" }],
+        recheck: Duration.millis(200),
+      });
+
+      yield* client.create("dev", request("dev", { runtime: runtimes.fixed }));
+      yield* client.stopMachine({ id: "dev" });
+      yield* Effect.sleep(Duration.millis(600));
+
+      const stopped = yield* machine("dev");
+
+      expect(stopped.phase).toBe("settled");
+      expect(stopped.unasked).toBeUndefined();
+      expect(stopped.error).toBeUndefined();
+    })
   );
 
   it.effect("a fork and a restore are sized by their host's traits", () =>
@@ -3425,18 +3358,20 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
   it.effect("a resize asked during a failing stop still runs", () =>
     Effect.gen(function* () {
-      const { asking, client, fake, machine, row } = yield* served(saving);
+      const { asking, client, fake, machine, row } =
+        yield* served(copiesRunning);
 
-      yield* client.create("dev", request("dev", { runtime: runtimes.saving }));
-      yield* client.pauseMachine({ id: "dev" });
+      yield* client.create(
+        "dev",
+        request("dev", { runtime: runtimes.copiesRunning })
+      );
 
-      const resuming = fake.holdNext("admit");
-
-      fake.failNext("stop", new Internal({ message: "guest didn't flush" }));
+      const stopping = fake.holdNext("stop", {
+        fails: new Internal({ message: "guest didn't flush" }),
+      });
 
       yield* asking.stopMachine({ id: "dev" });
-      yield* resuming.entered;
-      turned(fake, "dev", "running");
+      yield* stopping.entered;
 
       const resize = yield* Effect.forkChild(
         client.resizeMachine({ id: "dev", cpu: 2 })
@@ -3444,7 +3379,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       yield* eventually(row("dev"), ({ resize: owed }) => owed !== undefined);
       yield* pause;
-      yield* resuming.release;
+      yield* stopping.release;
 
       const resized = yield* Fiber.join(resize);
       const rest = yield* machine("dev");
@@ -3521,7 +3456,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a linux copy's vCPUs or RAM below its source's, and any copy's smaller disk, are Unsizable before a row is written",
     () =>
       Effect.gen(function* () {
-        const linux = yield* served(saving);
+        const linux = yield* served(copiesRunning);
 
         const mac = yield* served({
           hosts: [{ id: "tart", as: "tart" }],
@@ -3529,7 +3464,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* linux.client.create(
           "dev",
-          request("dev", { runtime: runtimes.saving, cpu: 2 })
+          request("dev", { runtime: runtimes.copiesRunning, cpu: 2 })
         );
         yield* linux.client.captureCheckpoint({ machine: "dev", name: "snap" });
         yield* mac.client.create(
@@ -3586,11 +3521,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a fork or capture of a machine whose last step failed, in the state its host doesn't copy, is WrongState before a row is written",
     () =>
       Effect.gen(function* () {
-        const { client, fake, machine, rows, store } = yield* served(saving);
+        const { client, fake, machine, rows, store } =
+          yield* served(copiesRunning);
 
         yield* client.create(
           "dev",
-          request("dev", { runtime: runtimes.saving })
+          request("dev", { runtime: runtimes.copiesRunning })
         );
         yield* client.stopMachine({ id: "dev" });
         fake.failNext("start", new Internal({ message: "start refused" }));
@@ -3628,31 +3564,19 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a fork or capture of a running machine on a host that copies only a stopped one is WrongState before a row is written, and so is one of a stopped machine where a copy takes a running one",
+    "a fork or capture of a stopped machine on a host that copies only a running one is WrongState before a row is written, saying why",
     () =>
       Effect.gen(function* () {
-        const mac = yield* served({ hosts: [{ id: "fixed", as: "fixed" }] });
-        const linux = yield* served(saving);
+        const linux = yield* served(copiesRunning);
 
-        yield* mac.client.create(
-          "dev",
-          request("dev", { runtime: runtimes.fixed })
-        );
         yield* linux.client.create(
           "dev",
-          request("dev", { runtime: runtimes.saving })
+          request("dev", { runtime: runtimes.copiesRunning })
         );
         yield* linux.client.stopMachine({ id: "dev" });
-        mac.fake.calls.length = 0;
         linux.fake.calls.length = 0;
 
         const refused = [
-          yield* Effect.flip(
-            mac.client.forkMachine({ machine: "dev", name: "copy" })
-          ),
-          yield* Effect.flip(
-            mac.client.captureCheckpoint({ machine: "dev", name: "snap" })
-          ),
           yield* Effect.flip(
             linux.client.forkMachine({ machine: "dev", name: "copy" })
           ),
@@ -3670,16 +3594,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         ).toStrictEqual([
           [
             "WrongState",
-            "machine dev is running, and its host copies a machine only stopped: stop it, then fork it",
-            undefined,
-          ],
-          [
-            "WrongState",
-            "machine dev is running, and its host copies a machine only stopped: stop it, then capture it",
-            undefined,
-          ],
-          [
-            "WrongState",
             "machine dev is stopped, and its host copies a machine only running, as it copies only memory: start it, then fork it",
             undefined,
           ],
@@ -3689,17 +3603,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             undefined,
           ],
         ]);
+        expect((yield* linux.rows).map(({ name }) => name)).toStrictEqual([
+          "dev",
+        ]);
+        expect(yield* linux.store.checkpoints).toHaveLength(0);
         expect(
-          [yield* mac.rows, yield* linux.rows].map((rows) =>
-            rows.map(({ name }) => name)
-          )
-        ).toStrictEqual([["dev"], ["dev"]]);
-        expect([
-          (yield* mac.store.checkpoints).length,
-          (yield* linux.store.checkpoints).length,
-        ]).toStrictEqual([0, 0]);
-        expect(
-          [...mac.fake.calls, ...linux.fake.calls].filter(
+          linux.fake.calls.filter(
             (call) => call.startsWith("fork") || call.startsWith("capture")
           )
         ).toStrictEqual([]);
@@ -3769,11 +3678,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a fork whose source grows past the copy while it waits is refused by the rule its request passed, and its copy is deleted",
     () =>
       Effect.gen(function* () {
-        const { asking, client, fake, machine } = yield* served(saving);
+        const { asking, client, fake, machine } = yield* served(copiesRunning);
 
         yield* client.create(
           "dev",
-          request("dev", { runtime: runtimes.saving })
+          request("dev", { runtime: runtimes.copiesRunning })
         );
 
         const { release, entered } = fake.holdNext("resize");

@@ -32,7 +32,7 @@ const offered = {
   smolvm: ["ubuntu", process.env["CLANKERBOX_FAKE_UBUNTU_IMAGE"] ?? ubuntu],
   tart: ["macos", "registry.example/macos@sha256:00"],
   fixed: ["ubuntu", ubuntu],
-  saving: ["ubuntu", ubuntu],
+  copiesRunning: ["ubuntu", ubuntu],
 } as const satisfies Record<FakeRuntimeName, readonly [string, string]>;
 
 const isFaked = (text: string): text is FakeRuntimeName =>

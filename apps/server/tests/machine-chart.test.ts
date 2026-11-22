@@ -7,6 +7,7 @@ import type { Report } from "@clankerbox/host-contract";
 import { describe, expect, it } from "@effect/vitest";
 import { presets } from "@gjermundgaraba/clankerbox-host/testing";
 import { Desired, Internal } from "@gjermundgaraba/clankerbox-sdk";
+import { DateTime } from "effect";
 import { expectTypeOf } from "vite-plus/test";
 import { setup, transition, types } from "xstate";
 import type { SnapshotFrom } from "xstate";
@@ -41,13 +42,15 @@ import {
   when as at,
 } from "./chart-rows.ts";
 
-const wishes: readonly Wish[] = ["running", "stopped", "paused"];
+const wishes: readonly Wish[] = ["running", "stopped"];
 
 const flags: readonly boolean[] = [false, true];
 
 const seens = MachineState.literals;
 
 const earlier = new Internal({ message: "an earlier failure" });
+
+const stoppedUnasked = new Internal({ message: "stopped unasked" });
 
 const cut = new Internal({ message: "the make of dev ended on its host" });
 
@@ -117,6 +120,8 @@ const read = (
   id: "new",
   joins,
   awaiting: false,
+  at,
+  stoppedUnasked,
 });
 
 const reported = (
@@ -231,7 +236,6 @@ type Readable = Exclude<MachineState, "unknown" | "missing">;
 const stepped = {
   start: "made.stepping.starting",
   stop: "made.stepping.stopping",
-  pause: "made.stepping.pausing",
 } as const;
 
 const settles = "made.settled";
@@ -244,17 +248,10 @@ const decisions: Readonly<
   running: {
     running: [stepped.start, settles],
     stopped: [stepped.start, stepped.start],
-    paused: [stepped.start, stepped.start],
   },
   stopped: {
     running: [stepped.stop, stepped.stop],
     stopped: resting,
-    paused: [stepped.stop, stepped.stop],
-  },
-  paused: {
-    running: [stepped.pause, stepped.pause],
-    stopped: resting,
-    paused: resting,
   },
 };
 
@@ -282,6 +279,14 @@ const decidedBy = (from: Leaf, input: Input, joins: boolean): Leaf => {
     return "made.lost";
   }
 
+  if (
+    seen === "stopped" &&
+    input.desired === "running" &&
+    (from === "made.settled" || (prepared && !owing))
+  ) {
+    return "made.failed";
+  }
+
   if (owing) {
     return "made.stepping.resizing";
   }
@@ -298,7 +303,6 @@ const vmAfter: Partial<Record<Leaf, MachineState>> = {
   "making.sent": "running",
   "made.stepping.starting": "running",
   "made.stepping.stopping": "stopped",
-  "made.stepping.pausing": "paused",
 };
 
 const restsWithin = (input: Input, steps: number) => {
@@ -333,7 +337,7 @@ describe("a read", () => {
       )
     );
 
-    expect(table).toHaveLength(1120);
+    expect(table).toHaveLength(672);
     expect(
       table.filter(({ chart, decided }) => chart !== decided)
     ).toStrictEqual([]);
@@ -349,9 +353,9 @@ describe("a read", () => {
     });
   });
 
-  it("a read holds a pause while the capture it comes after hasn't begun, and pauses once it has", () => {
+  it("a read holds a stop while the capture it comes after hasn't begun, and stops once it has", () => {
     const row = rowAt("made.observing", {
-      desired: "paused",
+      desired: "stopped",
       after: "snap",
       prepared: true,
     });
@@ -361,7 +365,7 @@ describe("a read", () => {
     expect(held.next).toBe(row);
     expect(held.begin).toBeUndefined();
     expect(leafOf(row, { ...read("running"), awaiting: false })).toBe(
-      "made.stepping.pausing"
+      "made.stepping.stopping"
     );
     expect(leafOf(row, { ...read("stopped"), awaiting: true })).toBe(
       "made.settled"
@@ -419,33 +423,14 @@ describe("a read", () => {
     ).toStrictEqual([]);
   });
 
-  it("a made machine asked to pause is paused only from running, and never made, started or stopped", () => {
+  it("a made machine asked to stop is stopped only from running", () => {
     expect(
       madeInputs.filter(
         (input) =>
-          input.desired === "paused" &&
+          input.desired === "stopped" &&
           !input.resizing &&
-          ([
-            "making.sent",
-            "made.stepping.starting",
-            "made.stepping.stopping",
-          ].includes(decide(input)) ||
-            (decide(input) === "made.stepping.pausing") !==
-              (input.seen === "running"))
-      )
-    ).toStrictEqual([]);
-  });
-
-  it("a paused machine asked to run or stop is started or stopped, never left at rest", () => {
-    expect(
-      madeInputs.filter(
-        (input) =>
-          input.seen === "paused" &&
-          !input.resizing &&
-          ((input.desired === "running" &&
-            decide(input) !== "made.stepping.starting") ||
-            (input.desired === "stopped" &&
-              decide(input) !== "made.stepping.stopping"))
+          (decide(input) === "made.stepping.stopping") !==
+            (input.seen === "running")
       )
     ).toStrictEqual([]);
   });
@@ -531,11 +516,10 @@ describe("a read", () => {
 const kindWishes: ReadonlyArray<
   readonly [Operation["kind"], readonly Desired[]]
 > = [
-  ["make", ["running", "stopped", "paused"]],
+  ["make", ["running", "stopped"]],
   ["start", ["running"]],
   ["join", ["running"]],
   ["stop", ["stopped"]],
-  ["pause", ["paused"]],
   ["remove", Desired.literals],
   ["resize", Desired.literals],
   ["capture", Desired.literals],
@@ -696,10 +680,9 @@ describe("what a write begins and finishes", () => {
   it("only a start from stopped takes the host's pin", () => {
     expect([
       after(rowAt("made.observing"), read("stopped")).pin,
-      after(rowAt("made.observing"), read("paused")).pin,
       after(rowAt("made.observing", { desired: "stopped" }), read("running"))
         .pin,
-    ]).toStrictEqual(["new pin", "pin", "pin"]);
+    ]).toStrictEqual(["new pin", "pin"]);
   });
 
   it("a make takes the pin of the host it is sent to, which its VM boots under", () => {
@@ -839,7 +822,6 @@ const phases: Readonly<Record<Leaf, MachinePhase>> = {
   "made.failed": "failed",
   "made.stepping.starting": "starting",
   "made.stepping.stopping": "stopping",
-  "made.stepping.pausing": "pausing",
   "made.stepping.resizing": "resizing",
   "made.stepping.joining.sent": "settled",
   "made.stepping.joining.asked": "observing",
@@ -907,7 +889,6 @@ const edges: Readonly<Record<Leaf, Edges>> = {
   "made.failed": madeAtRest,
   "made.stepping.starting": stepTo("made.stepping.starting"),
   "made.stepping.stopping": stepTo("made.stepping.stopping"),
-  "made.stepping.pausing": stepTo("made.stepping.pausing"),
   "made.stepping.resizing": stepTo("made.stepping.resizing"),
   "made.stepping.joining.sent": {
     ask: "made.stepping.joining.asked",
@@ -958,14 +939,13 @@ const edges: Readonly<Record<Leaf, Edges>> = {
 
 const wished: Partial<Record<Leaf, Wish>> = {
   "made.stepping.stopping": "stopped",
-  "made.stepping.pausing": "paused",
 };
 
 const kindsOf = (state: Leaf) => {
   const { step } = metaOf(state);
 
   return step === "any"
-    ? (["make", "start", "stop", "pause", "resize", "join"] as const)
+    ? (["make", "start", "stop", "resize", "join"] as const)
     : [step];
 };
 
@@ -1005,13 +985,197 @@ const factsWritten: readonly Write[] = [
     "a make done tells its handle and endpoint, and its machine is still to prepare",
     rowAt("making.sent", prepared),
     report("done", reach),
-    { state: "made.observing", prepared: false, ...reach },
+    { state: "made.observing", prepared: false, boots: 1, ...reach },
   ],
   [
     "a make done prepared tells its host key, and its machine needs no start",
     rowAt("making.sent"),
     report("done", { ...reach, hostKey: "key", prepared: true }),
-    { state: "made.observing", prepared: true, ...reach, hostKey: "key" },
+    {
+      state: "made.observing",
+      prepared: true,
+      boots: 1,
+      ...reach,
+      hostKey: "key",
+    },
+  ],
+  [
+    "a start done that booted a machine read stopped counts the boot",
+    rowAt("made.stepping.starting", { booting: true, boots: 2 }),
+    done,
+    { state: "made.observing", prepared: true, booting: false, boots: 3 },
+  ],
+  [
+    "a start that fails counts no boot",
+    rowAt("made.stepping.starting", { booting: true, boots: 2 }),
+    failed,
+    { state: "made.failed", error, booting: false },
+  ],
+  [
+    "a machine at rest running that its runtime stopped unasked rests failed saying so, and isn't started again",
+    rowAt("made.settled", { ...prepared, boots: 2 }),
+    read("stopped"),
+    {
+      state: "made.failed",
+      error: stoppedUnasked,
+      unasked: { what: "stopped", at },
+    },
+  ],
+  [
+    "a machine its runtime stopped unasked just after a start of ours rests failed saying so, and isn't started again",
+    rowAt("made.observing", { ...prepared, boots: 2 }),
+    read("stopped"),
+    {
+      state: "made.failed",
+      error: stoppedUnasked,
+      unasked: { what: "stopped", at },
+    },
+  ],
+  [
+    "a resize of a machine resting failed after its runtime stopped it unasked leaves it stopped, failed again",
+    rowAt("made.observing", {
+      ...prepared,
+      boots: 2,
+      unasked: { what: "stopped", at: DateTime.makeUnsafe(1) },
+    }),
+    read("stopped"),
+    {
+      state: "made.failed",
+      error: stoppedUnasked,
+      unasked: { what: "stopped", at },
+    },
+  ],
+  [
+    "the cause a runtime gives for a stop it made unasked is recorded with it",
+    rowAt("made.settled", { ...prepared, boots: 2 }),
+    { ...read("stopped"), why: "out of memory" },
+    {
+      state: "made.failed",
+      error: stoppedUnasked,
+      unasked: { what: "stopped", at, why: "out of memory" },
+    },
+  ],
+  [
+    "a cause a runtime gives for a machine that runs is no change",
+    rowAt("made.settled", { ...prepared, boots: 2 }),
+    { ...read("running"), why: "out of memory" },
+    {},
+  ],
+  [
+    "a stopped machine read stopped is what was asked, and no change unasked",
+    rowAt("made.settled", { desired: "stopped", boots: 2 }),
+    read("stopped"),
+    {},
+  ],
+  [
+    "a stop read once it is done settles, and is no change unasked",
+    rowAt("made.observing", { desired: "stopped", boots: 2 }),
+    read("stopped"),
+    { state: "made.settled" },
+  ],
+  [
+    "a start asked of a machine its runtime stopped unasked boots it",
+    rowAt("made.observing", {
+      boots: 2,
+      unasked: { what: "stopped", at },
+    }),
+    read("stopped"),
+    { state: "made.stepping.starting", pin: "new pin", booting: true },
+  ],
+  [
+    "a machine at rest stopped that runs unasked is recorded so, with its boot, and stopped again",
+    rowAt("made.settled", { desired: "stopped", boots: 2 }),
+    read("running"),
+    {
+      state: "made.stepping.stopping",
+      boots: 3,
+      unasked: { what: "started", at },
+    },
+  ],
+  [
+    "a machine its runtime no longer has is recorded lost unasked",
+    rowAt("made.settled", { ...prepared, boots: 2 }),
+    read("missing"),
+    { state: "made.lost", unasked: { what: "lost", at } },
+  ],
+  [
+    "a lost machine read lost again keeps when it was first found lost",
+    rowAt("made.lost", {
+      boots: 2,
+      unasked: { what: "lost", at: DateTime.makeUnsafe(1) },
+    }),
+    read("missing"),
+    {},
+  ],
+  [
+    "a reboot in place its runtime marks anew counts a boot, recorded unasked",
+    rowAt("made.settled", { ...prepared, boots: 2, reboot: "first" }),
+    { ...read("running"), reboot: "second" },
+    {
+      state: "made.settled",
+      boots: 3,
+      reboot: "second",
+      unasked: { what: "rebooted", at },
+    },
+  ],
+  [
+    "a start done that booted its machine leaves no reboot mark, so the mark its runtime gives after the boot counts none",
+    rowAt("made.stepping.starting", {
+      booting: true,
+      boots: 2,
+      reboot: "first",
+    }),
+    done,
+    {
+      state: "made.observing",
+      prepared: true,
+      booting: false,
+      boots: 3,
+      reboot: undefined,
+    },
+  ],
+  [
+    "a start that fails to boot its machine leaves no reboot mark either, as its runtime may have booted it",
+    rowAt("made.stepping.starting", {
+      booting: true,
+      boots: 2,
+      reboot: "first",
+    }),
+    failed,
+    { state: "made.failed", error, booting: false, reboot: undefined },
+  ],
+  [
+    "a start its host lost while it booted its machine leaves no reboot mark, as the boot may have run",
+    rowAt("made.stepping.starting", {
+      booting: true,
+      boots: 2,
+      reboot: "first",
+    }),
+    gone,
+    { state: "made.observing", reboot: undefined },
+  ],
+  [
+    "a start done of a machine that ran keeps its reboot mark",
+    rowAt("made.stepping.starting", { boots: 2, reboot: "first" }),
+    done,
+    { state: "made.observing", prepared: true, booting: false },
+  ],
+  [
+    "a machine at rest stopped that runs unasked with a new reboot mark is recorded started, counting one boot",
+    rowAt("made.settled", { desired: "stopped", boots: 2, reboot: "first" }),
+    { ...read("running"), reboot: "second" },
+    {
+      state: "made.stepping.stopping",
+      boots: 3,
+      reboot: "second",
+      unasked: { what: "started", at },
+    },
+  ],
+  [
+    "the first reboot mark a runtime gives counts no boot",
+    rowAt("made.settled", { ...prepared, boots: 2 }),
+    { ...read("running"), reboot: "first" },
+    { state: "made.settled", reboot: "first" },
   ],
   [
     "a start done prepares its machine and tells its host key",
@@ -1022,12 +1186,6 @@ const factsWritten: readonly Write[] = [
   [
     "a stop done leaves the machine to prepare again",
     rowAt("made.stepping.stopping", { desired: "stopped", ...prepared }),
-    done,
-    { state: "made.observing", prepared: false },
-  ],
-  [
-    "a pause done leaves the machine to prepare again",
-    rowAt("made.stepping.pausing", { desired: "paused", ...prepared }),
     done,
     { state: "made.observing", prepared: false },
   ],
@@ -1156,10 +1314,10 @@ const factsWritten: readonly Write[] = [
     { state: "undoing.due", error },
   ],
   [
-    "a read of a stopped machine that starts it takes the host's pin",
+    "a read of a stopped machine that starts it takes the host's pin, and boots it, which a read after a request records no change unasked",
     rowAt("made.observing"),
     read("stopped"),
-    { state: "made.stepping.starting", pin: "new pin" },
+    { state: "made.stepping.starting", pin: "new pin", booting: true },
   ],
 ];
 
@@ -1241,7 +1399,7 @@ describe("the chart", () => {
       expect.objectContaining({ type: "@xstate.terminate" }),
     ];
 
-    expect(steps.length).toBeGreaterThan(10_000);
+    expect(steps.length).toBeGreaterThan(7000);
     expect(steps.some(({ next }) => next === "removed")).toBe(true);
     expect(steps.map(({ effects }) => effects)).toStrictEqual(
       steps.map(({ next }) => (next === "removed" ? ending : []))
@@ -1329,8 +1487,6 @@ describe("the chart", () => {
       ["running", true, "made.stepping.joining.sent"],
       ["stopped", false, "made.stepping.stopping"],
       ["stopped", true, "made.stepping.stopping"],
-      ["paused", false, "made.stepping.pausing"],
-      ["paused", true, "made.stepping.pausing"],
     ]);
   });
 
@@ -1372,7 +1528,6 @@ describe("the chart", () => {
       host: "other",
       instance: "moved-instance",
       runtime: presets.tart.traits.runtime,
-      captures: "disk",
       pin: "other pin",
       source: { kind: "checkpoint", name: "built" },
     } as const;
@@ -1398,6 +1553,17 @@ describe("the chart", () => {
     const adjacency = getAdjacencyMap(machine, {
       input: facts(),
       events: [...representatives],
+      serializeState: ({ value, context }) =>
+        JSON.stringify({
+          value,
+          context: {
+            ...context,
+            boots: "unbounded",
+            booting: "decides no target",
+            reboot: context.reboot !== undefined,
+            unasked: "decides no target",
+          },
+        }),
     });
 
     const reached = adjacencyMapToArray(adjacency).map(

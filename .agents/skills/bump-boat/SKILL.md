@@ -172,7 +172,7 @@ Each line names where the code holds it and how to check it again.
 - Each request is bounded by `answerWithin` in `platform/provider-http.ts`: 30
   seconds for a read, a minute for a change. A request unanswered by then is
   one whose answer was lost. Each provider call of a step, a make, start,
-  stop, pause, delete, resize or capture, is `bounded` there, 10 minutes for
+  stop, delete, resize or capture, is `bounded` there, 10 minutes for
   all its requests and polls, and runs whole: a later request cuts the step
   short only once it has ended.
 - The apt Tailscale package enables its own `tailscaled` unit on boat's

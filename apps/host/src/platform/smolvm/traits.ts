@@ -33,10 +33,7 @@ export const ramGrowthMib = 64 * 1024;
 export const traits = (arch: string): RuntimeTraits => ({
   runtime: RuntimeName.make("smolvm"),
   images: "references",
-  checkpoint: "disk",
   captureFrom: "either",
-  pause: "stops",
-  stop: "resumes",
   copies: "any",
   resize: {
     running: "grow",

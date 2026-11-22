@@ -211,8 +211,9 @@ Each: what Tart does, where, and what of ours depends on it.
   a VM as Tart's `state` does (VMDirectory.swift): a VM at all when its
   directory under the home's `vms/` (`VMStorageLocal`'s `baseURL`) holds the
   files `initialized` asks for (`layout`), running while a `tart run` holds the
-  lock on its `config.json` (`running`, PIDLock.swift), then paused when
-  `state.vzvmsave` exists (`stateURL`). `Home.look` reads the directory, and
+  lock on its `config.json` (`running`, PIDLock.swift), and stopped
+  otherwise (`stateWith`), one with a `state.vzvmsave` included, which Tart
+  reads suspended (`stateURL`). `Home.look` reads the directory, and
   `locks.ts` asks who holds each VM's lock with `fcntl(F_GETLK)`, as Tart's
   `PIDLock.pid` does, through macOS's `/usr/bin/perl`, since Node has no
   `fcntl`: one Perl for every VM a read asks about, packing `struct flock` as
@@ -238,8 +239,8 @@ Each: what Tart does, where, and what of ours depends on it.
   block. A print without them, or with a state not among those captured on
   macOS 27.2 (`apps/host/tests/platform/tart/launchctl/`, and `capturedOn` in
   `launchd.ts`), makes that VM alone read unknown, with a warning that names
-  it and the remedy, a release qualified on that macOS, and fails a stop, a
-  pause or a boot of it `Internal`, saying the same. The states: `not running` before a job's first run and after each, with
+  it and the remedy, a release qualified on that macOS, and fails a stop or a
+  boot of it `Internal`, saying the same. The states: `not running` before a job's first run and after each, with
   `last exit code`, a number or `(never exited)`; `xpcproxy` while launchd
   starts a VM's job; `spawn scheduled` while it waits to respawn a job
   `KeepAlive` restarts, which runs no process, so the host reads it as exited;
@@ -315,33 +316,27 @@ Each: what Tart does, where, and what of ours depends on it.
   run without `--suspendable` fails the same way (the SIGUSR1 handler in `run`,
   `validateSaveRestoreSupport`, Commands/Run.swift). `--suspendable` also
   drops the VM's audio and entropy devices and its non-Mac input devices
-  (`suspendable`'s help, Commands/Run.swift). Ours: every job runs
-  `--suspendable` (`program`), so every mac VM boots without those devices; a
-  pause stops a VM whose loaded job's arguments lack it, as `stop` does, then,
-  without interruption, waits `suspendWait` for its job to exit and reads
-  `saved` in the job's log, or runs `tart stop <vm>` to
-  remove what it left of `state.vzvmsave` and fails; a log it can't read fails
-  the pause and keeps the state.
+  (`suspendable`'s help, Commands/Run.swift). Ours: no job runs
+  `--suspendable` (`program`), so every mac VM boots with those devices, and
+  the host never runs `tart suspend`.
 - `tart run` of a VM with a `state.vzvmsave` turns on `--suspendable` itself,
   prints "restoring VM state from a snapshot...", removes the file only once
   the restore succeeds, and on a failed restore prints the error and exits 1
-  (`run`, Commands/Run.swift). Ours: a start boots a paused VM's job as it
-  boots a stopped one, its log emptied first.
+  (`run`, Commands/Run.swift). Ours: a start boots a VM something else
+  suspended as it boots a stopped one, its log emptied first (`launch`), so
+  Tart restores it.
 - `tart stop` of a suspended VM removes its `state.vzvmsave` and exits 0,
-  booting nothing (`stopSuspended`, Commands/Stop.swift). Ours: `stop` of a
-  paused machine is `tart stop <vm>`, and Tart's `stop` trait is `discards`, so
-  the core neither admits it nor checks its pin.
+  booting nothing (`stopSuspended`, Commands/Stop.swift). Ours: `stop` leaves
+  a VM that isn't running as it is, a suspended one included.
 - Virtualization.framework seals saved state with a key in the operator's
   session keychain: a restore while the session is locked fails, printed by
   `tart run` as `Error Domain=VZErrorDomain Code=12 "The virtual machine
   failed to restore with error “permission denied”."`, macOS's English text;
   the first save, which creates the key, fails too, later saves work locked,
   and a root LaunchDaemon can't save at all (no keychain, -25291). macOS, not
-  Tart, so re-check it on a macOS upgrade. Ours: every failed resume is
-  `Internal`, its message saying a locked session refuses one, the saved state
-  kept; README's mac Deploy says to make the first pause unlocked; `pin` is
-  `undefined`, as a restore that fails keeps the saved state, so no pin guards
-  a resume.
+  Tart, so re-check it on a macOS upgrade. Ours: the host saves no VM state,
+  and `pin` is `undefined`, as every Tart copy is a `tart clone` of the disk,
+  a running source's included, booted fresh.
 
 **Softnet and the network**
 
@@ -466,7 +461,7 @@ times, and the disk's capacity and format)
 - On the base, in the private `TART_HOME`: `tart list`'s `Disk` of the cached
   image, for README's capacity and `diskGib` floor; a clone, `tart set
   --random-serial`, and `tart run` with `program`'s flags (`--no-graphics
-  --suspendable --net-softnet-block=@host`), timing the first exec that
+  --net-softnet-block=@host`), timing the first exec that
   answers; then over `tart exec -i <vm> sudo -n /bin/bash -c`, the guest
   agent's version, sshd's host keys, the `/dev/random` and `/dev/urandom`
   writes, `/etc/environment` and `/etc/zshenv`, the application firewall's
@@ -499,9 +494,7 @@ times, and the disk's capacity and format)
   the host. Every `start` writes the VM's
   job again, and a stopped job launchd still holds whose arguments aren't this
   host's is reloaded, so VMs move as they restart; keep the old install until
-  no running VM's job names it. A paused machine resumes under the new Tart,
-  or fails and keeps its saved state, which a stop discards; start or stop
-  each paused machine before the move to keep that from happening.
+  no running VM's job names it.
 - And how the base moves: `tart pull` the new reference as the host's user,
   into its Tart home, then set it as `bases.macos` in the host's config and
   restart the host.

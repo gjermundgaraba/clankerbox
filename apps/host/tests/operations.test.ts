@@ -8,7 +8,6 @@ import { layer } from "@effect/vitest";
 import {
   Internal,
   Missing,
-  PinMismatch,
   readTimeout,
   Unsizable,
   WrongState,
@@ -248,10 +247,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           runsOn: true,
         });
 
-        const stopping = delivery(
-          { _tag: "stop", machine: ref("dev"), machines: [] },
-          2
-        );
+        const stopping = delivery({ _tag: "stop", machine: ref("dev") }, 2);
 
         const removing = delivery(
           { _tag: "remove", machine: ref("dev"), keep: [] },
@@ -292,8 +288,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const stop: Step = {
           _tag: "stop",
           machine: ref("dev"),
-
-          machines: [],
         };
 
         yield* deliver(host, delivery(stop, 2));
@@ -347,29 +341,26 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "cancel turns the report cancelled only once the step has ended",
     () =>
       Effect.gen(function* () {
-        const host = yield* runner({ as: "saving" });
+        const host = yield* runner({ as: "copiesRunning" });
 
         yield* finished(host, makes("dev"));
 
-        const { release, entered } = host.fake.holdNext("pause", {
+        const { release, entered } = host.fake.holdNext("stop", {
           runsOn: true,
         });
 
-        const pausing = delivery(
-          { _tag: "pause", machine: ref("dev"), pin: "fake 1" },
-          2
-        );
+        const stopping = delivery({ _tag: "stop", machine: ref("dev") }, 2);
 
-        yield* deliver(host, pausing);
+        yield* deliver(host, stopping);
         yield* entered;
-        yield* host.operations.cancel(pausing.id);
+        yield* host.operations.cancel(stopping.id);
         yield* pause;
 
-        expect(yield* stillRunning(host, pausing.id)).toBe(true);
+        expect(yield* stillRunning(host, stopping.id)).toBe(true);
 
         yield* release;
 
-        expect((yield* ended(host, pausing.id)).status).toBe("cancelled");
+        expect((yield* ended(host, stopping.id)).status).toBe("cancelled");
       })
   );
 
@@ -786,10 +777,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           runsOn: true,
         });
 
-        const stopping = delivery(
-          { _tag: "stop", machine: ref("dev"), machines: [] },
-          2
-        );
+        const stopping = delivery({ _tag: "stop", machine: ref("dev") }, 2);
 
         const making = delivery(makes("dev", { taken: [firstPort] }), 3);
 
@@ -938,7 +926,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           host,
           makes("dev", { setup: { script: hostKeySetup } })
         );
-        yield* finished(host, { _tag: "stop", machine: dev, machines: [] }, 2);
+        yield* finished(host, { _tag: "stop", machine: dev }, 2);
         yield* finished(
           host,
           makes("other", { setup: { script: hostKeySetup } })
@@ -950,7 +938,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             _tag: "start",
             keep: [],
             machine: dev,
-            pin: "fake 1",
             machines: [other],
           },
           3
@@ -962,7 +949,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             _tag: "start",
             keep: [],
             machine: other,
-            pin: "fake 1",
             machines: [dev],
           },
           2
@@ -975,33 +961,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(host.fake.activations.map(({ action }) => action)).toStrictEqual(
           ["createMachine", "createMachine", "startMachine"]
         );
-      })
-  );
-
-  it.effect(
-    "a stop that resumes admits a VM the runtime holds paused, beside the machines that run",
-    () =>
-      Effect.gen(function* () {
-        const host = yield* runner({ as: "saving", ramBudgetMib: 1024 });
-        const dev = ref("dev", reached(firstPort));
-        const other = ref("other", reached(firstPort + 1));
-
-        yield* finished(host, makes("dev"));
-        yield* finished(
-          host,
-          { _tag: "pause", machine: dev, pin: "fake 1" },
-          2
-        );
-        yield* finished(host, makes("other"));
-
-        const stopped = yield* finished(
-          host,
-          { _tag: "stop", machine: dev, pin: "fake 1", machines: [other] },
-          3
-        );
-
-        expect(errorOf(stopped)).toStrictEqual(["failed", "Capacity"]);
-        expect(host.fake.machines.get("dev")?.state).toBe("paused");
       })
   );
 
@@ -1045,10 +1004,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const { entered, release } = host.fake.holdNext("stop");
 
-        yield* deliver(
-          host,
-          delivery({ _tag: "stop", machine: dev, machines: [] }, 2)
-        );
+        yield* deliver(host, delivery({ _tag: "stop", machine: dev }, 2));
         yield* entered;
 
         const running = yield* Effect.forkChild(
@@ -1078,7 +1034,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const dev = ref("dev", reached(firstPort));
 
         yield* finished(host, makes("dev"));
-        yield* finished(host, { _tag: "stop", machine: dev, machines: [] }, 2);
+        yield* finished(host, { _tag: "stop", machine: dev }, 2);
         host.fake.calls.length = 0;
 
         const stopped = yield* Effect.flip(
@@ -1133,8 +1089,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   const leavingSteps = {
-    stopping: { _tag: "stop", machine: ref("dev"), machines: [] },
-    pausing: { _tag: "pause", machine: ref("dev"), pin: "fake 1" },
+    stopping: { _tag: "stop", machine: ref("dev") },
     deleting: { _tag: "remove", machine: ref("dev"), keep: [] },
   } as const satisfies Record<string, Step>;
 
@@ -1145,7 +1100,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       `a ${verb} with an exec in flight first ends its command, as a cut does, and the exec answers WrongState in the phase ${phase}, saying the ${verb} ended it`,
       () =>
         Effect.gen(function* () {
-          const host = yield* runner({ as: "saving" });
+          const host = yield* runner({ as: "copiesRunning" });
           const dev = ref("dev", reached(firstPort));
 
           yield* finished(host, makes("dev"));
@@ -1221,9 +1176,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     })
   );
 
-  it.effect("a fork copies only a VM booted under the host's pin", () =>
+  it.effect("a fork copies a running VM only under the host's pin", () =>
     Effect.gen(function* () {
       const host = yield* runner();
+
+      yield* finished(host, makes("dev"));
 
       const report = yield* finished(
         host,
@@ -1233,7 +1190,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       );
 
       expect(errorOf(report)).toStrictEqual(["failed", "PinMismatch"]);
-      expect(report.error?.message).toContain("stop it and start it again");
+      expect(report.error?.message).toContain(
+        "copy it stopped, or start it again first"
+      );
       expect(host.fake.calls).not.toContain("fork copy");
     })
   );
@@ -1333,178 +1292,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(yield* read(keysOf("dev"))).toBe(installed);
         expect(yield* read(keysOf("copy"))).toBe(installed);
       })
-  );
-
-  it.effect("a paused machine starts only under the pin it booted under", () =>
-    Effect.gen(function* () {
-      const host = yield* runner({ as: "saving" });
-
-      yield* finished(host, makes("dev"));
-      yield* finished(
-        host,
-        { _tag: "pause", machine: ref("dev"), pin: "fake 1" },
-        2
-      );
-
-      const report = yield* finished(
-        host,
-        {
-          _tag: "start",
-          keep: [],
-          machine: ref("dev"),
-          pin: "fake 0",
-          machines: [],
-        },
-        3
-      );
-
-      expect(report.error).toStrictEqual(
-        new PinMismatch({
-          message:
-            "machine dev was paused under fake 0, and this host runs fake 1; it resumes only under the same one: delete it, or resume it under that one",
-        })
-      );
-      expect(host.fake.calls).not.toContain("start dev");
-    })
-  );
-
-  it.effect("a stopped machine starts under any pin, as nothing resumes", () =>
-    Effect.gen(function* () {
-      const host = yield* runner();
-      const setup = { script: hostKeySetup };
-
-      yield* finished(host, makes("dev", { setup }));
-      yield* finished(
-        host,
-        { _tag: "stop", machine: ref("dev"), machines: [] },
-        2
-      );
-
-      const report = yield* finished(
-        host,
-        {
-          _tag: "start",
-          keep: [],
-          machine: ref("dev"),
-          pin: "fake 0",
-          machines: [],
-        },
-        3
-      );
-
-      expect(report.status).toBe("done");
-    })
-  );
-
-  it.effect(
-    "a stop that resumes a paused machine does so only under its pin, and is admitted",
-    () =>
-      Effect.gen(function* () {
-        const host = yield* runner({ as: "saving" });
-
-        yield* finished(host, makes("dev"));
-        yield* finished(
-          host,
-          { _tag: "pause", machine: ref("dev"), pin: "fake 1" },
-          2
-        );
-
-        const refused = yield* finished(
-          host,
-          {
-            _tag: "stop",
-            machine: ref("dev"),
-            pin: "fake 0",
-            machines: [],
-          },
-          3
-        );
-
-        const stopped = yield* finished(
-          host,
-          {
-            _tag: "stop",
-            machine: ref("dev"),
-            pin: "fake 1",
-            machines: [],
-          },
-          4
-        );
-
-        expect(errorOf(refused)).toStrictEqual(["failed", "PinMismatch"]);
-        expect(stopped.status).toBe("done");
-        expect(counted(host.fake.calls, "stop dev")).toBe(1);
-        expect(host.fake.activations.at(-1)?.action).toBe("stopMachine");
-      })
-  );
-
-  it.effect(
-    "a runtime whose stop doesn't resume stops a paused VM under any pin, and admits nothing",
-    () =>
-      Effect.gen(function* () {
-        const host = yield* runner({ as: "tart" });
-
-        yield* finished(
-          host,
-          makes("dev", { source: { _tag: "base", base: "macos" } })
-        );
-        yield* finished(host, { _tag: "pause", machine: ref("dev") }, 2);
-        host.fake.calls.length = 0;
-
-        const report = yield* finished(
-          host,
-          {
-            _tag: "stop",
-            machine: ref("dev"),
-            pin: "older",
-            machines: [],
-          },
-          3
-        );
-
-        expect(host.fake.machines.get("dev")?.state).toBe("stopped");
-        expect(report.status).toBe("done");
-        expect(host.fake.calls).toStrictEqual(["stop dev"]);
-      })
-  );
-
-  it.effect("a pause stops a VM booted under another pin instead", () => {
-    const lines: string[] = [];
-
-    return Effect.gen(function* () {
-      const host = yield* runner({ as: "saving" });
-
-      yield* finished(host, makes("dev"));
-
-      const report = yield* finished(
-        host,
-        { _tag: "pause", machine: ref("dev"), pin: "fake 0" },
-        2
-      );
-
-      expect(report.status).toBe("done");
-      expect(host.fake.calls).toContain("stop dev");
-      expect(host.fake.calls).not.toContain("pause dev");
-      expect(host.fake.machines.get("dev")?.state).toBe("stopped");
-      expect(lines).toContain(
-        "pause dev: its VM booted under fake 0, and this host runs fake 1, so it stops it instead"
-      );
-    }).pipe(Effect.provide(Logger.layer([capturing(lines)])));
-  });
-
-  it.effect("a pause under the host's pin saves the VM", () =>
-    Effect.gen(function* () {
-      const host = yield* runner({ as: "saving" });
-
-      yield* finished(host, makes("dev"));
-      yield* finished(
-        host,
-        { _tag: "pause", machine: ref("dev"), pin: "fake 1" },
-        2
-      );
-
-      expect(host.fake.machines.get("dev")?.state).toBe("paused");
-    })
   );
 
   it.effect(
@@ -1784,11 +1571,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const host = yield* runner();
 
         yield* finished(host, makes("dev"));
-        yield* finished(
-          host,
-          { _tag: "stop", machine: ref("dev"), machines: [] },
-          2
-        );
+        yield* finished(host, { _tag: "stop", machine: ref("dev") }, 2);
 
         const reading = host.fake.holdNext("sizes");
 
@@ -1892,19 +1675,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "a resize refused up front touches nothing, admission included, and says why",
     () =>
       Effect.gen(function* () {
-        const host = yield* runner({ as: "saving" });
+        const host = yield* runner({ as: "copiesRunning" });
         const mac = yield* runner({ as: "tart" });
         const dev = ref("dev");
 
-        const parked = ref("paused", reached(firstPort + 1));
-
         yield* finished(host, makes("dev"));
-        yield* finished(host, makes("paused"));
-        yield* finished(
-          host,
-          { _tag: "pause", machine: parked, pin: "fake 1" },
-          2
-        );
         yield* finished(
           mac,
           makes("dev", { source: { _tag: "base", base: "macos" } })
@@ -1929,10 +1704,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const live = yield* resizing({ cpu: 2, ramMib: 512 }, 3);
         const gone = yield* resizing({ cpu: 2 }, 1, host, ref("gone"));
         const running = yield* resizing({ ramMib: 2048 }, 2, mac);
-        const paused = yield* resizing({ cpu: 2 }, 3, host, parked);
 
         expect(
-          [disk, live, running, paused].map(({ error }) => [
+          [disk, live, running].map(({ error }) => [
             error?._tag,
             error?.message,
           ])
@@ -1945,10 +1719,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           [
             "WrongState",
             "machine dev is running, and the tart runtime resizes only a stopped machine: stop it first",
-          ],
-          [
-            "WrongState",
-            "machine paused is paused, and the saving runtime resizes a stopped or running machine: stop it first",
           ],
         ]);
         expect(gone.error?._tag).toBe("Missing");
@@ -1964,7 +1734,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "sizes the runtime can't give are refused before admission and anything native, for a resize and a copy",
     () =>
       Effect.gen(function* () {
-        const host = yield* runner({ as: "saving" });
+        const host = yield* runner({ as: "copiesRunning" });
 
         const refused = new Unsizable({
           message: "this host takes no 2G of RAM",
@@ -2004,7 +1774,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect([resized.error, forked.error]).toStrictEqual([refused, refused]);
         expect(host.fake.sized).toStrictEqual([
           ["dev", held, asked, true],
-          ["copy", held, asked, true],
+          ["copy", held, asked, false],
         ]);
         expect(host.fake.calls).not.toContain("resize dev");
         expect(host.fake.calls).not.toContain("fork copy");
@@ -2214,7 +1984,7 @@ const leftIn = (host: Runner) => path.join(host.dir, "left");
 
 const leaveHooks = (host: Runner) =>
   Effect.forEach(
-    ["stop", "pause", "delete"],
+    ["stop", "delete"],
     (hook) => guestHook(host, hook, `echo ${hook} >>"${leftIn(host)}"`),
     { discard: true }
   );
@@ -2236,23 +2006,9 @@ const hooksRun = (host: Runner) =>
 const stateOf = (host: Runner) =>
   host.fake.machines.get("dev")?.state ?? "missing";
 
-type LeavingStep = Extract<
-  Step,
-  { readonly _tag: "stop" | "pause" | "remove" }
->;
+type LeavingStep = Extract<Step, { readonly _tag: "stop" | "remove" }>;
 
-const stopping: LeavingStep = {
-  _tag: "stop",
-  machine: ref("dev"),
-  pin: "fake 1",
-  machines: [],
-};
-
-const pausing: LeavingStep = {
-  _tag: "pause",
-  machine: ref("dev"),
-  pin: "fake 1",
-};
+const stopping: LeavingStep = { _tag: "stop", machine: ref("dev") };
 
 const removing: LeavingStep = {
   _tag: "remove",
@@ -2262,19 +2018,12 @@ const removing: LeavingStep = {
 
 const leavings = [
   { step: "stop", sent: stopping, hook: "stop", ends: "stopped" },
-  { step: "pause", sent: pausing, hook: "pause", ends: "paused" },
-  {
-    step: "pause under another pin",
-    sent: { ...pausing, pin: "fake 0" },
-    hook: "pause",
-    ends: "stopped",
-  },
   { step: "remove", sent: removing, hook: "delete", ends: "missing" },
 ] as const;
 
 const notRunning = [
   { step: "remove", before: stopping, sent: removing, ends: "missing" },
-  { step: "stop", before: pausing, sent: stopping, ends: "stopped" },
+  { step: "stop", before: stopping, sent: stopping, ends: "stopped" },
 ] as const;
 
 const hooked = (step: LeavingStep, timeoutSeconds = 30): Step => ({
@@ -2334,7 +2083,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       `a ${step} that asks for its hook reads the VM once, runs the guest's ${hook} hook while it runs, then ends it ${ends}`,
       () =>
         Effect.gen(function* () {
-          const host = yield* runner({ as: "saving" });
+          const host = yield* runner({ as: "copiesRunning" });
 
           yield* finished(host, makes("dev"));
           yield* identified(host);
@@ -2354,7 +2103,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       `a ${step} that doesn't ask for a hook runs none, and ends the VM ${ends}`,
       () =>
         Effect.gen(function* () {
-          const host = yield* runner({ as: "saving" });
+          const host = yield* runner({ as: "copiesRunning" });
 
           yield* finished(host, makes("dev"));
           yield* identified(host);
@@ -2595,18 +2344,18 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const logged: string[] = [];
 
       return Effect.gen(function* () {
-        const host = yield* runner({ as: "saving" });
+        const host = yield* runner({ as: "copiesRunning" });
 
         yield* finished(host, makes("dev"));
         yield* identified(host);
         yield* leaveHooks(host);
         host.fake.failNext("exec", new Internal({ message: "agent gone" }));
 
-        const report = yield* finished(host, hooked(pausing), 2);
+        const report = yield* finished(host, hooked(stopping), 2);
 
         expect(report.status).toBe("done");
         expect(yield* hooksRun(host)).toStrictEqual([]);
-        expect(stateOf(host)).toBe("paused");
+        expect(stateOf(host)).toBe("stopped");
         expect(logged.join("\n")).toContain("agent gone");
       }).pipe(Effect.provide(Logger.layer([capturing(logged)])));
     }
@@ -3088,7 +2837,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const app = ref("app", reached(portOf(made) ?? 0));
 
-        yield* finished(host, { _tag: "stop", machine: app, machines: [] }, 2);
+        yield* finished(host, { _tag: "stop", machine: app }, 2);
 
         const stopped = yield* accepts(portIn(app));
 
@@ -3207,7 +2956,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a fork the runtime refuses for its source's state, and a fork or a restore refused for the pin, open no relay, and their removes are done",
+    "a fork or a restore refused for the pin opens no relay, and its remove is done",
     () =>
       Effect.gen(function* () {
         const host = yield* runner({ relayed: true, as: "fixed" });
@@ -3215,16 +2964,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* finished(host, makes("src"));
 
-        const running = yield* finished(
-          host,
-          makes("twin", { source: { _tag: "machine", machine: src } })
-        );
-
         const forkPinned = yield* finished(
           host,
           makes("pinned", {
             source: { _tag: "machine", machine: src, pin: "fake 0" },
-            taken: [relayPorts + 1],
+            taken: [],
           })
         );
 
@@ -3236,12 +2980,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
               checkpoint: checkpoint("snap"),
               pin: "fake 0",
             },
-            taken: [relayPorts + 1, relayPorts + 2],
+            taken: [relayPorts + 1],
           })
         );
 
         const refused = [
-          { name: "twin", report: running },
           { name: "pinned", report: forkPinned },
           { name: "copy", report: restorePinned },
         ];
@@ -3255,18 +2998,16 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
 
         expect(refused.map(({ report }) => errorOf(report))).toStrictEqual([
-          ["failed", "WrongState"],
           ["failed", "PinMismatch"],
           ["failed", "PinMismatch"],
         ]);
         expect(refused.map(({ report }) => portOf(report))).toStrictEqual([
           relayPorts + 1,
           relayPorts + 2,
-          relayPorts + 3,
         ]);
         expect([open, removed.map(({ status }) => status)]).toStrictEqual([
-          [false, false, false],
-          ["done", "done", "done"],
+          [false, false],
+          ["done", "done"],
         ]);
         expect(
           host.fake.calls.filter((call) => call.startsWith("delete"))
@@ -3293,9 +3034,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         ]);
 
         expect(Object.fromEntries(states)).toStrictEqual({
-          ok: "running",
-          broken: "unknown",
-          gone: "missing",
+          ok: { state: "running" },
+          broken: { state: "unknown" },
+          gone: { state: "missing" },
         });
       })
   );
@@ -3354,7 +3095,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const stopped = yield* finished(
           host,
-          { _tag: "stop", machine: dev, machines: [broken, gone] },
+          { _tag: "stop", machine: dev },
           2
         );
 
@@ -3364,7 +3105,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             _tag: "start",
             keep: [],
             machine: dev,
-            pin: "fake 1",
             machines: [broken, gone],
           },
           3
@@ -3415,7 +3155,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           _tag: "start",
           keep: [],
           machine: ref("broken"),
-          pin: "fake 1",
           machines: [],
         });
 

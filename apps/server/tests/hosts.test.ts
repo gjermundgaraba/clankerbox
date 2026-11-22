@@ -270,15 +270,15 @@ layer(NodeServices.layer, { excludeTestServices: true })(
             message: `this host runs clankerbox 0.42.0 and the caller is ${version}; their major.minor must match`,
           });
 
-          const { stop: _, ...unstopped } = info.traits;
+          const { copies: _, ...uncopying } = info.traits;
 
-          const unstoppable = yield* stubHost(200, {
+          const another = yield* stubHost(200, {
             ...info,
-            traits: unstopped,
+            traits: uncopying,
           });
 
           const seen = yield* Effect.forEach(
-            [older, refusing, unstoppable],
+            [older, refusing, another],
             listedAt
           );
 

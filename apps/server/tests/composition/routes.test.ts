@@ -16,7 +16,13 @@ import { Effect, Exit, Fiber, Layer, Schema } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { expect } from "vite-plus/test";
 
-import { saving, clientOf, eventually, running, runtimes } from "../support.ts";
+import {
+  copiesRunning,
+  clientOf,
+  eventually,
+  running,
+  runtimes,
+} from "../support.ts";
 
 const spec: MachineSpec = {
   base: "ubuntu",
@@ -228,10 +234,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "the SDK's client forks, captures, restores and deletes checkpoints on a served control plane",
     () =>
       Effect.gen(function* () {
-        const { url, store } = yield* running(saving);
+        const { url, store } = yield* running(copiesRunning);
         const client = yield* clientOf(url);
 
-        yield* client.create("dev", { ...spec, runtime: runtimes.saving });
+        yield* client.create("dev", {
+          ...spec,
+          runtime: runtimes.copiesRunning,
+        });
 
         const copy = yield* client.forkMachine({
           machine: "dev",
@@ -262,7 +271,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(captured).toMatchObject({
           id: "snap",
           machine: "dev",
-          kind: "ram",
           phase: "ready",
         });
         expect(listed).toStrictEqual([captured]);
@@ -297,7 +305,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a raw capture or pause that names its checkpoint as a build's copy is InvalidInput, and captures nothing",
+    "a raw capture or stop that names its checkpoint as a build's copy is InvalidInput, and captures nothing",
     () =>
       Effect.gen(function* () {
         const { url, hosts, store } = yield* running();
@@ -308,7 +316,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             machine: "dev",
             name: "built-0123456789abcdef",
           }),
-          yield* post(url, "pauseMachine", {
+          yield* post(url, "stopMachine", {
             id: "dev",
             capture: { name: "fetched-0123456789abcdef" },
           }),

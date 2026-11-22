@@ -410,7 +410,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(copy).toMatchObject({
           build: "web@1",
           runtime: "smolvm",
-          kind: "disk",
         });
         expect(isBuildCopy(copy?.name ?? "")).toBe(true);
         expect(copy?.machine).toMatch(/^building-[0-9a-f]{16}$/u);

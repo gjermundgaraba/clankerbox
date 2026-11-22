@@ -130,7 +130,7 @@ imports `platform/` or `composition/`.
   It only reads the steps the host holds.
 - `exec.ts`: how a command runs in a guest: the launcher and its mark, its
   output, and the end of a command cut short.
-- `guest.ts`: setup, preparation, the tailnet, and the hook a stop, pause or
+- `guest.ts`: setup, preparation, the tailnet, and the hook a stop or
   delete runs first, each a script `exec.ts` runs in the guest.
 - `usage.ts`: the machines in use, and the RAM a runtime holds beside them, for the RAM budget and capacity.
 - `settings.ts`: what a host runs on, and the port ranges it keeps.
@@ -166,7 +166,7 @@ imports `platform/` or `composition/`.
   states the two rules every adapter keeps, and `tests/runtime-contract.ts` is
   the suite each runtime passes over its own fake provider: the fake runtime's
   three presets, `smolvm`, `tart` and `fixed`, which is neither and has size
-  classes, a pause that stops, machines that stop on their own and the
+  classes, machines that stop on their own and the
   tombstones a rented runtime keeps, the four adapters over `tests/smolvm-model.ts`,
   `tests/scripted-mac.ts`, `tests/fake-smol-cloud.ts` and `tests/fake-boat.ts`,
   and agent-sandbox's over a real kind cluster, in `tests/kind/`.
@@ -210,7 +210,13 @@ provider's API over loopback, for its adapter's tests and for the verify skill,
 and `tests/live/smol-cloud.test.ts` and `tests/live/boat.test.ts`, run by
 `vp run test:live` in `apps/host` with `SMOL_MACHINES_API_KEY` or
 `BOAT_API_KEY`, and `TAILSCALE_AUTHKEY`, set and never in CI, check the real
-accounts. `tests/kind/`, run by `vp run test:kind` in `apps/host` and in CI,
+accounts. A fake of a provider is written from what we believe of it, so a
+test against it proves only that the code does what we believed. A signal read
+from a provider's undocumented behaviour, such as boat's reboot mark, which its
+list omits and its own record holds, is proven only by driving the real adapter
+against the account and replaying what it read through the real chart: that is
+how a boat machine's first reboot in place was found uncounted, which every fake
+test had passed. `tests/kind/`, run by `vp run test:kind` in `apps/host` and in CI,
 makes a kind cluster with the agent-sandbox controller through `cluster.sh`,
 and runs the runtime contract and a guest's SSH there, with the faults a fake
 provider would give injected at the adapter's HTTP client. Its
@@ -360,11 +366,9 @@ the run.
   before its host forgets it. A step acts on its row's handle, or on what the
   runtime finds of the row's instance, never on a VM by its name alone, and a
   remove or a delete of a checkpoint that finds nothing is done, while one whose
-  search fails fails. A runtime's stop, and smolvm's and Tart's pause, mask
+  search fails fails. A runtime's stop masks
   interruption from the command that halts a running VM until it has, so a step
   cut short reports `cancelled` only once the VM is where that command takes it.
-  A smolvm host that starts resumes a machine a killed pause left `pausing`, so
-  no step runs a hook in a frozen guest.
 - **A delete answers for its instance for good.** Once a runtime's `delete`
   has answered for an instance, anything of that instance that appears later is
   deleted, and the control plane never makes that instance again. A `remove`
@@ -395,7 +399,7 @@ the run.
   the deadline the host gives it. A timed-out exec whose end isn't confirmed
   answers 124 with its output and `mayStillRun`. The launcher waits for its
   command, so a process holding the mark in its arguments stands above the
-  command for its whole life, unless the command kills it. A stop, pause or
+  command for its whole life, unless the command kills it. A stop or
   remove step first ends its
   machine's execs in flight so, before its hook and its runtime call:
   `Operations` admits an exec only while no step runs in its machine's scope,
@@ -423,15 +427,11 @@ the run.
   on that host, with the same error: a build's copy so failed is cleared and
   fetched again where a build store has it, and a user's checkpoint reads
   `failed`, saying to delete it.
-- **A start starts the machine, also when it runs already, or resumes it when it
-  is paused, and prepares it.** A pause leaves a stopped machine stopped. On a
-  runtime whose `pause` trait `saves`, it saves a running machine and stops its
-  VM, and stops one it can't save: a VM booted under another pin, or one Tart
-  can't suspend. On one whose `pause` `stops`, as boat's, it stops the machine
-  and saves nothing. A paused machine resumes
-  only under the pin it booted under, for a start, and for a stop on a runtime
-  whose `stop` trait `resumes` it, and a capture or fork copies only a VM booted under the
-  host's pin; the step carries the pin and the host compares. A resize is a step
+- **A start starts the machine, also when it runs already, and prepares it.** A
+  capture or fork of a running machine copies only a VM booted
+  under the host's pin, and a restore restores only under the pin its checkpoint
+  was saved under, as smolvm copies a running machine through its RAM; the step
+  carries the pin and the host compares. A resize is a step
   too, and the row keeps the sizes the runtime reads after it, also after one
   that failed part way. A checkpoint is usable only `ready`, and never changes
   but to fail when its host no longer holds it; a
@@ -465,6 +465,10 @@ the run.
   host its tests take; the SDK's
   `.` entry imports no Node and uses no `Buffer` or `process`; and
   `fence/no-manual-run` keeps hand-run Effect to the files above.
+- **A removal removes its promises.** Taking out a behaviour includes the
+  README, JSDoc and `docs/` lines that describe it: grep for the concept's
+  name, such as "resume", before calling the removal done. Twice the code went
+  cleanly and the prose kept promising what was gone, until a reviewer found it.
 
 Removable packages are not a practice here: the provider package is optional,
 but CI publishes it beside the SDK.

@@ -96,6 +96,7 @@ export const machine = (id: string, fields?: Partial<Machine>): Machine => ({
   state: "running",
   desired: "running",
   phase: "settled",
+  boots: 1,
   ...fields,
 });
 
@@ -106,7 +107,6 @@ export const checkpoint = (
   id,
   createdAt: DateTime.makeUnsafe("2026-10-01T00:00:00Z"),
   machine: id,
-  kind: "disk",
   phase: "ready",
   base: "ubuntu",
   cpu: 1,
@@ -171,9 +171,11 @@ const atRest = (row: Machine): Machine => {
     return { ...row, phase: "settled" };
   }
 
-  const stays = row.desired === "paused" && row.state === "stopped";
-
-  return { ...row, state: stays ? row.state : row.desired, phase: "settled" };
+  return {
+    ...row,
+    state: row.desired,
+    phase: "settled",
+  };
 };
 
 const nextStep = <S>(
@@ -574,10 +576,10 @@ export const stubServer = (options: StubServerOptions = {}) => {
           )
     );
 
-  const recordPause = ({
+  const recordStop = ({
     id,
     capture,
-  }: Parameters<Client.Interface["pauseMachine"]>[0]) =>
+  }: Parameters<Client.Interface["stopMachine"]>[0]) =>
     Effect.gen(function* () {
       if (capture !== undefined) {
         const found = yield* findMade(id);
@@ -593,7 +595,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
         yield* recordCapture(id, capture.name, capture);
       }
 
-      return yield* asked(id, "paused");
+      return yield* asked(id, "stopped");
     });
 
   const recordExec = (request: ExecRequest) =>
@@ -688,10 +690,8 @@ export const stubServer = (options: StubServerOptions = {}) => {
       ),
     startMachine: ({ id }) =>
       recording("startMachine", "machine.start", asked(id, "running")),
-    stopMachine: ({ id }) =>
-      recording("stopMachine", "machine.stop", asked(id, "stopped")),
-    pauseMachine: (request) =>
-      recording("pauseMachine", "machine.pause", recordPause(request)),
+    stopMachine: (request) =>
+      recording("stopMachine", "machine.stop", recordStop(request)),
     resizeMachine: ({ id, ...sizes }) =>
       recording(
         "resizeMachine",

@@ -73,6 +73,10 @@ export interface FakeSandbox {
   failed: boolean;
   cancelled: boolean;
   stoppedAt: number | undefined;
+  /** When its kernel last restarted on its machine, which boat answers as `lastReboot`. */
+  rebootedAt: string | undefined;
+  /** An `updatedAt` boat answers apart from a reboot, which then leaves it where it is. */
+  touchedAt?: string | undefined;
   relay: Relay;
 }
 
@@ -82,6 +86,9 @@ export interface FakeSnapshot {
   readonly createdAt: string;
   readonly type: Offered;
   readonly root: string;
+  /** The id of the snapshot behind the name, and the GB of data it restores. */
+  readonly snapshotId: string;
+  readonly dataGb: number;
   status: "saving" | "ready";
   readonly readyAt: number;
 }
@@ -544,6 +551,7 @@ export const fakeBoat = (
     const losing = new Map<BoatCall, number>();
     const pageSize = options.pageSize ?? 200;
     let savingLate = false;
+    let postedSavesLast = Duration.zero;
     let listsLagging = 0;
     let failingNext = false;
     let cancellingNext = false;
@@ -561,6 +569,7 @@ export const fakeBoat = (
     );
 
     let quotaOn = false;
+    let readsThrottled = false;
     let starts = 0;
     let queue = Promise.resolve();
 
@@ -594,8 +603,12 @@ export const fakeBoat = (
       type: sandbox.type,
       labels: sandbox.labels,
       createdAt: sandbox.createdAt,
+      updatedAt: sandbox.touchedAt ?? sandbox.rebootedAt ?? sandbox.createdAt,
       dataExpiredAt: sandbox.dataExpired ? sandbox.createdAt : null,
       hydrated: sandbox.hydratingFor === 0,
+      error: sandbox.failed ? "fake boat failed its sandbox" : null,
+      lastReboot:
+        sandbox.rebootedAt === undefined ? null : { at: sandbox.rebootedAt },
     });
 
     const sandboxJson = (sandbox: FakeSandbox) => {
@@ -615,6 +628,9 @@ export const fakeBoat = (
       sourceSandboxId: snapshot.sourceSandboxId,
       createdAt: snapshot.createdAt,
       type: snapshot.type,
+      ...(snapshot.status === "ready"
+        ? { snapshotId: snapshot.snapshotId }
+        : {}),
     });
 
     const settled = (snapshot: FakeSnapshot) => {
@@ -674,6 +690,7 @@ export const fakeBoat = (
         failed: failingNext,
         cancelled: cancellingNext,
         stoppedAt: undefined,
+        rebootedAt: undefined,
         relay: await listen(),
       };
 
@@ -1069,6 +1086,8 @@ export const fakeBoat = (
         createdAt: new Date().toISOString(),
         type: source.type,
         root,
+        snapshotId: minted("snap"),
+        dataGb: source.dataGb,
         status: before === undefined ? "saving" : "ready",
         readyAt: Date.now() + Duration.toMillis(lasts),
       };
@@ -1105,6 +1124,14 @@ export const fakeBoat = (
 
       if (snapshot === undefined) {
         return notFound(`saved snapshot ${name}`);
+      }
+
+      if (settled(snapshot).status === "saving") {
+        return refused(
+          409,
+          "snapshot_not_ready",
+          `"${name}" is still saving. Wait for it to finish.`
+        );
       }
 
       snapshots.delete(name);
@@ -1145,7 +1172,9 @@ export const fakeBoat = (
       return {
         status: 200,
         body: {
-          sandboxes: matching.slice(from, from + limit).map(sandboxJson),
+          sandboxes: matching
+            .slice(from, from + limit)
+            .map((sandbox) => ({ ...sandboxJson(sandbox), lastReboot: null })),
           pageInfo: { nextCursor: next, hasMore: next !== null, limit },
         },
       };
@@ -1220,7 +1249,8 @@ export const fakeBoat = (
         return method === "POST"
           ? await withBody(
               saveBody(raw),
-              async (body) => await save(body.sandboxId, body.name)
+              async (body) =>
+                await save(body.sandboxId, body.name, postedSavesLast)
             )
           : savedList(url);
       }
@@ -1272,6 +1302,14 @@ export const fakeBoat = (
 
       switch (action) {
         case undefined: {
+          if (readsThrottled && method === "GET") {
+            return refused(
+              429,
+              "IP_RATE_LIMIT_EXCEEDED",
+              "fake boat throttles reads"
+            );
+          }
+
           if (sandbox.cancelled) {
             removed(sandbox);
           }
@@ -1295,6 +1333,25 @@ export const fakeBoat = (
 
         case "stop": {
           return await stop(sandbox);
+        }
+
+        case "snapshots": {
+          return {
+            status: 200,
+            body: {
+              snapshots: [...snapshots.values()].flatMap((snapshot) =>
+                snapshot.sourceSandboxId === sandbox.id &&
+                settled(snapshot).status === "ready"
+                  ? [
+                      {
+                        id: snapshot.snapshotId,
+                        contentSizeBytes: snapshot.dataGb * 1e9,
+                      },
+                    ]
+                  : []
+              ),
+            },
+          };
         }
 
         case "sshkey": {
@@ -1591,6 +1648,10 @@ export const fakeBoat = (
       landSaveDuringDelete: Effect.sync(() => {
         savingLate = true;
       }),
+      savesLast: (lasts) =>
+        Effect.sync(() => {
+          postedSavesLast = Duration.fromInputUnsafe(lasts);
+        }),
       saveAs: (sandboxId, name, lasts) =>
         Effect.promise(async () => {
           await save(
@@ -1642,6 +1703,26 @@ export const fakeBoat = (
 
           if (sandbox !== undefined) {
             sandbox.failed = true;
+          }
+        }),
+      touch: (id: string, at: string) =>
+        Effect.sync(() => {
+          const sandbox = sandboxes.get(id);
+
+          if (sandbox !== undefined) {
+            sandbox.touchedAt = at;
+          }
+        }),
+      throttleReads: (on: boolean) =>
+        Effect.sync(() => {
+          readsThrottled = on;
+        }),
+      reboot: (id: string, at: string) =>
+        Effect.sync(() => {
+          const sandbox = sandboxes.get(id);
+
+          if (sandbox !== undefined) {
+            sandbox.rebootedAt = at;
           }
         }),
       archiveSlowly: (id: string, reads: number) =>
@@ -1710,12 +1791,17 @@ export interface FakeBoat {
   readonly vanish: (id: string) => Effect.Effect<void>;
   readonly vanishNow: (id: string) => void;
   readonly fail: (id: string) => Effect.Effect<void>;
+  readonly throttleReads: (on: boolean) => Effect.Effect<void>;
+  readonly touch: (id: string, at: string) => Effect.Effect<void>;
+  /** Restarts a running sandbox's kernel in place, answered in `lastReboot` by its ID and as null in its list, as the real one does. */
+  readonly reboot: (id: string, at: string) => Effect.Effect<void>;
   readonly archiveSlowly: (id: string, reads: number) => Effect.Effect<void>;
   readonly expire: (id: string) => Effect.Effect<void>;
   readonly malformedSnapshot: (
     name: string,
     sourceSandboxId?: string | number
   ) => Effect.Effect<void>;
+  readonly savesLast: (lasts: Duration.Input) => Effect.Effect<void>;
   readonly saveAs: (
     sandboxId: string,
     name: string,

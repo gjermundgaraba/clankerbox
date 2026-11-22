@@ -7,6 +7,7 @@ import type { Scope } from "effect";
 import { expect } from "vite-plus/test";
 
 import { runCommand } from "../src/exec.ts";
+import { stateIn } from "../src/runtime.ts";
 import type {
   Execution,
   Interface as Runtime,
@@ -102,20 +103,9 @@ const outputOf = (execution: Execution) =>
   Stream.mkString(Stream.decodeText(execution.output));
 
 const stateOf = (runtime: Runtime, machine: Sized) =>
-  Effect.map(
-    runtime.observe([machine]),
-    (observed) => observed.get(machine.name) ?? "unknown"
+  Effect.map(runtime.observe([machine]), (observed) =>
+    stateIn(observed, machine)
   );
-
-const inCaptureState = (runtime: Runtime, machine: Sized) =>
-  runtime.traits.captureFrom === "stopped"
-    ? runtime.stop(machine)
-    : Effect.void;
-
-const outOfCaptureState = (runtime: Runtime, machine: Sized) =>
-  runtime.traits.captureFrom === "stopped"
-    ? Effect.void
-    : runtime.stop(machine);
 
 const shell = (runtime: Runtime, machine: Sized, script: string) =>
   Effect.flatMap(
@@ -239,56 +229,6 @@ export const runtimeContract = (subject: Subject): void => {
     );
 
     it.live(
-      "pauses a running machine where its pause saves, and a start resumes it",
-      () =>
-        withFixture(({ runtime }) =>
-          Effect.gen(function* () {
-            if (runtime.traits.pause !== "saves") {
-              return;
-            }
-
-            const machine = yield* made(runtime, "dev");
-
-            yield* runtime.pause(machine);
-
-            const paused = yield* stateOf(runtime, machine);
-
-            yield* runtime.start(machine, new Set());
-
-            expect([paused, yield* stateOf(runtime, machine)]).toStrictEqual([
-              "paused",
-              "running",
-            ]);
-          })
-        )
-    );
-
-    it.live(
-      "pauses a running machine where its pause stops by stopping it, and a start runs it",
-      () =>
-        withFixture(({ runtime }) =>
-          Effect.gen(function* () {
-            if (runtime.traits.pause !== "stops") {
-              return;
-            }
-
-            const machine = yield* made(runtime, "dev");
-
-            yield* runtime.pause(machine);
-
-            const paused = yield* stateOf(runtime, machine);
-
-            yield* runtime.start(machine, new Set());
-
-            expect([paused, yield* stateOf(runtime, machine)]).toStrictEqual([
-              "stopped",
-              "running",
-            ]);
-          })
-        )
-    );
-
-    it.live(
       "captures a machine only in the state its traits name, and makes a machine of the checkpoint",
       () =>
         withFixture(({ runtime }) =>
@@ -301,15 +241,13 @@ export const runtimeContract = (subject: Subject): void => {
               captureFrom === "either"
                 ? undefined
                 : yield* Effect.gen(function* () {
-                    yield* outOfCaptureState(runtime, machine);
+                    yield* runtime.stop(machine);
 
                     const refusal = yield* Effect.flip(
                       runtime.capture(machine, snap)
                     );
 
-                    yield* captureFrom === "running"
-                      ? runtime.start(machine, new Set())
-                      : runtime.stop(machine);
+                    yield* runtime.start(machine, new Set());
 
                     return refusal;
                   });
@@ -350,11 +288,6 @@ export const runtimeContract = (subject: Subject): void => {
         withFixture(({ runtime }) =>
           Effect.gen(function* () {
             const { captureFrom } = runtime.traits;
-
-            if (captureFrom === "stopped") {
-              return;
-            }
-
             const source = yield* made(runtime, "dev");
 
             const wrote = yield* shell(
@@ -462,8 +395,6 @@ export const runtimeContract = (subject: Subject): void => {
             const snap = { name: "snap", instance: second };
             const unheld = { name: "other", instance: third };
 
-            yield* inCaptureState(runtime, machine);
-
             const handle = yield* runtime.capture(machine, snap);
             const absent = runtime.checkpointHandle(unheld);
 
@@ -485,8 +416,6 @@ export const runtimeContract = (subject: Subject): void => {
           Effect.gen(function* () {
             const machine = yield* made(runtime, "dev");
             const snap = { name: "snap", instance: second };
-
-            yield* inCaptureState(runtime, machine);
 
             const handle = yield* runtime.capture(machine, snap);
 
@@ -679,8 +608,6 @@ export const runtimeContract = (subject: Subject): void => {
           Effect.gen(function* () {
             const machine = yield* made(runtime, "dev");
 
-            yield* inCaptureState(runtime, machine);
-
             const kept = yield* runtime.capture(machine, {
               name: "kept",
               instance: first,
@@ -722,8 +649,6 @@ export const runtimeContract = (subject: Subject): void => {
         withFixture(({ runtime }) =>
           Effect.gen(function* () {
             const machine = yield* made(runtime, "dev");
-
-            yield* inCaptureState(runtime, machine);
 
             const kept = yield* runtime.capture(machine, {
               name: "kept",

@@ -55,6 +55,7 @@ import type {
   Interface,
   MachineState,
   Origin,
+  Sighting,
   Sized,
   Sizes,
 } from "../../../src/runtime.ts";
@@ -405,7 +406,7 @@ layer(NodeServices.layer)((it) => {
       })
   );
 
-  it("smolvm's paused state is its own, and the rest map onto running and stopped by whether the VMM is alive", () => {
+  it("smolvm's states map onto running and stopped by whether the VMM is alive, a paused one stopped, as no host pauses one", () => {
     expect(
       Object.fromEntries(
         (
@@ -425,7 +426,7 @@ layer(NodeServices.layer)((it) => {
       created: "stopped",
       running: "running",
       stopped: "stopped",
-      paused: "paused",
+      paused: "stopped",
       pausing: "running",
       failed: "stopped",
       unreachable: "running",
@@ -438,6 +439,7 @@ layer(NodeServices.layer)((it) => {
       const replies = new Map([
         ["dev-01234567", status("running")],
         ["two-01234567", status("created")],
+        ["far-01234567", status("unreachable")],
         [
           "gone-01234567",
           {
@@ -457,24 +459,33 @@ layer(NodeServices.layer)((it) => {
       const observed = yield* runtime.observe([
         machine,
         sized({ ...machine, name: "two" }),
+        sized({ ...machine, name: "far" }),
         sized({ ...machine, name: "gone" }),
       ]);
 
       expect(observed).toStrictEqual(
         new Map([
-          ["dev", "running"],
-          ["two", "stopped"],
-          ["gone", "missing"],
+          ["dev", { state: "running" }],
+          ["two", { state: "stopped" }],
+          [
+            "far",
+            {
+              state: "stopped",
+              why: "smolvm reads its VM unreachable: its VM manager runs, but the agent in it doesn't answer",
+            },
+          ],
+          ["gone", { state: "missing" }],
         ])
       );
       expect(smolvmArgs(spawner.calls).map((args) => args[3])).toStrictEqual(
         expect.arrayContaining([
           "dev-01234567",
           "two-01234567",
+          "far-01234567",
           "gone-01234567",
         ])
       );
-      expect(spawner.calls).toHaveLength(4);
+      expect(spawner.calls).toHaveLength(5);
     })
   );
 
@@ -505,8 +516,8 @@ layer(NodeServices.layer)((it) => {
 
         expect(observed).toStrictEqual(
           new Map([
-            ["dev", "unknown"],
-            ["two", "stopped"],
+            ["dev", { state: "unknown" }],
+            ["two", { state: "stopped" }],
           ])
         );
         expect(logged).toStrictEqual([
@@ -546,8 +557,8 @@ layer(NodeServices.layer)((it) => {
         expect(Duration.format(waited)).toBe("8s");
         expect(value).toStrictEqual(
           new Map([
-            ["two", "stopped"],
-            ...hanging.map(({ name }) => [name, "unknown"] as const),
+            ["two", { state: "stopped" }],
+            ...hanging.map(({ name }) => [name, { state: "unknown" }] as const),
           ])
         );
       })
@@ -847,7 +858,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "start leaves a running machine as it is, boots an unreachable one again, resumes a paused one or one a pause left part way, and refuses a frozen or missing one before anything native",
+    "start leaves a running machine as it is, boots an unreachable one again, and refuses a frozen or missing one before anything native",
     () =>
       Effect.gen(function* () {
         let reply = status("running");
@@ -858,12 +869,7 @@ layer(NodeServices.layer)((it) => {
 
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-        for (const next of [
-          "running",
-          "unreachable",
-          "paused",
-          "pausing",
-        ] as const) {
+        for (const next of ["running", "unreachable"] as const) {
           reply = status(next);
           yield* runtime.start(machine, new Set());
         }
@@ -891,57 +897,6 @@ layer(NodeServices.layer)((it) => {
           "status --name dev-01234567",
           "status --name dev-01234567",
           "start --name dev-01234567",
-          "status --name dev-01234567",
-          "resume --name dev-01234567",
-          "status --name dev-01234567",
-          "resume --name dev-01234567",
-          "status --name dev-01234567",
-          "status --name dev-01234567",
-        ]);
-      })
-  );
-
-  it.effect(
-    "pause stops a running machine, resumes one an older host paused, or a pause left part way, to stop it, leaves a stopped one, and refuses a missing one",
-    () =>
-      Effect.gen(function* () {
-        let reply = status("running");
-
-        const spawner = scripted((call) =>
-          call.args[1] === "status" ? reply : undefined
-        );
-
-        const runtime = yield* runtimeOf(yield* prepared(), spawner);
-
-        for (const next of [
-          "running",
-          "paused",
-          "pausing",
-          "stopped",
-        ] as const) {
-          reply = status(next);
-          yield* runtime.pause(machine);
-        }
-
-        reply = unknown;
-
-        expect(
-          failure(yield* Effect.flip(runtime.pause(machine)))
-        ).toStrictEqual([
-          "Missing",
-          "machine dev is missing from the smolvm runtime; delete it",
-        ]);
-        expect(
-          smolvmArgs(spawner.calls).map((args) => args.slice(1, 4).join(" "))
-        ).toStrictEqual([
-          "status --name dev-01234567",
-          "stop --name dev-01234567",
-          "status --name dev-01234567",
-          "resume --name dev-01234567",
-          "stop --name dev-01234567",
-          "status --name dev-01234567",
-          "resume --name dev-01234567",
-          "stop --name dev-01234567",
           "status --name dev-01234567",
           "status --name dev-01234567",
         ]);
@@ -1128,41 +1083,28 @@ layer(NodeServices.layer)((it) => {
       })
   );
 
-  it.effect(
-    "stop resumes a paused machine, or one a pause left part way, to end its saved execution, and leaves a stopped or missing one",
-    () =>
-      Effect.gen(function* () {
-        let reply = status("paused");
+  it.effect("stop leaves a stopped or missing machine as it is", () =>
+    Effect.gen(function* () {
+      let reply = status("stopped");
 
-        const spawner = scripted((call) =>
-          call.args[1] === "status" ? reply : undefined
-        );
+      const spawner = scripted((call) =>
+        call.args[1] === "status" ? reply : undefined
+      );
 
-        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+      const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-        for (const next of [
-          status("paused"),
-          status("pausing"),
-          status("stopped"),
-          unknown,
-        ]) {
-          reply = next;
-          yield* runtime.stop(machine);
-        }
+      for (const next of [status("stopped"), unknown]) {
+        reply = next;
+        yield* runtime.stop(machine);
+      }
 
-        expect(
-          smolvmArgs(spawner.calls).map((args) => args.slice(1, 4).join(" "))
-        ).toStrictEqual([
-          "status --name dev-01234567",
-          "resume --name dev-01234567",
-          "stop --name dev-01234567",
-          "status --name dev-01234567",
-          "resume --name dev-01234567",
-          "stop --name dev-01234567",
-          "status --name dev-01234567",
-          "status --name dev-01234567",
-        ]);
-      })
+      expect(
+        smolvmArgs(spawner.calls).map((args) => args.slice(1, 4).join(" "))
+      ).toStrictEqual([
+        "status --name dev-01234567",
+        "status --name dev-01234567",
+      ]);
+    })
   );
 
   it.effect(
@@ -1786,15 +1728,7 @@ layer(NodeServices.layer)((it) => {
           runtime.capture(machine, ramCheckpoint)
         );
 
-        reply = status("paused");
-
-        const paused = yield* Effect.flip(
-          runtime.make(copy, fromMachine(machine), copyPort)
-        );
-
-        expect(
-          [missing, unreachable, frozen, paused].map(failure)
-        ).toStrictEqual([
+        expect([missing, unreachable, frozen].map(failure)).toStrictEqual([
           [
             "Missing",
             "machine dev is missing from the smolvm runtime; delete it",
@@ -1807,13 +1741,8 @@ layer(NodeServices.layer)((it) => {
             "WrongState",
             "smolvm reads machine dev frozen, and copies only a running or stopped machine",
           ],
-          [
-            "WrongState",
-            "smolvm reads machine dev paused, and copies only a running or stopped machine",
-          ],
         ]);
         expect(smolvmArgs(spawner.calls).map((args) => args[1])).toStrictEqual([
-          "status",
           "status",
           "status",
           "status",
@@ -2098,53 +2027,23 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a host that starts resumes a machine a killed pause left half-paused, so no step meets its frozen guest, and leaves a paused one paused",
-    () =>
-      Effect.gen(function* () {
-        const model = smolvmModel();
-        const paused = nativeName({ name: "web", instance: machine.instance });
-
-        model.vms.set(machine.handle, { state: "pausing", forwards: [] });
-        model.vms.set(paused, { state: "paused", forwards: [] });
-
-        const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
-
-        yield* runtime.startup;
-
-        expect([
-          model.vms.get(machine.handle)?.state,
-          model.vms.get(paused)?.state,
-        ]).toStrictEqual(["running", "paused"]);
-      })
-  );
-
-  it.effect(
-    "a host's start that can't remove one seed build or resume one machine still removes and resumes the rest",
+    "a host's start that can't remove one seed build still removes the rest",
     () =>
       Effect.gen(function* () {
         const model = smolvmModel();
         const stuck = "image-seed-0123456789abcdef-4242";
         const left = "image-seed-fedcba9876543210-4242";
-        const frozen = "frozen-01234567";
 
         model.orphanVmm(stuck);
         model.orphanVmm(left);
-        model.vms.set(frozen, { state: "pausing", forwards: [] });
-        model.vms.set(machine.handle, { state: "pausing", forwards: [] });
         model.faults.reply = ({ args }) =>
-          (args[1] === "delete" && args.includes(stuck)) ||
-          (args[1] === "resume" && args.includes(frozen))
-            ? locked
-            : undefined;
+          args[1] === "delete" && args.includes(stuck) ? locked : undefined;
 
         const runtime = yield* runtimeOf(yield* prepared(), model.spawner);
 
         yield* runtime.startup;
 
-        expect({
-          left: model.vms.has(left),
-          resumed: model.vms.get(machine.handle)?.state,
-        }).toStrictEqual({ left: false, resumed: "running" });
+        expect(model.vms.has(left)).toBe(false);
       })
   );
 
@@ -2827,15 +2726,15 @@ layer(NodeServices.layer)((it) => {
       ];
 
       const read = yield* observeEach(machines, (ref) =>
-        Effect.succeed(states[names.indexOf(ref.name)] ?? "unknown")
+        Effect.succeed({ state: states[names.indexOf(ref.name)] ?? "unknown" })
       );
 
       expect(read).toStrictEqual(
         new Map([
-          ["a", "running"],
-          ["b", "stopped"],
-          ["c", "missing"],
-          ["d", "running"],
+          ["a", { state: "running" }],
+          ["b", { state: "stopped" }],
+          ["c", { state: "missing" }],
+          ["d", { state: "running" }],
         ])
       );
     })
@@ -2852,15 +2751,15 @@ layer(NodeServices.layer)((it) => {
             ? Effect.fail(
                 new Internal({ message: "smolvm machine status exited 1" })
               )
-            : Effect.succeed<MachineState>("running")
+            : Effect.succeed<Sighting>({ state: "running" })
         ).pipe(Effect.provide(logging(logged)));
 
         expect(read).toStrictEqual(
           new Map([
-            ["a", "running"],
-            ["b", "unknown"],
-            ["c", "running"],
-            ["d", "running"],
+            ["a", { state: "running" }],
+            ["b", { state: "unknown" }],
+            ["c", { state: "running" }],
+            ["d", { state: "running" }],
           ])
         );
         expect(logged).toStrictEqual([
@@ -2879,7 +2778,7 @@ layer(NodeServices.layer)((it) => {
           observeEach(machines, (ref) =>
             ref.name === "c"
               ? Effect.never
-              : Effect.succeed<MachineState>("stopped")
+              : Effect.succeed<Sighting>({ state: "stopped" })
           ).pipe(Effect.provide(logging(logged)))
         );
 
@@ -2889,10 +2788,10 @@ layer(NodeServices.layer)((it) => {
 
         expect(read).toStrictEqual(
           new Map([
-            ["a", "stopped"],
-            ["b", "stopped"],
-            ["c", "unknown"],
-            ["d", "stopped"],
+            ["a", { state: "stopped" }],
+            ["b", { state: "stopped" }],
+            ["c", { state: "unknown" }],
+            ["d", { state: "stopped" }],
           ])
         );
         expect(logged).toStrictEqual([
@@ -2911,7 +2810,7 @@ layer(NodeServices.layer)((it) => {
       yield* observeEach(
         Array.from({ length: 12 }, (_, index) => observed(`m${index}`)),
         () =>
-          Effect.gen(function* (): Effect.fn.Return<MachineState> {
+          Effect.gen(function* (): Effect.fn.Return<Sighting> {
             running += 1;
             most = Math.max(most, running);
 
@@ -2919,7 +2818,7 @@ layer(NodeServices.layer)((it) => {
 
             running -= 1;
 
-            return "running" satisfies MachineState;
+            return { state: "running" } satisfies Sighting;
           })
       );
 
@@ -3001,8 +2900,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
 
         expect(Object.fromEntries(read)).toStrictEqual({
-          dev: "running",
-          two: "unknown",
+          dev: { state: "running" },
+          two: { state: "unknown" },
         });
         expect(capacity).toContainEqual({
           resource: "ramMib",
@@ -3023,7 +2922,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a start, a resume or a stop that resumes, of a machine whose port another program holds, fails Capacity naming the port and the cure, with nothing sent to boot it, while a running machine's resize or start, whose VM holds its port, goes on",
+    "a start of a machine whose port another program holds fails Capacity naming the port and the cure, with nothing sent to boot it, while a running machine's resize or start, whose VM holds its port, goes on",
     () =>
       Effect.gen(function* () {
         const model = smolvmModel();
@@ -3036,15 +2935,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
 
         const stopped = migrated("stopped", 10_000);
-        const paused = migrated("paused", 10_001);
-        const pausedToStop = migrated("parked", 10_002);
         const grown = migrated("grown", 10_003);
         const again = migrated("again", 10_004);
 
         const states = new Map([
           [stopped, "stopped"],
-          [paused, "paused"],
-          [pausedToStop, "paused"],
           [grown, "running"],
           [again, "running"],
         ] as const);
@@ -3064,31 +2959,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const onHost = [...states.keys()];
         const before = model.spawner.calls.length;
 
-        const pinned = runtime.pin === undefined ? {} : { pin: runtime.pin };
-
         const steps: ReadonlyArray<readonly [string, Step]> = [
           [
             stopped.name,
             { _tag: "start", machine: stopped, keep: [], machines: onHost },
-          ],
-          [
-            paused.name,
-            {
-              _tag: "start",
-              machine: paused,
-              keep: [],
-              ...pinned,
-              machines: onHost,
-            },
-          ],
-          [
-            pausedToStop.name,
-            {
-              _tag: "stop",
-              machine: pausedToStop,
-              ...pinned,
-              machines: onHost,
-            },
           ],
           [
             grown.name,
@@ -3133,27 +3007,17 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             "Capacity",
             "startMachine stopped needs port 10000 on 100.64.0.10, which another program on this host holds: free it, then ask again",
           ],
-          [
-            "failed",
-            "Capacity",
-            "startMachine paused needs port 10001 on 100.64.0.10, which another program on this host holds: free it, then ask again",
-          ],
-          [
-            "failed",
-            "Capacity",
-            "stopMachine parked needs port 10002 on 100.64.0.10, which another program on this host holds: free it, then ask again",
-          ],
           ["done", undefined, undefined],
           ["done", undefined, undefined],
         ]);
         expect(
           smolvmArgs(model.spawner.calls.slice(before)).filter(
-            ([, command]) => command === "start" || command === "resume"
+            ([, command]) => command === "start"
           )
         ).toStrictEqual([]);
         expect(
           onHost.map((each) => model.vms.get(nativeName(each))?.state)
-        ).toStrictEqual(["stopped", "paused", "paused", "running", "running"]);
+        ).toStrictEqual(["stopped", "running", "running"]);
       })
   );
 });

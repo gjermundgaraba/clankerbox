@@ -42,12 +42,29 @@ export type RoomError = RuntimeError | Capacity;
 
 export type StateError = Missing | WrongState;
 
-export type Observed = ReadonlyMap<string, MachineState>;
+/**
+ * What a runtime reads of a machine beyond its state, where it tells it: `reboot`, a mark that
+ * changes each time the machine boots again in place while it runs, and may also change when a
+ * start boots it, as `readMachines` states, and `why`, the cause in the provider's words of a
+ * machine stopped or missing.
+ */
+export interface Sighting {
+  readonly state: MachineState;
+  readonly reboot?: string | undefined;
+  readonly why?: string | undefined;
+}
+
+export type Observed = ReadonlyMap<string, Sighting>;
+
+export const sightingIn = (
+  observed: Observed,
+  machine: Pick<MachineRef, "name">
+): Sighting => observed.get(machine.name) ?? { state: "unknown" };
 
 export const stateIn = (
   observed: Observed,
   machine: Pick<MachineRef, "name">
-): MachineState => observed.get(machine.name) ?? "unknown";
+): MachineState => sightingIn(observed, machine).state;
 
 export type Sizes = Pick<MachineRef, "cpu" | "ramMib" | "diskGib">;
 
@@ -124,7 +141,6 @@ export interface Made {
 export type Booting =
   | "createMachine"
   | "startMachine"
-  | "stopMachine"
   | "resizeMachine"
   | "forkMachine"
   | "restoreMachine";
@@ -266,18 +282,14 @@ export interface Interface {
     requestsTailnet?: boolean
   ) => Effect.Effect<Made, RoomError | StateError | Unsizable | Invalid>;
   /**
-   * Starts or resumes the machine. A runtime that holds checkpoints through its machine prunes
-   * any outside `keepCheckpoints` only once the machine runs, so it can read the pause checkpoint
-   * before deleting it.
+   * Starts a stopped machine. A runtime that holds checkpoints through its machine deletes, once
+   * the machine runs, each of them whose handle `keepCheckpoints` lacks.
    */
   readonly start: (
     machine: Target,
     keepCheckpoints: ReadonlySet<Handle>
   ) => Effect.Effect<void, RoomError | StateError>;
   readonly stop: (machine: Target) => Effect.Effect<void, RuntimeError>;
-  readonly pause: (
-    machine: Target
-  ) => Effect.Effect<void, RuntimeError | StateError>;
   /**
    * Deletes this instance and its checkpoints outside `keepCheckpoints`. Remove calls this even
    * if find returned no handle. Once delete answers, anything that later appears for the same

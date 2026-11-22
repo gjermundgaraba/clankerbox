@@ -8,7 +8,6 @@ import {
   formatMib,
   Internal,
   Unsizable,
-  WrongState,
   sizedBy,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { HostError, Sizing } from "@gjermundgaraba/clankerbox-sdk";
@@ -436,17 +435,11 @@ export const make = (
       holder: number
     ): Effect.Effect<MachineState, Internal | Unreadable> =>
       Effect.gen(function* () {
-        const held = yield* home.look(vm);
-
-        if (held === undefined) {
+        if (!(yield* home.look(vm))) {
           return "missing";
         }
 
-        if (yield* runsWith(vm, holder)) {
-          return "running";
-        }
-
-        return held.saved ? "paused" : "stopped";
+        return (yield* runsWith(vm, holder)) ? "running" : "stopped";
       });
 
     const state = (vm: string) =>
@@ -469,7 +462,7 @@ export const make = (
                   Effect.as(Effect.logWarning(message), "unknown" as const)
                 )
               ),
-              (read) => [machine.name, read] as const
+              (read) => [machine.name, { state: read }] as const
             ),
           { concurrency: "unbounded" }
         );
@@ -660,12 +653,6 @@ export const make = (
         const vm = machine.handle;
         const observed = yield* state(vm);
 
-        if (observed === "paused") {
-          yield* call(["stop", vm], `stop ${vm}`);
-
-          return;
-        }
-
         if (observed !== "running") {
           return;
         }
@@ -800,28 +787,18 @@ export const make = (
       });
     };
 
-    const copyable = (what: string, machine: Target) =>
-      Effect.flatMap(state(machine.handle), (observed) => {
-        if (observed === "stopped" || observed === "running") {
-          return Effect.void;
-        }
-
-        return Effect.fail(
-          observed === "missing"
-            ? missing(traits.runtime, machine)
-            : new WrongState({
-                message: `a Tart ${what} copies a running or stopped machine's disk, and ${machine.name} is ${observed}: start or stop it first`,
-                machine: machine.name,
-                state: observed,
-              })
-        );
-      });
+    const copyable = (machine: Target) =>
+      Effect.flatMap(state(machine.handle), (observed) =>
+        observed === "missing"
+          ? Effect.fail(missing(traits.runtime, machine))
+          : Effect.void
+      );
 
     // tart clone copies a running source, reading its state only for its MAC address:
     // https://github.com/openai/tart/blob/2.41.1/Sources/tart/Commands/Clone.swift#L108
-    const copied = (what: string, source: Target, into: string) =>
+    const copied = (source: Target, into: string) =>
       Effect.gen(function* () {
-        yield* copyable(what, source);
+        yield* copyable(source);
         yield* clone(source.handle, into);
       });
 
@@ -839,13 +816,13 @@ export const make = (
           const { checkpoint } = origin;
 
           return Effect.flatMap(home.look(checkpoint.handle), (held) =>
-            held === undefined
-              ? Effect.fail(missingCheckpoint(traits.runtime, checkpoint))
-              : cloneInto(
+            held
+              ? cloneInto(
                   (into) => clone(checkpoint.handle, into),
                   machine,
                   sizeFlags(changes(checkpoint, machine))
                 )
+              : Effect.fail(missingCheckpoint(traits.runtime, checkpoint))
           );
         }
 
@@ -853,7 +830,7 @@ export const make = (
           const source = origin.machine;
 
           return cloneInto(
-            (into) => copied("fork", source, into),
+            (into) => copied(source, into),
             machine,
             sizeFlags(changes(source, machine))
           );
@@ -935,7 +912,7 @@ export const make = (
       find: Effect.fn("Tart.find")(function* (machine) {
         const handle = vmOf(machine);
 
-        if ((yield* home.look(handle)) !== undefined) {
+        if (yield* home.look(handle)) {
           return handle;
         }
 
@@ -987,24 +964,19 @@ export const make = (
             yield* boot(machine);
           }
 
-          if (observed === "paused") {
-            yield* boot(machine);
-          }
-
           if (observed === "running") {
             yield* settled(machine);
           }
         })
       ),
       stop: Effect.fn("Tart.stop")(stop),
-      pause: Effect.fn("Tart.pause")(stop),
       delete: Effect.fn("Tart.delete")((machine) =>
         machine.handle === undefined ? Effect.void : removed(machine.handle)
       ),
       capture: Effect.fn("Tart.capture")((machine, checkpoint) => {
         const handle = checkpointVm(checkpoint);
 
-        return Effect.as(copied("checkpoint", machine, handle), handle);
+        return Effect.as(copied(machine, handle), handle);
       }),
       sizable: () => Effect.void,
       resize: Effect.fn("Tart.resize")((machine, to) =>

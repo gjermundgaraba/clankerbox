@@ -752,20 +752,20 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           runCommand(
             unconfirmed,
             { machine, argv: ["sh", "-c", "sleep 30"] },
-            Effect.succeed("pause")
+            Effect.succeed("stop")
           )
         );
 
         expect(error).toStrictEqual(
           new WrongState({
             message:
-              "machine dev's pause ended this exec's command first, though it may still run in the guest: the end exited 125 and printed nothing",
+              "machine dev's stop ended this exec's command first, though it may still run in the guest: the end exited 125 and printed nothing",
             machine: "dev",
-            state: "pausing",
+            state: "stopping",
           })
         );
         expect(logged.flat()).toStrictEqual([
-          "couldn't end in dev the command of an exec that its machine's pause cut short, which may still run there: the end exited 125 and printed nothing",
+          "couldn't end in dev the command of an exec that its machine's stop cut short, which may still run there: the end exited 125 and printed nothing",
         ]);
       }).pipe(
         Effect.provide(

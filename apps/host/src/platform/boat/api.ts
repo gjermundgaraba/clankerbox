@@ -29,9 +29,29 @@ export const Sandbox = Schema.Struct({
   labels: Schema.optionalKey(Labels),
   dataExpiredAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
   hydrated: Schema.optionalKey(Schema.Boolean),
+  updatedAt: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  error: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 
 export type Sandbox = typeof Sandbox.Type;
+
+/**
+ * A sandbox as `GET /sandboxes/{id}` answers it, with `lastReboot`, which
+ * https://docs.boat.dev/openapi/boat-v1.yaml's `Sandbox` holds, but which its list,
+ * `GET /sandboxes`, answers null for every sandbox, rebooted or not, as a live account showed on
+ * 2026-11-21. So `Sandbox`, which a list decodes to, has no `lastReboot`, and only this has one.
+ * That is worth reporting to boat, as it contradicts boat's own OpenAPI: a list that answered it
+ * would let the host read each mark from the list, and the own-record reads `updatedAt` decides,
+ * with their owed re-reads, would go (see docs/design/machine-charts-decisions.tsv, 2026-11-21).
+ */
+export const OwnSandbox = Schema.Struct({
+  ...Sandbox.fields,
+  lastReboot: Schema.optionalKey(
+    Schema.NullOr(Schema.Struct({ at: Schema.String }))
+  ),
+});
+
+export type OwnSandbox = typeof OwnSandbox.Type;
 
 const Window = Schema.NullOr(
   Schema.Struct({ limit: Schema.Int, used: Schema.Int })
@@ -69,9 +89,24 @@ const SavedSnapshot = Schema.Struct({
   status: Schema.String,
   sourceSandboxId: Schema.optionalKey(Schema.String),
   error: Schema.optionalKey(Schema.String),
+  snapshotId: Schema.optionalKey(Schema.String),
 });
 
 export type SavedSnapshot = typeof SavedSnapshot.Type;
+
+/**
+ * One of a sandbox's own snapshots. `contentSizeBytes` is the user's data it restores, without the
+ * base image's, which is what a type's disk figure bounds: https://docs.boat.dev/openapi/boat-v1.yaml
+ * (`SnapshotSummary`).
+ */
+const SnapshotSummary = Schema.Struct({
+  id: Schema.String,
+  contentSizeBytes: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
+});
+
+export type SnapshotSummary = typeof SnapshotSummary.Type;
+
+const Summaries = Schema.Struct({ snapshots: Schema.Array(Schema.Unknown) });
 
 const ListedSnapshot = Schema.Struct({
   name: Schema.String,
@@ -81,6 +116,8 @@ const ListedSnapshot = Schema.Struct({
 export type ListedSnapshot = typeof ListedSnapshot.Type;
 
 const Created = Schema.Struct({ sandbox: Sandbox });
+
+const Own = Schema.Struct({ sandbox: OwnSandbox });
 
 const Listed = Schema.Struct({
   sandboxes: Schema.Array(Sandbox),
@@ -307,7 +344,7 @@ export const make = (url: string, key: Redacted.Redacted) =>
         ),
       sandbox: (id: string) =>
         Effect.map(
-          found(HttpClientRequest.get(`/sandboxes/${id}`), Created),
+          found(HttpClientRequest.get(`/sandboxes/${id}`), Own),
           (answer) => answer?.sandbox
         ),
       sandboxes: list,
@@ -357,6 +394,21 @@ export const make = (url: string, key: Redacted.Redacted) =>
         Effect.map(
           found(HttpClientRequest.get(`/saved-snapshots/${name}`), SavedOne),
           (answer) => answer?.snapshot
+        ),
+      snapshotsOf: (id: string) =>
+        Effect.map(
+          done(
+            HttpClientRequest.get(`/sandboxes/${id}/snapshots`).pipe(
+              HttpClientRequest.setUrlParam("limit", "20")
+            ),
+            Summaries
+          ),
+          ({ snapshots }) =>
+            snapshots.flatMap((record) =>
+              Option.toArray(
+                Schema.decodeUnknownOption(SnapshotSummary)(record)
+              )
+            )
         ),
       savedSnapshots: (namePrefix: string, ours: (name: string) => boolean) =>
         Effect.flatMap(

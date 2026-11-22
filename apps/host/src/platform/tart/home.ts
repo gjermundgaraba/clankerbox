@@ -17,10 +17,8 @@ export interface Home {
   readonly directory: (vm: string) => string;
   /** The file whose lock `tart run` holds while the VM runs. */
   readonly config: (vm: string) => string;
-  /** What the VM's directory holds, if Tart counts it as a VM: whether a suspend saved it. */
-  readonly look: (
-    vm: string
-  ) => Effect.Effect<{ readonly saved: boolean } | undefined, Internal>;
+  /** Whether Tart counts the VM's directory as a VM. */
+  readonly look: (vm: string) => Effect.Effect<boolean, Internal>;
 }
 
 // https://github.com/openai/tart/blob/2.41.1/Sources/tart/VMDirectory.swift#L93
@@ -62,11 +60,7 @@ export const make = (
         )
       ).pipe(
         // https://github.com/openai/tart/blob/2.41.1/Sources/tart/VMDirectory.swift#L65
-        Effect.map((entries) =>
-          initialized(entries)
-            ? { saved: entries.has("state.vzvmsave") }
-            : undefined
-        )
+        Effect.map(initialized)
       ),
   };
 };

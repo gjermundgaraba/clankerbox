@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
+# Needs kind v0.33.0, as CI pins it: v0.31 writes a kubeadm config the pinned v1.37 node refuses.
 set -euo pipefail
 
 out=${CLANKERBOX_KIND:-${TMPDIR:-/tmp}/clankerbox-kind}
 cluster=clankerbox
 node=kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
 version=v1.0.11
+snapshotter=v8.7.0
+hostpath=v1.19.0
 namespace=clankerbox
 context=kind-$cluster
 
@@ -13,6 +16,40 @@ mkdir -p "$out"
 if ! kind get clusters | grep -qx "$cluster"; then
   kind create cluster --name "$cluster" --image "$node" --wait 120s
 fi
+
+# kind's own local-path provisioner takes no snapshots, so the cluster also runs the CSI host-path
+# driver, whose class snapshots: https://github.com/kubernetes-csi/csi-driver-host-path
+kubectl --context "$context" apply -k \
+  "https://github.com/kubernetes-csi/external-snapshotter/client/config/crd?ref=$snapshotter"
+kubectl --context "$context" apply -k \
+  "https://github.com/kubernetes-csi/external-snapshotter/deploy/kubernetes/snapshot-controller?ref=$snapshotter"
+kubectl --context "$context" -n kube-system rollout status deploy/snapshot-controller --timeout=180s
+
+if [ ! -d "$out/csi-driver-host-path" ]; then
+  git clone -q --depth 1 -b "$hostpath" https://github.com/kubernetes-csi/csi-driver-host-path "$out/csi-driver-host-path"
+fi
+if ! kubectl --context "$context" get csidriver hostpath.csi.k8s.io >/dev/null 2>&1; then
+  (kubectl config use-context "$context" >/dev/null &&
+    "$out/csi-driver-host-path/deploy/kubernetes-latest/deploy.sh")
+fi
+kubectl --context "$context" apply -f - <<EOF
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata: {name: csi-hostpath-sc}
+provisioner: hostpath.csi.k8s.io
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+---
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: csi-hostpath-snapclass
+  annotations: {snapshot.storage.kubernetes.io/is-default-class: "true"}
+deletionPolicy: Delete
+driver: hostpath.csi.k8s.io
+EOF
+printf '%s' csi-hostpath-sc >"$out/storage-class"
 
 kubectl --context "$context" apply --server-side -f \
   "https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$version/sandbox.yaml"
@@ -43,6 +80,9 @@ rules:
     verbs: [get, list, create, patch, delete]
   - apiGroups: [""]
     resources: [pods]
+    verbs: [get, list, create, delete]
+  - apiGroups: [snapshot.storage.k8s.io]
+    resources: [volumesnapshots]
     verbs: [get, list, create, delete]
   - apiGroups: [""]
     resources: [pods/exec, pods/portforward]

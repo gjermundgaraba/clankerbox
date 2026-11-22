@@ -7,7 +7,7 @@ description: Model-check, with TLA+ and TLC, that a clankerbox machine request's
 
 ## What it proves
 
-**Property.** When a client's wait on `start`, `stop`, `pause`, `delete` or a
+**Property.** When a client's wait on `start`, `stop`, `delete` or a
 create ends in success, the VM is what the request asked for. A `Superseded`
 answer names something another request asked for. A failed create leaves no VM
 behind, however late an old delivery arrives. An operation runs once, however
@@ -43,7 +43,7 @@ TLC checks these invariants on every reachable state:
 
 | Invariant            | In plain words                                                                                       |
 | -------------------- | ---------------------------------------------------------------------------------------------------- |
-| `AnswerTrue`         | A success answer finds the VM as asked: running, stopped, paused (or stopped), gone                  |
+| `AnswerTrue`         | A success answer finds the VM as asked: running, stopped, gone                                      |
 | `RestTrue`           | A row resting `settled` with no operation holds the VM it says, unless it drifted since a decided read |
 | `SupersededHonest`   | `Superseded` names what another request asked for, never the request's own                           |
 | `NoOrphan`           | A failed create once undone, and a deleted machine, leave no VM but one that landed late             |
@@ -53,7 +53,7 @@ TLC checks these invariants on every reachable state:
 | `OpIsState`          | An operation is in flight exactly while the row's leaf has a step                                    |
 | `AllAnswered`        | (temporal, in `MachineAnswers.cfg` and `Drifting.cfg`) every request is answered, given fair scheduling |
 | `EventuallyNoOrphan` | (temporal, in `Drifting.cfg`) a VM whose row went or rests undone is deleted, by the runtime's sweep |
-| `RunsWhenWanted`     | (temporal, in `Drifting.cfg`) a machine wanted running runs, unless its row rests `lost`, or `failed` once a runtime call failed |
+| `RunsWhenWanted`     | (temporal, in `Drifting.cfg`) a machine wanted running runs, unless its row rests `lost`, or `failed` once a runtime call failed or its VM stopped by itself, which waits for a request to start it |
 
 Only `Drifting.cfg` sets `Drifts` and `LandsLate`. Elsewhere no VM drifts or
 lands late, so `RestTrue` and `NoOrphan` keep their whole strength there. Under
@@ -152,8 +152,6 @@ A pass covers this scope, and only it:
   rest on `apps/host/tests/platform/tombstones.test.ts` and the runtime
   contract's late-landing case; a wiped or second store, which keeps no
   tombstone, on `apps/server/tests/fleet.test.ts`.
-- **A pause meets a VM that drifted stopped and fails**, as the fake runtime's
-  pause does. A runtime whose pause stops leaves it stopped and reports done.
 - **The sequence fence is global.** The model's operation ID is its sequence,
   and the host's `high` stands for the scope's sequence, which is one scope
   here. A fence per scope is the same for one machine.

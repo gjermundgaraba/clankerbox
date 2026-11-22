@@ -2,9 +2,9 @@ import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import {
   Capacity,
   Internal,
+  Invalid,
   sizedBy,
   Unsizable,
-  WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   HostError,
@@ -21,7 +21,6 @@ import {
   Redacted,
   Schedule,
   Schema,
-  Semaphore,
 } from "effect";
 import type { Scope } from "effect";
 import type { HttpClient } from "effect/http";
@@ -49,7 +48,14 @@ import { KeyedApiUrl, Unanswered } from "../provider-http.ts";
 import { rented } from "../tombstones.ts";
 import type { Found, MarkedMachine } from "../tombstones.ts";
 import * as Api from "./api.ts";
-import type { ApiError, Claim, Condition, Pod, Sandbox } from "./api.ts";
+import type {
+  ApiError,
+  Claim,
+  Condition,
+  Pod,
+  Sandbox,
+  Snapshot,
+} from "./api.ts";
 import * as Channels from "./channels.ts";
 import { internal } from "./channels.ts";
 import { traits } from "./traits.ts";
@@ -114,6 +120,8 @@ const fillResources = {
   limits: { cpu: "1", memory: "512Mi" },
 };
 
+const refusedBase = 3;
+
 // The layout a usr-merged base has, whose /bin, /sbin and /lib directories link into /usr:
 // https://wiki.debian.org/UsrMerge
 const seedScript = [
@@ -124,12 +132,12 @@ const seedScript = [
   `  case " ${linkedIntoUsr.join(" ")} " in *" $name "*)`,
   `    if [ -L "$entry" ]; then continue; fi`,
   `    echo "the base's /$name is a directory, not a link into /usr: a machine's disk keeps /usr and the directories beside it, so its base is usr-merged, as Debian 12 and Ubuntu 24.04 are" >&2`,
-  "    exit 1 ;;",
+  `    exit ${refusedBase} ;;`,
   "  esac",
   `  case " ${[...persisted, ...passedOver, diskMount.slice(1)].join(" ")} " in *" $name "*) continue ;; esac`,
   `  if [ -d "$entry" ]; then`,
   `    echo "the base has /$name, which a machine's disk wouldn't keep: it keeps ${persisted.map((dir) => `/${dir}`).join(" ")}" >&2`,
-  "    exit 1",
+  `    exit ${refusedBase}`,
   "  fi",
   "done",
   `rm -rf "$to/root" "$to/root.new"`,
@@ -139,15 +147,6 @@ const seedScript = [
   "done",
   "sync",
   `mv "$to/root.new" "$to/root"`,
-  "sync",
-].join("\n");
-
-const copyScript = [
-  "set -eu",
-  `rm -rf /to/root /to/root.new`,
-  `cp -a /from/root /to/root.new`,
-  "sync",
-  `mv /to/root.new /to/root`,
   "sync",
 ].join("\n");
 
@@ -288,6 +287,16 @@ export const heldOf = (sandbox: Sandbox | undefined): Held => {
     : "moving";
 };
 
+/**
+ * The state a read gives each machine. It gives no reboot mark, so a pod the cluster makes again
+ * between two reads, its guest booted cold, raises no `boots`. The mark to give is the pod's UID
+ * with its container's `restartCount`, from the pod's status
+ * (https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#PodStatus),
+ * which the out-of-memory cause will
+ * read as well, not the guest's `/proc/sys/kernel/random/boot_id` over exec: a guest is a
+ * container, so that is its node's kernel's, the same across a pod made again on one node (see
+ * docs/design/machine-charts-decisions.tsv, 2026-11-21).
+ */
 const readAs: Readonly<Record<Held, MachineState>> = {
   running: "running",
   stopping: "stopped",
@@ -543,6 +552,7 @@ export const make = (
     const sandboxes = api.resource(paths.sandboxes, Api.Sandbox);
     const claims = api.resource(paths.claims, Api.Claim);
     const pods = api.resource(paths.pods, Api.Pod);
+    const snapshots = api.resource(paths.snapshots, Api.Snapshot);
     const quotas = api.resource(paths.quotas, Api.Quota);
 
     yield* api.served.pipe(
@@ -554,13 +564,14 @@ export const make = (
       )
     );
 
-    yield* Effect.all([sandboxes.list({}), claims.list({}), pods.list({})], {
-      discard: true,
-    }).pipe(
+    yield* Effect.all(
+      [sandboxes.list({}), claims.list({}), pods.list({}), snapshots.list({})],
+      { discard: true }
+    ).pipe(
       Effect.mapError(
         (error) =>
           new CannotStart({
-            message: `couldn't list the sandboxes, persistent volume claims and pods of namespace ${namespace}: grant the host's service account there what README's agent-sandbox row lists: ${error.message}`,
+            message: `couldn't list the sandboxes, persistent volume claims, pods and volume snapshots of namespace ${namespace}: grant the host's service account there what README's agent-sandbox row lists: ${error.message}`,
           })
       )
     );
@@ -575,6 +586,8 @@ export const make = (
 
     const checkpointName = (instance: string) =>
       `${machineName(instance)}-checkpoint`;
+
+    const copyName = (instance: string) => `${machineName(instance)}-copy`;
 
     const labelsOf = (
       instance: string,
@@ -720,72 +733,39 @@ export const make = (
       };
     };
 
-    type Fill =
-      | { readonly _tag: "seed"; readonly image: string }
-      | {
-          readonly _tag: "copy";
-          readonly from: string;
-          readonly uid: string;
-        };
-
-    const fillPodOf = (
+    const seedPodOf = (
       target: {
         readonly instance: string;
         readonly claim: string;
-        readonly kind: string;
       },
-      fill: Fill
-    ) => {
-      const seeding = fill._tag === "seed";
-
-      return {
-        metadata: {
-          name: fillName(target.instance),
-          labels: labelsOf(target.instance, `fill-${target.kind}`),
-        },
-        spec: {
-          restartPolicy: "Never",
-          automountServiceAccountToken: false,
-          enableServiceLinks: false,
-          terminationGracePeriodSeconds: 5,
-          ...placed,
-          containers: [
-            {
-              name: "fill",
-              image: seeding ? fill.image : guestImage,
-              command: [
-                "/bin/sh",
-                "-c",
-                literally(seeding ? seedScript : copyScript),
-              ],
-              terminationMessagePolicy: "FallbackToLogsOnError",
-              resources: fillResources,
-              securityContext: { runAsUser: 0, runAsGroup: 0 },
-              volumeMounts: seeding
-                ? [{ name: "to", mountPath: diskMount }]
-                : [
-                    { name: "from", mountPath: "/from", readOnly: true },
-                    { name: "to", mountPath: "/to" },
-                  ],
-            },
-          ],
-          volumes: [
-            { name: "to", persistentVolumeClaim: { claimName: target.claim } },
-            ...(seeding
-              ? []
-              : [
-                  {
-                    name: "from",
-                    persistentVolumeClaim: {
-                      claimName: fill.from,
-                      readOnly: true,
-                    },
-                  },
-                ]),
-          ],
-        },
-      };
-    };
+      image: string
+    ) => ({
+      metadata: {
+        name: fillName(target.instance),
+        labels: labelsOf(target.instance, "fill-disk"),
+      },
+      spec: {
+        restartPolicy: "Never",
+        automountServiceAccountToken: false,
+        enableServiceLinks: false,
+        terminationGracePeriodSeconds: 5,
+        ...placed,
+        containers: [
+          {
+            name: "fill",
+            image,
+            command: ["/bin/sh", "-c", literally(seedScript)],
+            terminationMessagePolicy: "FallbackToLogsOnError",
+            resources: fillResources,
+            securityContext: { runAsUser: 0, runAsGroup: 0 },
+            volumeMounts: [{ name: "to", mountPath: diskMount }],
+          },
+        ],
+        volumes: [
+          { name: "to", persistentVolumeClaim: { claimName: target.claim } },
+        ],
+      },
+    });
 
     const unrunnable = (
       what: string,
@@ -822,15 +802,14 @@ export const make = (
       );
     };
 
-    const fillOnce = (
+    const seeded = (
       target: {
         readonly instance: string;
         readonly claim: string;
-        readonly kind: string;
         readonly diskGib: number;
       },
-      fill: Fill
-    ): Effect.Effect<void, Internal | Capacity> =>
+      image: string
+    ): Effect.Effect<void, Internal | Capacity | Invalid> =>
       Effect.gen(function* () {
         const name = fillName(target.instance);
         const what = `fill ${target.claim}`;
@@ -876,7 +855,7 @@ export const make = (
           pods,
           name,
           target.instance,
-          fillPodOf(target, fill)
+          seedPodOf(target, image)
         ).pipe(Effect.mapError(failure(what)));
 
         const pod = yield* awaited(
@@ -894,22 +873,17 @@ export const make = (
         if (pod?.status?.phase !== "Succeeded") {
           const ended = pod?.status?.containerStatuses?.[0]?.state?.terminated;
 
+          if (ended?.exitCode === refusedBase) {
+            yield* cleared;
+
+            return yield* new Invalid({
+              message: `image ${image} can't be a machine's base: ${lastLines(ended.message ?? "")}`,
+            });
+          }
+
           return yield* new Internal({
             message: `${what}: ${pod === undefined ? "its pod is gone" : `its pod exited ${ended?.exitCode ?? "unknown"}: ${lastLines(ended?.message ?? "")}`}`,
           });
-        }
-
-        if (fill._tag === "copy") {
-          const source = yield* Effect.mapError(
-            claims.get(fill.from),
-            internal(what)
-          );
-
-          if (source?.metadata.uid !== fill.uid) {
-            return yield* new Internal({
-              message: `${what}: ${fill.from} was replaced while it was copied`,
-            });
-          }
         }
 
         yield* cleared;
@@ -920,56 +894,85 @@ export const make = (
           .pipe(Effect.mapError(internal(what)));
       });
 
-    const readers = new Map<
-      string,
-      { readonly turn: Semaphore.Semaphore; users: number }
-    >();
+    // A snapshot of a claim in use is the CSI driver's to take, and a restore of one is a new
+    // claim whose `dataSource` names it:
+    // https://kubernetes.io/docs/concepts/storage/volume-snapshots/#volume-snapshot-contents
+    // https://kubernetes.io/docs/concepts/storage/persistent-volumes/#volume-snapshot-and-restore-volume-from-snapshot-support
+    const snapshotted = (
+      name: string,
+      instance: string,
+      labels: Readonly<Record<string, string>>,
+      from: Claim,
+      diskGib: number
+    ): Effect.Effect<void, Internal | Capacity> =>
+      Effect.gen(function* () {
+        const what = `snapshot ${from.metadata.name}`;
 
-    // A ReadWriteOnce claim mounts on one node at a time, so copies of one source take turns:
-    // https://kubernetes.io/docs/concepts/storage/persistent-volumes/#access-modes
-    const filledBy = (target: Parameters<typeof fillOnce>[0], fill: Fill) => {
-      if (fill._tag === "seed") {
-        return fillOnce(target, fill);
-      }
+        yield* created(snapshots, name, instance, {
+          apiVersion: "snapshot.storage.k8s.io/v1",
+          kind: "VolumeSnapshot",
+          metadata: { name, labels },
+          spec: { source: { persistentVolumeClaimName: from.metadata.name } },
+        }).pipe(Effect.mapError(failure(what)));
 
-      return Effect.acquireUseRelease(
-        Effect.sync(() => {
-          const reader = readers.get(fill.from) ?? {
-            turn: Semaphore.makeUnsafe(1),
-            users: 0,
-          };
+        const taken = yield* awaited(
+          Effect.mapError(snapshots.get(name), internal(what)),
+          (found) =>
+            found === undefined ||
+            found.status?.readyToUse === true ||
+            found.status?.error !== undefined,
+          fillWithin(diskGib),
+          what
+        );
 
-          reader.users += 1;
-          readers.set(fill.from, reader);
+        if (taken?.status?.readyToUse !== true) {
+          return yield* new Internal({
+            message: `${what}: ${taken === undefined ? "the snapshot is gone" : `the cluster failed it: ${taken.status?.error?.message ?? ""}`}`,
+          });
+        }
 
-          return reader;
-        }),
-        (reader) => reader.turn.withPermits(1)(fillOnce(target, fill)),
-        (reader) =>
-          Effect.sync(() => {
-            reader.users -= 1;
+        const source = yield* Effect.mapError(
+          claims.get(from.metadata.name),
+          internal(what)
+        );
 
-            if (reader.users === 0) {
-              readers.delete(fill.from);
-            }
-          })
-      );
-    };
+        if (source?.metadata.uid !== from.metadata.uid) {
+          return yield* new Internal({
+            message: `${what}: the claim was replaced while it was snapshotted`,
+          });
+        }
+      });
 
     const claimed = (
       name: string,
       instance: string,
       labels: Readonly<Record<string, string>>,
-      diskGib: number
+      diskGib: number,
+      snapshot?: string
     ) =>
       created(claims, name, instance, {
-        metadata: { name, labels },
+        metadata: {
+          name,
+          labels,
+          ...(snapshot === undefined
+            ? {}
+            : { annotations: { [filledAnnotation]: "true" } }),
+        },
         spec: {
           accessModes: ["ReadWriteOnce"],
           resources: { requests: { storage: `${diskGib}Gi` } },
           ...(settings.storageClass === undefined
             ? {}
             : { storageClassName: settings.storageClass }),
+          ...(snapshot === undefined
+            ? {}
+            : {
+                dataSource: {
+                  apiGroup: "snapshot.storage.k8s.io",
+                  kind: "VolumeSnapshot",
+                  name: snapshot,
+                },
+              }),
         },
       }).pipe(Effect.mapError(failure(`make ${name}`)));
 
@@ -1086,35 +1089,6 @@ export const make = (
         );
       }).pipe(Effect.uninterruptible);
 
-    const sourceStopped = (source: Target) =>
-      Effect.gen(function* () {
-        const held = heldOf(yield* read(source));
-
-        switch (held) {
-          case "gone": {
-            return yield* missing(traits.runtime, source);
-          }
-
-          case "running":
-          case "moving": {
-            return yield* new WrongState({
-              message: `agent-sandbox copies a stopped machine, and ${source.name} is running: stop it first`,
-              machine: source.name,
-              state: "running",
-            });
-          }
-
-          case "stopped": {
-            return;
-          }
-
-          case "ended":
-          case "stopping": {
-            yield* stopped(source);
-          }
-        }
-      });
-
     // Kubernetes mounts a claim by its name alone, so a guest boots only once its own disk is
     // there: https://kubernetes.io/docs/concepts/storage/persistent-volumes/#claims-as-volumes
     const diskHeld = (machine: Identity) =>
@@ -1131,9 +1105,7 @@ export const make = (
 
     const sourceDisk = (source: Target) =>
       Effect.gen(function* () {
-        yield* sourceStopped(source);
-
-        const disk = live(
+        const claim = live(
           owned(
             yield* claims
               .get(diskName(source.instance))
@@ -1142,41 +1114,41 @@ export const make = (
           )
         );
 
-        const diskGib = diskGibOf(disk);
+        const diskGib = diskGibOf(claim);
 
-        if (disk === undefined || diskGib === undefined) {
+        if (claim === undefined || diskGib === undefined) {
           return yield* missing(traits.runtime, source);
         }
 
-        return {
-          fill: {
-            _tag: "copy",
-            from: disk.metadata.name,
-            uid: disk.metadata.uid,
-          } satisfies Fill,
-          diskGib,
-        };
+        return { claim, diskGib };
       });
 
     const dropped = (instance: string) =>
-      Effect.andThen(
-        removed(pods, fillName(instance), instance),
-        removed(claims, checkpointName(instance), instance)
+      Effect.all(
+        [
+          removed(pods, fillName(instance), instance),
+          removed(snapshots, checkpointName(instance), instance),
+        ],
+        { discard: true }
       );
 
     const prune = (machine: Target, keep: ReadonlySet<Handle>) =>
       Effect.gen(function* () {
-        const held = yield* claims.list({
+        const selector = {
           ...mark,
           [kindLabel]: "checkpoint",
           [sourceLabel]: machine.instance,
-        });
+        };
+
+        const held = yield* snapshots.list(selector);
 
         yield* Effect.forEach(
-          held.flatMap(({ metadata }) =>
-            keep.has(Handle.make(metadata.name))
-              ? []
-              : (metadata.labels?.[instanceLabel] ?? [])
+          new Set(
+            held.flatMap(({ metadata }) =>
+              keep.has(Handle.make(metadata.name))
+                ? []
+                : (metadata.labels?.[instanceLabel] ?? [])
+            )
           ),
           dropped,
           { discard: true }
@@ -1188,61 +1160,91 @@ export const make = (
       );
 
     const markedMachines = Effect.gen(function* () {
-      const found = yield* Effect.all([
+      const [machines, held, fills, taken] = yield* Effect.all([
         sandboxes.list(mark),
-        claims.list({ ...mark, [kindLabel]: "disk" }),
+        claims.list(mark),
         pods.list({ ...mark, [kindLabel]: "fill-disk" }),
+        snapshots.list(mark),
       ]);
 
-      const checkpoints = yield* claims.list({
-        ...mark,
-        [kindLabel]: "checkpoint",
-      });
+      const kindOf = ({
+        metadata,
+      }: {
+        readonly metadata: {
+          readonly labels?: Readonly<Record<string, string>>;
+        };
+      }) => metadata.labels?.[kindLabel];
+
+      const checkpoints = taken.filter((each) => kindOf(each) === "checkpoint");
 
       const instances = new Set(
-        found
-          .flat()
-          .flatMap(({ metadata }) => metadata.labels?.[instanceLabel] ?? [])
+        [
+          ...machines,
+          ...held.filter((each) => kindOf(each) === "disk"),
+          ...fills,
+          ...taken.filter((each) => kindOf(each) === "copy"),
+        ].flatMap(({ metadata }) => metadata.labels?.[instanceLabel] ?? [])
       );
 
       return [...instances].map((instance): MarkedMachine => ({
         instance,
         handle: Handle.make(machineName(instance)),
-        checkpoints: checkpoints.flatMap(({ metadata }) =>
-          metadata.labels?.[sourceLabel] === instance
-            ? [Handle.make(metadata.name)]
-            : []
-        ),
+        checkpoints: [
+          ...new Set(
+            checkpoints.flatMap(({ metadata }) =>
+              metadata.labels?.[sourceLabel] === instance
+                ? [Handle.make(metadata.name)]
+                : []
+            )
+          ),
+        ],
       }));
     }).pipe(Effect.mapError(internal("couldn't list what this host marked")));
 
-    const fillOf = (
+    type DiskSource =
+      | { readonly _tag: "seed"; readonly image: string }
+      | { readonly _tag: "snapshot"; readonly name: string }
+      | {
+          readonly _tag: "claim";
+          readonly claim: Claim;
+          readonly diskGib: number;
+        };
+
+    const diskSourceOf = (
       origin: Origin
-    ): Effect.Effect<Fill, Internal | Missing | WrongState> => {
+    ): Effect.Effect<DiskSource, Internal | Missing> => {
       switch (origin._tag) {
         case "image": {
           return Effect.succeed({ _tag: "seed", image: origin.image });
         }
 
         case "machine": {
-          return Effect.map(sourceDisk(origin.machine), ({ fill }) => fill);
+          return Effect.map(
+            sourceDisk(origin.machine),
+            ({ claim, diskGib }): DiskSource => ({
+              _tag: "claim",
+              claim,
+              diskGib,
+            })
+          );
         }
 
         case "checkpoint": {
           const { checkpoint } = origin;
 
-          return claims.get(checkpoint.handle).pipe(
+          return snapshots.get(checkpoint.handle).pipe(
             Effect.mapError(
               internal(`couldn't read checkpoint ${checkpoint.name}`)
             ),
-            Effect.flatMap((claim) => {
-              const held = live(owned(claim, checkpoint.instance));
+            Effect.flatMap((snapshot) => {
+              const taken: Snapshot | undefined = live(
+                owned(snapshot, checkpoint.instance)
+              );
 
-              return held !== undefined && filled(held)
-                ? Effect.succeed<Fill>({
-                    _tag: "copy",
-                    from: checkpoint.handle,
-                    uid: held.metadata.uid,
+              return taken?.status?.readyToUse === true
+                ? Effect.succeed<DiskSource>({
+                    _tag: "snapshot",
+                    name: checkpoint.handle,
                   })
                 : Effect.fail(missingCheckpoint(traits.runtime, checkpoint));
             })
@@ -1274,6 +1276,7 @@ export const make = (
             sandboxes.get(machineName(machine.instance)),
             claims.get(diskName(machine.instance)),
             pods.get(fillName(machine.instance)),
+            snapshots.get(copyName(machine.instance)),
           ]);
 
           return found.some((each) => {
@@ -1294,7 +1297,8 @@ export const make = (
         if (machines.length === 1 && only !== undefined) {
           return Effect.map(
             read(only),
-            (found): Observed => new Map([[only.name, readAs[heldOf(found)]]])
+            (found): Observed =>
+              new Map([[only.name, { state: readAs[heldOf(found)] }]])
           );
         }
 
@@ -1307,9 +1311,14 @@ export const make = (
             return new Map(
               machines.map((machine) => [
                 machine.name,
-                readAs[
-                  heldOf(owned(byName.get(machine.handle), machine.instance))
-                ],
+                {
+                  state:
+                    readAs[
+                      heldOf(
+                        owned(byName.get(machine.handle), machine.instance)
+                      )
+                    ],
+                },
               ])
             );
           }),
@@ -1329,24 +1338,54 @@ export const make = (
         Effect.gen(function* () {
           const handle = Handle.make(machineName(machine.instance));
           const target = { ...machine, handle };
-          const fill = yield* fillOf(origin);
+          const source = yield* diskSourceOf(origin);
           const disk = diskName(machine.instance);
+          const copy = copyName(machine.instance);
+          const labels = labelsOf(machine.instance, "disk");
 
-          yield* claimed(
-            disk,
-            machine.instance,
-            labelsOf(machine.instance, "disk"),
-            machine.diskGib
-          );
-          yield* filledBy(
-            {
-              instance: machine.instance,
-              claim: disk,
-              kind: "disk",
-              diskGib: machine.diskGib,
-            },
-            fill
-          );
+          switch (source._tag) {
+            case "seed": {
+              yield* claimed(disk, machine.instance, labels, machine.diskGib);
+              yield* seeded(
+                {
+                  instance: machine.instance,
+                  claim: disk,
+                  diskGib: machine.diskGib,
+                },
+                source.image
+              );
+              break;
+            }
+
+            case "snapshot": {
+              yield* claimed(
+                disk,
+                machine.instance,
+                labels,
+                machine.diskGib,
+                source.name
+              );
+              break;
+            }
+
+            case "claim": {
+              yield* snapshotted(
+                copy,
+                machine.instance,
+                labelsOf(machine.instance, "copy"),
+                source.claim,
+                source.diskGib
+              );
+              yield* claimed(
+                disk,
+                machine.instance,
+                labels,
+                machine.diskGib,
+                copy
+              );
+            }
+          }
+
           yield* diskHeld(machine);
 
           yield* created(sandboxes, handle, machine.instance, {
@@ -1368,6 +1407,16 @@ export const make = (
           }).pipe(Effect.mapError(failure(`make ${machine.name}`)));
 
           yield* ready(target, `make ${machine.name}`);
+
+          if (source._tag === "claim") {
+            yield* removed(snapshots, copy, machine.instance).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning(
+                  `couldn't delete ${copy}, so the machine's delete does: ${error.message}`
+                )
+              )
+            );
+          }
 
           return {
             handle,
@@ -1405,7 +1454,6 @@ export const make = (
           );
         }),
       stop: stopped,
-      pause: stopped,
       delete: (machine, keep) =>
         Effect.gen(function* () {
           yield* prune(machine, keep);
@@ -1414,6 +1462,11 @@ export const make = (
               [
                 removed(sandboxes, machine.handle, machine.instance),
                 removed(pods, fillName(machine.instance), machine.instance),
+                removed(
+                  snapshots,
+                  copyName(machine.instance),
+                  machine.instance
+                ),
                 removed(claims, diskName(machine.instance), machine.instance),
               ],
               { discard: true }
@@ -1424,25 +1477,16 @@ export const make = (
       capture: (machine, checkpoint) =>
         Effect.gen(function* () {
           const name = checkpointName(checkpoint.instance);
+          const { claim, diskGib } = yield* sourceDisk(machine);
 
-          const { fill, diskGib } = yield* sourceDisk(machine);
-
-          yield* claimed(
+          yield* snapshotted(
             name,
             checkpoint.instance,
             labelsOf(checkpoint.instance, "checkpoint", {
               [sourceLabel]: machine.instance,
             }),
+            claim,
             diskGib
-          );
-          yield* filledBy(
-            {
-              instance: checkpoint.instance,
-              claim: name,
-              kind: "checkpoint",
-              diskGib,
-            },
-            fill
           );
 
           return Handle.make(name);

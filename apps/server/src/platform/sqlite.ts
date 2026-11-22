@@ -231,6 +231,12 @@ export const migrations: readonly string[] = [
   `ALTER TABLE machines ADD COLUMN tailnet INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE checkpoints ADD COLUMN tailnet INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE builds ADD COLUMN tailnet INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE machines ADD COLUMN boots INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE machines ADD COLUMN booting INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE machines ADD COLUMN reboot TEXT;
+  ALTER TABLE machines ADD COLUMN unasked TEXT;
+  ALTER TABLE machines DROP COLUMN captures;
+  ALTER TABLE checkpoints DROP COLUMN kind`,
 ];
 
 const isSqliteError = (

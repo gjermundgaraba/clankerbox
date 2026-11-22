@@ -22,6 +22,7 @@ export const MachineRecord = Schema.Struct({
   id: Handle,
   name: Schema.optionalKey(Schema.NullOr(Schema.String)),
   state: Schema.String,
+  error: Schema.optionalKey(Schema.NullOr(Schema.String)),
   parentMachineId: Schema.optionalKey(Schema.NullOr(Schema.String)),
   resources: Schema.Struct({
     cpus: Schema.Int,
@@ -119,7 +120,7 @@ export type Frame =
   | { readonly _tag: "exit"; readonly exitCode: number }
   | { readonly _tag: "error"; readonly data: string };
 
-export type Verb = "start" | "stop" | "resume";
+export type Verb = "start" | "stop";
 
 const problemOf = Schema.decodeUnknownOption(Schema.fromJsonString(Problem));
 

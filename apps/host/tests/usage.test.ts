@@ -55,8 +55,11 @@ const admits = (
         return new Map(
           refs.map((asking) => [
             asking.name,
-            machines.find((held) => held.machine.name === asking.name)?.state ??
-              "missing",
+            {
+              state:
+                machines.find((held) => held.machine.name === asking.name)
+                  ?.state ?? "missing",
+            },
           ])
         );
       });

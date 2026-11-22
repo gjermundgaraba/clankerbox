@@ -65,7 +65,6 @@ import type {
   Interface,
   RuntimeError,
   Sizes,
-  StateError,
   Target,
 } from "../src/runtime.ts";
 import { allotted, checkRamBudget, inUse } from "../src/usage.ts";
@@ -78,7 +77,6 @@ export type Operation =
   | "create"
   | "start"
   | "stop"
-  | "pause"
   | "resize"
   | "sizes"
   | "delete"
@@ -109,10 +107,7 @@ export interface Preset {
 export const fixed: RuntimeTraits = {
   runtime: RuntimeName.make("fixed"),
   images: "named",
-  checkpoint: "disk",
-  captureFrom: "stopped",
-  pause: "stops",
-  stop: "discards",
+  captureFrom: "either",
   copies: "any",
   resize: { running: "none", stopped: "any" },
   sizes: {
@@ -138,14 +133,12 @@ export const presets = {
     cut: "ends",
     stopsOnItsOwn: false,
   },
-  saving: {
+  copiesRunning: {
     traits: {
       ...smolvm("x64"),
-      runtime: RuntimeName.make("saving"),
-      checkpoint: "ram",
+      runtime: RuntimeName.make("copies-running"),
       captureFrom: "running",
       whyRunning: "it copies only memory",
-      pause: "saves",
       copies: "grow",
     },
     guest: "debian",
@@ -466,6 +459,7 @@ type Injection<O extends Operation> =
       readonly entered: Deferred.Deferred<undefined>;
       readonly until: Deferred.Deferred<undefined>;
       readonly runsOn: boolean;
+      readonly fails: FailureOf<O> | undefined;
     };
 
 type Injections = { readonly [O in Operation]: Array<Injection<O>> };
@@ -553,7 +547,6 @@ export const fakeRuntime = (options: FakeOptions) => {
     create: [],
     start: [],
     stop: [],
-    pause: [],
     resize: [],
     sizes: [],
     delete: [],
@@ -619,12 +612,23 @@ export const fakeRuntime = (options: FakeOptions) => {
         }
 
         if (injection.kind === "hold") {
+          const { fails } = injection;
+
+          const ending: Effect.Effect<A, E | FailureOf<O>, R> =
+            fails === undefined
+              ? body
+              : Effect.suspend(() => {
+                  leftByFailure?.();
+
+                  return Effect.fail(fails);
+                });
+
           const held = Effect.andThen(
             Effect.andThen(
               Deferred.succeed(injection.entered, undefined),
               Deferred.await(injection.until)
             ),
-            body
+            ending
           );
 
           return injection.runsOn ? held : restore(held);
@@ -788,7 +792,7 @@ export const fakeRuntime = (options: FakeOptions) => {
       return new Map(
         refs.map((machine) => [
           machine.name,
-          machineOf(machine)?.state ?? "missing",
+          { state: machineOf(machine)?.state ?? "missing" },
         ])
       );
     });
@@ -1176,32 +1180,6 @@ export const fakeRuntime = (options: FakeOptions) => {
               })
             )
           ),
-        pause: (machine) =>
-          call(
-            "pause",
-            machine,
-            Effect.suspend((): Effect.Effect<void, StateError> => {
-              const found = machineOf(machine);
-
-              if (found === undefined) {
-                return Effect.fail(missing(traits.runtime, machine));
-              }
-
-              if (found.state === "stopped") {
-                return Effect.fail(
-                  new WrongState({
-                    message: `${machine.name} is stopped: start it first`,
-                    machine: machine.name,
-                    state: found.state,
-                  })
-                );
-              }
-
-              found.state = traits.pause === "stops" ? "stopped" : "paused";
-
-              return Effect.void;
-            })
-          ),
         resize: (machine, to) =>
           call(
             "resize",
@@ -1529,7 +1507,10 @@ export const fakeRuntime = (options: FakeOptions) => {
         entered: Deferred.await(entered),
       };
     },
-    holdNext: (operation: Operation, hold?: { readonly runsOn?: boolean }) => {
+    holdNext: <O extends Operation>(
+      operation: O,
+      hold?: { readonly runsOn?: boolean; readonly fails?: FailureOf<O> }
+    ) => {
       const until = Deferred.makeUnsafe<undefined>();
       const entered = Deferred.makeUnsafe<undefined>();
 
@@ -1538,6 +1519,7 @@ export const fakeRuntime = (options: FakeOptions) => {
         entered,
         until,
         runsOn: hold?.runsOn ?? false,
+        fails: hold?.fails,
       });
 
       return {

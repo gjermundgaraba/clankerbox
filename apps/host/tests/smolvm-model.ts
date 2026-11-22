@@ -398,16 +398,6 @@ export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
         return checkpoint(vm, args);
       }
 
-      case "pause": {
-        vm.state = "paused";
-
-        return {};
-      }
-
-      case "resume": {
-        return booted(vm);
-      }
-
       case "exec": {
         return args.slice(args.indexOf("--") + 1).join(" ") === "cat"
           ? { stdout: stdin ?? "" }

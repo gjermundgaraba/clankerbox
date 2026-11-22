@@ -65,7 +65,7 @@ export const command = Command.make(
     )
 ).pipe(
   Command.withDescription(
-    "The dispatch program for Amp's self-hosted orbs, run by `amp orb provider` once per job, with the job in its environment: a spawn makes the orb's machine run, from its project snapshot or its image, and starts `amp orb bootstrap` in it; a pause saves the snapshot when asked and pauses the machine; a delete deletes it."
+    "The dispatch program for Amp's self-hosted orbs, run by `amp orb provider` once per job, with the job in its environment: a spawn makes the orb's machine run, from its project snapshot or its image, and starts `amp orb bootstrap` in it; a pause saves the snapshot when asked and stops the machine; a delete deletes it."
   )
 );
 

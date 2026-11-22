@@ -41,6 +41,7 @@ import type {
   Interface,
   MachineState,
   Observed,
+  Sighting,
   Origin,
   Sizes,
   Target,
@@ -93,7 +94,6 @@ const moves: Readonly<Record<Goal, Readonly<Record<string, Move>>>> = {
     running: "done",
     stopped: "start",
     created: "start",
-    paused: "resume",
     missing: "missing",
     deleted: "missing",
   },
@@ -102,7 +102,6 @@ const moves: Readonly<Record<Goal, Readonly<Record<string, Move>>>> = {
     running: "stop",
     stopped: "done",
     created: "done",
-    paused: "resume",
     missing: "done",
     deleted: "done",
   },
@@ -160,13 +159,14 @@ const stateOf = (record: MachineRecord | undefined): MachineState => {
       return "running";
     }
 
+    // smol cloud pauses a machine only when asked, and a host never asks: a start or stop of one
+    // something else paused is stuck, saying so:
+    // https://smolmachines.com/docs/cloud/api-reference#machines
     case "stopped":
-    case "created": {
-      return "stopped";
-    }
-
+    case "created":
+    case "error":
     case "paused": {
-      return "paused";
+      return "stopped";
     }
 
     default: {
@@ -174,6 +174,19 @@ const stateOf = (record: MachineRecord | undefined): MachineState => {
     }
   }
 };
+
+/**
+ * A machine as `observe` tells it, with the reason smol cloud gives for one in its `error` state,
+ * its latest control-plane error, as https://smolmachines.com/openapi.json's `MachineInfo.error`
+ * defines it.
+ */
+const sightingOf = (record: MachineRecord | undefined): Sighting =>
+  record?.state === "error"
+    ? {
+        state: stateOf(record),
+        why: record.error ?? "smol cloud holds it in error, saying nothing",
+      }
+    : { state: stateOf(record) };
 
 const isGone = (error: ApiError) =>
   error._tag === "Refused" && error.status === 404;
@@ -879,7 +892,7 @@ export const make = (
       if (machines.length === 1 && only !== undefined) {
         return Effect.map(
           record(only.handle),
-          (found): Observed => new Map([[only.name, stateOf(found)]])
+          (found): Observed => new Map([[only.name, sightingOf(found)]])
         );
       }
 
@@ -889,7 +902,7 @@ export const make = (
         return new Map(
           machines.map(({ name, handle }) => [
             name,
-            stateOf(byHandle.get(handle)),
+            sightingOf(byHandle.get(handle)),
           ])
         );
       });
@@ -997,11 +1010,6 @@ export const make = (
           )
         ).pipe(bounded("smol cloud", `start ${machine.name}`)),
       stop: (machine) =>
-        Effect.mapError(
-          settled(machine, "stopped"),
-          (error) => new Internal({ message: error.message })
-        ),
-      pause: (machine) =>
         Effect.mapError(
           settled(machine, "stopped"),
           (error) => new Internal({ message: error.message })

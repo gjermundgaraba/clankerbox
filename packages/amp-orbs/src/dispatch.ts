@@ -132,12 +132,12 @@ const pause = Effect.fn("pause")(function* (
   }
 
   if (Option.isNone(job.snapshot) || found.state !== "running") {
-    yield* client.pauseMachine({ id: name });
+    yield* client.stopMachine({ id: name });
 
     return yield* Console.log(
       Option.isNone(job.snapshot)
-        ? `orb ${job.id}: machine ${name} paused`
-        : `orb ${job.id}: machine ${name} was ${found.state}, so it is paused without saving snapshot ${job.snapshot.value}`
+        ? `orb ${job.id}: machine ${name} stopped`
+        : `orb ${job.id}: machine ${name} was ${found.state}, so it is stopped without saving snapshot ${job.snapshot.value}`
     );
   }
 
@@ -149,7 +149,7 @@ const pause = Effect.fn("pause")(function* (
     settings.snapshotExpiry
   );
 
-  yield* client.pauseMachine({
+  yield* client.stopMachine({
     id: name,
     capture: {
       name: snapshot,
@@ -159,7 +159,7 @@ const pause = Effect.fn("pause")(function* (
   });
 
   return yield* Console.log(
-    `orb ${job.id}: machine ${name} paused, snapshot ${snapshot} ${previous === "deleted" ? "replaced" : "saved"}, kept until ${DateTime.formatIso(expiresAt)}`
+    `orb ${job.id}: machine ${name} stopped, snapshot ${snapshot} ${previous === "deleted" ? "replaced" : "saved"}, kept until ${DateTime.formatIso(expiresAt)}`
   );
 });
 

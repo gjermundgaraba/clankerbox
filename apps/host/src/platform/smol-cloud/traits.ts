@@ -12,18 +12,18 @@ import { RuntimeName } from "@gjermundgaraba/clankerbox-sdk";
  * https://smolmachines.com/openapi.json (`machine_export`)
  * https://smolmachines.com/docs/guides/skills/cloud-registry.md ("What cannot be undone")
  * https://smolmachines.com/docs/cloud/api-reference.md ("export a stopped machine's disk")
+ *
+ * A fork's stop and start of its branch, and a restore's, which keep no memory in the copy, are
+ * checked against the fake alone; the live suite against an account is owed.
  */
 export const traits = (
   most: RuntimeTraits["limits"]["most"]
 ): RuntimeTraits => ({
   runtime: RuntimeName.make("smol-cloud"),
   images: "references",
-  checkpoint: "disk",
   captureFrom: "running",
   whyRunning:
     "smol cloud has no way to copy a stopped machine's disk that doesn't leave storage in the account which nothing can delete",
-  pause: "stops",
-  stop: "resumes",
   copies: "same",
   resize: { running: "grow", stopped: "grow" },
   sizes: { _tag: "free" },

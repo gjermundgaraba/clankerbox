@@ -2,14 +2,14 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { accepts } from "@gjermundgaraba/clankerbox-host/testing";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, Logger, Option, Schedule } from "effect";
+import { DateTime, Duration, Effect, Logger, Option, Schedule } from "effect";
 import { expect } from "vite-plus/test";
 
 import { applied } from "../src/chart.ts";
 import { checkpointChart } from "../src/checkpoint-chart.ts";
 import { freshBoot } from "./chart-rows.ts";
 import {
-  saving,
+  copiesRunning,
   applying,
   at,
   clientOf,
@@ -82,6 +82,8 @@ const unsent = (
     id: `unsent-${name}`,
     joins: false,
     awaiting: false,
+    at: DateTime.makeUnsafe(0),
+    stoppedUnasked: new Internal({ message: "stopped unasked" }),
   });
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
@@ -496,7 +498,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { client, first, fake, planned, restart } = yield* killedPlane({
-          ...saving,
+          ...copiesRunning,
           recheck: Duration.millis(50),
         });
 
@@ -504,7 +506,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* client.create(
           "dev",
-          request("dev", { runtime: runtimes.saving })
+          request("dev", { runtime: runtimes.copiesRunning })
         );
         yield* client.captureCheckpoint({ machine: "dev", name: "snap" });
         fake.calls.length = 0;

@@ -66,6 +66,7 @@ import {
   missing,
   missingCheckpoint,
   Runtime,
+  sightingIn,
   stateIn,
   targetOf,
   timeoutFail,
@@ -75,6 +76,7 @@ import type {
   Handle,
   Held,
   Observed,
+  Sighting,
   Origin,
   Sized,
   Target,
@@ -246,7 +248,6 @@ const instanceLeftBy = (step: Step): string | undefined => {
     case "make":
     case "start":
     case "stop":
-    case "pause":
     case "resize":
     case "join": {
       return step.machine.instance;
@@ -266,8 +267,7 @@ const leftBy = (
   step: Step
 ): { readonly name: string; readonly leaving: Leaving } | undefined => {
   switch (step._tag) {
-    case "stop":
-    case "pause": {
+    case "stop": {
       return { name: step.machine.name, leaving: step._tag };
     }
 
@@ -301,23 +301,6 @@ export const make = (
   Effect.gen(function* () {
     const runtime = yield* Runtime;
     const { traits } = runtime;
-
-    const pauseOrStop = (machine: Target, pin: string | undefined) => {
-      if (traits.pause === "stops") {
-        return runtime.stop(machine);
-      }
-
-      if (pin === runtime.pin) {
-        return runtime.pause(machine);
-      }
-
-      return Effect.andThen(
-        Effect.logWarning(
-          `pause ${machine.name}: its VM booted under ${pin ?? "an older host"}, and this host runs ${runtime.pin ?? "no pin"}, so it stops it instead`
-        ),
-        runtime.stop(machine)
-      );
-    };
 
     const reaches = yield* Reaches;
     const hostScope = yield* Effect.scope;
@@ -445,6 +428,29 @@ export const make = (
       return refusal === undefined ? Effect.void : Effect.fail(refusal);
     };
 
+    const stateNow = (machine: Target, what: string) =>
+      Effect.gen(function* () {
+        const seen = stateIn(
+          yield* runtime
+            .observe([machine])
+            .pipe(inTime(`the ${traits.runtime} runtime`)),
+          machine
+        );
+
+        if (seen === "unknown") {
+          return yield* new Internal({
+            message: `the ${traits.runtime} runtime couldn't read machine ${machine.name}, so it isn't ${what}: try again`,
+          });
+        }
+
+        return seen;
+      });
+
+    const copiedPinned = (machine: Target, pin: string | undefined) =>
+      Effect.flatMap(stateNow(machine, "copied"), (seen) =>
+        seen === "running" ? pinned({ copy: machine.name }, pin) : Effect.void
+      );
+
     const originOf = (source: Source): Effect.Effect<Origin, HostError> =>
       Effect.gen(function* () {
         if (source._tag === "base") {
@@ -467,30 +473,11 @@ export const make = (
           } as const;
         }
 
-        yield* pinned({ copy: source.machine.name }, source.pin);
+        const machine = yield* machineTarget(source.machine);
 
-        return {
-          _tag: "machine",
-          machine: yield* machineTarget(source.machine),
-        } as const;
-      });
+        yield* copiedPinned(machine, source.pin);
 
-    const stateNow = (machine: Target, what: string) =>
-      Effect.gen(function* () {
-        const seen = stateIn(
-          yield* runtime
-            .observe([machine])
-            .pipe(inTime(`the ${traits.runtime} runtime`)),
-          machine
-        );
-
-        if (seen === "unknown") {
-          return yield* new Internal({
-            message: `the ${traits.runtime} runtime couldn't read machine ${machine.name}, so it isn't ${what}: try again`,
-          });
-        }
-
-        return seen;
+        return { _tag: "machine", machine } as const;
       });
 
     const flushed = (machine: Target) =>
@@ -753,14 +740,12 @@ export const make = (
       Effect.gen(function* () {
         const { machine, source, machines, authorizedKeys, join, taken } = step;
 
-        yield* source._tag === "base"
-          ? runtime.sizable(machine, machine, machine, false)
-          : runtime.sizable(
-              machine,
-              sourceSizes(source),
-              machine,
-              traits.checkpoint === "ram"
-            );
+        yield* runtime.sizable(
+          machine,
+          source._tag === "base" ? machine : sourceSizes(source),
+          machine,
+          false
+        );
 
         const origin = yield* originOf(source);
 
@@ -823,7 +808,7 @@ export const make = (
 
       switch (step._tag) {
         case "start": {
-          const { pin, machines } = step;
+          const { machines } = step;
           const keep = new Set(step.keep);
 
           return Effect.gen(function* () {
@@ -832,10 +817,6 @@ export const make = (
 
             if (seen === "missing") {
               return yield* missing(traits.runtime, machine);
-            }
-
-            if (seen === "paused") {
-              yield* pinned({ resume: machine.name }, pin);
             }
 
             const { port } = step.machine;
@@ -867,54 +848,18 @@ export const make = (
         }
 
         case "stop": {
-          const { pin, machines, hook } = step;
-
-          return Effect.gen(function* () {
-            const machine = yield* machineTarget(step.machine);
-            const stopped = runtime.stop(machine);
-
-            if (traits.stop === "discards") {
-              yield* beforeLeaving(
-                machine,
-                "stop",
-                hook,
-                stateNow(machine, "given its stop hook")
-              );
-
-              return yield* stopped;
-            }
-
-            const seen = yield* stateNow(machine, "stopped");
-
-            if (seen === "paused") {
-              yield* pinned({ resume: machine.name }, pin);
-
-              return yield* withRoom(
-                "stopMachine",
-                { ...step.machine, handle: machine.handle },
-                machines,
-                stopped
-              );
-            }
-
-            yield* beforeLeaving(machine, "stop", hook, Effect.succeed(seen));
-            yield* stopped;
-          });
-        }
-
-        case "pause": {
-          const { pin, hook } = step;
+          const { hook } = step;
 
           return Effect.gen(function* () {
             const machine = yield* machineTarget(step.machine);
 
             yield* beforeLeaving(
               machine,
-              "pause",
+              "stop",
               hook,
-              stateNow(machine, "given its pause hook")
+              stateNow(machine, "given its stop hook")
             );
-            yield* pauseOrStop(machine, pin);
+            yield* runtime.stop(machine);
           });
         }
 
@@ -963,9 +908,8 @@ export const make = (
 
           return Effect.gen(function* () {
             const machine = yield* Effect.tapError(
-              Effect.andThen(
-                pinned({ copy: step.machine.name }, pin),
-                Effect.tap(machineTarget(step.machine), flushed)
+              Effect.tap(machineTarget(step.machine), (target) =>
+                Effect.andThen(copiedPinned(target, pin), flushed(target))
               ),
               () => cleared
             );
@@ -1326,19 +1270,19 @@ export const make = (
     const readAlone = (machine: Ref) =>
       Effect.flatMap(found(machine), (handle) =>
         handle === undefined
-          ? Effect.succeed<MachineState>("missing")
+          ? Effect.succeed<Sighting>({ state: "missing" })
           : Effect.map(observed([targetOf(machine, handle)]), (seen) =>
-              stateIn(seen, machine)
+              sightingIn(seen, machine)
             )
       ).pipe(
         inTime(`the ${traits.runtime} runtime's read of ${machine.name}`),
         Effect.catch((error) =>
           Effect.as(
             Effect.logWarning(`read ${machine.name}: ${error.message}`),
-            "unknown" as const
+            { state: "unknown" } satisfies Sighting
           )
         ),
-        Effect.map((state) => [machine.name, state] as const)
+        Effect.map((seen) => [machine.name, seen] as const)
       );
 
     const reading: Interface["read"] = (machines) =>
@@ -1368,7 +1312,7 @@ export const make = (
           return new Map(
             machines.map(({ name }) => [
               name,
-              resolved.get(name) ?? stateIn(seen, { name }),
+              resolved.get(name) ?? sightingIn(seen, { name }),
             ])
           );
         })

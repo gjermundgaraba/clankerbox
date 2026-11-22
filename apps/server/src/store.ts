@@ -2,7 +2,6 @@ import { Handle, Step } from "@clankerbox/host-contract";
 import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
 import {
   Build,
-  Checkpoint,
   Desired,
   HostError,
   Labels,
@@ -10,8 +9,14 @@ import {
   Port,
   RuntimeName,
   Sizing,
+  Unasked,
 } from "@gjermundgaraba/clankerbox-sdk";
-import type { Conflict, Internal, Phase } from "@gjermundgaraba/clankerbox-sdk";
+import type {
+  Checkpoint,
+  Conflict,
+  Internal,
+  Phase,
+} from "@gjermundgaraba/clankerbox-sdk";
 import { Context, Effect, Schema, SchemaGetter } from "effect";
 import type {
   Array as Arr,
@@ -86,16 +91,12 @@ export type Operation = typeof Operation.Type;
 
 export type MachinePhase = Exclude<Phase, "waiting">;
 
-export const MadeOn = Schema.Struct({
-  runtime: RuntimeName,
-  captures: Checkpoint.fields.kind,
-});
+export const MadeOn = Schema.Struct({ runtime: RuntimeName });
 
 export type MadeOn = typeof MadeOn.Type;
 
 export const madeOn = (traits: RuntimeTraits): MadeOn => ({
   runtime: traits.runtime,
-  captures: traits.checkpoint,
 });
 
 const made = {
@@ -117,7 +118,14 @@ export const Facts = Schema.Struct({
   ...made,
   ...MadeOn.fields,
   endpoint: UndefinedFromNull(Schema.fromJsonString(Endpoint)),
-  desired: Desired.pick(["running", "stopped", "paused"]),
+  desired: Desired.pick(["running", "stopped"]),
+  /**
+   * Whether a step left the machine running and prepared, with no request to run it since, which
+   * clears it. While it holds, a read that finds the machine stopped while it is to run, but for
+   * one before an owed resize, finds its runtime's stop: just after a start, a join or a resize, or
+   * once a resize of a machine resting failed so is done. That rests the machine failed, as at
+   * rest, and only a request to run boots it again.
+   */
   prepared: Schema.BooleanFromBit,
   resize: UndefinedFromNull(Schema.fromJsonString(Sizing)),
   ephemeral: Schema.BooleanFromBit,
@@ -127,6 +135,13 @@ export const Facts = Schema.Struct({
   hostKey: UndefinedFromNull(Schema.String),
   undoneAt: UndefinedFromNull(Schema.DateTimeUtcFromString),
   after: UndefinedFromNull(Schema.String),
+  /** The cold boots of the machine the control plane knows of, as `Machine.boots` tells them. */
+  boots: Schema.Int,
+  /** Whether the start under way boots a machine last read stopped, which `boots` counts once it is done. */
+  booting: Schema.BooleanFromBit,
+  /** The runtime's mark of the machine's last reboot in place, as its last read answered it. */
+  reboot: UndefinedFromNull(Schema.String),
+  unasked: UndefinedFromNull(Schema.fromJsonString(Unasked)),
 });
 
 export type Facts = typeof Facts.Type;
@@ -136,7 +151,6 @@ export type ShownPhase = Checkpoint["phase"];
 export const CheckpointFacts = Schema.Struct({
   ...made,
   runtime: RuntimeName,
-  kind: Checkpoint.fields.kind,
   machine: Schema.String,
   failedAt: UndefinedFromNull(Schema.DateTimeUtcFromString),
   expiresAt: UndefinedFromNull(Schema.DateTimeUtcFromString),

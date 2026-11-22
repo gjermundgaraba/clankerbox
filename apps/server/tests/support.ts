@@ -87,7 +87,7 @@ export const quiet = Duration.hours(1);
 
 export const runtimes = {
   smolvm: RuntimeName.make("smolvm"),
-  saving: RuntimeName.make("saving"),
+  copiesRunning: RuntimeName.make("copies-running"),
   tart: RuntimeName.make("tart"),
   fixed: RuntimeName.make("fixed"),
 };
@@ -406,8 +406,6 @@ export const stubInfo = {
     images: "references",
     checkpoint: "ram",
     captureFrom: "running",
-    pause: "saves",
-    stop: "resumes",
     copies: "grow",
     resize: { running: "grow", stopped: "any" },
     sizes: { _tag: "free" },
@@ -459,4 +457,6 @@ export const stubHost = (
     })
   );
 
-export const saving = { hosts: [{ id: "smolvm", as: "saving" as const }] };
+export const copiesRunning = {
+  hosts: [{ id: "smolvm", as: "copiesRunning" as const }],
+};

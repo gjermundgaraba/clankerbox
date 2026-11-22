@@ -16,6 +16,7 @@ import {
   templateRef,
   Unavailable,
   sizedBy,
+  WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
   CreateRequest,
@@ -78,10 +79,12 @@ import type { MachineEvent, MachineRow, Move, Wish } from "./machine-chart.ts";
 import {
   machineOf,
   phaseShown,
+  seenOf,
   readStates,
   stateIn,
   stateOf,
 } from "./machine-view.ts";
+import type { Seen } from "./machine-view.ts";
 import {
   collect,
   cutShort,
@@ -138,12 +141,9 @@ export interface Interface {
     id: string
   ) => Effect.Effect<Machine, Declared<"startMachine">>;
   readonly stop: (
-    id: string
-  ) => Effect.Effect<Machine, Declared<"stopMachine">>;
-  readonly pause: (
     id: string,
     after?: string
-  ) => Effect.Effect<Machine, Declared<"pauseMachine">>;
+  ) => Effect.Effect<Machine, Declared<"stopMachine">>;
   readonly resize: (
     request: ResizeRequest
   ) => Effect.Effect<Machine, Declared<"resizeMachine">>;
@@ -168,6 +168,17 @@ export interface Interface {
 export class Machines extends Context.Service<Machines, Interface>()(
   "@clankerbox/server/Machines"
 ) {}
+
+/**
+ * What a machine asked to run rests failed with once its runtime stopped it unasked: the caller
+ * must start it, as nothing else will, and its runtime's cause where it named one.
+ */
+export const stoppedUnasked = (machine: string, why: string | undefined) =>
+  new WrongState({
+    message: `${machine} was stopped by its runtime, not by a request${why === undefined ? ", and the runtime gave no cause" : `: ${why}`}. Its memory and processes are gone, and nothing will start it again: start it to boot it cold`,
+    machine,
+    state: "stopped",
+  });
 
 const movesOn = (error: MachineRow["error"]): boolean =>
   error?._tag === "Capacity" ||
@@ -608,10 +619,12 @@ export const make = (
           return yield* applying(name, { type: "refused", error: refused });
         }
 
-        const seen =
+        const heard: Seen =
           stageOf(found.state) === "made"
-            ? (swept?.seen ?? (yield* stateOf(hosts, found)))
-            : "unknown";
+            ? (swept?.heard ?? (yield* seenOf(hosts, found)))
+            : { seen: "unknown" };
+
+        const { seen } = heard;
 
         const check = tailnets.get(name) ?? firstCheck;
 
@@ -627,9 +640,13 @@ export const make = (
             !found.ephemeral &&
             due(check),
           awaiting:
-            found.desired === "paused" &&
+            found.desired === "stopped" &&
             found.after !== undefined &&
             (yield* unbegun(found.after)),
+          at: yield* DateTime.now,
+          reboot: heard.reboot,
+          why: heard.why,
+          stoppedUnasked: stoppedUnasked(name, heard.why),
         });
 
         if (answer.at === "written" && answer.next !== "removed") {
@@ -724,6 +741,10 @@ export const make = (
           pin: info.pin,
           undoneAt: undefined,
           after: undefined,
+          boots: 0,
+          booting: false,
+          reboot: undefined,
+          unasked: undefined,
         };
 
         yield* store.insertMachine(created);
@@ -868,10 +889,14 @@ export const make = (
         const info = yield* answering(hosts, from.host);
         const spec = yield* copied(name, "fork", from, sizing, info.traits);
 
+        const seen = yield* stateOf(hosts, from);
+
         const refusal =
           unjoinedCopy(info, from, `machine ${id}`) ??
-          uncopiable(from, yield* stateOf(hosts, from), info.traits, "fork") ??
-          pinRefusal({ copy: id }, from.pin, info.pin);
+          uncopiable(from, seen, info.traits, "fork") ??
+          (seen === "running"
+            ? pinRefusal({ copy: id }, from.pin, info.pin)
+            : undefined);
 
         if (refusal !== undefined) {
           return yield* refusal;
@@ -1142,9 +1167,8 @@ export const make = (
       create: Effect.fn("Machines.create")(create),
       build: Effect.fn("Machines.build")(build),
       start: Effect.fn("Machines.start")((id) => asked(id, "running")),
-      stop: Effect.fn("Machines.stop")((id) => asked(id, "stopped")),
-      pause: Effect.fn("Machines.pause")((id, after) =>
-        asked(id, "paused", after)
+      stop: Effect.fn("Machines.stop")((id, after) =>
+        asked(id, "stopped", after)
       ),
       resize: Effect.fn("Machines.resize")(resize),
       delete: Effect.fn("Machines.delete")(remove),
