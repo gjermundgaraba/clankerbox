@@ -166,13 +166,12 @@ const fieldsOf = (text: string) =>
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
-    "create, pause, stop, start and delete reach the VM, and the CLI prints each outcome",
+    "create, stop, start and delete reach the VM, and the CLI prints each outcome",
     () =>
       Effect.gen(function* () {
         const { hosts, run } = yield* setUp();
 
         const created = yield* run(["create", "dev", ...sizes]);
-        const paused = yield* run(["pause", "dev"]);
         const stopped = yield* run(["stop", "dev"]);
         const started = yield* run(["start", "dev"]);
         const listed = yield* run(["machines"]);
@@ -182,7 +181,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const after = yield* run(["machines"]);
 
         expect(created).toMatchObject({ code: 0, stdout: "dev" });
-        expect(paused).toMatchObject({ code: 0, stdout: "dev stopped" });
         expect(stopped).toMatchObject({ code: 0, stdout: "dev stopped" });
         expect(started).toMatchObject({ code: 0, stdout: "dev running" });
         expect(listed.stdout).toContain("dev");
@@ -1005,7 +1003,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "pause --capture stops the VM and then captures its disk in a labelled checkpoint, which machines and checkpoint list find by label",
+    "stop --capture stops the VM and then captures its disk in a labelled checkpoint, which machines and checkpoint list find by label",
     () =>
       Effect.gen(function* () {
         const { hosts, run } = yield* setUp();
@@ -1013,8 +1011,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* run(["create", "dev", ...sizes, "--label", "app=web"]);
         hosts[0]?.fake.calls.splice(0);
 
-        const paused = yield* run([
-          "pause",
+        const stopped = yield* run([
+          "stop",
           "dev",
           "--capture",
           "snap",
@@ -1029,7 +1027,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const listed = yield* run(["checkpoint", "list", "--label", "app=web"]);
         const got = yield* run(["get", "dev"]);
 
-        expect(paused).toMatchObject({ code: 0, stdout: "dev stopped" });
+        expect(stopped).toMatchObject({ code: 0, stdout: "dev stopped" });
         expect(hosts[0]?.fake.calls).toStrictEqual([
           "exec dev",
           "stop dev",

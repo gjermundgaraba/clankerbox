@@ -552,7 +552,7 @@ describe("machines", () => {
     );
 
     it.effect(
-      "start, pause, stop and fork each wait for the machine to rest, and print where it came to",
+      "start, stop and fork each wait for the machine to rest, and print where it came to",
       () =>
         Effect.gen(function* () {
           const dir = yield* scratch;
@@ -561,17 +561,15 @@ describe("machines", () => {
 
           const runs = [
             yield* cli(["start", "dev", "--config", config], { server: stub }),
-            yield* cli(["pause", "dev", "--config", config], { server: stub }),
             yield* cli(["stop", "dev", "--config", config], { server: stub }),
             yield* cli(["fork", "dev", "copy", "--config", config], {
               server: stub,
             }),
           ];
 
-          expect(runs.map(({ code }) => code)).toStrictEqual([0, 0, 0, 0]);
+          expect(runs.map(({ code }) => code)).toStrictEqual([0, 0, 0]);
           expect(runs.map(({ stdout }) => stdout)).toStrictEqual([
             "dev running",
-            "dev stopped",
             "dev stopped",
             "copy",
           ]);
@@ -947,7 +945,7 @@ describe("machines", () => {
     );
 
     it.effect(
-      "pause --capture captures first, with --label and --expires on the checkpoint, and pauses",
+      "stop --capture captures first, with --label and --expires on the checkpoint, and stops",
       () =>
         Effect.gen(function* () {
           const dir = yield* scratch;
@@ -955,9 +953,9 @@ describe("machines", () => {
           const stub = server({ machines: [machine("dev")] });
           const before = yield* DateTime.now;
 
-          const paused = yield* cli(
+          const stopped = yield* cli(
             [
-              "pause",
+              "stop",
               "dev",
               "--capture",
               "snap",
@@ -985,12 +983,12 @@ describe("machines", () => {
           const hour =
             DateTime.toEpochMillis(expiresAt) - DateTime.toEpochMillis(before);
 
-          expect(paused).toMatchObject({ code: 0, stdout: "dev stopped" });
+          expect(stopped).toMatchObject({ code: 0, stdout: "dev stopped" });
           expect([source, labels]).toStrictEqual(["dev", { app: "web" }]);
           expect(hour).toBeGreaterThanOrEqual(3_600_000);
           expect(hour).toBeLessThan(3_660_000);
           expect(stub.calls).toStrictEqual([
-            "machine.pause",
+            "machine.stop",
             "machine.get",
             "checkpoint.get",
             "checkpoint.get",
@@ -999,7 +997,7 @@ describe("machines", () => {
     );
 
     it.effect(
-      "pause --label or --expires without --capture is refused before any call",
+      "stop --label or --expires without --capture is refused before any call",
       () =>
         Effect.gen(function* () {
           const dir = yield* scratch;
@@ -1007,7 +1005,7 @@ describe("machines", () => {
           const stub = server({ machines: [machine("dev")] });
 
           const { code, stderr } = yield* cli(
-            ["pause", "dev", "--label", "app=web", "--config", config],
+            ["stop", "dev", "--label", "app=web", "--config", config],
             { server: stub }
           );
 

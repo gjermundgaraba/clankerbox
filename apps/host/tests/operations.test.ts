@@ -349,18 +349,18 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           runsOn: true,
         });
 
-        const pausing = delivery({ _tag: "pause", machine: ref("dev") }, 2);
+        const stopping = delivery({ _tag: "stop", machine: ref("dev") }, 2);
 
-        yield* deliver(host, pausing);
+        yield* deliver(host, stopping);
         yield* entered;
-        yield* host.operations.cancel(pausing.id);
+        yield* host.operations.cancel(stopping.id);
         yield* pause;
 
-        expect(yield* stillRunning(host, pausing.id)).toBe(true);
+        expect(yield* stillRunning(host, stopping.id)).toBe(true);
 
         yield* release;
 
-        expect((yield* ended(host, pausing.id)).status).toBe("cancelled");
+        expect((yield* ended(host, stopping.id)).status).toBe("cancelled");
       })
   );
 
@@ -1090,7 +1090,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
   const leavingSteps = {
     stopping: { _tag: "stop", machine: ref("dev") },
-    pausing: { _tag: "pause", machine: ref("dev") },
     deleting: { _tag: "remove", machine: ref("dev"), keep: [] },
   } as const satisfies Record<string, Step>;
 
@@ -1139,7 +1138,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           );
           expect(host.fake.calls.slice(0, 2)).toStrictEqual([
             "exec dev",
-            `${verb === "pause" ? "stop" : verb} dev`,
+            `${verb} dev`,
           ]);
           expect(() => process.kill(pid, 0)).toThrow("ESRCH");
         }),
@@ -1293,24 +1292,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(yield* read(keysOf("dev"))).toBe(installed);
         expect(yield* read(keysOf("copy"))).toBe(installed);
       })
-  );
-
-  it.effect("a pause stops the machine", () =>
-    Effect.gen(function* () {
-      const host = yield* runner({ as: "copiesRunning" });
-
-      yield* finished(host, makes("dev"));
-
-      const report = yield* finished(
-        host,
-        { _tag: "pause", machine: ref("dev") },
-        2
-      );
-
-      expect(report.status).toBe("done");
-      expect(host.fake.calls).toContain("stop dev");
-      expect(host.fake.machines.get("dev")?.state).toBe("stopped");
-    })
   );
 
   it.effect(
@@ -2003,7 +1984,7 @@ const leftIn = (host: Runner) => path.join(host.dir, "left");
 
 const leaveHooks = (host: Runner) =>
   Effect.forEach(
-    ["stop", "pause", "delete"],
+    ["stop", "delete"],
     (hook) => guestHook(host, hook, `echo ${hook} >>"${leftIn(host)}"`),
     { discard: true }
   );
@@ -2025,17 +2006,9 @@ const hooksRun = (host: Runner) =>
 const stateOf = (host: Runner) =>
   host.fake.machines.get("dev")?.state ?? "missing";
 
-type LeavingStep = Extract<
-  Step,
-  { readonly _tag: "stop" | "pause" | "remove" }
->;
+type LeavingStep = Extract<Step, { readonly _tag: "stop" | "remove" }>;
 
 const stopping: LeavingStep = { _tag: "stop", machine: ref("dev") };
-
-const pausing: LeavingStep = {
-  _tag: "pause",
-  machine: ref("dev"),
-};
 
 const removing: LeavingStep = {
   _tag: "remove",
@@ -2045,13 +2018,12 @@ const removing: LeavingStep = {
 
 const leavings = [
   { step: "stop", sent: stopping, hook: "stop", ends: "stopped" },
-  { step: "pause", sent: pausing, hook: "pause", ends: "stopped" },
   { step: "remove", sent: removing, hook: "delete", ends: "missing" },
 ] as const;
 
 const notRunning = [
   { step: "remove", before: stopping, sent: removing, ends: "missing" },
-  { step: "stop", before: pausing, sent: stopping, ends: "stopped" },
+  { step: "stop", before: stopping, sent: stopping, ends: "stopped" },
 ] as const;
 
 const hooked = (step: LeavingStep, timeoutSeconds = 30): Step => ({
@@ -2379,7 +2351,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* leaveHooks(host);
         host.fake.failNext("exec", new Internal({ message: "agent gone" }));
 
-        const report = yield* finished(host, hooked(pausing), 2);
+        const report = yield* finished(host, hooked(stopping), 2);
 
         expect(report.status).toBe("done");
         expect(yield* hooksRun(host)).toStrictEqual([]);

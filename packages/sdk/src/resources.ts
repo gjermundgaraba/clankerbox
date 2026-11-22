@@ -105,7 +105,6 @@ export const Phase = Schema.Literals([
   "creating",
   "starting",
   "stopping",
-  "pausing",
   "resizing",
   "deleting",
   "settled",
@@ -202,12 +201,12 @@ export const templateRef = (
 };
 
 /**
- * A change to a machine that no request asked for, as a read of its runtime found it. A pause or a
- * stop is asked for, so neither is one.
+ * A change to a machine that no request asked for, as a read of its runtime found it. A stop is
+ * asked for, so it is never one.
  * - `stopped`: a machine asked to run that its runtime stopped, its memory and processes gone. The
  *   control plane doesn't start it again: it rests `failed`, its `error` a `WrongState` saying so,
  *   until a request asks it to run, and a start boots it cold.
- * - `started`: one asked to stay stopped or paused that runs, which the control plane stops again.
+ * - `started`: one asked to stay stopped that runs, which the control plane stops again.
  * - `rebooted`: one its runtime reports booted again in place while it ran.
  * - `lost`: one its runtime no longer has, which can only be deleted.
  *
@@ -646,17 +645,17 @@ export const CaptureRequest = Schema.Struct({
 export type CaptureRequest = typeof CaptureRequest.Type;
 
 /**
- * A pause of machine `id`. With `capture`, a checkpoint of that name is captured first, and the
- * pause begins once the capture has ended, however it ended: the checkpoint's row says how.
+ * A stop of machine `id`. With `capture`, a checkpoint of that name is captured too, before or after
+ * the stop as `stopMachine`'s description says.
  */
-export const PauseRequest = Schema.Struct({
+export const StopRequest = Schema.Struct({
   id: Name,
   capture: Schema.optionalKey(
     Schema.Struct({ name: CheckpointName, ...labelled, ...expiring })
   ),
 });
 
-export type PauseRequest = typeof PauseRequest.Type;
+export type StopRequest = typeof StopRequest.Type;
 
 const ArgumentText = Schema.String.check(
   Schema.makeFilter(

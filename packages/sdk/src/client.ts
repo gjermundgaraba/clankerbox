@@ -125,7 +125,6 @@ type Lists = "listMachines" | "listCheckpoints";
 type Waits =
   | "startMachine"
   | "stopMachine"
-  | "pauseMachine"
   | "resizeMachine"
   | "forkMachine"
   | "restoreMachine"
@@ -731,7 +730,7 @@ export const make = (
     };
 
     const asking =
-      <N extends "startMachine" | "stopMachine" | "pauseMachine">(
+      <N extends "startMachine" | "stopMachine">(
         name: N,
         desired: Machine["desired"]
       ) =>
@@ -853,17 +852,17 @@ export const make = (
         );
       });
 
-    const pauseMachine: Interface["pauseMachine"] = (input) => {
+    const stopMachine: Interface["stopMachine"] = (input) => {
       const { capture } = input;
 
       return capture === undefined
-        ? asking("pauseMachine", "paused")(input)
+        ? asking("stopMachine", "stopped")(input)
         : namingWhatMayExist(
             capture.name,
-            send("pauseMachine", input, input.id),
+            send("stopMachine", input, input.id),
             (recorded) =>
               Effect.flatMap(
-                machineRest(recorded, "paused", "pauseMachine"),
+                machineRest(recorded, "stopped", "stopMachine"),
                 (machine) =>
                   unlessNoWait(
                     machine,
@@ -875,7 +874,7 @@ export const make = (
                           capture.name
                         ),
                         endedAt<Checkpoint>("ready", "checkpoint"),
-                        "pauseMachine",
+                        "stopMachine",
                         capture.name
                       ),
                       machine
@@ -907,8 +906,7 @@ export const make = (
       create: bounding(create),
       ensure: bounding((name, from) => ensuring(name, from, true)),
       startMachine: bounding(startMachine),
-      stopMachine: bounding(asking("stopMachine", "stopped")),
-      pauseMachine: bounding(pauseMachine),
+      stopMachine: bounding(stopMachine),
       resizeMachine: bounding((input) =>
         Effect.flatMap(send("resizeMachine", input, input.id), (recorded) =>
           machineRest(recorded, "resize", "resizeMachine")

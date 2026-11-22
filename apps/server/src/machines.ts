@@ -141,12 +141,9 @@ export interface Interface {
     id: string
   ) => Effect.Effect<Machine, Declared<"startMachine">>;
   readonly stop: (
-    id: string
-  ) => Effect.Effect<Machine, Declared<"stopMachine">>;
-  readonly pause: (
     id: string,
     after?: string
-  ) => Effect.Effect<Machine, Declared<"pauseMachine">>;
+  ) => Effect.Effect<Machine, Declared<"stopMachine">>;
   readonly resize: (
     request: ResizeRequest
   ) => Effect.Effect<Machine, Declared<"resizeMachine">>;
@@ -643,7 +640,7 @@ export const make = (
             !found.ephemeral &&
             due(check),
           awaiting:
-            found.desired === "paused" &&
+            found.desired === "stopped" &&
             found.after !== undefined &&
             (yield* unbegun(found.after)),
           at: yield* DateTime.now,
@@ -1170,9 +1167,8 @@ export const make = (
       create: Effect.fn("Machines.create")(create),
       build: Effect.fn("Machines.build")(build),
       start: Effect.fn("Machines.start")((id) => asked(id, "running")),
-      stop: Effect.fn("Machines.stop")((id) => asked(id, "stopped")),
-      pause: Effect.fn("Machines.pause")((id, after) =>
-        asked(id, "paused", after)
+      stop: Effect.fn("Machines.stop")((id, after) =>
+        asked(id, "stopped", after)
       ),
       resize: Effect.fn("Machines.resize")(resize),
       delete: Effect.fn("Machines.delete")(remove),

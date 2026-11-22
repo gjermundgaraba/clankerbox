@@ -118,7 +118,7 @@ export const Facts = Schema.Struct({
   ...made,
   ...MadeOn.fields,
   endpoint: UndefinedFromNull(Schema.fromJsonString(Endpoint)),
-  desired: Desired.pick(["running", "stopped", "paused"]),
+  desired: Desired.pick(["running", "stopped"]),
   /**
    * Whether a step left the machine running and prepared, with no request to run it since, which
    * clears it. While it holds, a read that finds the machine stopped while it is to run, but for

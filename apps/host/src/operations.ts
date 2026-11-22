@@ -248,7 +248,6 @@ const instanceLeftBy = (step: Step): string | undefined => {
     case "make":
     case "start":
     case "stop":
-    case "pause":
     case "resize":
     case "join": {
       return step.machine.instance;
@@ -268,8 +267,7 @@ const leftBy = (
   step: Step
 ): { readonly name: string; readonly leaving: Leaving } | undefined => {
   switch (step._tag) {
-    case "stop":
-    case "pause": {
+    case "stop": {
       return { name: step.machine.name, leaving: step._tag };
     }
 
@@ -860,22 +858,6 @@ export const make = (
               "stop",
               hook,
               stateNow(machine, "given its stop hook")
-            );
-            yield* runtime.stop(machine);
-          });
-        }
-
-        case "pause": {
-          const { hook } = step;
-
-          return Effect.gen(function* () {
-            const machine = yield* machineTarget(step.machine);
-
-            yield* beforeLeaving(
-              machine,
-              "pause",
-              hook,
-              stateNow(machine, "given its pause hook")
             );
             yield* runtime.stop(machine);
           });

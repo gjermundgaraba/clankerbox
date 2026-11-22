@@ -42,7 +42,7 @@ import {
   when as at,
 } from "./chart-rows.ts";
 
-const wishes: readonly Wish[] = ["running", "stopped", "paused"];
+const wishes: readonly Wish[] = ["running", "stopped"];
 
 const flags: readonly boolean[] = [false, true];
 
@@ -236,7 +236,6 @@ type Readable = Exclude<MachineState, "unknown" | "missing">;
 const stepped = {
   start: "made.stepping.starting",
   stop: "made.stepping.stopping",
-  pause: "made.stepping.pausing",
 } as const;
 
 const settles = "made.settled";
@@ -252,10 +251,6 @@ const decisions: Readonly<
   },
   stopped: {
     running: [stepped.stop, stepped.stop],
-    stopped: resting,
-  },
-  paused: {
-    running: [stepped.pause, stepped.pause],
     stopped: resting,
   },
 };
@@ -308,7 +303,6 @@ const vmAfter: Partial<Record<Leaf, MachineState>> = {
   "making.sent": "running",
   "made.stepping.starting": "running",
   "made.stepping.stopping": "stopped",
-  "made.stepping.pausing": "stopped",
 };
 
 const restsWithin = (input: Input, steps: number) => {
@@ -343,7 +337,7 @@ describe("a read", () => {
       )
     );
 
-    expect(table).toHaveLength(896);
+    expect(table).toHaveLength(672);
     expect(
       table.filter(({ chart, decided }) => chart !== decided)
     ).toStrictEqual([]);
@@ -359,9 +353,9 @@ describe("a read", () => {
     });
   });
 
-  it("a read holds a pause while the capture it comes after hasn't begun, and pauses once it has", () => {
+  it("a read holds a stop while the capture it comes after hasn't begun, and stops once it has", () => {
     const row = rowAt("made.observing", {
-      desired: "paused",
+      desired: "stopped",
       after: "snap",
       prepared: true,
     });
@@ -371,7 +365,7 @@ describe("a read", () => {
     expect(held.next).toBe(row);
     expect(held.begin).toBeUndefined();
     expect(leafOf(row, { ...read("running"), awaiting: false })).toBe(
-      "made.stepping.pausing"
+      "made.stepping.stopping"
     );
     expect(leafOf(row, { ...read("stopped"), awaiting: true })).toBe(
       "made.settled"
@@ -429,19 +423,14 @@ describe("a read", () => {
     ).toStrictEqual([]);
   });
 
-  it("a made machine asked to pause is paused only from running, and never made, started or stopped", () => {
+  it("a made machine asked to stop is stopped only from running", () => {
     expect(
       madeInputs.filter(
         (input) =>
-          input.desired === "paused" &&
+          input.desired === "stopped" &&
           !input.resizing &&
-          ([
-            "making.sent",
-            "made.stepping.starting",
-            "made.stepping.stopping",
-          ].includes(decide(input)) ||
-            (decide(input) === "made.stepping.pausing") !==
-              (input.seen === "running"))
+          (decide(input) === "made.stepping.stopping") !==
+            (input.seen === "running")
       )
     ).toStrictEqual([]);
   });
@@ -527,11 +516,10 @@ describe("a read", () => {
 const kindWishes: ReadonlyArray<
   readonly [Operation["kind"], readonly Desired[]]
 > = [
-  ["make", ["running", "stopped", "paused"]],
+  ["make", ["running", "stopped"]],
   ["start", ["running"]],
   ["join", ["running"]],
   ["stop", ["stopped"]],
-  ["pause", ["paused"]],
   ["remove", Desired.literals],
   ["resize", Desired.literals],
   ["capture", Desired.literals],
@@ -834,7 +822,6 @@ const phases: Readonly<Record<Leaf, MachinePhase>> = {
   "made.failed": "failed",
   "made.stepping.starting": "starting",
   "made.stepping.stopping": "stopping",
-  "made.stepping.pausing": "pausing",
   "made.stepping.resizing": "resizing",
   "made.stepping.joining.sent": "settled",
   "made.stepping.joining.asked": "observing",
@@ -902,7 +889,6 @@ const edges: Readonly<Record<Leaf, Edges>> = {
   "made.failed": madeAtRest,
   "made.stepping.starting": stepTo("made.stepping.starting"),
   "made.stepping.stopping": stepTo("made.stepping.stopping"),
-  "made.stepping.pausing": stepTo("made.stepping.pausing"),
   "made.stepping.resizing": stepTo("made.stepping.resizing"),
   "made.stepping.joining.sent": {
     ask: "made.stepping.joining.asked",
@@ -953,14 +939,13 @@ const edges: Readonly<Record<Leaf, Edges>> = {
 
 const wished: Partial<Record<Leaf, Wish>> = {
   "made.stepping.stopping": "stopped",
-  "made.stepping.pausing": "paused",
 };
 
 const kindsOf = (state: Leaf) => {
   const { step } = metaOf(state);
 
   return step === "any"
-    ? (["make", "start", "stop", "pause", "resize", "join"] as const)
+    ? (["make", "start", "stop", "resize", "join"] as const)
     : [step];
 };
 
@@ -1077,14 +1062,14 @@ const factsWritten: readonly Write[] = [
     {},
   ],
   [
-    "a paused machine read stopped is what was asked, and no change unasked",
-    rowAt("made.settled", { desired: "paused", boots: 2 }),
+    "a stopped machine read stopped is what was asked, and no change unasked",
+    rowAt("made.settled", { desired: "stopped", boots: 2 }),
     read("stopped"),
     {},
   ],
   [
-    "a pause's stop read once it is done settles, and is no change unasked",
-    rowAt("made.observing", { desired: "paused", boots: 2 }),
+    "a stop read once it is done settles, and is no change unasked",
+    rowAt("made.observing", { desired: "stopped", boots: 2 }),
     read("stopped"),
     { state: "made.settled" },
   ],
@@ -1201,12 +1186,6 @@ const factsWritten: readonly Write[] = [
   [
     "a stop done leaves the machine to prepare again",
     rowAt("made.stepping.stopping", { desired: "stopped", ...prepared }),
-    done,
-    { state: "made.observing", prepared: false },
-  ],
-  [
-    "a pause done leaves the machine to prepare again",
-    rowAt("made.stepping.pausing", { desired: "paused", ...prepared }),
     done,
     { state: "made.observing", prepared: false },
   ],
@@ -1420,7 +1399,7 @@ describe("the chart", () => {
       expect.objectContaining({ type: "@xstate.terminate" }),
     ];
 
-    expect(steps.length).toBeGreaterThan(10_000);
+    expect(steps.length).toBeGreaterThan(7000);
     expect(steps.some(({ next }) => next === "removed")).toBe(true);
     expect(steps.map(({ effects }) => effects)).toStrictEqual(
       steps.map(({ next }) => (next === "removed" ? ending : []))
@@ -1508,8 +1487,6 @@ describe("the chart", () => {
       ["running", true, "made.stepping.joining.sent"],
       ["stopped", false, "made.stepping.stopping"],
       ["stopped", true, "made.stepping.stopping"],
-      ["paused", false, "made.stepping.pausing"],
-      ["paused", true, "made.stepping.pausing"],
     ]);
   });
 

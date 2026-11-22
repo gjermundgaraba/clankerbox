@@ -201,7 +201,6 @@ describe("client", () => {
             yield* client.getMachine({ id: "dev" });
             yield* client.startMachine({ id: "dev" });
             yield* client.stopMachine({ id: "dev" });
-            yield* client.pauseMachine({ id: "dev" });
             yield* client.resizeMachine({ id: "dev", cpu: 2 });
             yield* client.forkMachine({ machine: "dev", name: "copy" });
             yield* client.captureCheckpoint({ machine: "dev", name: "snap" });
@@ -302,27 +301,27 @@ describe("client", () => {
     );
 
     it.effect(
-      "a pause with a capture records the checkpoint, with its labels and expiry, and rests paused",
+      "a stop with a capture records the checkpoint, with its labels and expiry, and rests stopped",
       () =>
         Effect.gen(function* () {
           const stub = server({ machines: [machine("dev")] });
           const expiresAt = DateTime.makeUnsafe("2026-12-01T00:00:00Z");
 
-          const { paused, snap } = yield* withClient(stub, (client) =>
+          const { stopped, snap } = yield* withClient(stub, (client) =>
             Effect.gen(function* () {
-              const rested = yield* client.pauseMachine({
+              const rested = yield* client.stopMachine({
                 id: "dev",
                 capture: { name: "snap", labels: { app: "web" }, expiresAt },
               });
 
               return {
-                paused: rested,
+                stopped: rested,
                 snap: yield* client.getCheckpoint({ id: "snap" }),
               };
             })
           );
 
-          expect([paused.state, paused.phase]).toStrictEqual([
+          expect([stopped.state, stopped.phase]).toStrictEqual([
             "stopped",
             "settled",
           ]);
@@ -335,7 +334,7 @@ describe("client", () => {
     );
 
     it.effect(
-      "a pause whose capture fails answers the capture's error, once the machine has paused",
+      "a stop whose capture fails answers the capture's error, once the machine has stopped",
       () =>
         Effect.gen(function* () {
           const stub = server({ machines: [machine("dev")] });
@@ -347,7 +346,7 @@ describe("client", () => {
           const { error, dev } = yield* withClient(stub, (client) =>
             Effect.gen(function* () {
               const failed = yield* Effect.flip(
-                client.pauseMachine({ id: "dev", capture: { name: "snap" } })
+                client.stopMachine({ id: "dev", capture: { name: "snap" } })
               );
 
               return {
@@ -359,7 +358,7 @@ describe("client", () => {
 
           expect(error).toMatchObject({
             _tag: "ScriptFailed",
-            action: "pauseMachine",
+            action: "stopMachine",
             id: "snap",
           });
           expect([dev.state, dev.phase]).toStrictEqual(["stopped", "settled"]);
@@ -367,7 +366,7 @@ describe("client", () => {
     );
 
     it.effect(
-      "a pause with a capture of a machine that isn't running is WrongState",
+      "a stop with a capture of a machine that isn't running is WrongState",
       () =>
         Effect.gen(function* () {
           const stub = server({
@@ -378,7 +377,7 @@ describe("client", () => {
 
           const error = yield* withClient(stub, (client) =>
             Effect.flip(
-              client.pauseMachine({ id: "dev", capture: { name: "snap" } })
+              client.stopMachine({ id: "dev", capture: { name: "snap" } })
             )
           );
 
@@ -480,7 +479,7 @@ describe("client", () => {
     it.effect("ensure starts the machine of the name when one exists", () =>
       Effect.gen(function* () {
         const stub = server({
-          machines: [machine("dev", { state: "stopped", desired: "paused" })],
+          machines: [machine("dev", { state: "stopped", desired: "stopped" })],
         });
 
         const ensured = yield* withClient(stub, (client) =>
@@ -720,7 +719,7 @@ describe("client", () => {
                 client.captureCheckpoint({ machine: "dev", name: "built-x" })
               ),
               Effect.flip(
-                client.pauseMachine({
+                client.stopMachine({
                   id: "dev",
                   capture: { name: "fetched-x" },
                 })
@@ -734,7 +733,7 @@ describe("client", () => {
           ]);
           expect(errors.map(({ action }) => action)).toStrictEqual([
             "captureCheckpoint",
-            "pauseMachine",
+            "stopMachine",
           ]);
           expect(stub.calls).toStrictEqual([]);
         })
@@ -924,7 +923,7 @@ describe("client", () => {
 
           const exit = yield* Effect.exit(
             Effect.flatMap(Client.make(url), (client) =>
-              client.pauseMachine({ id: "dev" })
+              client.stopMachine({ id: "dev" })
             ).pipe(
               Effect.provide(
                 Layer.succeed(
@@ -1163,15 +1162,15 @@ describe("client", () => {
           const other = `${major}.${Number(minor) + 1}.0`;
           const stub = server({ version: other, machines: [machine("dev")] });
 
-          const [read, made, paused] = yield* withClient(stub, (client) =>
+          const [read, made, stopped] = yield* withClient(stub, (client) =>
             Effect.all([
               Effect.flip(client.getMachine({ id: "dev" })),
               Effect.flip(client.create("new", spec)),
-              Effect.flip(client.pauseMachine({ id: "dev" })),
+              Effect.flip(client.stopMachine({ id: "dev" })),
             ])
           );
 
-          for (const refused of [read, made, paused]) {
+          for (const refused of [read, made, stopped]) {
             expect(refused).toMatchObject({ _tag: "Invalid" });
             expect(refused.message).toBe(
               `this control plane runs clankerbox ${other} and the caller is ${version}; their major.minor must match`
@@ -1296,7 +1295,7 @@ describe("client", () => {
     );
 
     it.effect(
-      "a pause whose capture's wait the timeout cut names the checkpoint it may have made",
+      "a stop whose capture's wait the timeout cut names the checkpoint it may have made",
       () =>
         Effect.gen(function* () {
           const stub = server({ machines: [machine("dev")] });
@@ -1311,7 +1310,7 @@ describe("client", () => {
               stub,
               (client) =>
                 Effect.flip(
-                  client.pauseMachine({ id: "dev", capture: { name: "snap" } })
+                  client.stopMachine({ id: "dev", capture: { name: "snap" } })
                 ),
               { timeout: Duration.seconds(5), ...everyMinute }
             )
@@ -1380,7 +1379,6 @@ describe("client", () => {
           "creating",
           "starting",
           "stopping",
-          "pausing",
           "resizing",
           "deleting",
         ] as const) {
@@ -1442,12 +1440,12 @@ describe("client", () => {
 
         const states = yield* withClient(stub, (client) =>
           Effect.gen(function* () {
-            const paused = yield* client.pauseMachine({ id: "dev" });
-            const started = yield* client.startMachine({ id: "dev" });
             const stopped = yield* client.stopMachine({ id: "dev" });
-            const staysStopped = yield* client.pauseMachine({ id: "dev" });
+            const started = yield* client.startMachine({ id: "dev" });
+            const stoppedAgain = yield* client.stopMachine({ id: "dev" });
+            const staysStopped = yield* client.stopMachine({ id: "dev" });
 
-            return [paused, started, stopped, staysStopped].map(
+            return [stopped, started, stoppedAgain, staysStopped].map(
               ({ state }) => state
             );
           })
@@ -1712,14 +1710,14 @@ describe("client", () => {
         const stub = server({ machines: [machine("dev")] });
 
         stub.script("dev", [
-          { desired: "paused", phase: "failed", error: scriptFailed },
+          { desired: "stopped", phase: "failed", error: scriptFailed },
         ]);
 
         const error = yield* withClient(stub, (client) =>
           Effect.flip(client.startMachine({ id: "dev" }))
         );
 
-        expect(error).toMatchObject({ _tag: "Superseded", by: "paused" });
+        expect(error).toMatchObject({ _tag: "Superseded", by: "stopped" });
       })
     );
 
@@ -2299,7 +2297,6 @@ describe("client", () => {
                 created: client.create("new", spec),
                 started: client.startMachine({ id: "dev" }),
                 stopped: client.stopMachine({ id: "dev" }),
-                paused: client.pauseMachine({ id: "dev" }),
                 resized: client.resizeMachine({ id: "dev", cpu: 2 }),
                 forked: client.forkMachine({ machine: "dev", name: "copy" }),
                 restored: client.restoreMachine({
@@ -2321,7 +2318,6 @@ describe("client", () => {
             created: { phase: "observing" },
             started: { phase: "observing", desired: "running" },
             stopped: { phase: "observing", desired: "stopped" },
-            paused: { phase: "observing", desired: "paused" },
             resized: { phase: "observing", cpu: 2 },
             forked: { phase: "observing" },
             restored: { phase: "observing" },

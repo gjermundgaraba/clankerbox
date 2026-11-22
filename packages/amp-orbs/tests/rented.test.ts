@@ -191,7 +191,7 @@ const orbsOn = Effect.fn("orbsOn")(function* (
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
-    "the dispatch program spawns an orb on a smol cloud host, pauses it with a snapshot, resumes it, restores another from the snapshot and deletes both, as Amp's jobs ask",
+    "the dispatch program spawns an orb on a smol cloud host, stops it with a snapshot, resumes it, restores another from the snapshot and deletes both, as Amp's jobs ask",
     () =>
       Effect.gen(function* () {
         const { host, client, dispatched } = yield* orbsOn("smol-cloud");

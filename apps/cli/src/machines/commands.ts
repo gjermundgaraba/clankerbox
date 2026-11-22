@@ -125,23 +125,12 @@ export const start = Command.make(
 
 export const stop = Command.make(
   "stop",
-  { ...mutationFlags, machine: machineArgument },
-  (flags) =>
-    printResource(flags, {
-      call: (client) => client.stopMachine({ id: flags.machine }),
-      encode: encodeMachine,
-      text: machineState,
-    })
-).pipe(Command.withDescription(actionsByName.stopMachine.description));
-
-export const pause = Command.make(
-  "pause",
   {
     ...mutationFlags,
     capture: Flag.String("capture").pipe(
       Flag.withMetavar("NAME"),
       Flag.withDescription(
-        "Capture the machine as checkpoint NAME too, before or after the pause as its runtime captures a machine, where one can: the command's description says when."
+        "Capture the machine as checkpoint NAME too, before or after the stop as its runtime captures a machine, where one can: the command's description says when."
       ),
       Flag.optional
     ),
@@ -165,7 +154,7 @@ export const pause = Command.make(
             });
           }
 
-          return yield* client.pauseMachine({
+          return yield* client.stopMachine({
             id: flags.machine,
             ...(capture === undefined
               ? {}
@@ -183,7 +172,7 @@ export const pause = Command.make(
     })
 ).pipe(
   Command.withDescription(
-    `${actionsByName.pauseMachine.description} --label and --expires go on the checkpoint --capture makes, and a capture that fails fails the command with its error once the machine has paused.`
+    `${actionsByName.stopMachine.description} --label and --expires go on the checkpoint --capture makes, and a capture that fails fails the command with its error once the machine has stopped.`
   )
 );
 

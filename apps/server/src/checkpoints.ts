@@ -19,7 +19,7 @@ import type {
   HostError,
   ListFilter,
   Machine,
-  PauseRequest,
+  StopRequest,
   Conflict,
   Internal,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -57,9 +57,9 @@ export interface Interface {
   readonly capture: (
     request: CaptureRequest
   ) => Effect.Effect<Checkpoint, Declared<"captureCheckpoint">>;
-  readonly pause: (
-    request: PauseRequest
-  ) => Effect.Effect<Machine, Declared<"pauseMachine">>;
+  readonly stop: (
+    request: StopRequest
+  ) => Effect.Effect<Machine, Declared<"stopMachine">>;
   readonly delete: (
     id: string
   ) => Effect.Effect<void, Declared<"deleteCheckpoint">>;
@@ -287,7 +287,7 @@ export const make = (settings: {
           Effect.andThen(drive(name)),
           Effect.catchCause((cause) =>
             Effect.logWarning(
-              `couldn't discard checkpoint ${name}, whose pause was refused, so it stays a capture of its own, which runs now or at the next start of the control plane: ${Cause.pretty(cause)}`
+              `couldn't discard checkpoint ${name}, whose stop was refused, so it stays a capture of its own, which runs now or at the next start of the control plane: ${Cause.pretty(cause)}`
             )
           )
         );
@@ -364,10 +364,10 @@ export const make = (settings: {
         return yield* capturing(request);
       });
 
-    const pausing = ({ id, capture }: PauseRequest) =>
+    const stopping = ({ id, capture }: StopRequest) =>
       Effect.gen(function* () {
         if (capture === undefined) {
-          return yield* machines.pause(id);
+          return yield* machines.stop(id);
         }
 
         const found = yield* madeMachine(store, id);
@@ -379,13 +379,13 @@ export const make = (settings: {
             Effect.gen(function* () {
               const record = yield* recorded({ machine: id, ...capture });
 
-              const paused = yield* machines
-                .pause(id)
+              const stopped = yield* machines
+                .stop(id)
                 .pipe(Effect.tapError(() => discarded(record)));
 
               yield* driven(record);
 
-              return paused;
+              return stopped;
             })
           );
         }
@@ -394,14 +394,14 @@ export const make = (settings: {
 
         if (seen === "unknown") {
           return yield* new Unavailable({
-            message: `machine ${id}'s host can't be reached, so it can't be captured before it pauses`,
+            message: `machine ${id}'s host can't be reached, so it can't be captured before it stops`,
             readOnly: true,
           });
         }
 
         if (seen !== "running") {
           return yield* new WrongState({
-            message: `machine ${id} is ${seen}, and its host captures only a running machine, so a pause captures it only running: start it, then capture it`,
+            message: `machine ${id} is ${seen}, and its host captures only a running machine, so a stop captures it only running: start it, then capture it`,
             machine: id,
             state: seen,
           });
@@ -421,7 +421,7 @@ export const make = (settings: {
             yield* Effect.exit(restore(begun(record.name)));
 
             return yield* machines
-              .pause(id, record.name)
+              .stop(id, record.name)
               .pipe(Effect.tapError(() => discarded(record)));
           })
         );
@@ -463,7 +463,7 @@ export const make = (settings: {
       ),
       get: Effect.fn("Checkpoints.get")((id) => Effect.map(row(id), shown)),
       capture: Effect.fn("Checkpoints.capture")(asked),
-      pause: Effect.fn("Checkpoints.pause")(pausing),
+      stop: Effect.fn("Checkpoints.stop")(stopping),
       delete: Effect.fn("Checkpoints.delete")((id) =>
         Effect.andThen(row(id), remove(id))
       ),

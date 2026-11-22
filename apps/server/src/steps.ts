@@ -182,14 +182,6 @@ export const machineStep = (
         };
       }
 
-      case "pause": {
-        return {
-          _tag: "pause",
-          machine: ref,
-          ...hook,
-        };
-      }
-
       case "resize": {
         return { _tag: "resize", machine: ref, to: op.to ?? {}, machines };
       }

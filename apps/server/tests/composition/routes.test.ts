@@ -305,7 +305,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a raw capture or pause that names its checkpoint as a build's copy is InvalidInput, and captures nothing",
+    "a raw capture or stop that names its checkpoint as a build's copy is InvalidInput, and captures nothing",
     () =>
       Effect.gen(function* () {
         const { url, hosts, store } = yield* running();
@@ -316,7 +316,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             machine: "dev",
             name: "built-0123456789abcdef",
           }),
-          yield* post(url, "pauseMachine", {
+          yield* post(url, "stopMachine", {
             id: "dev",
             capture: { name: "fetched-0123456789abcdef" },
           }),

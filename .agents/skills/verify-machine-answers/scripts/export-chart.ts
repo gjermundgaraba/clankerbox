@@ -28,13 +28,12 @@ import {
   when,
 } from "../../../../apps/server/tests/chart-rows.ts";
 
-const wishes: readonly Wish[] = ["running", "stopped", "paused"];
+const wishes: readonly Wish[] = ["running", "stopped"];
 
 const kinds = [
   "make",
   "start",
   "stop",
-  "pause",
   "remove",
 ] as const satisfies ReadonlyArray<Operation["kind"]>;
 
@@ -57,7 +56,6 @@ const failedLeaves = leaves.filter((leaf) =>
 const events: ReadonlyArray<readonly [string, MachineEvent]> = [
   ["ask:running", { type: "ask", desired: "running" }],
   ["ask:stopped", { type: "ask", desired: "stopped" }],
-  ["ask:paused", { type: "ask", desired: "paused" }],
   ["delete", { type: "delete" }],
   ...(["running", "stopped", "missing", "unknown"] as const).map(
     (seen) =>

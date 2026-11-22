@@ -117,10 +117,6 @@ export const wants = (kind: Operation["kind"], desired: Asked): boolean => {
       return desired === "stopped";
     }
 
-    case "pause": {
-      return desired === "paused";
-    }
-
     case "remove":
     case "resize":
     case "capture":
@@ -194,19 +190,13 @@ const decided = ({ context, event }: On<"read">) => {
     return { target: "#machine.made.stepping.resizing" } as const;
   }
 
-  if (desired === "paused") {
-    if (seen !== "running") {
+  if (desired === "stopped") {
+    if (seen === "stopped") {
       return { target: "#machine.made.settled" } as const;
     }
 
     return awaiting
       ? undefined
-      : ({ target: "#machine.made.stepping.pausing" } as const);
-  }
-
-  if (desired === "stopped") {
-    return seen === "stopped"
-      ? ({ target: "#machine.made.settled" } as const)
       : ({ target: "#machine.made.stepping.stopping" } as const);
   }
 
@@ -433,10 +423,6 @@ export const machine = setup({
             stopping: {
               meta: { phase: "stopping", step: "stop", activity: "follow" },
               on: { reported: ended("stop", { prepared: false }) },
-            },
-            pausing: {
-              meta: { phase: "pausing", step: "pause", activity: "follow" },
-              on: { reported: ended("pause", { prepared: false }) },
             },
             resizing: {
               meta: { phase: "resizing", step: "resize", activity: "follow" },

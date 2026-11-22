@@ -59,7 +59,7 @@ const installsLeaveHooks = (dir: string, then = "") => ({
   script: [
     "#!/bin/sh",
     'mkdir -p "$CLANKERBOX_ROOT/etc/clankerbox"',
-    ...["stop", "pause", "delete"].flatMap((hook) => [
+    ...["stop", "delete"].flatMap((hook) => [
       `printf '#!/bin/sh\\necho %s >>"%s"\\n${then}\\n' ${hook} "${leftIn(dir)}" >"$CLANKERBOX_ROOT/etc/clankerbox/${hook}"`,
       `chmod 755 "$CLANKERBOX_ROOT/etc/clankerbox/${hook}"`,
     ]),
@@ -262,7 +262,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
   for (const as of ["smolvm", "tart"] as const) {
     it.effect(
-      `a ${as} machine runs its guest's hook before each stop, pause and delete, and a template's builder runs none`,
+      `a ${as} machine runs its guest's hook before each stop and delete, and a template's builder runs none`,
       () =>
         Effect.gen(function* () {
           const dir = yield* scratch;
@@ -276,16 +276,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           yield* client.create("dev", fromWeb);
           yield* client.stopMachine({ id: "dev" });
           yield* client.startMachine({ id: "dev" });
-          yield* client.pauseMachine({ id: "dev" });
-          yield* client.startMachine({ id: "dev" });
           yield* client.deleteMachine({ id: "dev" });
 
           expect(afterBuild).toStrictEqual([]);
-          expect(yield* hooksRun(dir)).toStrictEqual([
-            "stop",
-            "pause",
-            "delete",
-          ]);
+          expect(yield* hooksRun(dir)).toStrictEqual(["stop", "delete"]);
         })
     );
   }
@@ -992,13 +986,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const refused = yield* Effect.all([
           Effect.flip(client.startMachine({ id: "dev" })),
           Effect.flip(client.stopMachine({ id: "dev" })),
-          Effect.flip(client.pauseMachine({ id: "dev" })),
           Effect.flip(client.resizeMachine({ id: "dev", cpu: 2 })),
           Effect.flip(client.forkMachine({ machine: "dev", name: "copy" })),
         ]);
 
         expect(refused.map(({ _tag }) => _tag)).toStrictEqual(
-          Array.from({ length: 5 }, () => "NotFound")
+          Array.from({ length: 4 }, () => "NotFound")
         );
         expect(
           (yield* client.listMachines()).map(({ id }) => id)
@@ -1401,36 +1394,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     })
   );
 
-  it.effect("a start sent while a machine pauses cuts the pause short", () =>
-    Effect.gen(function* () {
-      const { asking, client, fake } = yield* served(copiesRunning);
-
-      yield* client.create(
-        "dev",
-        request("dev", { runtime: runtimes.copiesRunning })
-      );
-      fake.calls.length = 0;
-
-      const pausing = fake.holdNext("stop");
-
-      yield* asking.pauseMachine({ id: "dev" });
-      yield* pausing.entered;
-
-      const started = yield* client.startMachine({ id: "dev" });
-
-      expect(at(started)).toStrictEqual(["running", "running", "settled"]);
-      expect(fake.calls).toStrictEqual([
-        "exec dev",
-        "stop dev",
-        "start dev",
-        "exec dev",
-        "exec dev",
-      ]);
-    })
-  );
-
   it.effect(
-    "a machine keeps the pin it booted under through a pause and the start after",
+    "a machine keeps the pin it booted under through a stop and the start after",
     () =>
       Effect.gen(function* () {
         const { client, fake, pins } = yield* served(copiesRunning);
@@ -1442,11 +1407,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         fake.calls.length = 0;
 
         const booted = yield* pins;
-        const paused = yield* client.pauseMachine({ id: "dev" });
+        const stopped = yield* client.stopMachine({ id: "dev" });
         const started = yield* client.startMachine({ id: "dev" });
 
         expect(booted).toStrictEqual(["fake 1"]);
-        expect(at(paused)).toStrictEqual(["stopped", "paused", "settled"]);
+        expect(at(stopped)).toStrictEqual(["stopped", "stopped", "settled"]);
         expect(at(started)).toStrictEqual(["running", "running", "settled"]);
         expect(yield* pins).toStrictEqual(["fake 1"]);
         expect(fake.calls).toStrictEqual([
@@ -1461,7 +1426,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a pause stops a machine booted under another pin, or none, and the next boot records the host's",
+    "a stop stops a machine booted under another pin, or none, and the next boot records the host's",
     () =>
       Effect.gen(function* () {
         const { bootedUnder, client, fake, pins } = yield* served();
@@ -1474,15 +1439,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           yield* bootedUnder("dev", pin);
           fake.calls.length = 0;
 
-          const paused = yield* client.pauseMachine({ id: "dev" });
+          const stopped = yield* client.stopMachine({ id: "dev" });
 
-          answers.push([at(paused), [...fake.calls]]);
+          answers.push([at(stopped), [...fake.calls]]);
           yield* client.startMachine({ id: "dev" });
         }
 
         expect(answers).toStrictEqual(
           Array.from({ length: 2 }, () => [
-            ["stopped", "paused", "settled"],
+            ["stopped", "stopped", "settled"],
             ["exec dev", "stop dev"],
           ])
         );
@@ -1503,23 +1468,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(at(started)).toStrictEqual(["running", "running", "settled"]);
         expect(yield* pins).toStrictEqual(["fake 0"]);
-      })
-  );
-
-  it.effect(
-    "a pause of a stopped machine leaves it stopped, and calls no runtime",
-    () =>
-      Effect.gen(function* () {
-        const { client, fake } = yield* served();
-
-        yield* client.create("dev", request("dev"));
-        yield* client.stopMachine({ id: "dev" });
-        fake.calls.length = 0;
-
-        const paused = yield* client.pauseMachine({ id: "dev" });
-
-        expect(at(paused)).toStrictEqual(["stopped", "paused", "settled"]);
-        expect(fake.calls).toStrictEqual([]);
       })
   );
 
@@ -2209,28 +2157,23 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
-  it.effect(
-    "a pause is asked for, so the stop it makes records no change unasked",
-    () =>
-      Effect.gen(function* () {
-        const { client, machine } = yield* served({
-          hosts: [{ id: "fixed", as: "fixed" }],
-          recheck: Duration.millis(200),
-        });
+  it.effect("a stop is asked for, so it records no change unasked", () =>
+    Effect.gen(function* () {
+      const { client, machine } = yield* served({
+        hosts: [{ id: "fixed", as: "fixed" }],
+        recheck: Duration.millis(200),
+      });
 
-        yield* client.create(
-          "dev",
-          request("dev", { runtime: runtimes.fixed })
-        );
-        yield* client.pauseMachine({ id: "dev" });
-        yield* Effect.sleep(Duration.millis(600));
+      yield* client.create("dev", request("dev", { runtime: runtimes.fixed }));
+      yield* client.stopMachine({ id: "dev" });
+      yield* Effect.sleep(Duration.millis(600));
 
-        const paused = yield* machine("dev");
+      const stopped = yield* machine("dev");
 
-        expect(paused.phase).toBe("settled");
-        expect(paused.unasked).toBeUndefined();
-        expect(paused.error).toBeUndefined();
-      })
+      expect(stopped.phase).toBe("settled");
+      expect(stopped.unasked).toBeUndefined();
+      expect(stopped.error).toBeUndefined();
+    })
   );
 
   it.effect("a fork and a restore are sized by their host's traits", () =>

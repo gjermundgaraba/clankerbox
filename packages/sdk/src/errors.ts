@@ -81,16 +81,8 @@ export class Conflict extends Schema.TaggedError<
   }
 }
 
-/**
- * What the operator asked a machine to be. `paused` stops it, as `stopped` does, on every runtime,
- * keeping its disk and none of its memory.
- */
-export const Desired = Schema.Literals([
-  "running",
-  "stopped",
-  "paused",
-  "deleted",
-]);
+/** What the operator asked a machine to be. */
+export const Desired = Schema.Literals(["running", "stopped", "deleted"]);
 
 export type Desired = typeof Desired.Type;
 
