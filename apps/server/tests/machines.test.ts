@@ -2410,6 +2410,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* client.create("dev", request("dev"));
         fake.failNext("delete", new Internal({ message: "EBUSY" }));
         fake.failNext("delete", new Internal({ message: "EBUSY" }));
+
+        const sweep = fake.holdNextObserve();
+
+        yield* sweep.entered;
         fake.calls.length = 0;
 
         const refused = yield* Effect.flip(client.deleteMachine({ id: "dev" }));
@@ -2418,6 +2422,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const beforeRecheck = deletes();
 
+        yield* sweep.release;
         yield* eventually(rows, (left) => left.length === 0);
 
         expect([refused._tag, refused.message]).toStrictEqual([
