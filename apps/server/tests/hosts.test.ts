@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import type { Server, ServerResponse } from "node:http";
+import path from "node:path";
 
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -9,7 +10,18 @@ import {
   readTimeout,
   version,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, Exit, Layer, Logger, Result, Schema } from "effect";
+import { read } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import {
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Logger,
+  Result,
+  Schedule,
+  Schema,
+} from "effect";
 import { HttpClient } from "effect/http";
 import { expect } from "vite-plus/test";
 
@@ -18,6 +30,7 @@ import { listed } from "../src/hosts.ts";
 import {
   clientOf,
   eventually,
+  firstHost,
   patched,
   request,
   restartedHost,
@@ -430,6 +443,78 @@ layer(NodeServices.layer, { excludeTestServices: true })(
               "host stopping is stopping: it replied HTTP 503 with no body, as a host's server does to each request while the host stops",
           });
         })
+    );
+
+    it.effect(
+      "that is stopping answers the exec its stop cuts and an exec sent meanwhile at once, both named as stopping, and runs nothing of the second",
+      () =>
+        Effect.gen(function* () {
+          const served = yield* running();
+          const host = firstHost(served);
+          const client = yield* clientOf(served.url);
+          const began = path.join(host.dir, "began");
+          const ran = path.join(host.dir, "ran");
+
+          yield* client.create("dev", request("dev"));
+          yield* client.create("other", request("other"));
+
+          const cut = yield* Effect.forkChild(
+            Effect.flip(
+              client.execMachine({
+                id: "dev",
+                argv: [
+                  "/bin/sh",
+                  "-c",
+                  `trap '' TERM; : >"${began}"; sleep 30`,
+                ],
+              })
+            )
+          );
+
+          yield* read(began).pipe(
+            Effect.retry(Schedule.spaced(Duration.millis(20)))
+          );
+
+          const beforeStop = host.fake.calls.length;
+          const stopping = yield* Effect.forkChild(host.dispose);
+
+          yield* Effect.sleep(Duration.millis(300));
+
+          const [took, meanwhile] = yield* Effect.timed(
+            Effect.flip(
+              client.execMachine({
+                id: "other",
+                argv: ["/bin/sh", "-c", `: >"${ran}"`],
+              })
+            )
+          );
+
+          yield* Fiber.join(stopping);
+
+          const stoppingAnswer = {
+            _tag: "Unavailable",
+            readOnly: false,
+            message:
+              "host smolvm is stopping: it replied HTTP 503 with no body, as a host's server does to each request while the host stops",
+          };
+
+          expect({
+            cut: yield* Fiber.join(cut),
+            meanwhile,
+            atOnce: Duration.toMillis(took) < 1000,
+          }).toMatchObject({
+            cut: stoppingAnswer,
+            meanwhile: stoppingAnswer,
+            atOnce: true,
+          });
+          expect(
+            host.fake.calls
+              .slice(beforeStop)
+              .filter((call) => call.endsWith(" other"))
+          ).toStrictEqual([]);
+          expect(yield* Effect.flip(read(ran))).toBeDefined();
+        }),
+      60_000
     );
 
     it.effect(

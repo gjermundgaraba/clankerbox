@@ -48,14 +48,25 @@ class ClosingEveryConnection extends Server {
  * for each to answer 503, and only then closes the server. A connection still open then is owed
  * nothing, so the server closes every one, where Node's own close closes the idle ones and waits on
  * the rest, on one whose request never completes for good.
+ *
+ * The routes go on after the server listens and come off when the stop begins, so a request that
+ * finds no more request listeners than the server had when it began listening, ours and any the
+ * library keeps for itself, is one no route will take. It answers 503 with Connection: close, so a
+ * kept-alive client opens a fresh connection for its next request rather than meet the final close
+ * mid-request, where a mutation would read as maybe run, not as sent to a stopping host.
  */
 export const hostServer = ({ listen }: Pick<HostSettings, "listen">) =>
   NodeHttpServer.layer(
     () => {
       const server = new ClosingEveryConnection();
+      let unroutedListeners = Infinity;
+
+      server.once("listening", () => {
+        unroutedListeners = server.listenerCount("request");
+      });
 
       server.on("request", (_request, response) => {
-        const unrouted = server.listenerCount("request") === 1;
+        const unrouted = server.listenerCount("request") <= unroutedListeners;
 
         if (unrouted) {
           response.writeHead(stoppingStatus, { connection: "close" }).end();

@@ -228,8 +228,12 @@ file never imports `platform/` or `composition/`.
 `runtimes.ts` is the registry of runtimes, one entry each under the name a host
 config's `runtime` gives it, with its settings and its Layer, `routes.ts` serves the host contract, and `host.ts` builds the
 host over a runtime Layer and a server Layer it is given. Its `hostServer` is the Node server a host
-listens on, the entry's and the tests' alike, and answers 503 at once to a
-request no route takes, as one that comes while the host stops. It closes every
+listens on, the entry's and the tests' alike, and answers 503 at once, with no
+body and Connection: close, to a request no route takes, as one that comes while
+the host stops: one that finds no more request listeners than the server had
+when it began listening, ours and the one `@effect/platform-node` keeps for
+itself. Connection: close keeps a kept-alive client from meeting the final close
+mid-request, which would read a mutation as maybe run. It closes every
 connection it still holds as it closes, which the stop does once each request it
 cut has answered.
 
