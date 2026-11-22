@@ -42,7 +42,7 @@ Each launch is a new run: runs never share a directory, a host's or the
 control plane's port, or evidence. Machines' SSH ports, 21000 to 21099, are
 shared by every run and test suite on the machine. A host probes a port before
 it gives one to a machine, but a smolvm machine's port is free while it is
-stopped or paused, so another run's machine or program can take it, and the
+stopped, so another run's machine or program can take it, and the
 start then answers `Capacity` naming the port, as it should: free the port, or
 run one lane at a time, to keep such a start from failing.
 
@@ -53,10 +53,10 @@ fleet's order and are named `<runtime>-<n>`, numbered per runtime: `fixed-1`,
 `smolvm-1`. Each fakes its runtime with that runtime's traits:
 
 - `smolvm` and `tart`, as the real runtimes are, so a smolvm machine takes at
-  most 16 vCPUs, and a start or resume of one whose port another program on
+  most 16 vCPUs, and a start of one whose port another program on
   this machine listens on fails `Capacity`, as a smolvm host's does;
 - `fixed`, which stands for no provider: size classes (`small` 1 vCPU, 1G, 10G;
-  `default` 2, 4G, 20G; `large` 4, 8G, 40G), a pause that stops, disk
+  `default` 2, 4G, 20G; `large` 4, 8G, 40G), disk
   checkpoints, machines that stop unasked, and machines that carry the host's
   mark, so that at each recheck the host deletes what it marked whose instance
   the control plane retired and no step it holds names. Its base is `ubuntu`;
@@ -281,7 +281,7 @@ reported the evidence.
 
 The fake stands in for the VM, so this proves none of:
 
-- a VM's boot, pause, resume or stop under smolvm or Tart, or its pin;
+- a VM's boot or stop under smolvm or Tart, or its pin;
 - what smol cloud's or boat's real API answers, which only its live suite under
   `apps/host/tests/live/` shows, on the operator's account;
 - what a capture, fork or restore copies;

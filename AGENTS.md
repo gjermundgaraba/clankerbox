@@ -130,7 +130,7 @@ imports `platform/` or `composition/`.
   It only reads the steps the host holds.
 - `exec.ts`: how a command runs in a guest: the launcher and its mark, its
   output, and the end of a command cut short.
-- `guest.ts`: setup, preparation, the tailnet, and the hook a stop, pause or
+- `guest.ts`: setup, preparation, the tailnet, and the hook a stop or
   delete runs first, each a script `exec.ts` runs in the guest.
 - `usage.ts`: the machines in use, and the RAM a runtime holds beside them, for the RAM budget and capacity.
 - `settings.ts`: what a host runs on, and the port ranges it keeps.
@@ -166,7 +166,7 @@ imports `platform/` or `composition/`.
   states the two rules every adapter keeps, and `tests/runtime-contract.ts` is
   the suite each runtime passes over its own fake provider: the fake runtime's
   three presets, `smolvm`, `tart` and `fixed`, which is neither and has size
-  classes, a pause that stops, machines that stop on their own and the
+  classes, machines that stop on their own and the
   tombstones a rented runtime keeps, the four adapters over `tests/smolvm-model.ts`,
   `tests/scripted-mac.ts`, `tests/fake-smol-cloud.ts` and `tests/fake-boat.ts`,
   and agent-sandbox's over a real kind cluster, in `tests/kind/`.
@@ -366,7 +366,7 @@ the run.
   before its host forgets it. A step acts on its row's handle, or on what the
   runtime finds of the row's instance, never on a VM by its name alone, and a
   remove or a delete of a checkpoint that finds nothing is done, while one whose
-  search fails fails. A runtime's stop, which a pause also runs, masks
+  search fails fails. A runtime's stop masks
   interruption from the command that halts a running VM until it has, so a step
   cut short reports `cancelled` only once the VM is where that command takes it.
 - **A delete answers for its instance for good.** Once a runtime's `delete`
@@ -399,7 +399,7 @@ the run.
   the deadline the host gives it. A timed-out exec whose end isn't confirmed
   answers 124 with its output and `mayStillRun`. The launcher waits for its
   command, so a process holding the mark in its arguments stands above the
-  command for its whole life, unless the command kills it. A stop, pause or
+  command for its whole life, unless the command kills it. A stop or
   remove step first ends its
   machine's execs in flight so, before its hook and its runtime call:
   `Operations` admits an exec only while no step runs in its machine's scope,
@@ -428,8 +428,7 @@ the run.
   fetched again where a build store has it, and a user's checkpoint reads
   `failed`, saying to delete it.
 - **A start starts the machine, also when it runs already, and prepares it.** A
-  pause stops the machine on every runtime, as a stop does, and leaves a stopped
-  machine stopped. A capture or fork of a running machine copies only a VM booted
+  capture or fork of a running machine copies only a VM booted
   under the host's pin, and a restore restores only under the pin its checkpoint
   was saved under, as smolvm copies a running machine through its RAM; the step
   carries the pin and the host compares. A resize is a step

@@ -32,7 +32,7 @@ is named `cbx-0live-<run>-*`: its own, and its host's under the host ID
 `0live-<run>`, which it mints for the run. A host ID starts with a letter, so
 no real host's ID equals that one or starts it, and no real host's machine
 carries the mark. The ID of every checkpoint it mints, and of every machine,
-which finds that machine's checkpoints once it is gone, such as a pause's,
+which finds that machine's checkpoints once it is gone,
 goes to its run's ledger, `smol-cloud-0live-<run>.ledger` in
 `~/.local/state/clankerbox-live` (`$XDG_STATE_HOME`, or
 `CLANKERBOX_LIVE_LEDGERS`, moves it), a folder of mode 0700 and a file of mode
@@ -99,7 +99,7 @@ when it was measured on the operator's account.
   a body it won't take. A 422 to such a body while the account is full is
   `Capacity` too, with the provider's detail kept: nothing in the answer
   tells the two apart, and a create moved on fails the same way on the next
-  host. A stop, pause or delete refused is `Internal`, and a resize refused
+  host. A stop or delete refused is `Internal`, and a resize refused
   400 or 422 `Unsizable`, whatever the account holds.
   (`smol-cloud.ts`'s `failed`; the fake's `quota` fault lowers the limits it
   reports to what the account holds.)
@@ -118,7 +118,7 @@ when it was measured on the operator's account.
   seconds or until an HTTP date, within `provider-http.ts`'s clamp of 1 to
   30 seconds, and sent again, six sends in all; each send has its own bound,
   and the wait is outside it. Each provider call of a step, a make, start,
-  stop, pause, delete, resize or capture, is `bounded` in `provider-http.ts`,
+  stop, delete, resize or capture, is `bounded` in `provider-http.ts`,
   10 minutes for all its requests and polls, and runs whole: a later request
   cuts the step short only once it has ended. A read whose answer is lost, or that the
   provider refuses `retryable`, is asked again the same way; a change whose
@@ -175,7 +175,7 @@ when it was measured on the operator's account.
 - A resize is absolute, so the adapter follows boat's rule for a lost
   answer: it reads the machine until it rests, is done when it holds the
   sizes asked, and sends the resize again otherwise, at most three times.
-  A start, stop, pause, resume or delete whose answer is lost follows the
+  A start, stop or delete whose answer is lost follows the
   same rule, done once the machine rests anywhere but where it was sent
   from, so a gateway's 502 to every send of one costs three sends, not one
   a second for the step's ten minutes. (`smol-cloud.ts`'s `resized` and
@@ -198,8 +198,9 @@ when it was measured on the operator's account.
   `available`.
 - A pause leaves a checkpoint of its own, which outlives the resume. While
   paused, exec, start, stop and that checkpoint's delete answer 409. Once the
-  resume has the machine running again, that checkpoint's delete answers 204:
-  a start's prune by `keep` depends on it.
+  resume has the machine running again, that checkpoint's delete answers 204.
+  Ours: the host never pauses or resumes a machine, and reads one something
+  else paused as stopped, its start or stop stuck (`stateOf`, `moveOf`).
 - A restore answers `stopped`, carries its source's ports and resources, no
   labels and no expiry (`ttlSeconds` null), and takes the `network` and
   `autoStopSeconds` it is sent.
