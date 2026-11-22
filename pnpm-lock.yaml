@@ -453,7 +453,7 @@ importers:
         version: 4.1.4
       sandbox-agent:
         specifier: 'catalog:'
-        version: 0.5.7(zod@4.6.5)
+        version: 0.5.7(zod@4.6.7)
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -2032,17 +2032,17 @@ packages:
     resolution: {integrity: sha512-XrBh9ZiQK5mJVRxZBAvD6LwRyAYrK3MFtH3+onyuxFL5hFD44EC3QOmIC1FjTj6H2MMwq46/NAI+NZxLZPZgxg==}
     engines: {node: '>=14.18.0'}
 
-  zod@4.6.5:
-    resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
+  zod@4.6.7:
+    resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
 
 ignoredOptionalDependencies:
   - '@sandbox-agent/cli'
 
 snapshots:
 
-  '@agentclientprotocol/sdk@0.16.1(zod@4.6.5)':
+  '@agentclientprotocol/sdk@0.16.1(zod@4.6.7)':
     dependencies:
-      zod: 4.6.5
+      zod: 4.6.7
 
   '@babel/code-frame@7.29.7':
     dependencies:
@@ -2576,9 +2576,9 @@ snapshots:
 
   acorn@8.19.0: {}
 
-  acp-http-client@0.5.7(zod@4.6.5):
+  acp-http-client@0.5.7(zod@4.6.7):
     dependencies:
-      '@agentclientprotocol/sdk': 0.16.1(zod@4.6.5)
+      '@agentclientprotocol/sdk': 0.16.1(zod@4.6.7)
     transitivePeerDependencies:
       - zod
 
@@ -2971,10 +2971,10 @@ snapshots:
     dependencies:
       queue-microtask: 1.2.3
 
-  sandbox-agent@0.5.7(zod@4.6.5):
+  sandbox-agent@0.5.7(zod@4.6.7):
     dependencies:
       '@sandbox-agent/cli-shared': 0.5.7
-      acp-http-client: 0.5.7(zod@4.6.5)
+      acp-http-client: 0.5.7(zod@4.6.7)
     transitivePeerDependencies:
       - zod
 
@@ -3074,7 +3074,7 @@ snapshots:
       string-width: 8.3.0
       which-command: 0.1.0
       yaml: 2.9.1
-      zod: 4.6.5
+      zod: 4.6.7
     optionalDependencies:
       oxfmt: 0.76.0(vite-plus@1.5.1(@types/node@26.6.6)(@vitest/ui@5.1.0)(typescript@7.0.2)(yaml@2.9.1))
       oxlint: 1.91.0(oxlint-tsgolint@7.0.2005)(vite-plus@1.5.1(@types/node@26.6.6)(@vitest/ui@5.1.0)(typescript@7.0.2)(yaml@2.9.1))
@@ -3208,4 +3208,4 @@ snapshots:
       '@yuku-toolchain/types': 0.19.0
       yuku-core: 0.19.0
 
-  zod@4.6.5: {}
+  zod@4.6.7: {}
