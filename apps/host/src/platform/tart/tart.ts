@@ -435,7 +435,7 @@ export const make = (
       holder: number
     ): Effect.Effect<MachineState, Internal | Unreadable> =>
       Effect.gen(function* () {
-        if (!(yield* home.look(vm))) {
+        if (!(yield* home.countsAsVm(vm))) {
           return "missing";
         }
 
@@ -815,7 +815,7 @@ export const make = (
         case "checkpoint": {
           const { checkpoint } = origin;
 
-          return Effect.flatMap(home.look(checkpoint.handle), (held) =>
+          return Effect.flatMap(home.countsAsVm(checkpoint.handle), (held) =>
             held
               ? cloneInto(
                   (into) => clone(checkpoint.handle, into),
@@ -912,7 +912,7 @@ export const make = (
       find: Effect.fn("Tart.find")(function* (machine) {
         const handle = vmOf(machine);
 
-        if (yield* home.look(handle)) {
+        if (yield* home.countsAsVm(handle)) {
           return handle;
         }
 
