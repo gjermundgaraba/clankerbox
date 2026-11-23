@@ -407,7 +407,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "every action refuses a request with no version, or another release's, and runs nothing",
+    "every action refuses a request with no version, another release's, or one that carries Origin, as a browser's does, and runs nothing",
     () =>
       Effect.gen(function* () {
         const { url, hosts, store } = yield* running();
@@ -422,13 +422,18 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const calls = [...hosts[0]!.fake.calls];
 
         for (const { name } of Http.actions) {
-          for (const headers of [{}, versioned(bump(1))]) {
+          for (const [headers, says] of [
+            [{}, /no clankerbox-version header/u],
+            [versioned(bump(1)), /their major\.minor must match/u],
+            [
+              { ...versioned(version), origin: url },
+              /takes no request that carries Origin/u,
+            ],
+          ] as const) {
             const answer = yield* post(url, name, { id: "dev" }, headers);
 
             expect(answer.status, name).toBe(400);
-            expect(decodeInvalid(answer.body).message, name).toMatch(
-              /no clankerbox-version header|their major\.minor must match/u
-            );
+            expect(decodeInvalid(answer.body).message, name).toMatch(says);
           }
         }
 

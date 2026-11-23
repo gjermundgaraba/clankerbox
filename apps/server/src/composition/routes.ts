@@ -1,4 +1,8 @@
-import { Http, versionCheck } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  Http,
+  refuseBrowsers,
+  versionCheck,
+} from "@gjermundgaraba/clankerbox-sdk";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Effect, Layer } from "effect";
@@ -43,5 +47,6 @@ const app = Action.implement(
 );
 
 export const routes = ActionHttp.layer(Http, [app]).pipe(
-  Layer.provide(versionCheck("control plane").layer)
+  Layer.provide(versionCheck("control plane").layer),
+  Layer.provide(refuseBrowsers("control plane").layer)
 );
