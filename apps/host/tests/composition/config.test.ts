@@ -264,6 +264,51 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
+    "a host that would publish machines' SSH on every address, as a wildcard listen.address without publish.address would, is refused, saying to set publish.address",
+    () =>
+      Effect.gen(function* () {
+        for (const [listen, publish, says] of [
+          ["0.0.0.0", undefined, "set publish.address"],
+          ["::", undefined, "set publish.address"],
+          ["0:0::0", undefined, "set publish.address"],
+          [
+            "37.27.63.112",
+            "0.0.0.0",
+            "publish.address 0.0.0.0 is every address",
+          ],
+          ["37.27.63.112", "::", "publish.address :: is every address"],
+        ] as const) {
+          const { file, loaded } = yield* load({
+            ...config,
+            listen: { address: listen, port: 8484 },
+            ...(publish === undefined ? {} : { publish: { address: publish } }),
+            callers: "callers",
+            tls,
+          });
+
+          yield* guarded(path.dirname(file));
+
+          const error = yield* Effect.flip(loaded);
+
+          expect(error._tag, listen).toBe("Invalid");
+          expect(error.message, listen).toContain(says);
+        }
+
+        const { file, loaded } = yield* load({
+          ...config,
+          listen: { address: "0.0.0.0", port: 8484 },
+          publish: { address: "37.27.63.112" },
+          callers: "callers",
+          tls,
+        });
+
+        yield* guarded(path.dirname(file));
+
+        expect(publishAddress(yield* loaded)).toBe("37.27.63.112");
+      })
+  );
+
+  it.effect(
     "with callers and tls a host listens on any address, and reads both",
     () =>
       Effect.gen(function* () {
