@@ -316,8 +316,7 @@ export const fetchable = (from: RuntimeName, to: RuntimeTraits): boolean =>
  * copy and a checkpoint's restore go through the VM's saved state, so they need the pin it was
  * saved under; a stopped machine's copy is of its disk alone and asks none. A restore is asked
  * however the checkpoint was captured, as its row doesn't record whether its source ran, so a
- * smolvm checkpoint of a stopped machine is refused too. Follow-up: stamp a checkpoint's pin only
- * when its capture went through RAM.
+ * smolvm checkpoint of a stopped machine is refused too.
  */
 export const pinRefusal = (
   of: { readonly copy: string } | { readonly restore: string },
