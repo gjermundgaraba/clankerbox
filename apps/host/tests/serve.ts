@@ -3,10 +3,14 @@ import path from "node:path";
 
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
+import type { Caller, Tls } from "@gjermundgaraba/clankerbox-sdk/node";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { Effect, FileSystem, Logger, Schema } from "effect";
 
+import { loadConfig } from "../src/composition/config.ts";
+import * as NodeBox from "../src/platform/box.ts";
 import * as S3 from "../src/platform/bucket/s3.ts";
+import { publishAddress } from "../src/settings.ts";
 import { fakeRuntime } from "./fake-runtime.ts";
 import type { FakeRuntimeName } from "./fake-runtime.ts";
 import {
@@ -24,7 +28,7 @@ import {
 } from "./support.ts";
 
 const usage =
-  "usage: serve.ts <run-dir> <host-id> [smolvm|tart|fixed] [ram-budget-mib], with CLANKERBOX_FAKE_BUILDS, CLANKERBOX_FAKE_FAIL_FIND (names whose search fails), CLANKERBOX_FAKE_PIN and CLANKERBOX_FAKE_UBUNTU_IMAGE optional";
+  "usage: serve.ts <run-dir> <host-id> [smolvm|tart|fixed] [ram-budget-mib], with CLANKERBOX_FAKE_BUILDS, CLANKERBOX_FAKE_FAIL_FIND (names whose search fails), CLANKERBOX_FAKE_PIN, CLANKERBOX_FAKE_UBUNTU_IMAGE and CLANKERBOX_HOST_CONFIG (a host config whose listen, publish, callers and tls the host takes) optional";
 
 const [runArg, idArg, runtimeArg = "smolvm", budgetArg] = process.argv.slice(2);
 
@@ -66,6 +70,39 @@ const decodeBuilds = Schema.decodeUnknownEffect(
   Schema.fromJsonString(S3.BuildsSettings)
 );
 
+interface Configured {
+  readonly address?: string;
+  readonly port?: number;
+  readonly publishAddress?: string;
+  readonly callers?: readonly Caller[];
+  readonly tls?: Tls;
+}
+
+const configured = Effect.gen(function* () {
+  const file = process.env["CLANKERBOX_HOST_CONFIG"];
+
+  if (file === undefined) {
+    const none: Configured = {};
+
+    return none;
+  }
+
+  const config = yield* loadConfig(file).pipe(
+    Effect.provide(NodeBox.layer),
+    Effect.orDie
+  );
+
+  const read: Configured = {
+    address: config.listen.address,
+    port: config.listen.port,
+    publishAddress: publishAddress(config),
+    ...(config.callers === undefined ? {} : { callers: config.callers }),
+    ...(config.tls === undefined ? {} : { tls: config.tls }),
+  };
+
+  return read;
+});
+
 const bucket = Effect.gen(function* () {
   const file = process.env["CLANKERBOX_FAKE_BUILDS"];
 
@@ -94,6 +131,7 @@ runServe(
         }
 
         const builds = yield* bucket;
+        const { publishAddress: published, ...listening } = yield* configured;
 
         const host = yield* startHost(dir, {
           id,
@@ -101,6 +139,7 @@ runServe(
           as: runtime,
           bases: new Map([[base, image]]),
           ...(port === undefined ? {} : { port }),
+          ...listening,
           logger: Logger.consolePretty({ colors: false }),
           http: NodeHttpClient.layerNodeHttp,
           fake: fakeRuntime({
@@ -109,6 +148,7 @@ runServe(
             ramBudgetMib,
             pin: process.env["CLANKERBOX_FAKE_PIN"],
             probesPorts: true,
+            publishAddress: published,
             builds,
             onCall: (call) => {
               appendFileSync(

@@ -185,6 +185,7 @@ export interface FakeOptions {
   readonly pin?: string | undefined;
   readonly relayed?: boolean | undefined;
   readonly probesPorts?: boolean | undefined;
+  readonly publishAddress?: string | undefined;
   readonly onCall?: ((call: string) => void) | undefined;
   readonly builds?: Store | undefined;
 }
@@ -958,7 +959,7 @@ export const fakeRuntime = (options: FakeOptions) => {
           ? yield* Effect.provide(PortProbe, BindProbe.layer)
           : { free: () => Effect.succeed(true) };
 
-      const address = "127.0.0.1";
+      const address = options.publishAddress ?? "127.0.0.1";
 
       stubs = bin;
 
