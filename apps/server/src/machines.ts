@@ -172,10 +172,6 @@ export class Machines extends Context.Service<Machines, Interface>()(
   "@clankerbox/server/Machines"
 ) {}
 
-/**
- * What a machine asked to run rests failed with once its runtime stopped it unasked: the caller
- * must start it, as nothing else will, and its runtime's cause where it named one.
- */
 export const stoppedUnasked = (machine: string, why: string | undefined) =>
   new WrongState({
     message: `${machine} was stopped by its runtime, not by a request${why === undefined ? ", and the runtime gave no cause" : `: ${why}`}. Its memory and processes are gone, and nothing will start it again: start it to boot it cold`,

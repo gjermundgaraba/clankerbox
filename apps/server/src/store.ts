@@ -119,13 +119,6 @@ export const Facts = Schema.Struct({
   ...MadeOn.fields,
   endpoint: UndefinedFromNull(Schema.fromJsonString(Endpoint)),
   desired: Desired.pick(["running", "stopped"]),
-  /**
-   * Whether a step left the machine running and prepared, with no request to run it since, which
-   * clears it. While it holds, a read that finds the machine stopped while it is to run, but for
-   * one before an owed resize, finds its runtime's stop: just after a start, a join or a resize, or
-   * once a resize of a machine resting failed so is done. That rests the machine failed, as at
-   * rest, and only a request to run boots it again.
-   */
   prepared: Schema.BooleanFromBit,
   resize: UndefinedFromNull(Schema.fromJsonString(Sizing)),
   ephemeral: Schema.BooleanFromBit,
@@ -135,11 +128,8 @@ export const Facts = Schema.Struct({
   hostKey: UndefinedFromNull(Schema.String),
   undoneAt: UndefinedFromNull(Schema.DateTimeUtcFromString),
   after: UndefinedFromNull(Schema.String),
-  /** The cold boots of the machine the control plane knows of, as `Machine.boots` tells them. */
   boots: Schema.Int,
-  /** Whether the start under way boots a machine last read stopped, which `boots` counts once it is done. */
   booting: Schema.BooleanFromBit,
-  /** The runtime's mark of the machine's last reboot in place, as its last read answered it. */
   reboot: UndefinedFromNull(Schema.String),
   unasked: UndefinedFromNull(Schema.fromJsonString(Unasked)),
 });
