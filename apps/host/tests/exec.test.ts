@@ -1059,7 +1059,37 @@ const manyLinesSeconds = 5;
 
 const chainDepth = 400;
 
+const daemonSeconds = 30;
+
+const daemonCases = (shell: readonly string[]) => {
+  layer(NodeServices.layer, { excludeTestServices: true })((it) => {
+    it.effect(
+      "a daemon its command starts on stdio of its own holds none of the exec's output, so the exec ends with its command",
+      () =>
+        Effect.gen(function* () {
+          const [took, ran] = yield* Effect.timed(
+            launched(shell, {
+              argv: [
+                "sh",
+                "-c",
+                `sleep ${daemonSeconds} </dev/null >/dev/null 2>&1 & echo $!`,
+              ],
+            })
+          );
+
+          killed(Number(ran.stdout.trim()));
+
+          expect(ran.code).toBe(0);
+          expect(Duration.toSeconds(took)).toBeLessThan(daemonSeconds / 2);
+        }),
+      daemonSeconds * 2000
+    );
+  });
+};
+
 const shellCases = (shell: readonly string[]) => {
+  daemonCases(shell);
+
   layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     it.effect(
       `a command gets its arguments, env and the rest of stdin exactly as given, its own uid, and many arguments`,
@@ -1890,4 +1920,14 @@ describe.each(guestShells)("under $name", ({ name, argv, installed }) => {
       shellCases(argv);
     }
   );
+});
+
+const macSh = ["/bin/sh"] as const;
+
+const shIsBash32 = /version 3\.2\./u.test(
+  spawnSync(macSh[0], ["--version"], { encoding: "utf-8" }).stdout ?? ""
+);
+
+describe.runIf(shIsBash32)("under bash 3.2, macOS's sh", () => {
+  daemonCases(macSh);
 });

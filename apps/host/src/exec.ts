@@ -74,6 +74,11 @@ const endedRecords = "${CLANKERBOX_ROOT-}/var/run/clankerbox-ended";
 // A shell copies a string whole at each append and `"$@"` whole at each `set`, and bash 3.2 slows
 // with each variable it holds, so values wait in at most 1000 variables, named in strings of 100,
 // and a value's lines are joined 1000 at a time by `"$*"`, then its pieces at once.
+// bash 3.2, macOS's sh, keeps a copy above fd 10 of a descriptor of 3 or more that a command's
+// redirection moves or closes, and leaves it open across exec, so a command run as
+// `exec env -- "$@" 3>&-` holds fd 3 there, and a daemon it starts holds the exec's output open;
+// a bare `exec`'s redirections keep nothing to undo:
+// https://github.com/apple-oss-distributions/bash/blob/bash-144/bash-3.2/redir.c#L1006-L1015
 const launcher = [
   "set -e",
   `[ ! -e "${endedRecords}/\${1#${markName}=}" ] || exit 143`,
@@ -125,7 +130,7 @@ const launcher = [
   "esac",
   "trap : HUP INT QUIT USR1 USR2 PIPE ALRM TERM XCPU XFSZ VTALRM PROF SYS",
   "exec 3>&2 2>/dev/null",
-  `(exec env -- "$@" 2>&3 3>&-) || exit`,
+  `(exec 2>&3 3>&-; exec env -- "$@") || exit`,
 ].join("\n");
 
 /**
