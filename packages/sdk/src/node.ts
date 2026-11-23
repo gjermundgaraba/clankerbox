@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { Server as HttpServer } from "node:http";
 import { Server as HttpsServer } from "node:https";
 import { BlockList, isIP } from "node:net";
+import type { Socket } from "node:net";
 
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
@@ -135,9 +136,25 @@ class ClosingHttp extends HttpServer {
 }
 
 class ClosingHttps extends HttpsServer {
+  readonly sockets = new Set<Socket>();
+
+  constructor(options: { readonly cert: string; readonly key: string }) {
+    super(options);
+    this.on("connection", (socket: Socket) => {
+      this.sockets.add(socket);
+      socket.once("close", () => {
+        this.sockets.delete(socket);
+      });
+    });
+  }
+
   override close(callback?: (error?: Error) => void) {
     super.close(callback);
     this.closeAllConnections();
+
+    for (const socket of this.sockets) {
+      socket.destroy();
+    }
 
     return this;
   }
