@@ -49,15 +49,15 @@ const fromBrowser = (
     origin,
     (sent) =>
       new Invalid({
-        message: `this ${server} takes no request from a browser, and this one carries Origin ${sent}`,
+        message: `this ${server} takes no request that carries Origin, as a browser's does, and this one carries ${sent}: a proxy in front of it must not add Origin`,
       })
   );
 
 const encodeInvalid = Schema.encodeSync(Invalid);
 
-const refused = (error: Invalid, status: number) =>
+const refused = (error: Invalid) =>
   Effect.succeed(
-    HttpServerResponse.jsonUnsafe(encodeInvalid(error), { status })
+    HttpServerResponse.jsonUnsafe(encodeInvalid(error), { status: 400 })
   );
 
 /**
@@ -65,11 +65,16 @@ const refused = (error: Invalid, status: number) =>
  * contract, before it reads anything, so a mutation it sends is never run under a contract it
  * doesn't share.
  *
- * It refuses a request that carries `Origin` too. A browser sends one with every POST, which every
- * action is, and no caller of ours does, so a page whose name was rebound to the server's address
- * can't act on it, whatever name it was reached by. `Host` is left unchecked: a server is reached by
- * its IP, by a MagicDNS name or through a proxy, so an allowlist of names would need config, and
- * refusing `Origin` already refuses the rebound page.
+ * It refuses a request that carries `Origin` too. A browser sends `Origin` with every POST, which
+ * every action is, and no caller of ours does, so a page whose name was rebound to the server's
+ * address can't act on it, whatever name it was reached by. That page is same-origin to its
+ * browser, so its `Origin` names the `Host` it sent: refusing only an `Origin` that differs from
+ * `Host` would leave it open. `Host` is left unchecked: a server is reached by its IP, by a
+ * MagicDNS name or through a proxy, so an allowlist of names would need config, and refusing
+ * `Origin` already refuses the rebound page.
+ *
+ * Both refusals are `Invalid` at 400, which a client reads with its message. A 403 is each action's
+ * built-in `Forbidden`, which a client reads only as an answer it didn't expect.
  */
 export const versionCheck = (server: string, own: string = version) =>
   HttpRouter.middleware((handle) =>
@@ -77,11 +82,11 @@ export const versionCheck = (server: string, own: string = version) =>
       Option.match(
         fromBrowser(server, Headers.get(request.headers, "origin")),
         {
-          onSome: (error) => refused(error, 403),
+          onSome: refused,
           onNone: () =>
             Option.match(
               refusal(server, own, Headers.get(request.headers, versionHeader)),
-              { onNone: () => handle, onSome: (error) => refused(error, 400) }
+              { onNone: () => handle, onSome: refused }
             ),
         }
       )

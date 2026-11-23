@@ -21,7 +21,11 @@ const answering = HttpRouter.add(
   HttpServerResponse.text("pong")
 );
 
-const asking = (headers: Record<string, string>, own?: string) =>
+const asking = (
+  headers: Record<string, string>,
+  own?: string,
+  url = "http://cbx.test/api/ping"
+) =>
   Effect.acquireUseRelease(
     Effect.sync(() =>
       HttpRouter.toWebHandler(
@@ -35,7 +39,7 @@ const asking = (headers: Record<string, string>, own?: string) =>
     (web) =>
       Effect.promise(async () => {
         const response = await web.handler(
-          new Request("http://cbx.test/api/ping", { method: "POST", headers })
+          new Request(url, { method: "POST", headers })
         );
 
         return { status: response.status, body: await response.text() };
@@ -45,6 +49,9 @@ const asking = (headers: Record<string, string>, own?: string) =>
         await web.dispose();
       })
   );
+
+const carrying = (origin: string, url?: string) =>
+  asking({ [versionHeader]: version, origin }, undefined, url);
 
 const [major = "0", minor = "0"] = version.split(".");
 
@@ -105,22 +112,22 @@ describe("release", () => {
   );
 
   it.effect(
-    "a request from a browser is refused 403 before its handler runs, though it carries the release, as a page whose name was rebound to the server's address sends",
+    "a request that carries Origin is refused Invalid before its handler runs, though it carries the release: a rebound page's, whose Origin names the host it reached, a cross-origin page's, and a sandboxed one's",
     () =>
       Effect.gen(function* () {
-        const rebound = yield* asking({
-          [versionHeader]: version,
-          origin: "http://evil.example:8484",
-        });
+        const page = "http://evil.example:8484";
 
-        const sandboxed = yield* asking({
-          [versionHeader]: version,
-          origin: "null",
-        });
+        const rebound = yield* carrying(page, `${page}/api/ping`);
+        const crossOrigin = yield* carrying(page);
+        const sandboxed = yield* carrying("null");
 
-        expect([rebound.status, sandboxed.status]).toStrictEqual([403, 403]);
+        expect([
+          rebound.status,
+          crossOrigin.status,
+          sandboxed.status,
+        ]).toStrictEqual([400, 400, 400]);
         expect((yield* decodeInvalid(rebound.body)).message).toBe(
-          "this control plane takes no request from a browser, and this one carries Origin http://evil.example:8484"
+          "this control plane takes no request that carries Origin, as a browser's does, and this one carries http://evil.example:8484: a proxy in front of it must not add Origin"
         );
       })
   );
