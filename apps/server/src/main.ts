@@ -8,6 +8,7 @@ import { Command, Flag } from "effect/cli";
 
 import { loadConfig } from "./composition/config.ts";
 import { controlPlaneServer, serverLayer } from "./composition/server.ts";
+import { token } from "./composition/token.ts";
 import * as Tailscale from "./platform/tailscale.ts";
 
 const run = (file: string) =>
@@ -39,7 +40,8 @@ const server = Command.make(
 ).pipe(
   Command.withDescription(
     "Run the clankerbox control plane, until it is stopped."
-  )
+  ),
+  Command.withSubcommands([token])
 );
 
 NodeRuntime.runMain(
