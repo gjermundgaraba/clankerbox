@@ -50,8 +50,12 @@ const asking = (
       })
   );
 
-const carrying = (origin: string, url?: string) =>
-  asking({ [versionHeader]: version, origin }, undefined, url);
+const carrying = (origin: string, host: string) =>
+  asking(
+    { [versionHeader]: version, origin, host },
+    undefined,
+    `http://${host}/api/ping`
+  );
 
 const [major = "0", minor = "0"] = version.split(".");
 
@@ -112,14 +116,14 @@ describe("release", () => {
   );
 
   it.effect(
-    "a request that carries Origin is refused Invalid before its handler runs, though it carries the release: a rebound page's, whose Origin names the host it reached, a cross-origin page's, and a sandboxed one's",
+    "a request that carries Origin is refused Invalid before its handler runs, though it carries the release: a rebound page's, whose Origin names the Host it sent, a cross-origin page's, and a sandboxed one's",
     () =>
       Effect.gen(function* () {
         const page = "http://evil.example:8484";
 
-        const rebound = yield* carrying(page, `${page}/api/ping`);
-        const crossOrigin = yield* carrying(page);
-        const sandboxed = yield* carrying("null");
+        const rebound = yield* carrying(page, "evil.example:8484");
+        const crossOrigin = yield* carrying(page, "cbx.test");
+        const sandboxed = yield* carrying("null", "cbx.test");
 
         expect([
           rebound.status,
