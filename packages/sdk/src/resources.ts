@@ -244,8 +244,7 @@ export type Unasked = typeof Unasked.Type;
  * holds, its memory and processes are those of one boot, but for a stop and start its runtime made
  * by itself between two reads, which only a runtime that reports its reboots shows. A reboot in
  * place between a start's boot and the next read isn't counted either, as that read takes the
- * runtime's reboot mark afresh; it costs little, as it comes right after a cold boot already
- * counted, and the first read after a make was always so. A runtime that reports reboots reports
+ * runtime's reboot mark afresh. A runtime that reports reboots reports
  * a machine that never rebooted in place as such, so its first reboot counts as each later one does.
  * A boot a host makes inside another step
  * that leaves the machine stopped, as a fork may, counts none, as nothing ran in it for the

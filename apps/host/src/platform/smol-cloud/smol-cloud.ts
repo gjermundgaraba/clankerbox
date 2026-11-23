@@ -73,7 +73,6 @@ export const SmolCloudSettings = Schema.Struct({
 
 export type SmolCloudSettings = typeof SmolCloudSettings.Type;
 
-/** The provider caps a name at 63 characters, which `cbx-`, a host ID of this length and an instance fill. */
 export const longestHostId = 26;
 
 const idleStopSeconds = 86_400;

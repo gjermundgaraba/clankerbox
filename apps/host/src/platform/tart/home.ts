@@ -17,8 +17,7 @@ export interface Home {
   readonly directory: (vm: string) => string;
   /** The file whose lock `tart run` holds while the VM runs. */
   readonly config: (vm: string) => string;
-  /** Whether Tart counts the VM's directory as a VM. */
-  readonly look: (vm: string) => Effect.Effect<boolean, Internal>;
+  readonly countsAsVm: (vm: string) => Effect.Effect<boolean, Internal>;
 }
 
 // https://github.com/openai/tart/blob/2.41.1/Sources/tart/VMDirectory.swift#L93
@@ -49,7 +48,7 @@ export const make = (
     directory,
     // https://github.com/openai/tart/blob/2.41.1/Sources/tart/VMDirectory.swift#L48
     config: (vm) => path.join(directory(vm), "config.json"),
-    look: (vm) =>
+    countsAsVm: (vm) =>
       files(
         `couldn't read ${directory(vm)}`,
         fs.readDirectory(directory(vm)).pipe(

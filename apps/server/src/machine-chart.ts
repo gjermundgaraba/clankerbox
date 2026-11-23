@@ -56,13 +56,9 @@ export interface Read extends Begins {
   readonly pin: string | undefined;
   readonly joins: boolean;
   readonly awaiting: boolean;
-  /** When the read was taken. */
   readonly at: Unasked["at"];
-  /** The runtime's mark of the machine's last reboot in place, where its runtime keeps one. */
   readonly reboot?: string | undefined;
-  /** Why the runtime says the machine is stopped or missing, where it says. */
   readonly why?: string | undefined;
-  /** The error a machine asked to run rests failed with, should the read find its runtime stopped it unasked. */
   readonly stoppedUnasked: HostError;
 }
 

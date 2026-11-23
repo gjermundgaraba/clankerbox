@@ -49,11 +49,6 @@ export const typeOf = (
     );
   });
 
-/**
- * A fork of a running sandbox saves a fresh snapshot first, timed live on 2026-11-21 at 694 s, 906 s
- * and 2807 s for the same 90 GiB. Its check of the save's size against the fork's type is checked against the fake
- * alone.
- */
 export const traits = (
   offered: Arr.NonEmptyReadonlyArray<BoatType>
 ): RuntimeTraits => ({

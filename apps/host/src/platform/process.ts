@@ -70,11 +70,6 @@ const commandIn =
       forceKillAfter: Duration.seconds(5),
     });
 
-/**
- * The commands a host runs with `env` alone. Each runs in a process group of its own, which its
- * interruption ends whole, or, `detached: false`, in the host's, which ends with the host where its
- * service manager ends that group, as launchd does.
- */
 export const cliIn = (
   env: Readonly<Record<string, string | undefined>>,
   { detached = true }: { readonly detached?: boolean } = {}

@@ -60,7 +60,7 @@ layer(NodeServices.layer)((it) => {
             }
           }
 
-          read[layout] = yield* home.look(layout);
+          read[layout] = yield* home.countsAsVm(layout);
         }
 
         expect(read).toStrictEqual({
