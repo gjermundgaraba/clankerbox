@@ -9,8 +9,8 @@ import { Argument, Command, Flag } from "effect/cli";
 
 /**
  * Mints a token for `name`, appends its line to the callers file, made if absent, and answers the
- * token, which nothing keeps: a name already in the file, or a file that doesn't read as one, is
- * `Invalid` and changes nothing.
+ * token, which nothing keeps. A name already in the file, or a file that doesn't read as one, is
+ * `Invalid` and changes nothing. It appends rather than rewrites, so adds run at once keep each line.
  */
 export const addCaller = (
   callers: string,
@@ -57,15 +57,17 @@ export const addCaller = (
     const { token, line } = mintToken(name);
     const separator = text === "" || text.endsWith("\n") ? "" : "\n";
 
-    yield* fs.writeFileString(callers, `${text}${separator}${line}\n`).pipe(
-      Effect.mapError(
-        (error) =>
-          new Invalid({
-            message: `couldn't write callers ${callers}: ${error.message}`,
-            file: callers,
-          })
-      )
-    );
+    yield* fs
+      .writeFileString(callers, `${separator}${line}\n`, { flag: "a" })
+      .pipe(
+        Effect.mapError(
+          (error) =>
+            new Invalid({
+              message: `couldn't write callers ${callers}: ${error.message}`,
+              file: callers,
+            })
+        )
+      );
 
     return token;
   });
@@ -75,7 +77,7 @@ const add = Command.make(
   {
     name: Argument.String("name").pipe(
       Argument.withDescription(
-        "The caller's name, as the control plane's log names it: a person, laptop or provider."
+        "The caller's name: a person, laptop or provider."
       )
     ),
     callers: Flag.String("callers").pipe(

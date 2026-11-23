@@ -89,4 +89,31 @@ layer(NodeServices.layer)((it) => {
         expect(yield* read(file)).toBe(before);
       })
   );
+  it.effect("token adds run at once each keep their line", () =>
+    Effect.gen(function* () {
+      const file = path.join(yield* scratch, "callers");
+      const names = Array.from({ length: 8 }, (_, index) => `laptop-${index}`);
+
+      yield* addCaller(file, "first");
+
+      const tokens = yield* Effect.forEach(
+        names,
+        (name) => addCaller(file, name),
+        {
+          concurrency: "unbounded",
+        }
+      );
+
+      const callers = yield* readCallers(file);
+
+      expect(callers.map(({ name }) => name).toSorted()).toStrictEqual(
+        ["first", ...names].toSorted()
+      );
+      expect(
+        tokens.map(
+          (token) => callerInConstantTime(callers, Redacted.value(token))?.name
+        )
+      ).toStrictEqual(names);
+    })
+  );
 });
