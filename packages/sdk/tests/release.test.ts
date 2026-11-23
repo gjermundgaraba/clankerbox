@@ -21,11 +21,7 @@ const answering = HttpRouter.add(
   HttpServerResponse.text("pong")
 );
 
-const asking = (
-  headers: Record<string, string>,
-  own?: string,
-  url = "http://cbx.test/api/ping"
-) =>
+const asking = (headers: Record<string, string>, own?: string) =>
   Effect.acquireUseRelease(
     Effect.sync(() =>
       HttpRouter.toWebHandler(
@@ -39,7 +35,7 @@ const asking = (
     (web) =>
       Effect.promise(async () => {
         const response = await web.handler(
-          new Request(url, { method: "POST", headers })
+          new Request("http://cbx.test/api/ping", { method: "POST", headers })
         );
 
         return { status: response.status, body: await response.text() };
@@ -48,13 +44,6 @@ const asking = (
       Effect.promise(async () => {
         await web.dispose();
       })
-  );
-
-const carrying = (origin: string, host: string) =>
-  asking(
-    { [versionHeader]: version, origin, host },
-    undefined,
-    `http://${host}/api/ping`
   );
 
 const [major = "0", minor = "0"] = version.split(".");
@@ -111,27 +100,6 @@ describe("release", () => {
         );
         expect((yield* decodeInvalid(newer.body)).message).toBe(
           "this control plane runs clankerbox 0.40.1 and the caller is 0.41.0; their major.minor must match"
-        );
-      })
-  );
-
-  it.effect(
-    "a request that carries Origin is refused Invalid before its handler runs, though it carries the release: a rebound page's, whose Origin names the Host it sent, a cross-origin page's, and a sandboxed one's",
-    () =>
-      Effect.gen(function* () {
-        const page = "http://evil.example:8484";
-
-        const rebound = yield* carrying(page, "evil.example:8484");
-        const crossOrigin = yield* carrying(page, "cbx.test");
-        const sandboxed = yield* carrying("null", "cbx.test");
-
-        expect([
-          rebound.status,
-          crossOrigin.status,
-          sandboxed.status,
-        ]).toStrictEqual([400, 400, 400]);
-        expect((yield* decodeInvalid(rebound.body)).message).toBe(
-          "this control plane takes no request that carries Origin, as a browser's does, and this one carries http://evil.example:8484: a proxy in front of it must not add Origin"
         );
       })
   );

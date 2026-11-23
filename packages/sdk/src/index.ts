@@ -1,5 +1,7 @@
 export * from "./api.ts";
 
+export * from "./browsers.ts";
+
 export * from "./errors.ts";
 
 export * from "./ids.ts";

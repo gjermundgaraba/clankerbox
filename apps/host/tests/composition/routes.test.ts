@@ -550,7 +550,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "every action refuses a request with no version, or another release's, and runs nothing",
+    "every action refuses a request with no version, another release's, or one that carries Origin, as a browser's does, and runs nothing",
     () =>
       Effect.gen(function* () {
         const { url, fake } = yield* serve();
@@ -574,11 +574,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const refusals = [
           {
             headers: {},
-            says: `no ${versionHeader} header`,
+            says: `no ${versionHeader} header; this host runs clankerbox ${version}`,
           },
           {
             headers: versioned(bump(1)),
             says: `this host runs clankerbox ${version} and the caller is ${bump(1)}; their major.minor must match`,
+          },
+          {
+            headers: { ...versioned(version), origin: url },
+            says: `this host takes no request that carries Origin, as a browser's does, and this one carries ${url}`,
           },
         ];
 
@@ -589,9 +593,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
             expect(answer.status, name).toBe(400);
             expect(message, name).toContain(says);
-            expect(message, name).toContain(
-              `this host runs clankerbox ${version}`
-            );
           }
         }
 

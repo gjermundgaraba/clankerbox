@@ -1,5 +1,9 @@
 import { HostHttp } from "@clankerbox/host-contract";
-import { version, versionCheck } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  refuseBrowsers,
+  version,
+  versionCheck,
+} from "@gjermundgaraba/clankerbox-sdk";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Effect, Layer } from "effect";
@@ -58,5 +62,6 @@ const app = (config: Served) =>
 
 export const routes = (config: Served) =>
   ActionHttp.layer(HostHttp, [app(config)]).pipe(
-    Layer.provide(versionCheck("host").layer)
+    Layer.provide(versionCheck("host").layer),
+    Layer.provide(refuseBrowsers("host").layer)
   );

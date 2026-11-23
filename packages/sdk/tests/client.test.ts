@@ -10,7 +10,7 @@ import {
   Layer,
   Result,
 } from "effect";
-import { HttpClient, HttpClientRequest } from "effect/http";
+import { HttpClient } from "effect/http";
 import { TestClock } from "effect/testing";
 import { afterEach, describe, expect } from "vite-plus/test";
 
@@ -1239,50 +1239,6 @@ describe("client", () => {
 
           expect(stub.calls).toStrictEqual([]);
           expect(stub.held()).toStrictEqual(["dev"]);
-          expect(stub.row("dev")?.desired).toBe("running");
-        })
-    );
-  });
-
-  describe("a request that carries Origin", () => {
-    it.effect(
-      "is refused Invalid with its message, as through a proxy that adds Origin, and runs no mutation it is sent",
-      () =>
-        Effect.gen(function* () {
-          const stub = server({ machines: [machine("dev")] });
-          const origin = "http://proxy.example";
-
-          const [read, stopped] = yield* Effect.flatMap(
-            Client.make(url),
-            (client) =>
-              Effect.all([
-                Effect.flip(client.getMachine({ id: "dev" })),
-                Effect.flip(client.stopMachine({ id: "dev" })),
-              ])
-          ).pipe(
-            Effect.provide(
-              Layer.effect(
-                HttpClient.HttpClient,
-                Effect.map(
-                  HttpClient.HttpClient,
-                  HttpClient.mapRequest(
-                    HttpClientRequest.setHeader("origin", origin)
-                  )
-                )
-              ).pipe(
-                Layer.provide(transport(new Map([[new URL(url).origin, stub]])))
-              )
-            )
-          );
-
-          for (const refused of [read, stopped]) {
-            expect(refused).toMatchObject({ _tag: "Invalid" });
-            expect(refused.message).toBe(
-              `this control plane takes no request that carries Origin, as a browser's does, and this one carries ${origin}: a proxy in front of it must not add Origin`
-            );
-          }
-
-          expect(stub.calls).toStrictEqual([]);
           expect(stub.row("dev")?.desired).toBe("running");
         })
     );

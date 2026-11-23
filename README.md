@@ -7,7 +7,7 @@ clankerbox runs machines (VMs) for coding agents and reports where each one is r
 - A client talks to one control plane, `clankerbox-server`, by machine name. It never learns which host a machine is on. Adding a host is one line in the control plane's config.
 - A template lives on the control plane: a base, sizes and builds, each a copy of a machine its setup ran on. A create from a template clones its current build, so no setup runs.
 - Each machine exposes only SSH, reported as a `host:port` with the guest's host key. That key is Ed25519: each new machine, fork or restore replaces the image's host keys with one new Ed25519 key. A Linux guest serves only that key, and a macOS guest on Tart all three, since its sshd makes new RSA and ECDSA keys beside it at its first connection. A machine can also request the tailnet: it then joins it as its own node, with a key the control plane mints for each join, so its ports are reachable there.
-- The control plane, the hosts and the clients share a Tailscale tailnet. Nothing authenticates a caller: the APIs have no keys and no TLS, and anything that reaches the control plane can act on every machine. Each listens only on a tailnet or loopback address, which limits where it can be reached from, and the tailnet's policy limits who reaches it; they refuse a request that carries `Origin`, so no browser page acts on them (see Deploy).
+- The control plane, the hosts and the clients share a Tailscale tailnet. Nothing authenticates a caller: the APIs have no keys and no TLS, so anything that reaches the control plane can act on every machine (see Deploy, Network).
 
 ## How it fits together
 
@@ -539,7 +539,7 @@ Clients never need a host's API port. The control plane and each host refuse any
 
 ## SDK
 
-`@gjermundgaraba/clankerbox-sdk` holds the API's schemas, errors and the client. SDK 1.2.3 talks to a control plane of release 1.2.x, which refuses other releases. It runs in Node, through `./node`: the control plane refuses a request that carries `Origin`, as a browser's does, so a client in a browser page fails `Invalid` on every call. The SDK and the Sandbox Agent provider take Effect and `@effect/platform-node` `~4.1.4` and `@gjermundgaraba/effect-actions` `^0.33.0` as peer dependencies: upgrade them together.
+`@gjermundgaraba/clankerbox-sdk` holds the API's schemas, errors and the client. SDK 1.2.3 talks to a control plane of release 1.2.x, which refuses other releases. It runs in Node, through `./node`, not in a browser page: the browser blocks its calls to another origin, as the control plane serves no CORS, and the control plane refuses the rest, which carry `Origin`. The SDK and the Sandbox Agent provider take Effect and `@effect/platform-node` `~4.1.4` and `@gjermundgaraba/effect-actions` `^0.33.0` as peer dependencies: upgrade them together.
 
 ```ts
 import * as NodeServices from "@effect/platform-node/NodeServices";
