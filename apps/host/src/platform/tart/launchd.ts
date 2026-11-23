@@ -33,11 +33,6 @@ const programOf = (output: string): readonly string[] | undefined =>
     .filter((argument) => argument !== "")
     .map((argument) => argument.slice(2));
 
-/**
- * The job `launchctl print gui/<uid>/<label>` printed, or what it printed that this host can't
- * read: no state or no arguments, or a state macOS didn't print when the `bump-tart` skill last
- * captured them, as a later macOS may.
- */
 export const parse = (output: string): Result.Result<Job, string> => {
   const state = line(output, "state");
   const program = programOf(output);

@@ -287,16 +287,6 @@ export const heldOf = (sandbox: Sandbox | undefined): Held => {
     : "moving";
 };
 
-/**
- * The state a read gives each machine. It gives no reboot mark, so a pod the cluster makes again
- * between two reads, its guest booted cold, raises no `boots`. The mark to give is the pod's UID
- * with its container's `restartCount`, from the pod's status
- * (https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#PodStatus),
- * which the out-of-memory cause will
- * read as well, not the guest's `/proc/sys/kernel/random/boot_id` over exec: a guest is a
- * container, so that is its node's kernel's, the same across a pod made again on one node (see
- * docs/design/machine-charts-decisions.tsv, 2026-11-21).
- */
 const readAs: Readonly<Record<Held, MachineState>> = {
   running: "running",
   stopping: "stopped",
@@ -417,10 +407,6 @@ const diskGibOf = (claim: Claim | undefined) => {
   );
 };
 
-/**
- * Whether the resizer gave up on a claim's growth:
- * https://github.com/kubernetes/api/blob/v0.34.0/core/v1/types.go#L680-L698
- */
 const ungrowable = (claim: Claim, diskGib: number) => {
   const allocated = amount(
     claim.status?.allocatedResources,

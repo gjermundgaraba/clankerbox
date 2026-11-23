@@ -17,7 +17,6 @@ export interface Home {
   readonly directory: (vm: string) => string;
   /** The file whose lock `tart run` holds while the VM runs. */
   readonly config: (vm: string) => string;
-  /** Whether Tart counts the VM's directory as a VM. */
   readonly countsAsVm: (vm: string) => Effect.Effect<boolean, Internal>;
 }
 

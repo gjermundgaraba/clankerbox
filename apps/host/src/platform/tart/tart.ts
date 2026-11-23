@@ -230,11 +230,6 @@ const sizeFlags = ({ cpu, ramMib, diskGib }: Sizing): readonly string[] => [
 
 export const minimumVersion = "2.41.1";
 
-/**
- * The newest Tart a mac host starts under, the release the `bump-tart` skill last qualified. The
- * host reads VMs from Tart's own directories and processes, which no release promises to keep, so a
- * newer Tart is refused rather than misread.
- */
 export const testedVersion = "2.41.1";
 
 const release = /^\d+\.\d+\.\d+$/u;

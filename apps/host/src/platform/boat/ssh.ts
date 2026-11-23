@@ -39,10 +39,6 @@ interface Attempt {
   readonly log: string;
 }
 
-/**
- * A command whose host key is refused never ran, so it runs once more under a fresh pin when the
- * provider answers a new key, as it does after a guest re-keys.
- */
 export const make = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

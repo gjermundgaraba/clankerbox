@@ -564,12 +564,6 @@ export const make = (
     // https://docs.boat.dev/snapshots/resume-and-fork
     // A create from a saved snapshot that is still saving is answered with a sandbox, seen live on
     // 2026-11-21, so a save is waited out to `ready` before anything is made from it.
-    //
-    // Only the save's request runs whole, as a provider call: the wait for its snapshot after it
-    // is reads, which a later request cuts as on any runtime. A save cut so goes on at boat, under
-    // a name made from the instance, so a fork or capture asked again finds it and waits for it,
-    // and a snapshot already saved from the machine under that name stands for a new one: a POST
-    // over it would wait out its save inside the call's 10 minutes, then save afresh.
     const savedAs = (machine: Target, name: string, what: string) =>
       Effect.gen(function* () {
         const before = yield* api

@@ -2,8 +2,6 @@ import type { RuntimeTraits } from "@clankerbox/host-contract/traits";
 import { RuntimeName } from "@gjermundgaraba/clankerbox-sdk";
 
 /**
- * `most` is the most the account's plan gives one machine.
- *
  * smol cloud copies a stopped machine's disk only by exporting it, which pushes an artifact into
  * the account's registry that no shipped tool can delete, so a fork or capture of a stopped machine
  * is refused rather than leave storage behind it. Its export documents neither a body nor an answer.
@@ -12,9 +10,6 @@ import { RuntimeName } from "@gjermundgaraba/clankerbox-sdk";
  * https://smolmachines.com/openapi.json (`machine_export`)
  * https://smolmachines.com/docs/guides/skills/cloud-registry.md ("What cannot be undone")
  * https://smolmachines.com/docs/cloud/api-reference.md ("export a stopped machine's disk")
- *
- * A fork's stop and start of its branch, and a restore's, which keep no memory in the copy, are
- * checked against the fake alone; the live suite against an account is owed.
  */
 export const traits = (
   most: RuntimeTraits["limits"]["most"]
