@@ -324,6 +324,39 @@ layer(NodeServices.layer)((it) => {
       })
   );
 
+  it.effect(
+    "a host entry's token is read from its file, and a host without one sends none",
+    () =>
+      Effect.gen(function* () {
+        const linux = mintToken("cp");
+
+        const { file, loaded } = yield* load({
+          ...config,
+          hosts: [
+            {
+              id: "linux",
+              url: "http://100.64.0.10:8484",
+              token: "linux.token",
+            },
+            { id: "mac", url: "http://100.64.0.20:8484" },
+          ],
+        });
+
+        yield* write(
+          path.join(path.dirname(file), "linux.token"),
+          `${Redacted.value(linux.token)}\n`
+        );
+
+        const read = yield* loaded;
+
+        expect(
+          read.hosts.map(({ token }) =>
+            token === undefined ? undefined : Redacted.value(token)
+          )
+        ).toStrictEqual([Redacted.value(linux.token), undefined]);
+      })
+  );
+
   it.effect("a config that can't be read is Invalid and names its file", () =>
     Effect.gen(function* () {
       const file = path.join(yield* scratch, "missing.json");

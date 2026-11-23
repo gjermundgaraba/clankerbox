@@ -11,6 +11,7 @@ import {
 import type { Host, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
+import type { Redacted } from "effect";
 import { Brand, Context, Data, Duration, Effect, Layer, Schema } from "effect";
 import { HttpClient, HttpClientError, HttpClientRequest } from "effect/http";
 
@@ -24,6 +25,8 @@ export interface Member {
   readonly id: string;
   readonly url: string;
   readonly draining: boolean;
+  /** The token the host takes from this control plane, when its config names callers. */
+  readonly token?: Redacted.Redacted | undefined;
 }
 
 interface Failed {
@@ -43,9 +46,17 @@ export type Unreachable = Unanswered | Incompatible | Unsent;
 const hostApi = (member: Member) =>
   ActionHttp.client(HostHttp, {
     baseUrl: member.url,
-    transformClient: HttpClient.mapRequest(
-      HttpClientRequest.setHeader(versionHeader, version)
-    ),
+    transformClient: HttpClient.mapRequest((request) => {
+      const versioned = HttpClientRequest.setHeader(
+        request,
+        versionHeader,
+        version
+      );
+
+      return member.token === undefined
+        ? versioned
+        : HttpClientRequest.bearerToken(versioned, member.token);
+    }),
   });
 
 export type HostApi = Effect.Success<ReturnType<typeof hostApi>>;
@@ -144,6 +155,13 @@ const unusable = (host: string, error: unknown): Unreachable => {
     return new Incompatible({
       host,
       message: `host ${host} answers in another contract than this control plane's: ${error.message.replaceAll(/\s*\n\s*/gu, " ")}`,
+    });
+  }
+
+  if (Schema.is(Action.Unauthenticated)(error)) {
+    return new Unanswered({
+      host,
+      message: `host ${host} refused the control plane's token: ${error.message}; its entry in the config must name the token whose hash is in the host's callers`,
     });
   }
 

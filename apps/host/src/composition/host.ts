@@ -1,10 +1,9 @@
-import { Server } from "node:http";
-
 import { stoppingStatus } from "@clankerbox/host-contract";
 import { journal } from "@clankerbox/host-contract/journal";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
+import { closingServer } from "@gjermundgaraba/clankerbox-sdk/node";
 import { Effect, Layer } from "effect";
 import type { FileSystem, Path } from "effect";
 import { HttpRouter } from "effect/http";
@@ -23,6 +22,7 @@ import * as Reach from "../reach.ts";
 import { Runtime } from "../runtime.ts";
 import type { CannotStart } from "../runtime.ts";
 import type { HostSettings } from "../settings.ts";
+import type { HostConfig } from "./config.ts";
 import { routes } from "./routes.ts";
 
 export type ServerLayer = Layer.Layer<
@@ -34,20 +34,10 @@ export type ServerLayer = Layer.Layer<
   HttpServerError.ServeError
 >;
 
-class ClosingEveryConnection extends Server {
-  override close(callback?: (error?: Error) => void) {
-    super.close(callback);
-    this.closeAllConnections();
-
-    return this;
-  }
-}
-
 /**
  * Without the preemptive shutdown, the stop takes the routes off, cuts the requests they run, waits
  * for each to answer 503, and only then closes the server. A connection still open then is owed
- * nothing, so the server closes every one, where Node's own close closes the idle ones and waits on
- * the rest, on one whose request never completes for good.
+ * nothing, so the server, `closingServer`, closes every one.
  *
  * The routes go on after the server listens and come off when the stop begins, so a request that
  * finds no more request listeners than the server had when it began listening, ours and any the
@@ -55,10 +45,13 @@ class ClosingEveryConnection extends Server {
  * kept-alive client opens a fresh connection for its next request rather than meet the final close
  * mid-request, where a mutation would read as maybe run, not as sent to a stopping host.
  */
-export const hostServer = ({ listen }: Pick<HostSettings, "listen">) =>
+export const hostServer = ({
+  listen,
+  tls,
+}: Pick<HostConfig, "listen" | "tls">) =>
   NodeHttpServer.layer(
     () => {
-      const server = new ClosingEveryConnection();
+      const server = closingServer(tls);
       let unroutedListeners = Infinity;
 
       server.once("listening", () => {
@@ -87,7 +80,7 @@ const startedUp = Layer.effectDiscard(
 );
 
 export const hostLayer = <E, R>(
-  config: HostSettings,
+  config: HostSettings & Pick<HostConfig, "callers">,
   runtime: Layer.Layer<Runtime, E, R>,
   server: ServerLayer
 ): Layer.Layer<
@@ -95,7 +88,7 @@ export const hostLayer = <E, R>(
   HostError | CannotStart | E,
   Exclude<R, PortProbe> | FileSystem.FileSystem | Path.Path
 > =>
-  HttpRouter.serve(routes(config), {
+  HttpRouter.serve(routes(config, config.callers ?? []), {
     disableLogger: true,
     middleware: journal,
   }).pipe(

@@ -8,12 +8,15 @@ import {
   version,
   versionHeader,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import { mintToken, readCallers } from "@gjermundgaraba/clankerbox-sdk/node";
+import { scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import * as Action from "@gjermundgaraba/effect-actions/Action";
 import {
   Effect,
   Exit,
   Fiber,
   Logger,
+  Redacted,
   References,
   Schedule,
   Schema,
@@ -57,6 +60,21 @@ const post = (
   });
 
 const decodeReport = Schema.decodeUnknownSync(Schema.fromJsonString(Report));
+
+const decodeUnauthenticated = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Action.Unauthenticated)
+);
+
+const bearer = (token: Redacted.Redacted) => `Bearer ${Redacted.value(token)}`;
+
+const callersFile = (...lines: string[]) =>
+  Effect.gen(function* () {
+    const file = `${yield* scratch}/callers`;
+
+    yield* write(file, `${lines.join("\n")}\n`);
+
+    return file;
+  });
 
 const decodeInvalid = Schema.decodeUnknownSync(Schema.fromJsonString(Invalid));
 
@@ -602,6 +620,81 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(calls).toStrictEqual(["startup"]);
         expect(observed).toStrictEqual([]);
+        expect(served.status).toBe(200);
+      })
+  );
+
+  it.effect(
+    "with callers, every action refuses a request with no token, one minted for another host, or one sent as Basic, at 401, and runs nothing; the control plane's is served",
+    () =>
+      Effect.gen(function* () {
+        const linux = mintToken("cp");
+        const mac = mintToken("cp");
+
+        const { url, fake } = yield* serve({
+          callers: yield* readCallers(yield* callersFile(linux.line)),
+        });
+
+        const ref = { ...dev, port: 10_022 };
+
+        const bodies = {
+          readHost: {},
+          readMachines: {
+            machines: [{ name: dev.name, instance: dev.instance }],
+          },
+          readSizes: { machine: ref },
+          readCapacity: { machines: [ref] },
+          adoptMachines: { machines: [ref] },
+          runOperation: { ...made("op-1"), boot: "never read" },
+          waitOperation: { id: "op-1" },
+          cancelOperation: { id: "op-1" },
+          collectOperation: { id: "op-1" },
+          execMachine: { machine: ref, argv: ["true"] },
+        } satisfies { readonly [N in HostAction]: Body<N> };
+
+        const refusals = [
+          { authorization: undefined, says: "carries none" },
+          {
+            authorization: bearer(mac.token),
+            says: "no caller with this token",
+          },
+          {
+            authorization: `Basic ${Redacted.value(linux.token)}`,
+            says: "carries none",
+          },
+        ];
+
+        for (const { name } of HostHttp.actions) {
+          for (const { authorization, says } of refusals) {
+            const answer = yield* post(
+              url,
+              name,
+              bodies[name],
+              authorization === undefined
+                ? versioned(version)
+                : { ...versioned(version), authorization }
+            );
+
+            expect(answer.status, name).toBe(401);
+            expect(decodeUnauthenticated(answer.body).message, name).toContain(
+              says
+            );
+          }
+        }
+
+        expect(fake.calls).toStrictEqual(["startup"]);
+        expect(fake.observed).toStrictEqual([]);
+
+        const served = yield* post(
+          url,
+          "readHost",
+          {},
+          {
+            ...versioned(version),
+            authorization: bearer(linux.token),
+          }
+        );
+
         expect(served.status).toBe(200);
       })
   );

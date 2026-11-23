@@ -24,6 +24,7 @@ import type {
 import type { Caller } from "@gjermundgaraba/clankerbox-sdk/node";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
+import type { Redacted } from "effect";
 import {
   Context,
   Duration,
@@ -293,6 +294,7 @@ export const plane = (options?: {
     readonly id: string;
     readonly as?: FakeRuntimeName;
     readonly options?: Parameters<typeof startHost>[1];
+    readonly token?: Redacted.Redacted;
   }>;
   readonly draining?: readonly string[];
   readonly recheck?: Duration.Duration;
@@ -338,11 +340,16 @@ export const plane = (options?: {
       listen: { address: "127.0.0.1", port: 0 },
       stateDir,
       hosts: [
-        ...hosts.map(({ id, url }) => ({
-          id,
-          url,
-          draining: options?.draining?.includes(id) === true,
-        })),
+        ...hosts.map(({ id, url }, index) => {
+          const token = members[index]?.token;
+
+          return {
+            id,
+            url,
+            draining: options?.draining?.includes(id) === true,
+            ...(token === undefined ? {} : { token }),
+          };
+        }),
         ...(options?.members ?? []),
       ],
       recheck: options?.recheck ?? quiet,

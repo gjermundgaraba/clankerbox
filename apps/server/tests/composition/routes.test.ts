@@ -153,6 +153,54 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "the control plane sends each host its own token: a host that takes it is up and runs a create, one given another host's token is unreachable and says why, and one with no callers ignores it",
+    () =>
+      Effect.gen(function* () {
+        const linux = mintToken("cp");
+        const mac = mintToken("cp");
+
+        const served = yield* running({
+          hosts: [
+            {
+              id: "linux",
+              options: {
+                callers: yield* readCallers(yield* callersFile(linux.line)),
+              },
+              token: linux.token,
+            },
+            {
+              id: "mac",
+              options: {
+                callers: yield* readCallers(yield* callersFile(mac.line)),
+              },
+              token: linux.token,
+            },
+            { id: "open", token: mac.token },
+          ],
+        });
+
+        const client = yield* clientOf(served.url);
+        const [up, refused, open] = yield* client.hosts;
+
+        expect(up).toMatchObject({ id: "linux", state: "up" });
+        expect(refused).toMatchObject({ id: "mac", state: "unreachable" });
+        expect(refused?.problem).toContain(
+          "host mac refused the control plane's token"
+        );
+        expect(open).toMatchObject({ id: "open", state: "up" });
+
+        yield* client.create("dev", { ...spec, host: "linux" });
+
+        const [machine] = yield* client.listMachines();
+
+        expect(machine?.state).toBe("running");
+        expect(
+          served.hosts[0]!.fake.calls.filter((call) => call.includes("dev"))
+        ).not.toStrictEqual([]);
+      })
+  );
+
+  it.effect(
     "the control plane places an image reference on a linux host, and the machine boots from it",
     () =>
       Effect.gen(function* () {

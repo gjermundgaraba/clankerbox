@@ -5,6 +5,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
+import type { Caller } from "@gjermundgaraba/clankerbox-sdk/node";
 import {
   read as readFile,
   scratch,
@@ -75,6 +76,7 @@ export interface HostOptions {
   readonly ports?: PortRange;
   readonly tailnet?: boolean;
   readonly http?: Layer.Layer<HttpClient.HttpClient>;
+  readonly callers?: readonly Caller[];
 }
 
 export interface ServedHost {
@@ -125,6 +127,7 @@ export const startHostOver = <E>(
         {
           ...settings,
           tailnet: options?.tailnet,
+          callers: options?.callers,
         },
         runtime(settings),
         loopbackServer(options?.port)

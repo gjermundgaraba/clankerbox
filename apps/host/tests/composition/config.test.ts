@@ -2,6 +2,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
+import { mintToken } from "@gjermundgaraba/clankerbox-sdk/node";
 import { scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { Effect } from "effect";
 import type { Schema } from "effect";
@@ -43,6 +44,19 @@ const load = (contents: Schema.Json, ephemeral = linuxDefault) =>
     yield* write(file, JSON.stringify(contents));
 
     return { file, loaded: onBox(ephemeral)(loadConfig(file)) };
+  });
+
+const tls = { cert: "cert.pem", key: "key.pem" };
+
+const guarded = (dir: string) =>
+  Effect.gen(function* () {
+    const plane = mintToken("cp");
+
+    yield* write(path.join(dir, "callers"), `${plane.line}\n`);
+    yield* write(path.join(dir, "cert.pem"), "a certificate");
+    yield* write(path.join(dir, "key.pem"), "a key");
+
+    return { plane };
   });
 
 layer(NodeServices.layer)((it) => {
@@ -199,44 +213,77 @@ layer(NodeServices.layer)((it) => {
       })
   );
 
-  it.effect("a host listens only on a tailnet or loopback address", () =>
-    Effect.gen(function* () {
-      for (const address of [
-        "127.0.0.1",
-        "127.0.0.2",
-        "::1",
-        "100.64.0.1",
-        "fd7a:115c:a1e0::5",
-      ]) {
-        const { loaded } = yield* load({
+  it.effect(
+    "without callers and tls a host listens only on a tailnet or loopback address, and names what an other address lacks",
+    () =>
+      Effect.gen(function* () {
+        for (const address of [
+          "127.0.0.1",
+          "127.0.0.2",
+          "::1",
+          "100.64.0.1",
+          "fd7a:115c:a1e0::5",
+        ]) {
+          const { loaded } = yield* load({
+            ...config,
+            listen: { address, port: 8484 },
+          });
+
+          expect(yield* loaded, address).toMatchObject({
+            listen: { address },
+          });
+        }
+
+        for (const [address, extra, says] of [
+          ["0.0.0.0", {}, "needs callers and tls set"],
+          ["::", {}, "needs callers and tls set"],
+          ["37.27.63.112", {}, "needs callers and tls set"],
+          ["192.168.1.2", {}, "needs callers and tls set"],
+          ["100.128.0.1", {}, "needs callers and tls set"],
+          ["37.27.63.112", { callers: "callers" }, "needs tls set"],
+          ["37.27.63.112", { tls }, "needs callers set"],
+          ["linux.tailnet", {}, "an IP address"],
+        ] as const) {
+          const { file, loaded } = yield* load({
+            ...config,
+            ...extra,
+            listen: { address, port: 8484 },
+          });
+
+          yield* guarded(path.dirname(file));
+
+          const error = yield* Effect.flip(loaded);
+
+          expect([error._tag, error.file], address).toStrictEqual([
+            "Invalid",
+            file,
+          ]);
+          expect(error.message, address).toContain(says);
+        }
+      })
+  );
+
+  it.effect(
+    "with callers and tls a host listens on any address, and reads both",
+    () =>
+      Effect.gen(function* () {
+        const { file, loaded } = yield* load({
           ...config,
-          listen: { address, port: 8484 },
+          listen: { address: "37.27.63.112", port: 8484 },
+          callers: "callers",
+          tls,
         });
 
-        expect(yield* loaded, address).toMatchObject({
-          listen: { address },
-        });
-      }
+        const { plane } = yield* guarded(path.dirname(file));
+        const host = yield* loaded;
 
-      for (const address of [
-        "0.0.0.0",
-        "::",
-        "37.27.63.112",
-        "192.168.1.2",
-        "linux.tailnet",
-        "100.128.0.1",
-      ]) {
-        const { loaded } = yield* load({
-          ...config,
-          listen: { address, port: 8484 },
-        });
-
-        const error = yield* Effect.flip(loaded);
-
-        expect(error._tag, address).toBe("Invalid");
-        expect(error.message, address).toContain("tailnet address");
-      }
-    })
+        expect(host.listen.address).toBe("37.27.63.112");
+        expect(host.callers?.map(({ name }) => name)).toStrictEqual(["cp"]);
+        expect(Buffer.from(host.callers?.[0]?.hash ?? []).toString("hex")).toBe(
+          plane.line.split(" ")[1]
+        );
+        expect(host.tls).toStrictEqual({ cert: "a certificate", key: "a key" });
+      })
   );
 
   it.effect(

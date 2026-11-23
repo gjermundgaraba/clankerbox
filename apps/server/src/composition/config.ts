@@ -12,6 +12,7 @@ import {
   listenRefusal,
   readCallers,
   readTls,
+  readToken,
   TlsFiles,
 } from "@gjermundgaraba/clankerbox-sdk/node";
 import { Effect, FileSystem, Path, Schema } from "effect";
@@ -37,6 +38,7 @@ const ServerConfigFile = Schema.Struct({
       id: HostId,
       url: Schema.String,
       draining: Schema.optionalKey(Schema.Boolean),
+      token: Schema.optionalKey(Schema.String),
     })
   ).check(
     Schema.makeFilter((hosts) => {
@@ -108,11 +110,19 @@ export const loadConfig = (
     return {
       listen: decoded.listen,
       stateDir: relative(decoded.stateDir),
-      hosts: decoded.hosts.map(({ id, url, draining }) => ({
-        id,
-        url,
-        draining: draining === true,
-      })),
+      hosts: yield* Effect.forEach(
+        decoded.hosts,
+        ({ id, url, draining, token }) =>
+          Effect.map(
+            token === undefined ? Effect.undefined : readToken(relative(token)),
+            (read) => ({
+              id,
+              url,
+              draining: draining === true,
+              ...(read === undefined ? {} : { token: read }),
+            })
+          )
+      ),
       recheck: defaultRecheck,
       failedRowsLast: defaultFailedRowsLast,
       authorizedKeys: yield* readAuthorizedKeys(
