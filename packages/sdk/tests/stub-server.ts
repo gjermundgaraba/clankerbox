@@ -39,7 +39,7 @@ import type {
   Checkpoint,
   Client,
   CreateRequest,
-  Declared,
+  Answered,
   Executed,
   ExecRequest,
   Host,
@@ -59,7 +59,7 @@ export type CheckpointStep = Step<Checkpoint, Checkpoint["phase"]>;
 export type BuildStep = Step<Build, Build["phase"]>;
 
 export type Refusals = {
-  readonly [N in Client.ServerAction]?: Declared<N>;
+  readonly [N in Client.ServerAction]?: Answered<N>;
 };
 
 export interface StubServerOptions {
@@ -77,10 +77,10 @@ export interface StubServerOptions {
   };
   readonly create?: (
     request: CreateRequest
-  ) => Effect.Effect<Machine, Declared<"createMachine">>;
+  ) => Effect.Effect<Machine, Answered<"createMachine">>;
   readonly exec?: (
     request: ExecRequest
-  ) => Effect.Effect<Executed, Declared<"execMachine">>;
+  ) => Effect.Effect<Executed, Answered<"execMachine">>;
 }
 
 const stubRuntime = RuntimeName.make("stub");
@@ -233,13 +233,13 @@ export const stubServer = (options: StubServerOptions = {}) => {
     action: N,
     call: string,
     work: Effect.Effect<A, E>
-  ): Effect.Effect<A, E | Declared<N>> =>
-    Effect.suspend((): Effect.Effect<A, E | Declared<N>> => {
-      const refusal: Declared<N> | undefined = options.refuse?.[action];
+  ): Effect.Effect<A, E | Answered<N>> =>
+    Effect.suspend((): Effect.Effect<A, E | Answered<N>> => {
+      const refusal: Answered<N> | undefined = options.refuse?.[action];
 
       calls.push(call);
 
-      const answer: Effect.Effect<A, E | Declared<N>> =
+      const answer: Effect.Effect<A, E | Answered<N>> =
         refusal === undefined ? work : Effect.fail(refusal);
 
       return Effect.andThen(
@@ -619,7 +619,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
 
   const recordBuild = (
     request: BuildRequest
-  ): Effect.Effect<Build, Declared<"buildTemplate">> =>
+  ): Effect.Effect<Build, Answered<"buildTemplate">> =>
     Effect.sync(() => {
       const { template: name, base, cpu, ramMib, diskGib, setup } = request;
       const found = templates.get(name);
@@ -816,6 +816,9 @@ export const stubServer = (options: StubServerOptions = {}) => {
     },
     script: (id: string, steps: readonly MachineStep[]) => {
       machineScripts.set(id, steps);
+    },
+    loseReply: (how: "down" | "cut") => {
+      replyLost = how;
     },
     scriptCheckpoint: (id: string, steps: readonly CheckpointStep[]) => {
       checkpointScripts.set(id, steps);

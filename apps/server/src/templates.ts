@@ -14,6 +14,7 @@ import {
   NotFound,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
+  Answered,
   Build,
   BuildCopy,
   BuildRequest,
@@ -60,7 +61,7 @@ export interface Interface {
   ) => Effect.Effect<Template, Declared<"getTemplate">>;
   readonly build: (
     request: BuildRequest
-  ) => Effect.Effect<Build, Declared<"buildTemplate">>;
+  ) => Effect.Effect<Build, Answered<"buildTemplate">>;
   readonly delete: (
     id: string
   ) => Effect.Effect<void, Declared<"deleteTemplate">>;

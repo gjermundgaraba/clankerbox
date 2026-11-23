@@ -12,7 +12,7 @@ import {
   NotMade,
   NotOffered,
   PinMismatch,
-  Unavailable,
+  Unconfirmed,
   Unsizable,
   WrongState,
 } from "./errors.ts";
@@ -99,7 +99,6 @@ const making = [
   NotMade,
   Unsizable,
   Conflict,
-  Unavailable,
   Internal,
 ] as const;
 
@@ -147,7 +146,6 @@ export const Http = ActionHttp.make(
         Conflict,
         WrongState,
         PinMismatch,
-        Unavailable,
         Internal,
       ] as const,
       description:
@@ -201,10 +199,10 @@ export const Http = ActionHttp.make(
         NotMade,
         Missing,
         WrongState,
-        Unavailable,
+        Unconfirmed,
         Internal,
       ] as const,
-      description: `Run a command in a running machine, as the user it names or root, with the environment given, and answer its exit code and output once it exits, whatever the code. It waits for a step under way on the machine before it begins, though not for a capture of it or a fork from it, which run beside it, and its timeout counts from then. It runs as long as the request does: ending the request, or its timeout, ends the command and what it started in the guest, and a timeout answers exit code ${timedOutExitCode} with the output once the host's end has finished, which the host waits for at most ${Duration.format(endTimeout)} past it, with mayStillRun saying why when the host couldn't confirm they had ended, so they may still run. A stop or delete of the machine first ends it so, and it answers WrongState in the phase stopping or deleting, its message saying when the command may still run. Nothing of it is stored or logged.`,
+      description: `Run a command in a running machine, as the user it names or root, with the environment given, and answer its exit code and output once it exits, whatever the code. It waits for a step under way on the machine before it begins, though not for a capture of it or a fork from it, which run beside it, and its timeout counts from then. It runs as long as the request does: ending the request, or its timeout, ends the command and what it started in the guest, and a timeout answers exit code ${timedOutExitCode} with the output once the host's end has finished, which the host waits for at most ${Duration.format(endTimeout)} past it, with mayStillRun saying why when the host couldn't confirm they had ended, so they may still run. A stop or delete of the machine first ends it so, and it answers WrongState in the phase stopping or deleting, its message saying when the command may still run. Nothing of it is stored or logged. A host that isn't sent the command is Unavailable, so it didn't run, and one sent it that gives no answer the control plane can read is Unconfirmed, so it may have run.`,
       input: ExecRequest,
       success: Executed,
     }),
@@ -248,14 +246,7 @@ export const Http = ActionHttp.make(
     }),
     Action.make("buildTemplate", {
       ...write,
-      error: [
-        Invalid,
-        Conflict,
-        NotOffered,
-        Unsizable,
-        Unavailable,
-        Internal,
-      ] as const,
+      error: [Invalid, Conflict, NotOffered, Unsizable, Internal] as const,
       description: `Build a template: a machine made from its base on the \`runtime\` the build names, its setup run, then copied and deleted. Only a host of that runtime takes the build, one with no room moving it to the next host of the same runtime, and each clone of it runs on that runtime too. Each build gives the base, the runtime and the sizes, which the template then shows, and a setup without a timeout takes the host's. With \`host\`, only that host is tried, as if it were the only one, and NotOffered answers a host the control plane doesn't know. NotOffered answers a base no host of the runtime offers, and Unsizable sizes no host of it that offers the base gives, each saying why it passed over each host. The template's current build moves to this one only once its setup has run, and it keeps its last ${keptBuilds} ready builds. Conflict refuses a build of a template whose build still runs.`,
       input: BuildRequest,
       success: Build,
@@ -299,5 +290,16 @@ export const Http = ActionHttp.make(
 
 export const actionsByName = Action.byName(Http.actions);
 
-export type Declared<N extends keyof typeof actionsByName> =
-  (typeof actionsByName)[N]["error"][number]["Type"];
+/**
+ * What the control plane may fail `N` with: the errors `N` declares, and the built-in
+ * `Action.Unavailable`.
+ */
+export type Answered<N extends keyof typeof actionsByName> =
+  | (typeof actionsByName)[N]["error"][number]["Type"]
+  | Action.Unavailable;
+
+/** The errors `N` declares that a client passes on as they come: all but `Unconfirmed`. */
+export type Declared<N extends keyof typeof actionsByName> = Exclude<
+  (typeof actionsByName)[N]["error"][number],
+  typeof Unconfirmed
+>["Type"];

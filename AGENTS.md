@@ -356,6 +356,14 @@ the run.
   machine it asked by `createdAt`, reads on through `waiting` as through an
   outage of the control plane, and ends `Unavailable`, the request saved, once
   two minutes pass with no read that tells it anything.
+- **The wire says whether a 503 may have run.** A server site that refuses
+  before it records or sends anything fails with effect-actions' built-in
+  `Action.Unavailable`, which a generic client retries. One that sent the call
+  on to a host and got nothing it could read fails `Unconfirmed`. Choose by what
+  the code can promise at that point, never by what sounds safer: a site that
+  can't tell takes `Unconfirmed`. The SDK's `Unavailable { readOnly }` is the
+  client's reading of both and is declared by no action, as 0.34 of
+  effect-actions refuses a second error of that tag.
 - **A step is a whole operation on a host.** The write that enters a leaf with a
   `step` records an operation in the store with its leases, and the loop then
   sends it. The host runs it to its end whether or not the caller stays, and

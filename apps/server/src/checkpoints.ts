@@ -13,6 +13,7 @@ import {
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
+  Answered,
   CaptureRequest,
   Checkpoint,
   Declared,
@@ -23,6 +24,7 @@ import type {
   Conflict,
   Internal,
 } from "@gjermundgaraba/clankerbox-sdk";
+import * as Action from "@gjermundgaraba/effect-actions/Action";
 import { Cause, Context, DateTime, Effect, Layer, Option } from "effect";
 import type { Scope, Duration } from "effect";
 
@@ -59,7 +61,7 @@ export interface Interface {
   ) => Effect.Effect<Checkpoint, Declared<"captureCheckpoint">>;
   readonly stop: (
     request: StopRequest
-  ) => Effect.Effect<Machine, Declared<"stopMachine">>;
+  ) => Effect.Effect<Machine, Answered<"stopMachine">>;
   readonly delete: (
     id: string
   ) => Effect.Effect<void, Declared<"deleteCheckpoint">>;
@@ -310,7 +312,11 @@ export const make = (settings: {
           return true;
         }
 
-        yield* answering(hosts, host);
+        yield* answering(hosts, host).pipe(
+          Effect.mapError(
+            ({ message }) => new Unavailable({ message, readOnly: true })
+          )
+        );
 
         return false;
       });
@@ -393,9 +399,8 @@ export const make = (settings: {
         const seen = yield* stateOf(hosts, found);
 
         if (seen === "unknown") {
-          return yield* new Unavailable({
+          return yield* new Action.Unavailable({
             message: `machine ${id}'s host can't be reached, so it can't be captured before it stops`,
-            readOnly: true,
           });
         }
 

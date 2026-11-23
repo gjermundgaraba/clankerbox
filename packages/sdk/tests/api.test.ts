@@ -6,7 +6,7 @@ import {
   Http,
   Invalid,
   PublicKeys,
-  Unavailable,
+  Unconfirmed,
   Usage,
   version,
   versionHeader,
@@ -44,6 +44,29 @@ const create = {
   diskGib: 10,
 };
 
+const answered = async (
+  stub: StubServer,
+  action: "createMachine" | "execMachine",
+  body: Schema.Json
+) => {
+  const response = await stub.handler(
+    new Request(`http://cbx.test/api/${action}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        [versionHeader]: version,
+      },
+      body: JSON.stringify(body),
+    })
+  );
+
+  return {
+    status: response.status,
+    retryAfter: response.headers.get("retry-after"),
+    body: await response.text(),
+  };
+};
+
 describe("api", () => {
   afterEach(async () => {
     await server?.dispose();
@@ -64,26 +87,50 @@ describe("api", () => {
     expect(status).toBe(200);
   });
 
-  it("Unavailable answers 503, for a server that can't reach any host", async () => {
+  it("a refusal that recorded and sent nothing is the built-in Unavailable: 503, Retry-After and a message alone", async () => {
     server = stubServer({
       refuse: {
-        createMachine: new Unavailable({ message: "no host", readOnly: true }),
+        createMachine: new Action.Unavailable({ message: "no host answered" }),
       },
     });
 
-    const response = await server.handler(
-      new Request("http://cbx.test/api/createMachine", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          [versionHeader]: version,
-        },
-        body: JSON.stringify(create),
-      })
-    );
+    await expect(
+      answered(server, "createMachine", create)
+    ).resolves.toStrictEqual({
+      status: 503,
+      retryAfter: "1",
+      body: JSON.stringify({
+        _tag: "Unavailable",
+        message: "no host answered",
+      }),
+    });
+  });
 
-    expect(response.status).toBe(503);
-    await expect(response.text()).resolves.toContain('"_tag":"Unavailable"');
+  it("a call a host was sent and gave no answer to is Unconfirmed: 503 with no Retry-After", async () => {
+    server = stubServer({
+      refuse: {
+        execMachine: new Unconfirmed({ message: "host h didn't answer" }),
+      },
+    });
+
+    await expect(
+      answered(server, "execMachine", { id: "dev", argv: ["true"] })
+    ).resolves.toStrictEqual({
+      status: 503,
+      retryAfter: null,
+      body: JSON.stringify({
+        _tag: "Unconfirmed",
+        message: "host h didn't answer",
+      }),
+    });
+  });
+
+  it("only execMachine declares Unconfirmed: no other action sends anything on to a host", () => {
+    expect(
+      Http.actions
+        .filter((action) => action.error.some((error) => error === Unconfirmed))
+        .map(({ name }) => name)
+    ).toStrictEqual(["execMachine"]);
   });
 
   it("an undeclared field is refused with InvalidInput, before the handler runs", async () => {

@@ -9,6 +9,7 @@ import {
   Internal,
   RuntimeName,
 } from "@gjermundgaraba/clankerbox-sdk";
+import * as Action from "@gjermundgaraba/effect-actions/Action";
 import { Effect, Option, Result } from "effect";
 
 import { Incompatible, Unanswered } from "../src/hosts.ts";
@@ -347,10 +348,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
           expect(offersOther._tag).toBe("NotOffered");
           expect(offersOther.message).toContain("a offers debian");
-          expect(noReply).toMatchObject({
-            _tag: "Unavailable",
-            readOnly: true,
-          });
+          expect(Action.isUnavailable(noReply)).toBe(true);
           expect(noReply.message).toContain("no smolvm host answered");
           expect(noReply.message).toContain("b failed: connection refused");
         })
@@ -493,10 +491,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             Result.flip(holders([up("a"), draining("b")]))
           );
 
-          expect(noReply).toMatchObject({
-            _tag: "Unavailable",
-            readOnly: true,
-          });
+          expect(Action.isUnavailable(noReply)).toBe(true);
           expect(noReply.message).toContain("b failed: connection refused");
           expect(passed).toMatchObject({
             _tag: "NotBuilt",

@@ -15,10 +15,12 @@ import {
   readTimeout,
   templateRef,
   Unavailable,
+  Unconfirmed,
   sizedBy,
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type {
+  Answered,
   CreateRequest,
   Declared,
   Executed,
@@ -34,6 +36,7 @@ import type {
   Sizing,
   Internal,
 } from "@gjermundgaraba/clankerbox-sdk";
+import * as Action from "@gjermundgaraba/effect-actions/Action";
 import {
   Cause,
   Context,
@@ -130,7 +133,7 @@ export interface Interface {
   ) => Effect.Effect<Machine, Declared<"getMachine">>;
   readonly create: (
     request: CreateRequest
-  ) => Effect.Effect<Machine, Declared<"createMachine">>;
+  ) => Effect.Effect<Machine, Answered<"createMachine">>;
   readonly build: (
     name: string,
     spec: Spec & { readonly setup: Setup },
@@ -152,13 +155,13 @@ export interface Interface {
   ) => Effect.Effect<void, Declared<"deleteMachine">>;
   readonly fork: (
     request: ForkRequest & Sizing
-  ) => Effect.Effect<Machine, Declared<"forkMachine">>;
+  ) => Effect.Effect<Machine, Answered<"forkMachine">>;
   readonly restore: (
     request: RestoreRequest & Sizing
-  ) => Effect.Effect<Machine, Declared<"restoreMachine">>;
+  ) => Effect.Effect<Machine, Answered<"restoreMachine">>;
   readonly exec: (
     request: ExecRequest
-  ) => Effect.Effect<Executed, Declared<"execMachine">>;
+  ) => Effect.Effect<Executed, Answered<"execMachine">>;
   readonly capacity: Effect.Effect<CapacityRead, Internal>;
   readonly rest: (
     name: string
@@ -976,12 +979,9 @@ export const make = (
           )
           .pipe(
             Effect.catchTags({
-              Unsent: ({ message }) =>
-                new Unavailable({ message, readOnly: true }),
-              Unanswered: ({ message }) =>
-                new Unavailable({ message, readOnly: false }),
-              Incompatible: ({ message }) =>
-                new Unavailable({ message, readOnly: false }),
+              Unsent: ({ message }) => new Action.Unavailable({ message }),
+              Unanswered: ({ message }) => new Unconfirmed({ message }),
+              Incompatible: ({ message }) => new Unconfirmed({ message }),
             })
           );
       });

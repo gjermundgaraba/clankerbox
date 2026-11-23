@@ -10,10 +10,10 @@ import {
   buildId,
   NotBuilt,
   NotOffered,
-  Unavailable,
   Unsizable,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { RuntimeName, Sizes } from "@gjermundgaraba/clankerbox-sdk";
+import * as Action from "@gjermundgaraba/effect-actions/Action";
 import { Array as Arr, Result } from "effect";
 
 import { phaseOf as copyPhaseOf } from "./checkpoint-chart.ts";
@@ -132,7 +132,7 @@ export const placing = (
   ask: Ask
 ): Result.Result<
   Arr.NonEmptyReadonlyArray<HostInfo>,
-  NotOffered | Unsizable | Unavailable
+  NotOffered | Unsizable | Action.Unavailable
 > => {
   const named = among(reached, ask);
 
@@ -170,9 +170,8 @@ export const placing = (
 
   if (noReply) {
     return Result.fail(
-      new Unavailable({
+      new Action.Unavailable({
         message: `no ${runtime} host answered that can take base ${base}${onTailnet(ask)}: ${reasons}`,
-        readOnly: true,
       })
     );
   }
@@ -248,7 +247,7 @@ export const holding = <A>(
   unready: ReadonlyMap<string, Pick<CheckpointRow, "state" | "error">>
 ): Result.Result<
   Arr.NonEmptyReadonlyArray<readonly [HostInfo, A]>,
-  NotBuilt | NotOffered | Unsizable | Unavailable
+  NotBuilt | NotOffered | Unsizable | Action.Unavailable
 > => {
   const named = among(reached, ask);
 
@@ -301,9 +300,8 @@ export const holding = <A>(
 
   if (noReply) {
     return Result.fail(
-      new Unavailable({
+      new Action.Unavailable({
         message: `no host answered that can take a clone of build ${made.id}${onTailnet(ask)}: ${reasons}`,
-        readOnly: true,
       })
     );
   }

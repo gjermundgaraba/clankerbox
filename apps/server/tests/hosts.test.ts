@@ -232,8 +232,8 @@ const stoppingHost = Effect.acquireRelease(
 );
 
 const declaredBy = {
-  readHost: new Set([400]),
-  execMachine: new Set([400, 500]),
+  readHost: new Set([400, 503]),
+  execMachine: new Set([400, 500, 503]),
 };
 
 const silentHost = Effect.acquireRelease(

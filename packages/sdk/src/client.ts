@@ -29,6 +29,7 @@ import {
   Missing,
   Superseded,
   Unavailable,
+  Unconfirmed,
 } from "./errors.ts";
 import type { ClankerboxError, HostError } from "./errors.ts";
 import { version, versionHeader } from "./release.ts";
@@ -64,7 +65,8 @@ type Input<N extends ServerAction> = Actions[N]["input"]["Type"];
 
 /**
  * What a call of `N` fails with: an error the action declares, which always includes `Invalid`, or
- * no reply, or a reply the client couldn't use.
+ * no reply, or a reply the client couldn't use. `Unconfirmed` and the built-in `Action.Unavailable`
+ * arrive as `Unavailable`.
  */
 export type ErrorOf<N extends ServerAction> =
   | Declared<N>
@@ -274,7 +276,8 @@ const cutByStopOrProxy: ReadonlySet<number> = new Set([502, 503, 504]);
 const isUndeclared = (error: unknown): error is Undeclared =>
   HttpClientError.isHttpClientError(error) ||
   Schema.isSchemaError(error) ||
-  Schema.is(Action.BuiltIn)(error);
+  Schema.is(Action.BuiltIn)(error) ||
+  Schema.is(Unconfirmed)(error);
 
 const fromHttp = (
   failure: HttpClientError.HttpClientError,
@@ -318,6 +321,8 @@ const fromUndeclared = (
       }),
     Unauthenticated: (failure) => unexpected(context, failure),
     Forbidden: (failure) => unexpected(context, failure),
+    Unavailable: ({ message }) => new Unavailable({ message, readOnly: true }),
+    Unconfirmed: ({ message }) => new Unavailable({ message, readOnly: false }),
   });
 
 /**
@@ -339,14 +344,14 @@ const settle = <A, E>(
   context: CallContext
 ): Effect.Effect<A, E | Invalid | Unavailable | Internal> =>
   call.pipe(
-    Effect.timeoutOrElse({
-      duration: context.timeout,
-      orElse: () => Effect.fail(unanswered(context, context.timedOut)),
-    }),
     failHttpDefects,
     Effect.catchIf(isUndeclared, (error) =>
       Effect.fail(fromUndeclared(error, context))
-    )
+    ),
+    Effect.timeoutOrElse({
+      duration: context.timeout,
+      orElse: () => Effect.fail(unanswered(context, context.timedOut)),
+    })
   );
 
 const deleting = (removal: Effect.Effect<void, ClankerboxError>) =>

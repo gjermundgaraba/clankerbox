@@ -5,11 +5,11 @@ import {
   HostError,
   readTimeout,
   release,
-  Unavailable,
   version,
   versionHeader,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Host, Internal } from "@gjermundgaraba/clankerbox-sdk";
+import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Brand, Context, Data, Duration, Effect, Layer, Schema } from "effect";
 import { HttpClient, HttpClientError, HttpClientRequest } from "effect/http";
@@ -103,13 +103,11 @@ export const listed = ({ member, info, problem }: Reached): Host =>
 export const answering = (
   hosts: Interface,
   host: string
-): Effect.Effect<HostInfo, Unavailable> =>
+): Effect.Effect<HostInfo, Action.Unavailable> =>
   hosts
     .read(host)
     .pipe(
-      Effect.mapError(
-        ({ message }) => new Unavailable({ message, readOnly: true })
-      )
+      Effect.mapError(({ message }) => new Action.Unavailable({ message }))
     );
 
 const describe = (error: unknown): string =>

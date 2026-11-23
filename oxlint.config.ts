@@ -93,9 +93,12 @@ export default config({
         "fence/allowed-imports": [
           "error",
           {
-            allow: domainImports,
+            allow: [
+              ...domainImports,
+              "^@gjermundgaraba/effect-actions/Action$",
+            ],
             because:
-              "a server domain file imports only other domain files, effect, the SDK and the host contract; a host is reached through hosts.ts, and platform/ and Node are for composition/",
+              "a server domain file imports only other domain files, effect, the SDK, the host contract and effect-actions' Action, for its built-in errors; a host is reached through hosts.ts, and platform/ and Node are for composition/",
           },
         ],
       },

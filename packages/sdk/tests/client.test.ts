@@ -1,4 +1,5 @@
 import { it } from "@effect/vitest";
+import * as Action from "@gjermundgaraba/effect-actions/Action";
 import {
   Clock,
   DateTime,
@@ -24,6 +25,7 @@ import {
   retryable,
   ScriptFailed,
   Unavailable,
+  Unconfirmed,
   version,
   RuntimeName,
 } from "../src/index.ts";
@@ -598,10 +600,12 @@ describe("client", () => {
             create: ({ id }) => {
               creates += 1;
 
+              if (creates === 1) {
+                stub.loseReply("down");
+              }
+
               return Effect.fail(
-                creates === 1
-                  ? new Unavailable({ message: "lost", readOnly: false })
-                  : new Conflict({ message: `machine ${id} exists`, id })
+                new Conflict({ message: `machine ${id} exists`, id })
               );
             },
           });
@@ -873,14 +877,13 @@ describe("client", () => {
     );
 
     it.effect(
-      "the server's Unavailable is its reply: a refusal it says can be retried",
+      "the built-in Unavailable on the wire is the SDK's Unavailable, readOnly: a refusal that made nothing, so it can be retried",
       () =>
         Effect.gen(function* () {
           const stub = server({
             refuse: {
-              createMachine: new Unavailable({
+              createMachine: new Action.Unavailable({
                 message: "no host answered",
-                readOnly: true,
               }),
             },
           });
@@ -889,9 +892,66 @@ describe("client", () => {
             Effect.flip(client.create("dev", spec))
           );
 
-          expect(error._tag).toBe("Unavailable");
+          expect(error).toStrictEqual(
+            new Unavailable({
+              message: "no host answered",
+              readOnly: true,
+              action: "createMachine",
+              id: "dev",
+            })
+          );
           expect(retryable(error)).toBe(true);
           expect(stub.calls).toStrictEqual(["machine.create"]);
+        })
+    );
+
+    it.effect(
+      "an ensure takes the built-in Unavailable as a refusal: no second look, and nothing named made",
+      () =>
+        Effect.gen(function* () {
+          const stub = server({
+            refuse: {
+              createMachine: new Action.Unavailable({
+                message: "no host answered",
+              }),
+            },
+          });
+
+          const error = yield* withClient(stub, (client) =>
+            Effect.flip(client.ensure("dev", { spec }))
+          );
+
+          expect(error).toMatchObject({ _tag: "Unavailable", readOnly: true });
+          expect(error).not.toHaveProperty("made");
+          expect(
+            stub.calls.filter((call) => call === "machine.create")
+          ).toStrictEqual(["machine.create"]);
+        })
+    );
+
+    it.effect(
+      "Unconfirmed on the wire is the SDK's Unavailable, not readOnly: the command may have run, so it isn't retried",
+      () =>
+        Effect.gen(function* () {
+          const stub = server({
+            machines: [machine("dev")],
+            exec: () =>
+              Effect.fail(new Unconfirmed({ message: "host h didn't answer" })),
+          });
+
+          const error = yield* withClient(stub, (client) =>
+            Effect.flip(client.execMachine({ id: "dev", argv: ["true"] }))
+          );
+
+          expect(error).toStrictEqual(
+            new Unavailable({
+              message: "host h didn't answer",
+              readOnly: false,
+              action: "execMachine",
+              id: "dev",
+            })
+          );
+          expect(retryable(error)).toBe(false);
         })
     );
 

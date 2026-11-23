@@ -309,8 +309,11 @@ export class Capacity extends Schema.TaggedError<
 
 /**
  * No answer. The client makes it when the control plane gives no reply, or when a wait stops with
- * the request saved, and the control plane when no host it could place on answers. A mutation may
- * have been recorded and may yet run, so it is retryable only when `readOnly`.
+ * the request saved, and reads it from either answer the control plane gives for a host it got
+ * nothing usable from: the built-in `Action.Unavailable`, with nothing recorded or sent, as
+ * `readOnly`, and `Unconfirmed`, sent on and maybe run, as not. A mutation may have been recorded
+ * and may yet run, so it is retryable only when `readOnly`. No action declares it: a raw HTTP or
+ * MCP caller sees the two answers, and a row's `error` keeps it as it was stored.
  */
 export class Unavailable extends Schema.TaggedError<
   Unavailable,
@@ -332,6 +335,17 @@ export class Unavailable extends Schema.TaggedError<
     });
   }
 }
+
+/**
+ * The control plane sent the call on to a host and got no answer it could read, so the call may
+ * have run there: read what it acts on before trying again. Its answer where nothing was sent is
+ * the built-in `Action.Unavailable`, safe to try again. The client reads it as an `Unavailable`
+ * that isn't `readOnly`.
+ */
+export class Unconfirmed extends Schema.TaggedError<
+  Unconfirmed,
+  { readonly brand: unique symbol }
+>()("Unconfirmed", { message: Schema.String }, { httpApiStatus: 503 }) {}
 
 export class Internal extends Schema.TaggedError<
   Internal,
