@@ -83,8 +83,15 @@ const server = (options?: StubServerOptions) => {
   return stub;
 };
 
+const secureUrl = "https://cbx.test";
+
 const network = (endpoint: Endpoint) =>
-  transport(new Map([[new URL(serverUrl).origin, endpoint]]));
+  transport(
+    new Map([
+      [new URL(serverUrl).origin, endpoint],
+      [secureUrl, endpoint],
+    ])
+  );
 
 const dispatched = (
   env: Readonly<Record<string, string>>,
@@ -149,7 +156,7 @@ layer(NodeServices.layer)((it) => {
         const result = yield* dispatched(
           spawnEnv,
           stub,
-          { ...settings, token: "orbs.token" },
+          { ...settings, server: secureUrl, token: "orbs.token" },
           { "orbs.token": `${Redacted.value(token)}\n` }
         );
 

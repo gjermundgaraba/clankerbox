@@ -6,6 +6,7 @@ import {
   Port,
   readAuthorizedKeys,
   readToken,
+  Client,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Caller, Tls } from "@gjermundgaraba/clankerbox-sdk/node";
 import {
@@ -61,6 +62,19 @@ export interface ServerConfig extends ServerSettings {
   readonly tls?: Tls | undefined;
 }
 
+const refuseTokenUrl = (file: string, id: string, url: string) => {
+  const refused = Client.tokenUrlRefusal(url);
+
+  return refused === undefined
+    ? Effect.void
+    : Effect.fail(
+        new Invalid({
+          message: `server config ${file}: host ${id} has a token, and its url ${refused}`,
+          file,
+        })
+      );
+};
+
 export const loadConfig = (
   file: string
 ): Effect.Effect<ServerConfig, Invalid, FileSystem.FileSystem | Path.Path> =>
@@ -114,7 +128,12 @@ export const loadConfig = (
         decoded.hosts,
         ({ id, url, draining, token }) =>
           Effect.map(
-            token === undefined ? Effect.undefined : readToken(relative(token)),
+            token === undefined
+              ? Effect.undefined
+              : Effect.andThen(
+                  refuseTokenUrl(resolved, id, url),
+                  readToken(relative(token))
+                ),
             (read) => ({
               id,
               url,

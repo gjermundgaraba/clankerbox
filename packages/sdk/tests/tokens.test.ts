@@ -2,9 +2,15 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import { Effect, Layer, Redacted, Schema } from "effect";
-import { HttpRouter, HttpServer, HttpServerResponse } from "effect/http";
+import {
+  FetchHttpClient,
+  HttpRouter,
+  HttpServer,
+  HttpServerResponse,
+} from "effect/http";
 import { describe, expect } from "vite-plus/test";
 
+import * as Client from "../src/client.ts";
 import {
   callerInConstantTime,
   mintToken,
@@ -200,6 +206,56 @@ layer(NodeServices.layer)((it) => {
             expect(error.message, says).toContain(says);
           }
         })
+    );
+  });
+  describe("tokenUrlRefusal", () => {
+    it("lets a token go over https anywhere, and over http only to a tailnet or loopback IP", () => {
+      for (const url of [
+        "https://203.0.113.7:8585",
+        "https://box.tailnet.ts.net",
+        "http://127.0.0.1:8484",
+        "http://127.255.0.9",
+        "http://localhost:8484",
+        "http://100.64.0.1:8484",
+        "http://100.127.255.255",
+        "http://[::1]:8484",
+        "http://[fd7a:115c:a1e0::5]:8484",
+      ]) {
+        expect(Client.tokenUrlRefusal(url), url).toBeUndefined();
+      }
+
+      for (const url of [
+        "http://203.0.113.7:8585",
+        "http://100.63.255.255",
+        "http://100.128.0.1",
+        "http://10.0.0.5",
+        "http://box.tailnet.ts.net",
+        "http://127.0.0.1.evil.example",
+        "http://[fd7a:115c:a1e1::1]",
+        "http://[2001:db8::1]",
+        "ftp://127.0.0.1",
+        "not a url",
+      ]) {
+        expect(Client.tokenUrlRefusal(url), url).toBeDefined();
+      }
+    });
+
+    it.effect(
+      "Client.make refuses a token for an http URL a token may not cross, and takes one without",
+      () =>
+        Effect.gen(function* () {
+          const refused = yield* Effect.flip(
+            Client.make("http://203.0.113.7:8585", {
+              token: Redacted.make("a".repeat(64)),
+            })
+          );
+
+          expect(refused.message).toContain(
+            "would cross the network in the clear"
+          );
+
+          yield* Client.make("http://203.0.113.7:8585");
+        }).pipe(Effect.provide(FetchHttpClient.layer))
     );
   });
 });

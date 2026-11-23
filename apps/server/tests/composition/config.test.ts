@@ -357,6 +357,34 @@ layer(NodeServices.layer)((it) => {
       })
   );
 
+  it.effect(
+    "a host entry with a token and an http url a token may not cross is Invalid, naming the host",
+    () =>
+      Effect.gen(function* () {
+        const { file, loaded } = yield* load({
+          ...config,
+          hosts: [
+            {
+              id: "linux",
+              url: "http://203.0.113.8:8484",
+              token: "linux.token",
+            },
+          ],
+        });
+
+        yield* write(
+          path.join(path.dirname(file), "linux.token"),
+          `${Redacted.value(mintToken("cp").token)}\n`
+        );
+
+        const error = yield* Effect.flip(loaded);
+
+        expect([error._tag, error.file]).toStrictEqual(["Invalid", file]);
+        expect(error.message).toContain("host linux has a token");
+        expect(error.message).toContain("use https");
+      })
+  );
+
   it.effect("a config that can't be read is Invalid and names its file", () =>
     Effect.gen(function* () {
       const file = path.join(yield* scratch, "missing.json");

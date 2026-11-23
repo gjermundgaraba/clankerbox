@@ -56,6 +56,32 @@ const ServerUrl = Schema.String.check(
   )
 );
 
+const tailnetOrLoopbackV4 =
+  /^(?:127\.\d+\.\d+\.\d+|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d+\.\d+)$/u;
+
+const tailnetOrLoopbackV6 = /^\[(?:::1|fd7a:115c:a1e0:[0-9a-f:]*)\]$/u;
+
+/**
+ * Why a bearer token may not be sent to `url`, or `undefined` when it may: over `https`, or over
+ * `http` only to a tailnet or loopback IP, whose path the tailnet encrypts or never leaves the box.
+ * A name, a MagicDNS one included, is no such IP, so a token goes to it only over `https`.
+ */
+export const tokenUrlRefusal = (url: string): string | undefined => {
+  if (!URL.canParse(url)) {
+    return `${url} is not a URL`;
+  }
+
+  const { protocol, hostname } = new URL(url);
+
+  return protocol === "https:" ||
+    (protocol === "http:" &&
+      (hostname === "localhost" ||
+        tailnetOrLoopbackV4.test(hostname) ||
+        tailnetOrLoopbackV6.test(hostname)))
+    ? undefined
+    : `${url} is neither https nor http to a tailnet or loopback IP, so a token sent there would cross the network in the clear: use https`;
+};
+
 type Actions = typeof actions;
 
 export type ServerAction = keyof Actions;
@@ -590,6 +616,13 @@ export const make = (
           new Invalid({ message: `the server URL: ${describeIssues(error)}` })
       )
     );
+
+    const refused =
+      options?.token === undefined ? undefined : tokenUrlRefusal(url);
+
+    if (refused !== undefined) {
+      return yield* new Invalid({ message: `the server URL: ${refused}` });
+    }
 
     const api: ServerApi = yield* serverApi(url, options?.token);
     const methods: Methods = api;

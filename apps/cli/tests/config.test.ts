@@ -8,6 +8,7 @@ import {
   write,
   scratch,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import { transport } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import type { StubServer } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import { Effect, Redacted } from "effect";
 import { afterEach, expect } from "vite-plus/test";
@@ -24,6 +25,8 @@ import {
 const stubs: StubServer[] = [];
 
 const server = serverIn(stubs);
+
+const secureUrl = "https://cbx.test";
 
 const hostsStderr = (config: string) =>
   Effect.map(cli(["hosts", "--config", config]), ({ stderr }) => stderr);
@@ -143,11 +146,11 @@ layer(NodeServices.layer)((it) => {
         yield* write(path.join(dir, "raw.token"), "laptop\n");
         yield* write(
           config,
-          JSON.stringify({ server: serverUrl, token: "laptop.token" })
+          JSON.stringify({ server: secureUrl, token: "laptop.token" })
         );
 
         const { code } = yield* cli(["hosts", "--config", config], {
-          server: stub,
+          http: transport(new Map([[secureUrl, stub]])),
         });
 
         expect(code).toBe(0);
@@ -158,7 +161,7 @@ layer(NodeServices.layer)((it) => {
 
         yield* write(
           config,
-          JSON.stringify({ server: serverUrl, token: "raw.token" })
+          JSON.stringify({ server: secureUrl, token: "raw.token" })
         );
 
         expect(yield* hostsStderr(config)).toBe(
