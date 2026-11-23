@@ -41,25 +41,47 @@ const refusal = (
           ),
   });
 
+const fromBrowser = (
+  server: string,
+  origin: Option.Option<string>
+): Option.Option<Invalid> =>
+  Option.map(
+    origin,
+    (sent) =>
+      new Invalid({
+        message: `this ${server} takes no request from a browser, and this one carries Origin ${sent}`,
+      })
+  );
+
 const encodeInvalid = Schema.encodeSync(Invalid);
+
+const refused = (error: Invalid, status: number) =>
+  Effect.succeed(
+    HttpServerResponse.jsonUnsafe(encodeInvalid(error), { status })
+  );
 
 /**
  * Refuses a caller of another release than `own`, this package's by default, for a server of either
  * contract, before it reads anything, so a mutation it sends is never run under a contract it
  * doesn't share.
+ *
+ * It refuses a request that carries `Origin` too. A browser sends one with every POST, which every
+ * action is, and no caller of ours does, so a page whose name was rebound to the server's address
+ * can't act on it, whatever name it was reached by. `Host` is left unchecked: a server is reached by
+ * its IP, by a MagicDNS name or through a proxy, so an allowlist of names would need config, and
+ * refusing `Origin` already refuses the rebound page.
  */
 export const versionCheck = (server: string, own: string = version) =>
   HttpRouter.middleware((handle) =>
     Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
       Option.match(
-        refusal(server, own, Headers.get(request.headers, versionHeader)),
+        fromBrowser(server, Headers.get(request.headers, "origin")),
         {
-          onNone: () => handle,
-          onSome: (error) =>
-            Effect.succeed(
-              HttpServerResponse.jsonUnsafe(encodeInvalid(error), {
-                status: 400,
-              })
+          onSome: (error) => refused(error, 403),
+          onNone: () =>
+            Option.match(
+              refusal(server, own, Headers.get(request.headers, versionHeader)),
+              { onNone: () => handle, onSome: (error) => refused(error, 400) }
             ),
         }
       )

@@ -104,6 +104,27 @@ describe("release", () => {
       })
   );
 
+  it.effect(
+    "a request from a browser is refused 403 before its handler runs, though it carries the release, as a page whose name was rebound to the server's address sends",
+    () =>
+      Effect.gen(function* () {
+        const rebound = yield* asking({
+          [versionHeader]: version,
+          origin: "http://evil.example:8484",
+        });
+
+        const sandboxed = yield* asking({
+          [versionHeader]: version,
+          origin: "null",
+        });
+
+        expect([rebound.status, sandboxed.status]).toStrictEqual([403, 403]);
+        expect((yield* decodeInvalid(rebound.body)).message).toBe(
+          "this control plane takes no request from a browser, and this one carries Origin http://evil.example:8484"
+        );
+      })
+  );
+
   it.effect("the version check refuses another release, naming both", () =>
     Effect.gen(function* () {
       const caller = `${major}.${Number(minor) + 1}.0`;

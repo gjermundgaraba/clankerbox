@@ -535,11 +535,11 @@ Start the control plane again, and delete each leftover in the provider's consol
 | The control plane | Each host | its `listen.port` | steps and reads |
 | Clients that run `ssh` | Each host | its `machinePorts` | SSH straight to machines |
 
-Clients never need a host's API port. The control plane logs one line when a host stops answering, and one when it answers again. On a smolvm host, nothing may listen on a public address: guests can reach those. On macOS with the application firewall on, allow incoming connections for each new `node` binary, which allows them for every program that `node` runs.
+Clients never need a host's API port. The control plane and each host refuse, 403, any request that carries an `Origin` header, as a browser's does: a web page whose name was rebound to their address, from a browser on any machine the tailnet lets reach them, could otherwise act on every machine. The control plane logs one line when a host stops answering, and one when it answers again. On a smolvm host, nothing may listen on a public address: guests can reach those. On macOS with the application firewall on, allow incoming connections for each new `node` binary, which allows them for every program that `node` runs.
 
 ## SDK
 
-`@gjermundgaraba/clankerbox-sdk` holds the API's schemas, errors and the client. SDK 1.2.3 talks to a control plane of release 1.2.x, which refuses other releases. The SDK and the Sandbox Agent provider take Effect and `@effect/platform-node` `~4.1.4` and `@gjermundgaraba/effect-actions` `^0.33.0` as peer dependencies: upgrade them together.
+`@gjermundgaraba/clankerbox-sdk` holds the API's schemas, errors and the client. SDK 1.2.3 talks to a control plane of release 1.2.x, which refuses other releases. It runs in Node, through `./node`: the control plane refuses a browser's request, by its `Origin` header, so a client in a browser page gets 403 on every call. The SDK and the Sandbox Agent provider take Effect and `@effect/platform-node` `~4.1.4` and `@gjermundgaraba/effect-actions` `^0.33.0` as peer dependencies: upgrade them together.
 
 ```ts
 import * as NodeServices from "@effect/platform-node/NodeServices";
