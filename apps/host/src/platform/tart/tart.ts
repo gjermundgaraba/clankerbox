@@ -50,6 +50,7 @@ import type {
   StateError,
   Target,
 } from "../../runtime.ts";
+import { publishAddress } from "../../settings.ts";
 import type { HostSettings } from "../../settings.ts";
 import { allotted, inUse } from "../../usage.ts";
 import { throughBucket } from "../bucket/builds.ts";
@@ -1029,7 +1030,7 @@ export const make = (
 
 export const layer = (
   settings: typeof TartSettings.Type,
-  config: Pick<HostSettings, "id" | "stateDir" | "listen">
+  config: Pick<HostSettings, "id" | "stateDir" | "listen" | "publish">
 ): Layer.Layer<
   Runtime,
   HostError | CannotStart,
@@ -1046,7 +1047,7 @@ export const layer = (
 
       return yield* make({
         binary: settings.binary,
-        publishAddress: config.listen.address,
+        publishAddress: publishAddress(config),
         hostId: config.id,
         stateDir: config.stateDir,
         uid: box.uid,

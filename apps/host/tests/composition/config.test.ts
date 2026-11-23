@@ -9,6 +9,7 @@ import { expect } from "vite-plus/test";
 
 import { Box } from "../../src/box.ts";
 import { loadConfig } from "../../src/composition/config.ts";
+import { publishAddress } from "../../src/settings.ts";
 import type { ReservedPorts } from "../../src/settings.ts";
 
 const image = "registry.example/ubuntu@sha256:00";
@@ -172,6 +173,29 @@ layer(NodeServices.layer)((it) => {
         });
 
         expect((yield* Effect.flip(owning))._tag).toBe("Invalid");
+      })
+  );
+
+  it.effect(
+    "machine SSH ports are published on publish.address when the config sets one, any IP, and on listen.address otherwise",
+    () =>
+      Effect.gen(function* () {
+        const apart = yield* (yield* load({
+          ...config,
+          publish: { address: "203.0.113.7" },
+        })).loaded;
+
+        const together = yield* (yield* load(config)).loaded;
+
+        const named = yield* Effect.flip(
+          (yield* load({ ...config, publish: { address: "linux.example" } }))
+            .loaded
+        );
+
+        expect(publishAddress(apart)).toBe("203.0.113.7");
+        expect(apart.listen.address).toBe("100.64.0.10");
+        expect(publishAddress(together)).toBe("100.64.0.10");
+        expect(named.message).toContain("an IP address");
       })
   );
 

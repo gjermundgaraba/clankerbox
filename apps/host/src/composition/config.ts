@@ -6,7 +6,7 @@ import {
   Invalid,
   Port,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Address } from "@gjermundgaraba/clankerbox-sdk/node";
+import { Address, AnyAddress } from "@gjermundgaraba/clankerbox-sdk/node";
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
 
 import { Box } from "../box.ts";
@@ -22,6 +22,7 @@ const MachinePorts = Schema.Struct({ first: Port, last: Port }).check(
 const common = {
   id: HostId,
   listen: Schema.Struct({ address: Address, port: Port }),
+  publish: Schema.optionalKey(Schema.Struct({ address: AnyAddress })),
   stateDir: Schema.String,
   bases: Schema.Record(Schema.String, Schema.String).check(
     Schema.makeFilter((bases) => {
