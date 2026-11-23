@@ -28,25 +28,6 @@ interface Landing {
   pending: Effect.Effect<unknown, HttpClientError.HttpClientError> | undefined;
 }
 
-/**
- * `base`, each request a call the contract's faults reach: `stall` holds one, as `stallingHttp`
- * does, `dropAnswer` sends the next create or delete of a Sandbox and loses its answer, and
- * `landLate` loses unsent every create of a claim, a make's first, until the effect it answers
- * sends the first of them. `requests` holds the method and path of each request sent.
- *
- * `stall` counts only the writes, a request that isn't a GET. This keeps every cut that can leave a
- * different state, and drops only cuts that repeat one. A read changes nothing in the cluster, and
- * nothing on the host either: the adapter keeps no state across its reads, and the one thing it
- * writes to its state directory, a delete's tombstone, is written after the whole delete has
- * answered. So a step cut at a read leaves the cluster and the host exactly as a cut at the start
- * of the next write does. The reads are mostly polls, and how many a step makes depends on how fast
- * the cluster is. On kind on 2026-11-21, a make from a base made 50 calls: 5 writes (a claim's
- * POST, a fill pod's POST and DELETE, the claim's PATCH, and the Sandbox's POST) and 45 reads. Of
- * those reads, 9 polled the fill pod every 500 ms and 31 polled the Sandbox and its pod until they
- * were ready. Cutting at every call, a slow cluster ran 76 rounds of one series where a fast one
- * ran 45, and the case ran past its 10 minutes. Cutting at the writes, each series of a make has
- * 5 cut points on any cluster. Don't add the read cuts back: they test nothing these don't.
- */
 export const faultyHttp = <E, R>(
   base: Layer.Layer<HttpClient.HttpClient, E, R>
 ) => {

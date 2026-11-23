@@ -71,9 +71,6 @@ const endedRecords = "${CLANKERBOX_ROOT-}/var/run/clankerbox-ended";
 // command they wait for ends by a signal, but for INT and PIPE:
 // https://git.savannah.gnu.org/cgit/bash.git/tree/builtins/evalstring.c?h=bash-5.2#n130
 // https://git.kernel.org/pub/scm/utils/dash/dash.git/tree/src/jobs.c?h=v0.5.12#n427
-// A shell copies a string whole at each append and `"$@"` whole at each `set`, and bash 3.2 slows
-// with each variable it holds, so values wait in at most 1000 variables, named in strings of 100,
-// and a value's lines are joined 1000 at a time by `"$*"`, then its pieces at once.
 // bash 3.2, macOS's sh, keeps a copy above fd 10 of a descriptor of 3 or more that a command's
 // redirection moves or closes, and leaves it open across exec, so a command run as
 // `exec env -- "$@" 3>&-` holds fd 3 there, and a daemon it starts holds the exec's output open;
@@ -133,12 +130,6 @@ const launcher = [
   `(exec 2>&3 3>&-; exec env -- "$@") || exit`,
 ].join("\n");
 
-/**
- * The launcher waits instead of becoming the command, so its mark remains in the process tree
- * even if the command clears its environment. It traps portable termination signals so the
- * runtime does not report the launcher gone while the command still runs. The subshell resets
- * those traps before executing the command; see POSIX Shell Command Language, "trap".
- */
 export const guestCommand = (
   { argv, env, user, stdin }: Invocation,
   mark: string

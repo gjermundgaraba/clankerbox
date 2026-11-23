@@ -844,10 +844,7 @@ describe.runIf(live)("boat, against the real account", () => {
 
   // boat's list answers `lastReboot` null where its sandbox's own record holds it, so a read of
   // two machines or more reads each mark only as the host reads that record, a behaviour no doc
-  // states and which a fake built from the same reading can only echo. The case keeps each
-  // machine's marks in the order its reads gave them, not as a set of distinct marks: a reading
-  // that flips back to an earlier mark, as a "never" from the list after a new mark would, adds
-  // nothing to a set, so the case would pass while the chart counted a false reboot on every flip.
+  // states.
   // https://docs.boat.dev/openapi/boat-v1.yaml (`Sandbox.lastReboot`)
   it.live(
     "reads of three machines give a reboot in place of one, and only that one, a new mark: a fresh machine's first and second, and one rebooted before the host first read it",
