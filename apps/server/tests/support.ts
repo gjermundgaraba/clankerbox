@@ -21,6 +21,7 @@ import type {
   Internal,
   Machine,
 } from "@gjermundgaraba/clankerbox-sdk";
+import type { Caller } from "@gjermundgaraba/clankerbox-sdk/node";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import {
@@ -37,6 +38,7 @@ import { HttpServer } from "effect/http";
 
 import { applied } from "../src/chart.ts";
 import * as Checkpoints from "../src/checkpoints.ts";
+import type { ServerConfig } from "../src/composition/config.ts";
 import { controlPlaneServer, serverLayer } from "../src/composition/server.ts";
 import * as Hosts from "../src/hosts.ts";
 import type { Member } from "../src/hosts.ts";
@@ -163,12 +165,13 @@ export interface Plane {
   readonly hosts: readonly TestHost[];
   readonly settings: ServerSettings;
   readonly start: (
-    port?: number
+    port?: number,
+    callers?: readonly Caller[]
   ) => Effect.Effect<Started, CannotStart | Internal>;
 }
 
 const started = (
-  settings: ServerSettings,
+  settings: ServerSettings & Pick<ServerConfig, "callers">,
   port: number,
   logger: Logger.Logger<unknown, unknown> | undefined,
   tailnet: Tailnet["Service"] | undefined
@@ -300,6 +303,7 @@ export const plane = (options?: {
   readonly tailnet?: Tailnet["Service"];
   readonly logger?: Logger.Logger<unknown, unknown>;
   readonly members?: readonly Member[];
+  readonly callers?: readonly Caller[];
 }) =>
   Effect.gen(function* () {
     const dir = yield* scratch;
@@ -353,8 +357,13 @@ export const plane = (options?: {
       stateDir,
       hosts,
       settings,
-      start: (port = 0) =>
-        started(settings, port, options?.logger, options?.tailnet),
+      start: (port = 0, callers = options?.callers) =>
+        started(
+          { ...settings, callers },
+          port,
+          options?.logger,
+          options?.tailnet
+        ),
     };
 
     return plan;

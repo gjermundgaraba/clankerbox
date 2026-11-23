@@ -3,6 +3,7 @@ import { inspect } from "node:util";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
+import { mintToken } from "@gjermundgaraba/clankerbox-sdk/node";
 import { scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import { Effect, Redacted } from "effect";
@@ -31,6 +32,17 @@ const load = (contents: Schema.Json, keys = `${operatorKey}\n`) =>
     yield* write(file, JSON.stringify(contents));
 
     return { file, loaded: loadConfig(file) };
+  });
+
+const guarded = (dir: string) =>
+  Effect.gen(function* () {
+    const laptop = mintToken("laptop");
+
+    yield* write(path.join(dir, "callers"), `${laptop.line}\n`);
+    yield* write(path.join(dir, "cert.pem"), "a certificate");
+    yield* write(path.join(dir, "key.pem"), "a key");
+
+    return { laptop };
   });
 
 layer(NodeServices.layer)((it) => {
@@ -245,6 +257,70 @@ layer(NodeServices.layer)((it) => {
         expect(errors.map(({ file }) => file === undefined)).not.toContain(
           true
         );
+      })
+  );
+
+  it.effect(
+    "a listen address that is neither tailnet nor loopback is refused unless the config names both callers and tls, saying which it lacks",
+    () =>
+      Effect.gen(function* () {
+        const tls = { cert: "cert.pem", key: "key.pem" };
+
+        for (const address of ["203.0.113.7", "0.0.0.0", "::", "10.0.0.5"]) {
+          const listen = { ...config.listen, address };
+
+          for (const [extra, lacks, has] of [
+            [{}, "callers and tls", undefined],
+            [{ callers: "callers" }, "needs tls set", "callers"],
+            [{ tls }, "needs callers set", "tls set"],
+          ] as const) {
+            const { file, loaded } = yield* load({
+              ...config,
+              listen,
+              ...extra,
+            });
+
+            yield* guarded(path.dirname(file));
+
+            const error = yield* Effect.flip(loaded);
+
+            expect([error._tag, error.file], address).toStrictEqual([
+              "Invalid",
+              file,
+            ]);
+            expect(error.message, address).toContain(
+              `listen.address ${address} is not a tailnet address`
+            );
+            expect(error.message, address).toContain(lacks);
+
+            if (has !== undefined) {
+              expect(error.message, address).not.toContain(has);
+            }
+          }
+        }
+      })
+  );
+
+  it.effect(
+    "a config with callers and tls listens anywhere and reads each",
+    () =>
+      Effect.gen(function* () {
+        const { file, loaded } = yield* load({
+          ...config,
+          listen: { ...config.listen, address: "203.0.113.7" },
+          callers: "callers",
+          tls: { cert: "cert.pem", key: "key.pem" },
+        });
+
+        const { laptop } = yield* guarded(path.dirname(file));
+        const read = yield* loaded;
+
+        expect(read.listen.address).toBe("203.0.113.7");
+        expect(read.callers?.map(({ name }) => name)).toStrictEqual(["laptop"]);
+        expect(Buffer.from(read.callers?.[0]?.hash ?? []).toString("hex")).toBe(
+          laptop.line.split(" ")[1]
+        );
+        expect(read.tls).toStrictEqual({ cert: "a certificate", key: "a key" });
       })
   );
 

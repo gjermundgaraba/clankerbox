@@ -3,6 +3,8 @@ import {
   refuseBrowsers,
   versionCheck,
 } from "@gjermundgaraba/clankerbox-sdk";
+import { requireToken } from "@gjermundgaraba/clankerbox-sdk/node";
+import type { Caller } from "@gjermundgaraba/clankerbox-sdk/node";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Effect, Layer } from "effect";
@@ -46,7 +48,9 @@ const app = Action.implement(
   })
 );
 
-export const routes = ActionHttp.layer(Http, [app]).pipe(
-  Layer.provide(versionCheck("control plane").layer),
-  Layer.provide(refuseBrowsers("control plane").layer)
-);
+export const routes = (callers: readonly Caller[]) =>
+  ActionHttp.layer(Http, [app]).pipe(
+    Layer.provide(versionCheck("control plane").layer),
+    Layer.provide(requireToken("control plane", callers).layer),
+    Layer.provide(refuseBrowsers("control plane").layer)
+  );

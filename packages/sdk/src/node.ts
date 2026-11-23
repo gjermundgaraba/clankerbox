@@ -1,4 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { Server as HttpServer } from "node:http";
+import { Server as HttpsServer } from "node:https";
 import { BlockList, isIP } from "node:net";
 
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
@@ -43,18 +45,117 @@ for (const [network, prefix, family] of subnets) {
 const addressRule =
   "a tailnet address (100.64.0.0/10, fd7a:115c:a1e0::/48) or a loopback address";
 
-/** What a server may listen on: never where a guest or the internet reaches it. */
-export const Address = Schema.String.check(
-  Schema.makeFilter((address: string) => {
-    const family = isIP(address);
+const isPrivate = (address: string): boolean => {
+  const family = isIP(address);
 
-    return (
-      (family !== 0 &&
-        reachable.check(address, family === 4 ? "ipv4" : "ipv6")) ||
-      addressRule
-    );
-  })
+  return (
+    family !== 0 && reachable.check(address, family === 4 ? "ipv4" : "ipv6")
+  );
+};
+
+/** What a server may listen on when nothing authenticates its callers: a tailnet or loopback address. */
+export const Address = Schema.String.check(
+  Schema.makeFilter((address: string) => isPrivate(address) || addressRule)
 );
+
+/** Any IP address, which a config then holds to `listenRefusal`. */
+export const AnyAddress = Schema.String.check(
+  Schema.makeFilter((address: string) => isIP(address) !== 0 || "an IP address")
+);
+
+/**
+ * Why a server may not listen on `address`, or `undefined` when it may. A tailnet or loopback
+ * address is always allowed; any other only when the server authenticates its callers and serves
+ * TLS, as nothing else then stops whoever reaches it, and its token would cross the network in
+ * the clear. A config refuses to start on the reason, so a public address without both is never
+ * served.
+ */
+export const listenRefusal = (
+  field: string,
+  address: string,
+  guarded: { readonly callers: boolean; readonly tls: boolean }
+): string | undefined => {
+  if (isPrivate(address)) {
+    return undefined;
+  }
+
+  const lacking = [
+    guarded.callers ? undefined : "callers",
+    guarded.tls ? undefined : "tls",
+  ].filter((name) => name !== undefined);
+
+  return lacking.length === 0
+    ? undefined
+    : `${field} ${address} is not ${addressRule}, so it needs ${lacking.join(" and ")} set too: without them anyone who reaches it can act on every machine, and tokens would cross the network in the clear`;
+};
+
+/** A server's TLS: its certificate chain and key, as PEM. */
+export interface Tls {
+  readonly cert: string;
+  readonly key: string;
+}
+
+export const TlsFiles = Schema.Struct({
+  cert: Schema.NonEmptyString,
+  key: Schema.NonEmptyString,
+});
+
+/** Reads a config's `tls` files, each path resolved by `resolve`. */
+export const readTls = (
+  files: typeof TlsFiles.Type,
+  resolve: (path: string) => string
+): Effect.Effect<Tls, Invalid, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+
+    const read = (what: "cert" | "key") => {
+      const path = resolve(files[what]);
+
+      return fs.readFileString(path).pipe(
+        Effect.mapError(
+          (error) =>
+            new Invalid({
+              message: `couldn't read tls.${what} ${path}: ${describeFileError(error)}`,
+              file: path,
+            })
+        )
+      );
+    };
+
+    return { cert: yield* read("cert"), key: yield* read("key") };
+  });
+
+class ClosingHttp extends HttpServer {
+  override close(callback?: (error?: Error) => void) {
+    super.close(callback);
+    this.closeAllConnections();
+
+    return this;
+  }
+}
+
+class ClosingHttps extends HttpsServer {
+  override close(callback?: (error?: Error) => void) {
+    super.close(callback);
+    this.closeAllConnections();
+
+    return this;
+  }
+}
+
+/**
+ * The Node server a control plane or host listens on, over TLS when given `tls`, which closes
+ * every connection it still holds as it closes: Node's own close closes the idle ones and waits
+ * on the rest, on one whose request never completes for good. An https.Server is typed apart
+ * from an http.Server, but serves `request` as one does, which is all NodeHttpServer uses of it.
+ */
+export const closingServer = (tls: Tls | undefined): HttpServer =>
+  tls === undefined
+    ? new ClosingHttp()
+    : new ClosingHttps({
+        cert: tls.cert,
+        key: tls.key,
+      });
 
 /** A caller a server takes, by the name its token file gives it, and its token's SHA-256. */
 export interface Caller {

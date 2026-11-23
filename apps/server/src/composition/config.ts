@@ -6,7 +6,14 @@ import {
   Port,
   readAuthorizedKeys,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Address } from "@gjermundgaraba/clankerbox-sdk/node";
+import type { Caller, Tls } from "@gjermundgaraba/clankerbox-sdk/node";
+import {
+  AnyAddress,
+  listenRefusal,
+  readCallers,
+  readTls,
+  TlsFiles,
+} from "@gjermundgaraba/clankerbox-sdk/node";
 import { Effect, FileSystem, Path, Schema } from "effect";
 
 import { TailnetSettings } from "../platform/tailscale.ts";
@@ -18,9 +25,11 @@ import {
 import type { ServerSettings } from "../settings.ts";
 
 const ServerConfigFile = Schema.Struct({
-  listen: Schema.Struct({ address: Address, port: Port }),
+  listen: Schema.Struct({ address: AnyAddress, port: Port }),
   stateDir: Schema.String,
   authorizedKeys: Schema.String,
+  callers: Schema.optionalKey(Schema.String),
+  tls: Schema.optionalKey(TlsFiles),
   hookTimeout: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
   tailnet: Schema.optionalKey(TailnetSettings),
   hosts: Schema.Array(
@@ -45,6 +54,9 @@ const decodeConfig = Schema.decodeUnknownEffect(
 
 export interface ServerConfig extends ServerSettings {
   readonly tailnet?: TailnetSettings | undefined;
+  /** The callers it takes, by token; none, or left out, takes every caller, as before 0.44. */
+  readonly callers?: readonly Caller[] | undefined;
+  readonly tls?: Tls | undefined;
 }
 
 export const loadConfig = (
@@ -81,6 +93,18 @@ export const loadConfig = (
     const relative = (given: string) =>
       path.resolve(path.dirname(resolved), given);
 
+    const refused = listenRefusal("listen.address", decoded.listen.address, {
+      callers: decoded.callers !== undefined,
+      tls: decoded.tls !== undefined,
+    });
+
+    if (refused !== undefined) {
+      return yield* new Invalid({
+        message: `server config ${resolved}: ${refused}`,
+        file: resolved,
+      });
+    }
+
     return {
       listen: decoded.listen,
       stateDir: relative(decoded.stateDir),
@@ -96,5 +120,11 @@ export const loadConfig = (
       ),
       hookTimeoutSeconds: decoded.hookTimeout ?? defaultHookTimeoutSeconds,
       ...(decoded.tailnet === undefined ? {} : { tailnet: decoded.tailnet }),
+      ...(decoded.callers === undefined
+        ? {}
+        : { callers: yield* readCallers(relative(decoded.callers)) }),
+      ...(decoded.tls === undefined
+        ? {}
+        : { tls: yield* readTls(decoded.tls, relative) }),
     };
   });

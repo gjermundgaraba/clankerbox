@@ -12,7 +12,10 @@ import {
   RuntimeName,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { MachineSpec } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Exit, Fiber, Layer, Schema } from "effect";
+import { mintToken, readCallers } from "@gjermundgaraba/clankerbox-sdk/node";
+import { scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import * as Action from "@gjermundgaraba/effect-actions/Action";
+import { Effect, Exit, Fiber, Layer, Redacted, Schema } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { expect } from "vite-plus/test";
 
@@ -20,6 +23,7 @@ import {
   copiesRunning,
   clientOf,
   eventually,
+  plane,
   running,
   runtimes,
 } from "../support.ts";
@@ -60,6 +64,24 @@ const createRaw = (url: string, id: string, headers?: Record<string, string>) =>
   post(url, "createMachine", { id, ...spec }, headers);
 
 const decodeInvalid = Schema.decodeUnknownSync(Schema.fromJsonString(Invalid));
+
+const decodeUnauthenticated = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Action.Unauthenticated)
+);
+
+const bearing = (token: Redacted.Redacted) => ({
+  ...versioned(version),
+  authorization: `Bearer ${Redacted.value(token)}`,
+});
+
+const callersFile = (...lines: string[]) =>
+  Effect.gen(function* () {
+    const file = `${yield* scratch}/callers`;
+
+    yield* write(file, `${lines.join("\n")}\n`);
+
+    return file;
+  });
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
@@ -560,6 +582,94 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(row?.state).toBe("made.settled");
         expect(host!.fake.calls).toContain("exec dev");
+      })
+  );
+  it.effect(
+    "with callers, every action refuses a request with no token, another's, or one no caller holds, at 401 and runs nothing, and serves a caller's",
+    () =>
+      Effect.gen(function* () {
+        const laptop = mintToken("laptop");
+        const stranger = mintToken("laptop");
+        const callers = yield* readCallers(yield* callersFile(laptop.line));
+        const { url, hosts, store } = yield* running({ callers });
+
+        expect(
+          (yield* createRaw(url, "dev", bearing(laptop.token))).status
+        ).toBe(200);
+
+        const row = yield* eventually(
+          store.machines,
+          ([machine]) => machine?.state === "made.settled"
+        );
+
+        const calls = [...hosts[0]!.fake.calls];
+
+        for (const { name } of Http.actions) {
+          for (const [headers, says] of [
+            [versioned(version), /carries none/u],
+            [bearing(stranger.token), /no caller with this token/u],
+            [
+              {
+                ...versioned(version),
+                authorization: `Basic ${Redacted.value(laptop.token)}`,
+              },
+              /carries none/u,
+            ],
+          ] as const) {
+            const answer = yield* post(url, name, { id: "dev" }, headers);
+
+            expect(answer.status, name).toBe(401);
+            expect(decodeUnauthenticated(answer.body).message, name).toMatch(
+              says
+            );
+          }
+        }
+
+        expect(yield* store.machines).toStrictEqual(row);
+        expect(hosts[0]!.fake.calls).toStrictEqual(calls);
+      })
+  );
+
+  it.effect(
+    "a caller whose line leaves the callers file is refused once the control plane restarts, and the rest are still served",
+    () =>
+      Effect.gen(function* () {
+        const laptop = mintToken("laptop");
+        const orbs = mintToken("orbs");
+        const file = yield* callersFile(laptop.line, orbs.line);
+        const planned = yield* plane();
+        const first = yield* planned.start(0, yield* readCallers(file));
+
+        expect(
+          (yield* post(first.url, "listMachines", {}, bearing(orbs.token)))
+            .status
+        ).toBe(200);
+
+        yield* first.crash;
+        yield* write(file, `${laptop.line}\n`);
+
+        const second = yield* planned.start(
+          Number(new URL(first.url).port),
+          yield* readCallers(file)
+        );
+
+        yield* Effect.addFinalizer(() => second.crash);
+
+        const refused = yield* post(
+          second.url,
+          "listMachines",
+          {},
+          bearing(orbs.token)
+        );
+
+        expect(refused.status).toBe(401);
+        expect(decodeUnauthenticated(refused.body).message).toMatch(
+          /no caller with this token/u
+        );
+        expect(
+          (yield* post(second.url, "listMachines", {}, bearing(laptop.token)))
+            .status
+        ).toBe(200);
       })
   );
 });
