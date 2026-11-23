@@ -1,10 +1,19 @@
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { BlockList, isIP } from "node:net";
 
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
-import { Layer, Schema } from "effect";
+import * as Action from "@gjermundgaraba/effect-actions/Action";
+import { Effect, FileSystem, Layer, Option, Redacted, Schema } from "effect";
+import {
+  Headers,
+  HttpRouter,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/http";
 
 import * as Client from "./client.ts";
-import type { Invalid } from "./errors.ts";
+import { describeFileError } from "./describe.ts";
+import { Invalid } from "./errors.ts";
 
 /**
  * The client over Node's `http`. It is in `./node`, apart from `.`, so an app that brings its own
@@ -46,3 +55,202 @@ export const Address = Schema.String.check(
     );
   })
 );
+
+/** A caller a server takes, by the name its token file gives it, and its token's SHA-256. */
+export interface Caller {
+  readonly name: string;
+  readonly hash: Uint8Array;
+}
+
+const callerName = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
+
+const sha256Hex = /^[0-9a-f]{64}$/u;
+
+const mintedToken = /^[0-9a-f]{64}$/u;
+
+export const hashToken = (token: string): Uint8Array =>
+  createHash("sha256").update(token, "utf8").digest();
+
+/** A new token, 32 random bytes as hex, and the line a callers file takes for it under `name`. */
+export const mintToken = (name: string) => {
+  const token = randomBytes(32).toString("hex");
+
+  return {
+    token: Redacted.make(token),
+    line: `${name} ${Buffer.from(hashToken(token)).toString("hex")}`,
+  };
+};
+
+export const isCallerName = (name: string): boolean => callerName.test(name);
+
+/**
+ * Reads a callers file: a line `<name> <sha256 of the token, hex>` per caller, blank lines and
+ * `#` comments skipped. A name twice, a hash twice, or any other line is `Invalid`, naming the
+ * line, so a typo is refused at start rather than met as a refused caller.
+ */
+export const readCallers = (
+  path: string
+): Effect.Effect<readonly Caller[], Invalid, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+
+    const text = yield* fs.readFileString(path).pipe(
+      Effect.mapError(
+        (error) =>
+          new Invalid({
+            message: `couldn't read callers ${path}: ${describeFileError(error)}`,
+            file: path,
+          })
+      )
+    );
+
+    const callers: Caller[] = [];
+    const lines = text.replaceAll("\r\n", "\n").split("\n");
+
+    for (const [index, raw] of lines.entries()) {
+      const line = raw.trim();
+
+      if (line === "" || line.startsWith("#")) {
+        continue;
+      }
+
+      const refuse = (why: string) =>
+        new Invalid({
+          message: `callers ${path}, line ${index + 1}: ${why}`,
+          file: path,
+        });
+
+      const [name, hash, ...rest] = line.split(/\s+/u);
+
+      if (name === undefined || hash === undefined || rest.length > 0) {
+        return yield* refuse(
+          "each line is `<name> <sha256 of the token, hex>`: make one with `clankerbox-server token add <name>`"
+        );
+      }
+
+      if (!isCallerName(name)) {
+        return yield* refuse(
+          `the name ${name} isn't letters, digits, '.', '_' or '-', at most 64`
+        );
+      }
+
+      if (!sha256Hex.test(hash)) {
+        return yield* refuse(
+          `${name}'s hash is not 64 lowercase hex digits; the file holds each token's SHA-256, never the token`
+        );
+      }
+
+      if (callers.some((caller) => caller.name === name)) {
+        return yield* refuse(`${name} is named twice`);
+      }
+
+      const bytes = Buffer.from(hash, "hex");
+
+      if (callers.some((caller) => Buffer.compare(caller.hash, bytes) === 0)) {
+        return yield* refuse(`${name}'s hash is another caller's too`);
+      }
+
+      callers.push({ name, hash: bytes });
+    }
+
+    if (callers.length === 0) {
+      return yield* new Invalid({
+        message: `callers ${path} names no caller, so it would refuse everyone: add one with \`clankerbox-server token add <name>\``,
+        file: path,
+      });
+    }
+
+    return callers;
+  });
+
+/** Reads a token file, the token alone with any whitespace around it, as `mintToken` gives it. */
+export const readToken = (
+  path: string
+): Effect.Effect<Redacted.Redacted, Invalid, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+
+    const text = yield* fs.readFileString(path).pipe(
+      Effect.mapError(
+        (error) =>
+          new Invalid({
+            message: `couldn't read token ${path}: ${describeFileError(error)}`,
+            file: path,
+          })
+      )
+    );
+
+    const token = text.trim();
+
+    if (!mintedToken.test(token)) {
+      return yield* new Invalid({
+        message: `token ${path} doesn't hold a token, 64 lowercase hex digits as \`clankerbox-server token add\` prints`,
+        file: path,
+      });
+    }
+
+    return Redacted.make(token);
+  });
+
+/**
+ * The caller whose token this is, or none, found by comparing the token's SHA-256 with every
+ * caller's through `timingSafeEqual`, so the time taken is the same whichever byte or caller differs.
+ */
+export const callerInConstantTime = (
+  callers: readonly Caller[],
+  token: string
+): Caller | undefined => {
+  const presented = hashToken(token);
+  let found: Caller | undefined;
+
+  for (const caller of callers) {
+    if (timingSafeEqual(presented, caller.hash) && found === undefined) {
+      found = caller;
+    }
+  }
+
+  return found;
+};
+
+const bearer = /^Bearer[ \t]+(?<token>\S+)[ \t]*$/iu;
+
+const encodeUnauthenticated = Schema.encodeSync(Action.Unauthenticated);
+
+const refused = (message: string) =>
+  Effect.succeed(
+    HttpServerResponse.jsonUnsafe(
+      encodeUnauthenticated(new Action.Unauthenticated({ message })),
+      { status: 401, headers: { "www-authenticate": "Bearer" } }
+    )
+  );
+
+/**
+ * Refuses, for a server of either contract, a request whose `Authorization: Bearer` token is no
+ * caller's, before it reads anything, as effect-actions' `Unauthenticated` at 401. Given no
+ * callers it passes every request, as a server whose config names none takes every caller, the
+ * tailnet or loopback its listen address is limited to being its only gate.
+ */
+export const requireToken = (server: string, callers: readonly Caller[]) =>
+  HttpRouter.middleware((handle) =>
+    callers.length === 0
+      ? handle
+      : Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
+          Option.match(
+            Option.flatMap(
+              Headers.get(request.headers, "authorization"),
+              (value) =>
+                Option.fromNullishOr(bearer.exec(value)?.groups?.["token"])
+            ),
+            {
+              onNone: () =>
+                refused(
+                  `this ${server} takes only a caller with a token, and this request carries none`
+                ),
+              onSome: (token) =>
+                callerInConstantTime(callers, token) === undefined
+                  ? refused(`this ${server} takes no caller with this token`)
+                  : handle,
+            }
+          )
+        )
+  );
