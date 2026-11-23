@@ -1061,6 +1061,8 @@ const chainDepth = 400;
 
 const daemonSeconds = 30;
 
+const guestsOwnSh = "/bin/sh";
+
 const daemonCases = (shell: readonly string[]) => {
   layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     it.effect(
@@ -1070,7 +1072,7 @@ const daemonCases = (shell: readonly string[]) => {
           const [took, ran] = yield* Effect.timed(
             launched(shell, {
               argv: [
-                "sh",
+                guestsOwnSh,
                 "-c",
                 `sleep ${daemonSeconds} </dev/null >/dev/null 2>&1 & echo $!`,
               ],
