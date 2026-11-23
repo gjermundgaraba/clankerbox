@@ -167,8 +167,6 @@ const callerName = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
 
 const sha256Hex = /^[0-9a-f]{64}$/u;
 
-const mintedToken = /^[0-9a-f]{64}$/u;
-
 export const hashToken = (token: string): Uint8Array =>
   createHash("sha256").update(token, "utf8").digest();
 
@@ -262,35 +260,6 @@ export const readCallers = (
     }
 
     return callers;
-  });
-
-/** Reads a token file, the token alone with any whitespace around it, as `mintToken` gives it. */
-export const readToken = (
-  path: string
-): Effect.Effect<Redacted.Redacted, Invalid, FileSystem.FileSystem> =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-
-    const text = yield* fs.readFileString(path).pipe(
-      Effect.mapError(
-        (error) =>
-          new Invalid({
-            message: `couldn't read token ${path}: ${describeFileError(error)}`,
-            file: path,
-          })
-      )
-    );
-
-    const token = text.trim();
-
-    if (!mintedToken.test(token)) {
-      return yield* new Invalid({
-        message: `token ${path} doesn't hold a token, 64 lowercase hex digits as \`clankerbox-server token add\` prints`,
-        file: path,
-      });
-    }
-
-    return Redacted.make(token);
   });
 
 /**

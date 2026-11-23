@@ -214,6 +214,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
   const execs: ExecRequest[] = [];
   const calls: string[] = [];
   const versions: Array<string | null> = [];
+  const authorizations: Array<string | null> = [];
   const holds: Array<number | undefined> = [];
   let replyLost: "down" | "cut" | undefined;
 
@@ -807,6 +808,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
     execs,
     calls,
     versions,
+    authorizations,
     holds,
     hold: (held: Machine) => {
       machines.set(held.id, held);
@@ -835,6 +837,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
       context?: Context.Context<never>
     ): Promise<Response> => {
       versions.push(request.headers.get(versionHeader));
+      authorizations.push(request.headers.get("authorization"));
 
       const response = await web.handler(request, context);
 

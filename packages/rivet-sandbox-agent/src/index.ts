@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeClient from "@gjermundgaraba/clankerbox-sdk/node";
-import { Layer } from "effect";
+import { Layer, Redacted } from "effect";
 
 import type { ClankerboxProvider, Options } from "./options.ts";
 import { provider } from "./provider.ts";
@@ -16,5 +16,13 @@ export { ProviderDisposedError } from "./sandboxes.ts";
 export const clankerbox = (options: Options): ClankerboxProvider =>
   provider(
     options,
-    Layer.mergeAll(NodeClient.layer(options.server), NodeServices.layer)
+    Layer.mergeAll(
+      NodeClient.layer(options.server, {
+        token:
+          options.token === undefined
+            ? undefined
+            : Redacted.make(options.token),
+      }),
+      NodeServices.layer
+    )
   );

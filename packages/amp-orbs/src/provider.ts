@@ -44,6 +44,7 @@ export const command = Command.make(
 
       const client = yield* Client.make(settings.server, {
         timeout: waitTimeout,
+        token: settings.token,
       });
 
       yield* dispatch(given, settings, client).pipe(

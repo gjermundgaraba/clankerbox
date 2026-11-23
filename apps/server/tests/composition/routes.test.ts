@@ -679,6 +679,36 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "the SDK's client sends its token, and one without a token or with another reads the refusal as Invalid, saying what to fix",
+    () =>
+      Effect.gen(function* () {
+        const laptop = mintToken("laptop");
+
+        const { url } = yield* running({
+          callers: yield* readCallers(yield* callersFile(laptop.line)),
+        });
+
+        const listed = yield* (yield* clientOf(url, {
+          token: laptop.token,
+        })).listMachines();
+
+        expect(listed).toStrictEqual([]);
+
+        for (const options of [{}, { token: mintToken("laptop").token }]) {
+          const refused = yield* Effect.flip(
+            (yield* clientOf(url, options)).listMachines()
+          );
+
+          expect(refused._tag).toBe("Invalid");
+          expect(refused.message).toContain(
+            "the control plane refused this caller: this control plane takes"
+          );
+          expect(refused.message).toContain("callers file");
+        }
+      })
+  );
+
+  it.effect(
     "a caller whose line leaves the callers file is refused once the control plane restarts, and the rest are still served",
     () =>
       Effect.gen(function* () {

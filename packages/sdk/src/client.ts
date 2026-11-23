@@ -12,6 +12,7 @@ import {
   Schedule,
   Schema,
 } from "effect";
+import type { Redacted } from "effect";
 import { HttpClient, HttpClientError, HttpClientRequest } from "effect/http";
 
 import {
@@ -101,6 +102,8 @@ export interface Options {
    * the control plane holds, which reads again as soon as one answers.
    */
   readonly pollEvery?: Duration.Duration | undefined;
+  /** The bearer token this caller presents, for a control plane whose config names callers. */
+  readonly token?: Redacted.Redacted | undefined;
 }
 
 /** A delete of a resource that is already gone is `absent`: done either way. */
@@ -219,12 +222,20 @@ export class Client extends Context.Service<Client, Interface>()(
   "@gjermundgaraba/clankerbox-sdk/Client"
 ) {}
 
-const serverApi = (url: string) =>
+const serverApi = (url: string, token: Redacted.Redacted | undefined) =>
   ActionHttp.client(Http, {
     baseUrl: url,
-    transformClient: HttpClient.mapRequest(
-      HttpClientRequest.setHeader(versionHeader, version)
-    ),
+    transformClient: HttpClient.mapRequest((request) => {
+      const versioned = HttpClientRequest.setHeader(
+        request,
+        versionHeader,
+        version
+      );
+
+      return token === undefined
+        ? versioned
+        : HttpClientRequest.bearerToken(versioned, token);
+    }),
   });
 
 type ServerApi = Effect.Success<ReturnType<typeof serverApi>>;
@@ -319,7 +330,10 @@ const fromUndeclared = (
       new Internal({
         message: `the control plane's reply didn't decode: ${message}`,
       }),
-    Unauthenticated: (failure) => unexpected(context, failure),
+    Unauthenticated: ({ message }) =>
+      new Invalid({
+        message: `the control plane refused this caller: ${message}; give the client the token whose hash is a line of the control plane's callers file`,
+      }),
     Forbidden: (failure) => unexpected(context, failure),
     Unavailable: ({ message }) => new Unavailable({ message, readOnly: true }),
     Unconfirmed: ({ message }) => new Unavailable({ message, readOnly: false }),
@@ -577,7 +591,7 @@ export const make = (
       )
     );
 
-    const api: ServerApi = yield* serverApi(url);
+    const api: ServerApi = yield* serverApi(url, options?.token);
     const methods: Methods = api;
     const pollEvery = options?.pollEvery ?? defaultPoll;
     const noWait = options?.noWait === true;

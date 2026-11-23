@@ -1,4 +1,11 @@
-import { Effect, FileSystem, Option, Predicate, Schema } from "effect";
+import {
+  Effect,
+  FileSystem,
+  Option,
+  Predicate,
+  Redacted,
+  Schema,
+} from "effect";
 import type { PlatformError } from "effect";
 import { Base64 } from "effect/encoding";
 
@@ -181,4 +188,35 @@ export const readAuthorizedKeys = (
           })
       )
     );
+  });
+
+const mintedToken = /^[0-9a-f]{64}$/u;
+
+/** Reads a token file, the token alone with any whitespace around it, as `mintToken` gives it. */
+export const readToken = (
+  path: string
+): Effect.Effect<Redacted.Redacted, Invalid, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+
+    const text = yield* fs.readFileString(path).pipe(
+      Effect.mapError(
+        (error) =>
+          new Invalid({
+            message: `couldn't read token ${path}: ${describeFileError(error)}`,
+            file: path,
+          })
+      )
+    );
+
+    const token = text.trim();
+
+    if (!mintedToken.test(token)) {
+      return yield* new Invalid({
+        message: `token ${path} doesn't hold a token, 64 lowercase hex digits as \`clankerbox-server token add\` prints`,
+        file: path,
+      });
+    }
+
+    return Redacted.make(token);
   });

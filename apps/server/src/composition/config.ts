@@ -5,6 +5,7 @@ import {
   Invalid,
   Port,
   readAuthorizedKeys,
+  readToken,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { Caller, Tls } from "@gjermundgaraba/clankerbox-sdk/node";
 import {
@@ -12,7 +13,6 @@ import {
   listenRefusal,
   readCallers,
   readTls,
-  readToken,
   TlsFiles,
 } from "@gjermundgaraba/clankerbox-sdk/node";
 import { Effect, FileSystem, Path, Schema } from "effect";

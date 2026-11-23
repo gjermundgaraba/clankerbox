@@ -2,13 +2,14 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
+import { mintToken } from "@gjermundgaraba/clankerbox-sdk/node";
 import {
   mkdir,
   write,
   scratch,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import type { StubServer } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
-import { Effect } from "effect";
+import { Effect, Redacted } from "effect";
 import { afterEach, expect } from "vite-plus/test";
 
 import {
@@ -123,6 +124,45 @@ layer(NodeServices.layer)((it) => {
         );
         expect(yield* hostsStderr(path.join(dir, "absent.json"))).toBe(
           `clankerbox: Invalid: couldn't read client config ${path.join(dir, "absent.json")}: no such file or directory`
+        );
+      })
+  );
+  it.effect(
+    "a config's token, a file beside it, is sent as a bearer token on every call, and a file without one is Invalid naming it",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        const config = path.join(dir, "config.json");
+        const { token } = mintToken("laptop");
+        const stub = server();
+
+        yield* write(
+          path.join(dir, "laptop.token"),
+          `${Redacted.value(token)}\n`
+        );
+        yield* write(path.join(dir, "raw.token"), "laptop\n");
+        yield* write(
+          config,
+          JSON.stringify({ server: serverUrl, token: "laptop.token" })
+        );
+
+        const { code } = yield* cli(["hosts", "--config", config], {
+          server: stub,
+        });
+
+        expect(code).toBe(0);
+        expect(stub.authorizations).not.toStrictEqual([]);
+        expect(new Set(stub.authorizations)).toStrictEqual(
+          new Set([`Bearer ${Redacted.value(token)}`])
+        );
+
+        yield* write(
+          config,
+          JSON.stringify({ server: serverUrl, token: "raw.token" })
+        );
+
+        expect(yield* hostsStderr(config)).toBe(
+          `clankerbox: Invalid: token ${path.join(dir, "raw.token")} doesn't hold a token, 64 lowercase hex digits as \`clankerbox-server token add\` prints`
         );
       })
   );
