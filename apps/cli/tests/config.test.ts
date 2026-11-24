@@ -2,7 +2,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { mintToken } from "@gjermundgaraba/clankerbox-sdk/node";
+import { hashToken, mintToken } from "@gjermundgaraba/clankerbox-sdk/node";
 import {
   mkdir,
   write,
@@ -131,19 +131,18 @@ layer(NodeServices.layer)((it) => {
       })
   );
   it.effect(
-    "a config's token, a file beside it, is sent as a bearer token on every call, and a file without one is Invalid naming it",
+    "a config's token, a file beside it, is sent as a bearer token on every call, and a file holding no token, a hash, a host's token or a token without its prefix is Invalid saying which",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
         const config = path.join(dir, "config.json");
-        const { token } = mintToken("laptop");
+        const { token } = mintToken("caller", "laptop");
         const stub = server();
 
         yield* write(
           path.join(dir, "laptop.token"),
           `${Redacted.value(token)}\n`
         );
-        yield* write(path.join(dir, "raw.token"), "laptop\n");
         yield* write(
           config,
           JSON.stringify({ server: secureUrl, token: "laptop.token" })
@@ -159,14 +158,37 @@ layer(NodeServices.layer)((it) => {
           new Set([`Bearer ${Redacted.value(token)}`])
         );
 
-        yield* write(
-          config,
-          JSON.stringify({ server: secureUrl, token: "raw.token" })
-        );
+        const needs =
+          "where it needs a caller's token, cbx_ and 64 lowercase hex digits as `clankerbox-server token add` prints";
 
-        expect(yield* hostsStderr(config)).toBe(
-          `clankerbox: Invalid: token ${path.join(dir, "raw.token")} doesn't hold a token, 64 lowercase hex digits as \`clankerbox-server token add\` prints`
-        );
+        for (const [file, text, holds] of [
+          ["raw.token", "laptop\n", "no token"],
+          [
+            "hash.token",
+            `${Buffer.from(hashToken(Redacted.value(token))).toString("hex")}\n`,
+            "a SHA-256, which a callers file or store keeps, not the token",
+          ],
+          [
+            "host.token",
+            `${Redacted.value(mintToken("host", "cp").token)}\n`,
+            "a host's token",
+          ],
+          [
+            "bare.token",
+            `${Redacted.value(token).slice("cbx_".length)}\n`,
+            "a SHA-256, which a callers file or store keeps, not the token",
+          ],
+        ] as const) {
+          yield* write(path.join(dir, file), text);
+          yield* write(
+            config,
+            JSON.stringify({ server: secureUrl, token: file })
+          );
+
+          expect(yield* hostsStderr(config)).toBe(
+            `clankerbox: Invalid: token ${path.join(dir, file)} holds ${holds}, ${needs}`
+          );
+        }
       })
   );
 });

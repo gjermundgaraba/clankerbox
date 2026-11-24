@@ -436,11 +436,44 @@ export type Host = typeof Host.Type;
 export const callerNameRule =
   "letters, digits, '.', '_' or '-', at most 64, not starting with '.', '_' or '-'";
 
+/**
+ * The prefix a minted token starts with, by the hop it is for: `caller` for a control plane's
+ * callers, `host` for the control plane calling a host. It lets a person or a secret scanner tell a
+ * token from the SHA-256 it is kept as, and one hop's token from the other's. The prefix is part
+ * of the token, and of what is hashed; nothing checks a request's token by its prefix.
+ */
+export const tokenPrefix = { caller: "cbx_", host: "cbxh_" } as const;
+
+export type TokenKind = keyof typeof tokenPrefix;
+
+const mintedToken = /^(?<prefix>cbxh?_)[0-9a-f]{64}$/u;
+
+/** What `text` is by its form: a token of either hop, a SHA-256 in hex, or none of these. */
+export const secretKind = (text: string): TokenKind | "hash" | undefined => {
+  const prefix = mintedToken.exec(text)?.groups?.["prefix"];
+
+  if (prefix !== undefined) {
+    return prefix === tokenPrefix.host ? "host" : "caller";
+  }
+
+  return /^[0-9a-f]{64}$/u.test(text) ? "hash" : undefined;
+};
+
+/** Why `name` can't name a caller, or `undefined` when it can. */
+export const callerNameRefusal = (name: string): string | undefined => {
+  const held = secretKind(name);
+
+  if (held !== undefined) {
+    return `${name.slice(0, 8)}… is ${held === "hash" ? "a SHA-256" : "a token"}, not a name: give the caller's name, and token add mints its token`;
+  }
+
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(name)
+    ? undefined
+    : `the name ${name} isn't ${callerNameRule}`;
+};
+
 export const CallerName = Schema.String.check(
-  Schema.makeFilter(
-    (name: string) =>
-      /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(name) || callerNameRule
-  )
+  Schema.makeFilter((name: string) => callerNameRefusal(name) ?? true)
 );
 
 /**

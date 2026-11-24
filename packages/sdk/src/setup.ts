@@ -11,7 +11,8 @@ import { Base64 } from "effect/encoding";
 
 import { describeFileError, describeIssues } from "./describe.ts";
 import { Invalid } from "./errors.ts";
-import { PublicKeys } from "./resources.ts";
+import { PublicKeys, secretKind, tokenPrefix } from "./resources.ts";
+import type { TokenKind } from "./resources.ts";
 
 const lineLength = 76;
 
@@ -190,11 +191,19 @@ export const readAuthorizedKeys = (
     );
   });
 
-const mintedToken = /^[0-9a-f]{64}$/u;
+const heldAs = {
+  hash: "a SHA-256, which a callers file or store keeps, not the token",
+  caller: "a caller's token",
+  host: "a host's token",
+} as const;
 
-/** Reads a token file, the token alone with any whitespace around it, as `mintToken` gives it. */
+/**
+ * Reads a token file for `kind`'s hop, the token alone with any whitespace around it, as
+ * `mintToken` gives it. A SHA-256 in its place, or the other hop's token, is `Invalid`, saying so.
+ */
 export const readToken = (
-  path: string
+  path: string,
+  kind: TokenKind
 ): Effect.Effect<Redacted.Redacted, Invalid, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -210,10 +219,11 @@ export const readToken = (
     );
 
     const token = text.trim();
+    const held = secretKind(token);
 
-    if (!mintedToken.test(token)) {
+    if (held !== kind) {
       return yield* new Invalid({
-        message: `token ${path} doesn't hold a token, 64 lowercase hex digits as \`clankerbox-server token add\` prints`,
+        message: `token ${path} holds ${held === undefined ? "no token" : heldAs[held]}, where it needs ${heldAs[kind]}, ${tokenPrefix[kind]} and 64 lowercase hex digits as \`clankerbox-server token add\` prints`,
         file: path,
       });
     }

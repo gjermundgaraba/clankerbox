@@ -1,15 +1,11 @@
 import {
-  callerNameRule,
+  callerNameRefusal,
   describeFileError,
   Invalid,
   NotFound,
   tokenRows,
 } from "@gjermundgaraba/clankerbox-sdk";
-import {
-  isCallerName,
-  mintToken,
-  parseCallers,
-} from "@gjermundgaraba/clankerbox-sdk/node";
+import { mintToken, parseCallers } from "@gjermundgaraba/clankerbox-sdk/node";
 import {
   Console,
   DateTime,
@@ -38,10 +34,10 @@ export const addCaller = (
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
 
-    if (!isCallerName(name)) {
-      return yield* new Invalid({
-        message: `the name ${name} isn't ${callerNameRule}`,
-      });
+    const misnamed = callerNameRefusal(name);
+
+    if (misnamed !== undefined) {
+      return yield* new Invalid({ message: misnamed });
     }
 
     const unreadable = (error: PlatformError.PlatformError) =>
@@ -63,7 +59,7 @@ export const addCaller = (
       });
     }
 
-    const { token, line } = mintToken(name);
+    const { token, line } = mintToken("host", name);
     const separator = text === "" || text.endsWith("\n") ? "" : "\n";
 
     yield* fs
@@ -114,10 +110,10 @@ const stoppedStore = (config: string, made: "made if absent" | "must exist") =>
 export const addToken = (config: string, name: string) =>
   Effect.scoped(
     Effect.gen(function* () {
-      if (!isCallerName(name)) {
-        return yield* new Invalid({
-          message: `the name ${name} isn't ${callerNameRule}`,
-        });
+      const misnamed = callerNameRefusal(name);
+
+      if (misnamed !== undefined) {
+        return yield* new Invalid({ message: misnamed });
       }
 
       const store = yield* stoppedStore(config, "made if absent");

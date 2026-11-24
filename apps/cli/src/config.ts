@@ -84,6 +84,9 @@ export const loadConfig = (
     return {
       file,
       server: config.server,
-      token: yield* readToken(path.resolve(path.dirname(file), config.token)),
+      token: yield* readToken(
+        path.resolve(path.dirname(file), config.token),
+        "caller"
+      ),
     };
   });

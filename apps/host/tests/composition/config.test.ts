@@ -50,7 +50,7 @@ const tls = { cert: "cert.pem", key: "key.pem" };
 
 const guarded = (dir: string) =>
   Effect.gen(function* () {
-    const plane = mintToken("cp");
+    const plane = mintToken("host", "cp");
 
     yield* write(path.join(dir, "callers"), `${plane.line}\n`);
     yield* write(path.join(dir, "cert.pem"), "a certificate");

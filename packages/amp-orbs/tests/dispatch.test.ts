@@ -151,7 +151,7 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const stub = server();
-        const { token } = mintToken("orbs");
+        const { token } = mintToken("caller", "orbs");
 
         const result = yield* dispatched(
           spawnEnv,

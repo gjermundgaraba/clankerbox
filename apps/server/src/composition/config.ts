@@ -131,7 +131,7 @@ export const loadConfig = (
               ? Effect.undefined
               : Effect.andThen(
                   refuseTokenUrl(resolved, id, url),
-                  readToken(relative(token))
+                  readToken(relative(token), "host")
                 ),
             (read) => ({
               id,

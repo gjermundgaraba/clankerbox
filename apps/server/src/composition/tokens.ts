@@ -26,7 +26,7 @@ export const unrevoked = (store: Store["Service"]) =>
 /** A token row for a new caller's token, and the token. */
 export const minted = (name: string, mintedBy: string | undefined) =>
   Effect.map(DateTime.now, (mintedAt) => {
-    const { token, hash } = mintToken(name);
+    const { token, hash } = mintToken("caller", name);
 
     const row: TokenRow = {
       name,

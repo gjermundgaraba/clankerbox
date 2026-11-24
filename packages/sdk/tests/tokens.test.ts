@@ -85,13 +85,16 @@ const callersOf = (...lines: string[]) =>
     })
   );
 
-const laptop = mintToken("laptop");
-const orbs = mintToken("orbs");
-const other = mintToken("smolvm-1");
+const laptop = mintToken("caller", "laptop");
+const orbs = mintToken("caller", "orbs");
+const other = mintToken("caller", "smolvm-1");
+const host = mintToken("host", "cp");
 
 const sum = (bytes: Buffer) => bytes.reduce((total, byte) => total + byte, 0);
 
 const token = (minted: typeof laptop) => Redacted.value(minted.token);
+
+const hops = [token(laptop), token(host)];
 
 layer(NodeServices.layer)((it) => {
   describe("requireToken", () => {
@@ -203,107 +206,147 @@ layer(NodeServices.layer)((it) => {
         })
     );
 
-    it("finds no caller whose hash differs from the token's in any one bit, at every bit of every byte", () => {
-      const right = token(laptop);
-      const digest = Buffer.from(hashToken(right));
+    it("finds no caller whose hash differs from the token's in any one bit, at every bit of every byte, for a caller's token and a host's", () => {
+      for (const right of hops) {
+        const digest = Buffer.from(hashToken(right));
 
-      for (const index of digest.keys()) {
-        for (let bit = 0; bit < 8; bit += 1) {
-          const near = Buffer.from(digest);
+        for (const index of digest.keys()) {
+          for (let bit = 0; bit < 8; bit += 1) {
+            const near = Buffer.from(digest);
 
-          near.writeUInt8(near.readUInt8(index) ^ (1 << bit), index);
+            near.writeUInt8(near.readUInt8(index) ^ (1 << bit), index);
 
+            expect(
+              callerInConstantTime([{ name: "near", hash: near }], right),
+              `byte ${index}, bit ${bit}`
+            ).toBeUndefined();
+          }
+        }
+
+        expect(
+          callerInConstantTime([{ name: "same", hash: digest }], right)?.name
+        ).toBe("same");
+      }
+    });
+
+    it("finds no caller whose hash holds the token's bytes in another order, for a caller's token and a host's", () => {
+      for (const right of hops) {
+        const digest = Buffer.from(hashToken(right));
+
+        const permutations = [
+          Buffer.from([...digest].toReversed()),
+          ...[...digest.keys()].map((index) =>
+            Buffer.concat([digest.subarray(index), digest.subarray(0, index)])
+          ),
+          ...[...digest.keys()].map((index) => {
+            const next = (index + 1) % digest.length;
+            const swapped = Buffer.from(digest);
+
+            swapped.writeUInt8(digest.readUInt8(next), index);
+            swapped.writeUInt8(digest.readUInt8(index), next);
+
+            return swapped;
+          }),
+        ].filter((near) => !near.equals(digest));
+
+        expect(permutations.length).toBeGreaterThan(32);
+
+        for (const near of permutations) {
           expect(
             callerInConstantTime([{ name: "near", hash: near }], right),
-            `byte ${index}, bit ${bit}`
+            near.toString("hex")
           ).toBeUndefined();
         }
       }
-
-      expect(
-        callerInConstantTime([{ name: "same", hash: digest }], right)?.name
-      ).toBe("same");
     });
 
-    it("finds no caller whose hash holds the token's bytes in another order", () => {
-      const right = token(laptop);
-      const digest = Buffer.from(hashToken(right));
+    it("finds no caller whose hash has the token's byte sum but other bytes, for a caller's token and a host's", () => {
+      for (const right of hops) {
+        const digest = Buffer.from(hashToken(right));
 
-      const permutations = [
-        Buffer.from([...digest].toReversed()),
-        ...[...digest.keys()].map((index) =>
-          Buffer.concat([digest.subarray(index), digest.subarray(0, index)])
-        ),
-        ...[...digest.keys()].map((index) => {
-          const next = (index + 1) % digest.length;
-          const swapped = Buffer.from(digest);
+        const sameSum = [...digest.keys()].flatMap((raised) => {
+          const lowered = [...digest.keys()].find(
+            (index) => index !== raised && digest.readUInt8(index) > 0
+          );
 
-          swapped.writeUInt8(digest.readUInt8(next), index);
-          swapped.writeUInt8(digest.readUInt8(index), next);
+          if (digest.readUInt8(raised) === 255 || lowered === undefined) {
+            return [];
+          }
 
-          return swapped;
-        }),
-      ].filter((near) => !near.equals(digest));
+          const moved = Buffer.from(digest);
 
-      expect(permutations.length).toBeGreaterThan(32);
+          moved.writeUInt8(digest.readUInt8(raised) + 1, raised);
+          moved.writeUInt8(digest.readUInt8(lowered) - 1, lowered);
 
-      for (const near of permutations) {
-        expect(
-          callerInConstantTime([{ name: "near", hash: near }], right),
-          near.toString("hex")
-        ).toBeUndefined();
+          return [moved];
+        });
+
+        expect(sameSum.length).toBeGreaterThan(16);
+
+        for (const near of sameSum) {
+          expect(sum(near), near.toString("hex")).toBe(sum(digest));
+          expect(near.equals(digest)).toBe(false);
+          expect(
+            callerInConstantTime([{ name: "near", hash: near }], right),
+            near.toString("hex")
+          ).toBeUndefined();
+        }
       }
     });
 
-    it("finds no caller whose hash has the token's byte sum but other bytes", () => {
-      const right = token(laptop);
-      const digest = Buffer.from(hashToken(right));
+    it("finds no caller for a token that differs from its own in any one character, its prefix's included, or holds its digits under the other hop's prefix or none, for a caller's token and a host's", () => {
+      for (const right of hops) {
+        const callers = [{ name: "laptop", hash: hashToken(right) }];
 
-      const sameSum = [...digest.keys()].flatMap((raised) => {
-        const lowered = [...digest.keys()].find(
-          (index) => index !== raised && digest.readUInt8(index) > 0
-        );
+        expect(callerInConstantTime(callers, right)?.name).toBe("laptop");
 
-        if (digest.readUInt8(raised) === 255 || lowered === undefined) {
-          return [];
+        const prefix = right.startsWith("cbxh_") ? "cbxh_" : "cbx_";
+        const digits = right.slice(prefix.length);
+
+        const near = [
+          ...Array.from(
+            { length: right.length },
+            (_, index) =>
+              `${right.slice(0, index)}${right[index] === "0" ? "1" : "0"}${right.slice(index + 1)}`
+          ),
+          `${prefix === "cbx_" ? "cbxh_" : "cbx_"}${digits}`,
+          digits,
+        ];
+
+        for (const presented of near) {
+          expect(
+            callerInConstantTime(callers, presented),
+            presented
+          ).toBeUndefined();
         }
-
-        const moved = Buffer.from(digest);
-
-        moved.writeUInt8(digest.readUInt8(raised) + 1, raised);
-        moved.writeUInt8(digest.readUInt8(lowered) - 1, lowered);
-
-        return [moved];
-      });
-
-      expect(sameSum.length).toBeGreaterThan(16);
-
-      for (const near of sameSum) {
-        expect(sum(near), near.toString("hex")).toBe(sum(digest));
-        expect(near.equals(digest)).toBe(false);
-        expect(
-          callerInConstantTime([{ name: "near", hash: near }], right),
-          near.toString("hex")
-        ).toBeUndefined();
       }
     });
   });
 
   describe("mintToken", () => {
-    it("mints 64 hex digits, no two tokens alike, and no 8 bytes repeated in or across 4096 of them", () => {
-      const minted = Array.from({ length: 4096 }, () =>
-        Redacted.value(mintToken("laptop").token)
-      );
+    it("mints its hop's prefix and 64 hex digits, no two tokens alike, and no 8 bytes repeated in or across 4096 of them", () => {
+      for (const [kind, prefix] of [
+        ["caller", "cbx_"],
+        ["host", "cbxh_"],
+      ] as const) {
+        const minted = Array.from({ length: 4096 }, () =>
+          Redacted.value(mintToken(kind, "laptop").token)
+        );
 
-      const blocks = minted.flatMap(
-        (minting) => minting.match(/.{16}/gu) ?? []
-      );
+        const blocks = minted.flatMap(
+          (minting) => minting.slice(prefix.length).match(/.{16}/gu) ?? []
+        );
 
-      expect(
-        minted.filter((minting) => !/^[0-9a-f]{64}$/u.test(minting))
-      ).toStrictEqual([]);
-      expect(new Set(minted).size).toBe(4096);
-      expect(new Set(blocks).size).toBe(4096 * 4);
+        expect(
+          minted.filter(
+            (minting) =>
+              !minting.startsWith(prefix) ||
+              !/^[0-9a-f]{64}$/u.test(minting.slice(prefix.length))
+          )
+        ).toStrictEqual([]);
+        expect(new Set(minted).size).toBe(4096);
+        expect(new Set(blocks).size).toBe(4096 * 4);
+      }
     });
   });
 
@@ -315,7 +358,9 @@ layer(NodeServices.layer)((it) => {
           const hash = laptop.line.split(" ")[1]!;
 
           const refused = [
-            [[`laptop ${token(laptop)}x`], "not 64 lowercase hex"],
+            [[`laptop ${token(laptop)}`], "holds a token, not its SHA-256"],
+            [[`laptop ${token(host)}`], "holds a token, not its SHA-256"],
+            [[`laptop ${hash}x`], "not 64 lowercase hex"],
             [[`laptop ${hash.toUpperCase()}`], "not 64 lowercase hex"],
             [
               [laptop.line, `laptop ${orbs.line.split(" ")[1]!}`],

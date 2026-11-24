@@ -86,7 +86,8 @@ export const loadSettings = Effect.fn("loadSettings")(function* (
             (yield* Path.Path).resolve(
               (yield* Path.Path).dirname(file),
               settings.token
-            )
+            ),
+            "caller"
           ),
         }),
   };

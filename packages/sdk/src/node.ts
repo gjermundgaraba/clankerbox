@@ -26,7 +26,8 @@ import * as Client from "./client.ts";
 import { describeFileError } from "./describe.ts";
 import { Invalid } from "./errors.ts";
 import { isTailnetOrLoopback, tailnetOrLoopbackRule } from "./reach.ts";
-import { CallerName, callerNameRule } from "./resources.ts";
+import { callerNameRefusal, secretKind, tokenPrefix } from "./resources.ts";
+import type { TokenKind } from "./resources.ts";
 
 /**
  * The client over Node's `http`. It is in `./node`, apart from `.`, so an app that brings its own
@@ -162,9 +163,12 @@ const sha256Hex = /^[0-9a-f]{64}$/u;
 export const hashToken = (token: string): Uint8Array =>
   createHash("sha256").update(token, "utf8").digest();
 
-/** A new token, 32 random bytes as hex, its SHA-256, and the line a callers file takes for it under `name`. */
-export const mintToken = (name: string) => {
-  const token = randomBytes(32).toString("hex");
+/**
+ * A new token for `kind`'s hop, its prefix then 32 random bytes as hex, its SHA-256, and the line
+ * a callers file takes for it under `name`.
+ */
+export const mintToken = (kind: TokenKind, name: string) => {
+  const token = `${tokenPrefix[kind]}${randomBytes(32).toString("hex")}`;
   const hash = hashToken(token);
 
   return {
@@ -173,9 +177,6 @@ export const mintToken = (name: string) => {
     line: `${name} ${Buffer.from(hash).toString("hex")}`,
   };
 };
-
-export const isCallerName = (name: string): boolean =>
-  Schema.is(CallerName)(name);
 
 /**
  * Parses the text of a callers file at `path`: a line `<name> <sha256 of the token, hex>` per
@@ -211,8 +212,16 @@ export const parseCallers = (
         );
       }
 
-      if (!isCallerName(name)) {
-        return yield* refuse(`the name ${name} isn't ${callerNameRule}`);
+      const misnamed = callerNameRefusal(name);
+
+      if (misnamed !== undefined) {
+        return yield* refuse(misnamed);
+      }
+
+      if (secretKind(hash) === "caller" || secretKind(hash) === "host") {
+        return yield* refuse(
+          `${name}'s line holds a token, not its SHA-256; the file holds each token's SHA-256, never the token: make the line with \`clankerbox-server token add <name> --callers\``
+        );
       }
 
       if (!sha256Hex.test(hash)) {

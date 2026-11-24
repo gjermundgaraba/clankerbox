@@ -321,7 +321,7 @@ layer(NodeServices.layer)((it) => {
     "a host entry's token is read from its file, and a host without one sends none",
     () =>
       Effect.gen(function* () {
-        const linux = mintToken("cp");
+        const linux = mintToken("host", "cp");
 
         const { file, loaded } = yield* load({
           ...config,
@@ -367,7 +367,7 @@ layer(NodeServices.layer)((it) => {
 
         yield* write(
           path.join(path.dirname(file), "linux.token"),
-          `${Redacted.value(mintToken("cp").token)}\n`
+          `${Redacted.value(mintToken("host", "cp").token)}\n`
         );
 
         const error = yield* Effect.flip(loaded);

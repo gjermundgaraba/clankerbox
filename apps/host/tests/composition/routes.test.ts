@@ -628,8 +628,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "with callers, every action refuses a request with no token, one minted for another host, or one sent as Basic, at 401, and runs nothing; the control plane's is served",
     () =>
       Effect.gen(function* () {
-        const linux = mintToken("cp");
-        const mac = mintToken("cp");
+        const linux = mintToken("host", "cp");
+        const mac = mintToken("host", "cp");
 
         const { url, fake } = yield* serve({
           callers: yield* readCallers(yield* callersFile(linux.line)),

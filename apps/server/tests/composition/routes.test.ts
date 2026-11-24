@@ -167,8 +167,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "the control plane sends each host its own token: a host that takes it is up and runs a create, one given another host's token is unreachable and says why, and one with no callers ignores it",
     () =>
       Effect.gen(function* () {
-        const linux = mintToken("cp");
-        const mac = mintToken("cp");
+        const linux = mintToken("host", "cp");
+        const mac = mintToken("host", "cp");
 
         const served = yield* running({
           hosts: [
@@ -649,7 +649,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const { url, hosts, store } = yield* running({ tokens: true });
         const laptop = yield* seeded(store, "laptop");
-        const stranger = mintToken("laptop").token;
+        const stranger = mintToken("caller", "laptop").token;
 
         expect((yield* createRaw(url, "dev", bearing(laptop))).status).toBe(
           200
@@ -693,8 +693,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const { url } = yield* running({ tokens: true });
 
       expect(
-        (yield* post(url, "listMachines", {}, bearing(mintToken("x").token)))
-          .status
+        (yield* post(
+          url,
+          "listMachines",
+          {},
+          bearing(mintToken("caller", "x").token)
+        )).status
       ).toBe(401);
     })
   );
@@ -712,7 +716,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(listed).toStrictEqual([]);
 
-        for (const options of [{}, { token: mintToken("laptop").token }]) {
+        for (const options of [
+          {},
+          { token: mintToken("caller", "laptop").token },
+        ]) {
           const refused = yield* Effect.flip(
             (yield* clientOf(url, options)).listMachines()
           );

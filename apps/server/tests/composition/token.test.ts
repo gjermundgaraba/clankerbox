@@ -46,7 +46,7 @@ const serverConfig = (stateDir: string) =>
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
-    "token add makes the callers file, appends each caller's hash, and the control plane takes each printed token as its caller",
+    "token add makes the callers file, appends each caller's hash, and prints a host's token, cbxh_, that the host takes as its caller",
     () =>
       Effect.gen(function* () {
         const file = path.join(yield* scratch, "callers");
@@ -65,6 +65,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "orbs"
         );
         expect(yield* read(file)).not.toContain(Redacted.value(laptop));
+        expect(Redacted.value(laptop)).toMatch(/^cbxh_[0-9a-f]{64}$/u);
       })
   );
 
@@ -101,7 +102,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "token add refuses a name the file already holds, or one a callers file can't, and changes nothing",
+    "token add refuses a name the file already holds, one a callers file can't, or a SHA-256 or token given as a name, and changes nothing",
     () =>
       Effect.gen(function* () {
         const file = path.join(yield* scratch, "callers");
@@ -112,8 +113,24 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const twice = yield* Effect.flip(addCaller(file, "laptop"));
         const spaced = yield* Effect.flip(addCaller(file, "my laptop"));
 
+        const hash = "ab".repeat(32);
+        const minted = `cbx_${hash}`;
+
         expect(twice.message).toContain("already names laptop");
         expect(spaced.message).toContain("the name my laptop isn't");
+
+        for (const add of [
+          (name: string) => addCaller(file, name),
+          (name: string) => addToken(path.join(file, "no-config.json"), name),
+        ]) {
+          expect((yield* Effect.flip(add(hash))).message).toBe(
+            "abababab… is a SHA-256, not a name: give the caller's name, and token add mints its token"
+          );
+          expect((yield* Effect.flip(add(minted))).message).toBe(
+            "cbx_abab… is a token, not a name: give the caller's name, and token add mints its token"
+          );
+        }
+
         expect(yield* read(file)).toBe(before);
       })
   );
@@ -155,6 +172,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           yield* serverConfig(planned.stateDir),
           "root"
         );
+
+        expect(Redacted.value(token)).toMatch(/^cbx_[0-9a-f]{64}$/u);
 
         const served = yield* planned.start();
 
