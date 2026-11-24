@@ -89,6 +89,8 @@ const laptop = mintToken("laptop");
 const orbs = mintToken("orbs");
 const other = mintToken("smolvm-1");
 
+const sum = (bytes: Buffer) => bytes.reduce((total, byte) => total + byte, 0);
+
 const token = (minted: typeof laptop) => Redacted.value(minted.token);
 
 layer(NodeServices.layer)((it) => {
@@ -222,6 +224,69 @@ layer(NodeServices.layer)((it) => {
         callerInConstantTime([{ name: "same", hash: digest }], right)?.name
       ).toBe("same");
     });
+
+    it("finds no caller whose hash holds the token's bytes in another order", () => {
+      const right = token(laptop);
+      const digest = Buffer.from(hashToken(right));
+
+      const permutations = [
+        Buffer.from([...digest].toReversed()),
+        ...[...digest.keys()].map((index) =>
+          Buffer.concat([digest.subarray(index), digest.subarray(0, index)])
+        ),
+        ...[...digest.keys()].map((index) => {
+          const next = (index + 1) % digest.length;
+          const swapped = Buffer.from(digest);
+
+          swapped.writeUInt8(digest.readUInt8(next), index);
+          swapped.writeUInt8(digest.readUInt8(index), next);
+
+          return swapped;
+        }),
+      ].filter((near) => !near.equals(digest));
+
+      expect(permutations.length).toBeGreaterThan(32);
+
+      for (const near of permutations) {
+        expect(
+          callerInConstantTime([{ name: "near", hash: near }], right),
+          near.toString("hex")
+        ).toBeUndefined();
+      }
+    });
+
+    it("finds no caller whose hash has the token's byte sum but other bytes", () => {
+      const right = token(laptop);
+      const digest = Buffer.from(hashToken(right));
+
+      const sameSum = [...digest.keys()].flatMap((raised) => {
+        const lowered = [...digest.keys()].find(
+          (index) => index !== raised && digest.readUInt8(index) > 0
+        );
+
+        if (digest.readUInt8(raised) === 255 || lowered === undefined) {
+          return [];
+        }
+
+        const moved = Buffer.from(digest);
+
+        moved.writeUInt8(digest.readUInt8(raised) + 1, raised);
+        moved.writeUInt8(digest.readUInt8(lowered) - 1, lowered);
+
+        return [moved];
+      });
+
+      expect(sameSum.length).toBeGreaterThan(16);
+
+      for (const near of sameSum) {
+        expect(sum(near), near.toString("hex")).toBe(sum(digest));
+        expect(near.equals(digest)).toBe(false);
+        expect(
+          callerInConstantTime([{ name: "near", hash: near }], right),
+          near.toString("hex")
+        ).toBeUndefined();
+      }
+    });
   });
 
   describe("readCallers", () => {
@@ -288,6 +353,14 @@ layer(NodeServices.layer)((it) => {
         ["localhost", false],
         ["127.1", false],
         ["::1%lo", false],
+        ["2001:db8::ffff:7f00:1", false],
+        ["1::ffff:127.0.0.1", false],
+        ["fe80::ffff:6440:1", false],
+        ["0:0:0:0:1:ffff:7f00:1", false],
+        ["::ffff:0:1", false],
+        ["::5:0:1", false],
+        ["0:0:0:0:1:0:0:1", false],
+        ["1::1", false],
       ];
 
       for (const [address, takes] of expected) {
