@@ -15,7 +15,12 @@ import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import { Effect, Redacted } from "effect";
 import { expect } from "vite-plus/test";
 
-import { addCaller, addToken } from "../../src/composition/token.ts";
+import {
+  addCaller,
+  addToken,
+  listTokensOffline,
+  revokeTokenOffline,
+} from "../../src/composition/token.ts";
 import { clientOf, plane } from "../support.ts";
 
 const serverConfig = (stateDir: string) =>
@@ -38,7 +43,7 @@ const serverConfig = (stateDir: string) =>
     return file;
   });
 
-layer(NodeServices.layer)((it) => {
+layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
     "token add makes the callers file, appends each caller's hash, and the control plane takes each printed token as its caller",
     () =>
@@ -178,8 +183,97 @@ layer(NodeServices.layer)((it) => {
         expect(refused.message).toContain(
           "another control plane process holds state dir"
         );
-        expect(refused.message).toContain("clankerbox token mint");
+        expect(refused.message).toContain("clankerbox token");
         expect(yield* served.store.tokens).toStrictEqual([]);
+      })
+  );
+
+  it.effect(
+    "token list and revoke --config read and revoke a stopped control plane's tokens, what a revoked token minted included, and the control plane refuses the revoked ones once it starts",
+    () =>
+      Effect.gen(function* () {
+        const planned = yield* plane({ tokens: true });
+        const file = yield* serverConfig(planned.stateDir);
+        const root = yield* addToken(file, "root");
+        const first = yield* planned.start();
+
+        const leaked = yield* (yield* clientOf(first.url, {
+          token: root,
+        })).mintToken({ name: "leaked" });
+
+        yield* (yield* clientOf(first.url, {
+          token: Redacted.make(leaked.token),
+        })).mintToken({ name: "planted" });
+        yield* first.crash;
+
+        expect(
+          (yield* listTokensOffline(file)).map(({ name, mintedBy }) => [
+            name,
+            mintedBy,
+          ])
+        ).toStrictEqual([
+          ["root", undefined],
+          ["leaked", "root"],
+          ["planted", "leaked"],
+        ]);
+
+        yield* revokeTokenOffline(file, "leaked");
+        yield* revokeTokenOffline(file, "planted");
+
+        const fresh = yield* addToken(file, "root-2");
+        const second = yield* planned.start(Number(new URL(first.url).port));
+
+        yield* Effect.addFinalizer(() => second.crash);
+
+        const refused = yield* Effect.flip(
+          (yield* clientOf(second.url, {
+            token: Redacted.make(leaked.token),
+          })).listMachines()
+        );
+
+        expect(refused.message).toContain("refused this caller");
+        expect(
+          (yield* (yield* clientOf(second.url, { token: fresh })).tokens).map(
+            ({ name, revokedAt }) => [name, revokedAt !== undefined]
+          )
+        ).toStrictEqual([
+          ["root", false],
+          ["leaked", true],
+          ["planted", true],
+          ["root-2", false],
+        ]);
+      })
+  );
+
+  it.effect(
+    "token list and revoke --config refuse while the control plane runs, and revoke --config names a token it doesn't hold",
+    () =>
+      Effect.gen(function* () {
+        const planned = yield* plane({ tokens: true });
+        const file = yield* serverConfig(planned.stateDir);
+
+        yield* addToken(file, "root");
+
+        expect(
+          (yield* Effect.flip(revokeTokenOffline(file, "nobody"))).message
+        ).toContain("no token nobody");
+
+        const served = yield* planned.start();
+
+        yield* Effect.addFinalizer(() => served.crash);
+
+        for (const refused of [
+          yield* Effect.flip(listTokensOffline(file)),
+          yield* Effect.flip(revokeTokenOffline(file, "root")),
+        ]) {
+          expect(refused.message).toContain(
+            "another control plane process holds state dir"
+          );
+        }
+
+        expect(
+          (yield* served.store.tokens).map(({ revokedAt }) => revokedAt)
+        ).toStrictEqual([undefined]);
       })
   );
 });

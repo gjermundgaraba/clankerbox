@@ -8,11 +8,19 @@ import {
   mintToken,
   parseCallers,
 } from "@gjermundgaraba/clankerbox-sdk/node";
-import { Console, Effect, FileSystem, Option, Redacted } from "effect";
+import {
+  Console,
+  DateTime,
+  Effect,
+  FileSystem,
+  Option,
+  Redacted,
+} from "effect";
 import type { PlatformError } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 
 import * as Sqlite from "../platform/sqlite.ts";
+import type { TokenRow } from "../store.ts";
 import { loadConfig } from "./config.ts";
 import { minted } from "./tokens.ts";
 
@@ -71,11 +79,20 @@ export const addCaller = (
     return token;
   });
 
-/**
- * Mints a token for `name` into the store of the control plane `config` names,
- * and answers it. It opens the store as the control plane does, so it refuses while one runs: a
- * running control plane mints through any token it takes instead.
- */
+const stoppedStore = (config: string, doing: string) =>
+  Effect.flatMap(loadConfig(config), ({ stateDir }) =>
+    Sqlite.open({ stateDir }).pipe(
+      Effect.catchTag("CannotStart", (error) =>
+        Effect.fail(
+          new Invalid({
+            message: `${error.message}: stop it to ${doing} here, or use \`clankerbox token\` through a token it takes`,
+          })
+        )
+      )
+    )
+  );
+
+/** Mints a token for `name` into a stopped control plane's store, and answers it. */
 export const addToken = (config: string, name: string) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -85,18 +102,7 @@ export const addToken = (config: string, name: string) =>
         });
       }
 
-      const { stateDir } = yield* loadConfig(config);
-
-      const store = yield* Sqlite.open({ stateDir }).pipe(
-        Effect.catchTag("CannotStart", (error) =>
-          Effect.fail(
-            new Invalid({
-              message: `${error.message}: stop it to add a token here, or mint one with \`clankerbox token mint\` through a token it takes`,
-            })
-          )
-        )
-      );
-
+      const store = yield* stoppedStore(config, "add a token");
       const { row, token } = yield* minted(name, undefined);
 
       yield* store.insertToken(row);
@@ -104,6 +110,71 @@ export const addToken = (config: string, name: string) =>
       return token;
     })
   );
+
+/** Every token in a stopped control plane's store, revoked ones included. */
+export const listTokensOffline = (config: string) =>
+  Effect.scoped(
+    Effect.flatMap(stoppedStore(config, "list tokens"), (store) => store.tokens)
+  );
+
+/** Revokes a token in a stopped control plane's store, and answers its row. */
+export const revokeTokenOffline = (config: string, name: string) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const store = yield* stoppedStore(config, "revoke a token");
+      const revoked = yield* store.revokeToken(name, yield* DateTime.now);
+
+      return yield* Effect.fromOption(revoked).pipe(
+        Effect.mapError(() => new Invalid({ message: `no token ${name}` }))
+      );
+    })
+  );
+
+const configFlag = Flag.String("config").pipe(
+  Flag.withDescription(
+    "The control plane's config, whose store holds its tokens. The control plane must be stopped."
+  )
+);
+
+const tokenLine = (row: TokenRow) =>
+  [
+    row.name,
+    row.mintedBy ?? "-",
+    DateTime.formatIso(row.mintedAt),
+    row.revokedAt === undefined ? "-" : DateTime.formatIso(row.revokedAt),
+  ].join("\t");
+
+const list = Command.make("list", { config: configFlag }, ({ config }) =>
+  Effect.gen(function* () {
+    yield* Console.log("NAME\tMINTED_BY\tMINTED_AT\tREVOKED_AT");
+
+    for (const row of yield* listTokensOffline(config)) {
+      yield* Console.log(tokenLine(row));
+    }
+  }).pipe(Effect.catch((error) => Effect.die(error.message)))
+).pipe(
+  Command.withDescription(
+    "List every token in a stopped control plane's store, revoked ones and who minted each included."
+  )
+);
+
+const revoke = Command.make(
+  "revoke",
+  {
+    name: Argument.String("name").pipe(
+      Argument.withDescription("The name of the token to revoke.")
+    ),
+    config: configFlag,
+  },
+  ({ name, config }) =>
+    Effect.gen(function* () {
+      yield* Console.log(tokenLine(yield* revokeTokenOffline(config, name)));
+    }).pipe(Effect.catch((error) => Effect.die(error.message)))
+).pipe(
+  Command.withDescription(
+    "Revoke a token in a stopped control plane's store, so it is refused once the control plane starts."
+  )
+);
 
 const add = Command.make(
   "add",
@@ -115,7 +186,7 @@ const add = Command.make(
     ),
     config: Flag.String("config").pipe(
       Flag.withDescription(
-        "The control plane's config: the token goes into its store, managing tokens. The control plane must be stopped."
+        "The control plane's config: the token goes into its store. The control plane must be stopped."
       ),
       Flag.optional
     ),
@@ -161,7 +232,7 @@ const add = Command.make(
 
 export const token = Command.make("token").pipe(
   Command.withDescription(
-    "Mint the tokens a control plane and its hosts take."
+    "Mint the tokens a control plane and its hosts take, and list and revoke a stopped control plane's."
   ),
-  Command.withSubcommands([add])
+  Command.withSubcommands([add, list, revoke])
 );
