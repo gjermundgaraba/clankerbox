@@ -76,11 +76,9 @@ export type SmolCloudSettings = typeof SmolCloudSettings.Type;
 
 const providerNameCap = 63;
 
-const namePrefix = "cbx-";
+const hostPrefix = (hostId: string) => `cbx-${hostId}-`;
 
-const hostPrefix = (hostId: string) => `${namePrefix}${hostId}-`;
-
-export const longestHostId = providerNameCap - hostPrefix("").length - idLength;
+const longestHostId = providerNameCap - hostPrefix("").length - idLength;
 
 const idleStopSeconds = 86_400;
 
