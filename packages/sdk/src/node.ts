@@ -26,7 +26,7 @@ import * as Client from "./client.ts";
 import { describeFileError } from "./describe.ts";
 import { Invalid } from "./errors.ts";
 import { isTailnetOrLoopback, tailnetOrLoopbackRule } from "./reach.ts";
-import { CallerName } from "./resources.ts";
+import { CallerName, callerNameRule } from "./resources.ts";
 
 /**
  * The client over Node's `http`. It is in `./node`, apart from `.`, so an app that brings its own
@@ -37,13 +37,6 @@ export const layer = (
   options?: Client.Options
 ): Layer.Layer<Client.Client, Invalid> =>
   Client.layer(url, options).pipe(Layer.provide(NodeHttpClient.layerNodeHttp));
-
-/** What a server may listen on when nothing authenticates its callers: a tailnet or loopback address. */
-export const Address = Schema.String.check(
-  Schema.makeFilter(
-    (address: string) => isTailnetOrLoopback(address) || tailnetOrLoopbackRule
-  )
-);
 
 /** Any IP address, which a config then holds to `listenRefusal`. */
 export const AnyAddress = Schema.String.check(
@@ -135,7 +128,6 @@ class ClosingHttps extends HttpsServer {
 
   override close(callback?: (error?: Error) => void) {
     super.close(callback);
-    this.closeAllConnections();
 
     for (const socket of this.sockets) {
       socket.destroy();
@@ -186,26 +178,15 @@ export const isCallerName = (name: string): boolean =>
   Schema.is(CallerName)(name);
 
 /**
- * Reads a callers file: a line `<name> <sha256 of the token, hex>` per caller, blank lines and
- * `#` comments skipped. A name twice, a hash twice, or any other line is `Invalid`, naming the
- * line, so a typo is refused at start rather than met as a refused caller.
+ * Parses the text of a callers file at `path`: a line `<name> <sha256 of the token, hex>` per
+ * caller, blank lines and `#` comments skipped. A name twice, a hash twice, or any other line is
+ * `Invalid`, naming the line, so a typo is refused at start rather than met as a refused caller.
  */
-export const readCallers = (
-  path: string
-): Effect.Effect<readonly Caller[], Invalid, FileSystem.FileSystem> =>
+export const parseCallers = (
+  path: string,
+  text: string
+): Effect.Effect<readonly Caller[], Invalid> =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-
-    const text = yield* fs.readFileString(path).pipe(
-      Effect.mapError(
-        (error) =>
-          new Invalid({
-            message: `couldn't read callers ${path}: ${describeFileError(error)}`,
-            file: path,
-          })
-      )
-    );
-
     const callers: Caller[] = [];
     const lines = text.replaceAll("\r\n", "\n").split("\n");
 
@@ -231,9 +212,7 @@ export const readCallers = (
       }
 
       if (!isCallerName(name)) {
-        return yield* refuse(
-          `the name ${name} isn't letters, digits, '.', '_' or '-', at most 64`
-        );
+        return yield* refuse(`the name ${name} isn't ${callerNameRule}`);
       }
 
       if (!sha256Hex.test(hash)) {
@@ -254,6 +233,28 @@ export const readCallers = (
 
       callers.push({ name, hash: bytes });
     }
+
+    return callers;
+  });
+
+/** Reads and parses a callers file, refusing one that names no caller, which would refuse everyone. */
+export const readCallers = (
+  path: string
+): Effect.Effect<readonly Caller[], Invalid, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+
+    const text = yield* fs.readFileString(path).pipe(
+      Effect.mapError(
+        (error) =>
+          new Invalid({
+            message: `couldn't read callers ${path}: ${describeFileError(error)}`,
+            file: path,
+          })
+      )
+    );
+
+    const callers = yield* parseCallers(path, text);
 
     if (callers.length === 0) {
       return yield* new Invalid({

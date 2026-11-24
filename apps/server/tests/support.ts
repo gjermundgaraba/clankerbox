@@ -165,8 +165,7 @@ export interface Plane {
   readonly hosts: readonly TestHost[];
   readonly settings: ServerSettings;
   readonly start: (
-    port?: number,
-    tokens?: boolean
+    port?: number
   ) => Effect.Effect<Started, CannotStart | Internal>;
 }
 
@@ -363,9 +362,9 @@ export const plane = (options?: {
       stateDir,
       hosts,
       settings,
-      start: (port = 0, tokens = options?.tokens) =>
+      start: (port = 0) =>
         started(
-          { ...settings, tokens },
+          { ...settings, tokens: options?.tokens },
           port,
           options?.logger,
           options?.tailnet

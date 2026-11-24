@@ -240,7 +240,7 @@ export const migrations: readonly string[] = [
   ALTER TABLE checkpoints DROP COLUMN kind`,
   `CREATE TABLE tokens (
     name TEXT PRIMARY KEY,
-    hash TEXT NOT NULL UNIQUE,
+    hash TEXT NOT NULL UNIQUE CHECK (length(hash) = 64 AND hash NOT GLOB '*[^0-9a-f]*'),
     minted_by TEXT,
     minted_at TEXT NOT NULL,
     revoked_at TEXT

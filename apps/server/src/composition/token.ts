@@ -1,10 +1,15 @@
-import { Invalid } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  callerNameRule,
+  describeFileError,
+  Invalid,
+} from "@gjermundgaraba/clankerbox-sdk";
 import {
   isCallerName,
   mintToken,
-  readCallers,
+  parseCallers,
 } from "@gjermundgaraba/clankerbox-sdk/node";
 import { Console, Effect, FileSystem, Option, Redacted } from "effect";
+import type { PlatformError } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 
 import * as Sqlite from "../platform/sqlite.ts";
@@ -25,37 +30,27 @@ export const addCaller = (
 
     if (!isCallerName(name)) {
       return yield* new Invalid({
-        message: `the name ${name} isn't letters, digits, '.', '_' or '-', at most 64`,
+        message: `the name ${name} isn't ${callerNameRule}`,
       });
     }
 
-    const text = (yield* fs
-      .exists(callers)
-      .pipe(Effect.orElseSucceed(() => false)))
-      ? yield* fs.readFileString(callers).pipe(
-          Effect.mapError(
-            (error) =>
-              new Invalid({
-                message: `couldn't read callers ${callers}: ${error.message}`,
-                file: callers,
-              })
-          )
-        )
+    const unreadable = (error: PlatformError.PlatformError) =>
+      new Invalid({
+        message: `couldn't read callers ${callers}: ${describeFileError(error)}`,
+        file: callers,
+      });
+
+    const text = (yield* fs.exists(callers).pipe(Effect.mapError(unreadable)))
+      ? yield* fs.readFileString(callers).pipe(Effect.mapError(unreadable))
       : "";
 
-    const holdsCallers = text
-      .split("\n")
-      .some((line) => line.trim() !== "" && !line.trim().startsWith("#"));
+    const named = yield* parseCallers(callers, text);
 
-    if (holdsCallers) {
-      const named = yield* readCallers(callers);
-
-      if (named.some((caller) => caller.name === name)) {
-        return yield* new Invalid({
-          message: `callers ${callers} already names ${name}: delete its line first to give it a new token`,
-          file: callers,
-        });
-      }
+    if (named.some((caller) => caller.name === name)) {
+      return yield* new Invalid({
+        message: `callers ${callers} already names ${name}: delete its line first to give it a new token`,
+        file: callers,
+      });
     }
 
     const { token, line } = mintToken(name);
@@ -67,7 +62,7 @@ export const addCaller = (
         Effect.mapError(
           (error) =>
             new Invalid({
-              message: `couldn't write callers ${callers}: ${error.message}`,
+              message: `couldn't write callers ${callers}: ${describeFileError(error)}`,
               file: callers,
             })
         )
@@ -86,7 +81,7 @@ export const addToken = (config: string, name: string) =>
     Effect.gen(function* () {
       if (!isCallerName(name)) {
         return yield* new Invalid({
-          message: `the name ${name} isn't letters, digits, '.', '_' or '-', at most 64`,
+          message: `the name ${name} isn't ${callerNameRule}`,
         });
       }
 

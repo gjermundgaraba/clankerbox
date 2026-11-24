@@ -432,11 +432,13 @@ export const Host = Schema.Struct({
 export type Host = typeof Host.Type;
 
 /** A caller's name: a person, laptop or provider. */
+export const callerNameRule =
+  "letters, digits, '.', '_' or '-', at most 64, not starting with '.', '_' or '-'";
+
 export const CallerName = Schema.String.check(
   Schema.makeFilter(
     (name: string) =>
-      /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(name) ||
-      "letters, digits, '.', '_' or '-', at most 64, not starting with '.', '_' or '-'"
+      /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(name) || callerNameRule
   )
 );
 
