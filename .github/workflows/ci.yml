@@ -68,6 +68,8 @@ jobs:
           cache-toolchain: true
           run-install: false
       - run: vp install --frozen-lockfile
+      - name: Install the guest shells the host's tests run the launcher under
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh busybox-static
       - name: Plant each weakening the auth guards must refuse, and check its test refuses it
         run: node packages/sdk/tests/weakenings.ts .
 

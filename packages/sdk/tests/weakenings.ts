@@ -284,6 +284,7 @@ for (const suite of new Map(
   const { run } = vpTest(suite.package, suite.test);
 
   if (run.error !== undefined || run.status !== 0) {
+    console.error(`${run.stdout ?? ""}${run.stderr ?? ""}`);
     console.error(
       `${suite.package}/${suite.test} doesn't pass on this checkout, so no weakening can be judged by it: ${run.error?.message ?? `exit ${run.status ?? run.signal}`}`
     );
