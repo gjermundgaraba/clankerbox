@@ -275,6 +275,10 @@ delete, over the client), `job.ts` (the job, from the environment Amp gives),
 `settings.ts` (the sizes of each orb type, the user, the snapshot expiry),
 `names.ts` (a clankerbox name for an Amp ID), and `provider.ts`, the command.
 
+## Weakenings the auth guards must refuse
+
+`packages/sdk/tests/weakenings.ts` lists every weakening of `callerInConstantTime`, `isTailnetOrLoopback`, `requireToken` and the token store that a review has found, each with the test that must refuse it. After changing any of them, run `node packages/sdk/tests/weakenings.ts .` from the repository root: it plants each weakening in turn, runs its test, puts the file back, and exits 1 naming any weakening its test passed. A test that a new weakening passes gets a case that refuses it, and the weakening joins the list.
+
 ## Where Layers are chosen
 
 Only at an entry: each app's `main.ts` (the CLI's: Node's services, HTTP client,
