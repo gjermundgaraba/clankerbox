@@ -1,7 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { Server as HttpServer } from "node:http";
 import { Server as HttpsServer } from "node:https";
-import { BlockList, isIP } from "node:net";
+import { isIP } from "node:net";
 import type { Socket } from "node:net";
 
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
@@ -25,6 +25,7 @@ import {
 import * as Client from "./client.ts";
 import { describeFileError } from "./describe.ts";
 import { Invalid } from "./errors.ts";
+import { isTailnetOrLoopback, tailnetOrLoopbackRule } from "./reach.ts";
 import { CallerName } from "./resources.ts";
 
 /**
@@ -37,35 +38,11 @@ export const layer = (
 ): Layer.Layer<Client.Client, Invalid> =>
   Client.layer(url, options).pipe(Layer.provide(NodeHttpClient.layerNodeHttp));
 
-const reachable = new BlockList();
-
-// https://tailscale.com/docs/concepts/tailscale-ip-addresses
-// https://tailscale.com/docs/concepts/ip-and-dns-addresses
-const subnets = [
-  ["100.64.0.0", 10, "ipv4"],
-  ["127.0.0.0", 8, "ipv4"],
-  ["fd7a:115c:a1e0::", 48, "ipv6"],
-  ["::1", 128, "ipv6"],
-] as const;
-
-for (const [network, prefix, family] of subnets) {
-  reachable.addSubnet(network, prefix, family);
-}
-
-const addressRule =
-  "a tailnet address (100.64.0.0/10, fd7a:115c:a1e0::/48) or a loopback address";
-
-const isPrivate = (address: string): boolean => {
-  const family = isIP(address);
-
-  return (
-    family !== 0 && reachable.check(address, family === 4 ? "ipv4" : "ipv6")
-  );
-};
-
 /** What a server may listen on when nothing authenticates its callers: a tailnet or loopback address. */
 export const Address = Schema.String.check(
-  Schema.makeFilter((address: string) => isPrivate(address) || addressRule)
+  Schema.makeFilter(
+    (address: string) => isTailnetOrLoopback(address) || tailnetOrLoopbackRule
+  )
 );
 
 /** Any IP address, which a config then holds to `listenRefusal`. */
@@ -85,7 +62,7 @@ export const listenRefusal = (
   address: string,
   guarded: Readonly<Record<string, boolean>>
 ): string | undefined => {
-  if (isPrivate(address)) {
+  if (isTailnetOrLoopback(address)) {
     return undefined;
   }
 
@@ -95,7 +72,7 @@ export const listenRefusal = (
 
   return lacking.length === 0
     ? undefined
-    : `${field} ${address} is not ${addressRule}, so it needs ${lacking.join(" and ")} set too: without them anyone who reaches it can act on every machine, and tokens would cross the network in the clear`;
+    : `${field} ${address} is not ${tailnetOrLoopbackRule}, so it needs ${lacking.join(" and ")} set too: without them anyone who reaches it can act on every machine, and tokens would cross the network in the clear`;
 };
 
 /** A server's TLS: its certificate chain and key, as PEM. */

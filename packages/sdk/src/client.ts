@@ -33,6 +33,7 @@ import {
   Unconfirmed,
 } from "./errors.ts";
 import type { ClankerboxError, HostError } from "./errors.ts";
+import { isTailnetOrLoopback } from "./reach.ts";
 import { version, versionHeader } from "./release.ts";
 import { isResting, isUndone } from "./resources.ts";
 import type {
@@ -58,15 +59,10 @@ const ServerUrl = Schema.String.check(
   )
 );
 
-const tailnetOrLoopbackV4 =
-  /^(?:127\.\d+\.\d+\.\d+|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d+\.\d+)$/u;
-
-const tailnetOrLoopbackV6 = /^\[(?:::1|fd7a:115c:a1e0:[0-9a-f:]*)\]$/u;
-
 /**
  * Why a bearer token may not be sent to `url`, or `undefined` when it may: over `https`, or over
  * `http` only to a tailnet or loopback IP, whose path the tailnet encrypts or never leaves the box.
- * A name, a MagicDNS one included, is no such IP, so a token goes to it only over `https`.
+ * A name, `localhost` and MagicDNS ones included, is no such IP, so a token goes to it only over `https`.
  */
 export const tokenUrlRefusal = (url: string): string | undefined => {
   if (!URL.canParse(url)) {
@@ -77,9 +73,7 @@ export const tokenUrlRefusal = (url: string): string | undefined => {
 
   return protocol === "https:" ||
     (protocol === "http:" &&
-      (hostname === "localhost" ||
-        tailnetOrLoopbackV4.test(hostname) ||
-        tailnetOrLoopbackV6.test(hostname)))
+      isTailnetOrLoopback(hostname.replace(/^\[(?<ip>.*)\]$/u, "$<ip>")))
     ? undefined
     : `${url} is neither https nor http to a tailnet or loopback IP, so a token sent there would cross the network in the clear: use https`;
 };

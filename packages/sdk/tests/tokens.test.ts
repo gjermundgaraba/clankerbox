@@ -13,6 +13,7 @@ import { describe, expect } from "vite-plus/test";
 import * as Client from "../src/client.ts";
 import {
   callerInConstantTime,
+  listenRefusal,
   mintToken,
   readCallers,
   requireToken,
@@ -233,7 +234,6 @@ layer(NodeServices.layer)((it) => {
         "https://box.tailnet.ts.net",
         "http://127.0.0.1:8484",
         "http://127.255.0.9",
-        "http://localhost:8484",
         "http://100.64.0.1:8484",
         "http://100.127.255.255",
         "http://[::1]:8484",
@@ -248,6 +248,7 @@ layer(NodeServices.layer)((it) => {
         "http://100.128.0.1",
         "http://10.0.0.5",
         "http://box.tailnet.ts.net",
+        "http://localhost:8484",
         "http://127.0.0.1.evil.example",
         "http://[fd7a:115c:a1e1::1]",
         "http://[2001:db8::1]",
@@ -255,6 +256,47 @@ layer(NodeServices.layer)((it) => {
         "not a url",
       ]) {
         expect(Client.tokenUrlRefusal(url), url).toBeDefined();
+      }
+    });
+
+    it("takes over http exactly the addresses a server may listen on without tokens, so the two can't drift apart", () => {
+      for (const address of [
+        "127.0.0.1",
+        "127.255.255.254",
+        "128.0.0.1",
+        "126.255.255.255",
+        "100.64.0.0",
+        "100.127.255.255",
+        "100.63.255.255",
+        "100.128.0.0",
+        "10.0.0.5",
+        "203.0.113.7",
+        "0.0.0.0",
+        "::1",
+        "0:0:0:0:0:0:0:1",
+        "::2",
+        "::",
+        "fd7a:115c:a1e0::5",
+        "fd7a:115c:a1e0:ffff:ffff:ffff:ffff:ffff",
+        "fd7a:115c:a1e1::5",
+        "fd7a:115c:a1df::5",
+        "::ffff:127.0.0.1",
+        "::ffff:7f00:1",
+        "::ffff:100.64.0.1",
+        "::ffff:10.0.0.5",
+        "::ffff:203.0.113.7",
+        "2001:db8::1",
+      ]) {
+        const listens =
+          listenRefusal("listen.address", address, { tokens: false }) ===
+          undefined;
+
+        const host = address.includes(":") ? `[${address}]` : address;
+
+        expect(
+          Client.tokenUrlRefusal(`http://${host}:8484`) === undefined,
+          address
+        ).toBe(listens);
       }
     });
 
