@@ -347,6 +347,15 @@ for (const weakening of weakenings) {
       console.log(`           by ${name}`);
     }
 
+    if (!refused && !passed) {
+      console.log(
+        `${run.stdout ?? ""}${run.stderr ?? ""}`
+          .split("\n")
+          .slice(-40)
+          .join("\n")
+      );
+    }
+
     if (passed) {
       survived.push(weakening.what);
     } else if (!refused) {
