@@ -13,6 +13,7 @@ import { describe, expect } from "vite-plus/test";
 import * as Client from "../src/client.ts";
 import {
   callerInConstantTime,
+  hashToken,
   listenRefusal,
   mintToken,
   readCallers,
@@ -64,6 +65,36 @@ const asking = (
     (web) =>
       Effect.promise(async () => {
         await web.dispose();
+      })
+  );
+
+const servedOnce = (callers: Effect.Effect<readonly Caller[]>) =>
+  Effect.map(
+    Effect.acquireRelease(
+      Effect.sync(() =>
+        HttpRouter.toWebHandler(
+          answering.pipe(
+            Layer.provide(requireToken("control plane", callers).layer),
+            Layer.provide(HttpServer.layerServices)
+          ),
+          { disableLogger: true }
+        )
+      ),
+      (web) =>
+        Effect.promise(async () => {
+          await web.dispose();
+        })
+    ),
+    (web) => (authorization: string) =>
+      Effect.promise(async () => {
+        const response = await web.handler(
+          new Request("http://cbx.test/api/ping", {
+            method: "POST",
+            headers: { authorization },
+          })
+        );
+
+        return response.status;
       })
   );
 
@@ -152,26 +183,23 @@ layer(NodeServices.layer)((it) => {
           }
         })
     );
-
-    it.effect(
-      "refuses a caller whose line was deleted, once the file is read again",
-      () =>
-        Effect.gen(function* () {
-          const before = yield* callersOf(laptop.line, orbs.line);
-          const after = yield* callersOf(orbs.line);
-
-          expect(
-            (yield* asking(before, `Bearer ${token(laptop)}`)).status
-          ).toBe(200);
-          expect((yield* asking(after, `Bearer ${token(laptop)}`)).status).toBe(
-            401
-          );
-          expect((yield* asking(after, `Bearer ${token(orbs)}`)).status).toBe(
-            200
-          );
-        })
-    );
   });
+
+  it.effect(
+    "one middleware reads its callers at each request, so a caller taken away is refused from its next request",
+    () =>
+      Effect.gen(function* () {
+        let taken = yield* callersOf(laptop.line, orbs.line);
+        const ask = yield* servedOnce(Effect.sync(() => taken));
+
+        expect(yield* ask(`Bearer ${token(laptop)}`)).toBe(200);
+
+        taken = yield* callersOf(orbs.line);
+
+        expect(yield* ask(`Bearer ${token(laptop)}`)).toBe(401);
+        expect(yield* ask(`Bearer ${token(orbs)}`)).toBe(200);
+      }).pipe(Effect.scoped)
+  );
 
   describe("callerInConstantTime", () => {
     it.effect(
@@ -197,6 +225,20 @@ layer(NodeServices.layer)((it) => {
           }
         })
     );
+
+    it("finds no caller whose hash differs from the token's only in its last byte", () => {
+      const right = token(laptop);
+      const digest = Buffer.from(hashToken(right));
+
+      const near = Buffer.concat([
+        digest.subarray(0, 31),
+        Buffer.from([(digest.at(31) ?? 0) ^ 1]),
+      ]);
+
+      expect(
+        callerInConstantTime([{ name: "near", hash: near }], right)
+      ).toBeUndefined();
+    });
   });
 
   describe("readCallers", () => {
