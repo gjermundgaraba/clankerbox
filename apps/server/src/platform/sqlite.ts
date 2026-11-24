@@ -33,6 +33,7 @@ import type {
   Interface,
   Rows,
   TemplateRow,
+  TokenRow,
   Lease,
 } from "../store.ts";
 
@@ -237,6 +238,14 @@ export const migrations: readonly string[] = [
   ALTER TABLE machines ADD COLUMN unasked TEXT;
   ALTER TABLE machines DROP COLUMN captures;
   ALTER TABLE checkpoints DROP COLUMN kind`,
+  `CREATE TABLE tokens (
+    name TEXT PRIMARY KEY,
+    hash TEXT NOT NULL UNIQUE,
+    manages INTEGER NOT NULL,
+    minted_by TEXT,
+    minted_at TEXT NOT NULL,
+    revoked_at TEXT
+  ) STRICT`,
 ];
 
 const isSqliteError = (
@@ -423,6 +432,30 @@ const operationColumns = Schema.encodeSync(Operation);
 
 const templateFactsOf = Schema.decodeUnknownSync(StoredTemplate);
 
+const decodeToken = Schema.decodeUnknownSync(
+  Schema.Struct({
+    name: Schema.String,
+    hash: Schema.String,
+    manages: Schema.Int,
+    minted_by: Schema.NullOr(Schema.String),
+    minted_at: Schema.DateTimeUtcFromString,
+    revoked_at: Schema.NullOr(Schema.DateTimeUtcFromString),
+  })
+);
+
+const tokenOf = (raw: unknown): TokenRow => {
+  const row = decodeToken(raw);
+
+  return {
+    name: row.name,
+    hash: Buffer.from(row.hash, "hex"),
+    manages: row.manages === 1,
+    mintedBy: row.minted_by ?? undefined,
+    mintedAt: row.minted_at,
+    revokedAt: row.revoked_at ?? undefined,
+  };
+};
+
 const decodeLastBuild = Schema.decodeUnknownSync(
   Schema.Struct({ last: Schema.Int })
 );
@@ -607,6 +640,20 @@ export const open = (
 
     const upsertBoot = yield* prepare(
       "INSERT INTO hosts (id, boot) VALUES (?, ?) ON CONFLICT (id) DO UPDATE SET boot = excluded.boot"
+    );
+
+    const selectTokens = yield* prepare(
+      "SELECT * FROM tokens ORDER BY minted_at, name"
+    );
+
+    const selectToken = yield* prepare("SELECT * FROM tokens WHERE name = ?");
+
+    const insertToken = yield* prepare(
+      "INSERT INTO tokens (name, hash, manages, minted_by, minted_at, revoked_at) VALUES (?, ?, ?, ?, ?, NULL)"
+    );
+
+    const revokeToken = yield* prepare(
+      "UPDATE tokens SET revoked_at = ? WHERE name = ? AND revoked_at IS NULL"
     );
 
     const holderOf = (wanted: readonly Lease[]): Operation | undefined =>
@@ -865,6 +912,47 @@ export const open = (
       recordBoot: Effect.fn("Store.recordBoot")((host, boot) =>
         sql(`record host ${host}'s boot`, () => {
           upsertBoot.run(host, boot);
+        })
+      ),
+      tokens: sql("list tokens", () =>
+        selectTokens.all().map((raw) => tokenOf(raw))
+      ).pipe(Effect.withSpan("Store.tokens")),
+      insertToken: Effect.fn("Store.insertToken")((row) =>
+        Effect.flatMap(
+          sql(`insert token ${row.name}`, () => {
+            try {
+              insertToken.run(
+                row.name,
+                Buffer.from(row.hash).toString("hex"),
+                row.manages ? 1 : 0,
+                row.mintedBy ?? null,
+                DateTime.formatIso(row.mintedAt)
+              );
+
+              return Result.void;
+            } catch (error) {
+              if (isSqliteError(error) && error.errcode === sqlitePrimaryKey) {
+                return Result.fail(
+                  new Conflict({
+                    message: `a token named ${row.name} exists, or did until revoked: name this one otherwise`,
+                    id: row.name,
+                  })
+                );
+              }
+
+              throw error;
+            }
+          }),
+          Effect.fromResult
+        )
+      ),
+      revokeToken: Effect.fn("Store.revokeToken")((name, at) =>
+        transaction(db, `revoke token ${name}`, () => {
+          revokeToken.run(DateTime.formatIso(at), name);
+
+          const row = selectToken.get(name);
+
+          return row === undefined ? Option.none() : Option.some(tokenOf(row));
         })
       ),
     };
