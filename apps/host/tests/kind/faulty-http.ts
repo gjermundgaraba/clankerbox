@@ -29,10 +29,9 @@ interface Landing {
 }
 
 /**
- * `base`, each request a call the contract's faults reach: `stall` holds one, as `stallingHttp`
- * does, `dropAnswer` sends the next create or delete of a Sandbox and loses its answer, and
- * `landLate` loses unsent every create of a claim, a make's first, until the effect it answers
- * sends the first of them. `requests` holds the method and path of each request sent.
+ * `dropAnswer` sends the next create or delete of a Sandbox and loses its answer, and `landLate`
+ * loses unsent every create of a claim, a make's first, until the effect it answers sends the
+ * first of them.
  */
 export const faultyHttp = <E, R>(
   base: Layer.Layer<HttpClient.HttpClient, E, R>
