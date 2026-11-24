@@ -22,7 +22,7 @@ The goal is that a client talks to one server, IDs carry no host, and adding a h
     - Adding a host is one line in the control plane's config and a restart (D3).
     - There are two contracts, one for clients and one for hosts. Clients can't reach hosts directly, `error.host` goes, and `hosts` and `capacity` stay as operator views on the client contract (D4).
     - SSH stays direct (D6).
-    - The tailnet stays the only gate, and secrets stay where they are (D7).
+    - The tailnet stays the only gate, and secrets stay where they are (D7). Since 0.44 that holds only for a deployment without tokens: with `tokens` on the control plane and `callers` on its hosts, each caller presents a token over TLS (README, Network).
     - One instance with SQLite, and backups are required (D8).
     - Everything upgrades together (D4).
     - Placement takes the first host that fits, then the next on `Capacity`, and a create from a template takes only a host that holds its build's copy (D9, decision 16), and the next such host on a `Missing` naming the copy, which its host no longer holds. The control plane then fails that copy's row, so a recheck clears it and fetches the build there again where the build store holds it.
@@ -198,7 +198,7 @@ Kept means the rule holds with its meaning unchanged, even when it moves to the 
 | `Unavailable` is made only by the client library | Broken | A server now answers for a host it can't reach. |
 | Operations are contracts, `actionCommands` fails on an uncovered action | Kept | It covers the client contract. `Action.implement` in the host's routes covers the host contract. |
 | Dependency boundary, Layers only at an entry, lint fence, `no-manual-run` | Changed | Each app is a boundary. Most host domain files move to `apps/server`, and `apps/host` keeps the runtimes, guest scripts and the operation runner. |
-| The tailnet is the only gate, and everyone upgrades together | Kept by default | See D4 and D7. |
+| The tailnet is the only gate, and everyone upgrades together | Kept by default | See D4 and D7. Since 0.44 the tailnet is the only gate only without tokens: `tokens` and `callers`, with TLS, authenticate each caller (README, Network). |
 
 ## 4. What happens in each failure
 
