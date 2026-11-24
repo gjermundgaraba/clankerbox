@@ -78,8 +78,9 @@ const providerNameCap = 63;
 
 const namePrefix = "cbx-";
 
-export const longestHostId =
-  providerNameCap - namePrefix.length - "-".length - idLength;
+const hostPrefix = (hostId: string) => `${namePrefix}${hostId}-`;
+
+export const longestHostId = providerNameCap - hostPrefix("").length - idLength;
 
 const idleStopSeconds = 86_400;
 
@@ -307,7 +308,7 @@ export const make = (
       )
     );
 
-    const prefix = `${namePrefix}${host.id}-`;
+    const prefix = hostPrefix(host.id);
     const nameOf = (instance: string) => `${prefix}${instance}`;
 
     const instanceOf = (name: string | null | undefined) => {
