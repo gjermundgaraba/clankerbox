@@ -9,7 +9,6 @@ import type { TokenRow } from "../store.ts";
 
 export const tokenOf = (row: TokenRow): Token => ({
   name: row.name,
-  manages: row.manages,
   mintedAt: row.mintedAt,
   ...(row.mintedBy === undefined ? {} : { mintedBy: row.mintedBy }),
   ...(row.revokedAt === undefined ? {} : { revokedAt: row.revokedAt }),
@@ -25,18 +24,13 @@ export const unrevoked = (store: Store["Service"]) =>
   );
 
 /** A token row for a new caller's token, and the token. */
-export const minted = (
-  name: string,
-  manages: boolean,
-  mintedBy: string | undefined
-) =>
+export const minted = (name: string, mintedBy: string | undefined) =>
   Effect.map(DateTime.now, (mintedAt) => {
     const { token, hash } = mintToken(name);
 
     const row: TokenRow = {
       name,
       hash,
-      manages,
       mintedBy,
       mintedAt,
       revokedAt: undefined,
@@ -49,41 +43,27 @@ export const tokenActions = (enabled: boolean) =>
   Effect.gen(function* () {
     const store = yield* Store;
 
-    const manager = Effect.gen(function* () {
-      if (!enabled) {
-        return yield* new Invalid({
-          message:
-            "this control plane's config doesn't set tokens, so it takes every caller and keeps no tokens",
-        });
-      }
-
-      const caller = yield* CurrentCaller;
-      const rows = yield* store.tokens;
-
-      const row = rows.find(
-        ({ name, revokedAt }) =>
-          name === caller?.name && revokedAt === undefined
-      );
-
-      if (row?.manages !== true) {
-        return yield* new Invalid({
-          message: `the token ${caller?.name ?? "presented"} doesn't manage tokens: mint one that does with manages, or with \`clankerbox-server token add\` while the control plane is stopped`,
-        });
-      }
-
-      return row;
-    });
+    const enabledOnly = enabled
+      ? Effect.void
+      : Effect.fail(
+          new Invalid({
+            message:
+              "this control plane's config doesn't set tokens, so it takes every caller and keeps no tokens",
+          })
+        );
 
     return {
       listTokens: () =>
         Effect.andThen(
-          manager,
+          enabledOnly,
           Effect.map(store.tokens, (rows) => rows.map(tokenOf))
         ),
-      mintToken: ({ name, manages }: MintRequest) =>
+      mintToken: ({ name }: MintRequest) =>
         Effect.gen(function* () {
-          const by = yield* manager;
-          const { row, token } = yield* minted(name, manages === true, by.name);
+          yield* enabledOnly;
+
+          const by = yield* CurrentCaller;
+          const { row, token } = yield* minted(name, by?.name);
 
           yield* store.insertToken(row);
 
@@ -91,7 +71,7 @@ export const tokenActions = (enabled: boolean) =>
         }),
       revokeToken: ({ name }: { readonly name: string }) =>
         Effect.gen(function* () {
-          yield* manager;
+          yield* enabledOnly;
 
           const revoked = yield* store.revokeToken(name, yield* DateTime.now);
 

@@ -441,13 +441,12 @@ export const CallerName = Schema.String.check(
 );
 
 /**
- * A token a control plane takes, by its caller's name, never the token itself. One that `manages`
- * may mint and revoke tokens. `mintedBy` names the token that minted it, none for one minted
- * offline. A revoked token is refused, and kept, with what it minted, so a list shows them all.
+ * A token a control plane takes, by its caller's name, never the token itself. Every token may mint,
+ * list and revoke tokens. `mintedBy` names the token that minted it, none for one minted offline. A
+ * revoked token is refused, and kept, with what it minted, so a list shows them all.
  */
 export const Token = Schema.Struct({
   name: CallerName,
-  manages: Schema.Boolean,
   mintedBy: Schema.optionalKey(CallerName),
   mintedAt: Schema.DateTimeUtcFromString,
   revokedAt: Schema.optionalKey(Schema.DateTimeUtcFromString),
@@ -457,7 +456,6 @@ export type Token = typeof Token.Type;
 
 export const MintRequest = Schema.Struct({
   name: CallerName,
-  manages: Schema.optionalKey(Schema.Boolean),
 });
 
 export type MintRequest = typeof MintRequest.Type;

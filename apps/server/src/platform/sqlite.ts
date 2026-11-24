@@ -241,7 +241,6 @@ export const migrations: readonly string[] = [
   `CREATE TABLE tokens (
     name TEXT PRIMARY KEY,
     hash TEXT NOT NULL UNIQUE,
-    manages INTEGER NOT NULL,
     minted_by TEXT,
     minted_at TEXT NOT NULL,
     revoked_at TEXT
@@ -436,7 +435,6 @@ const decodeToken = Schema.decodeUnknownSync(
   Schema.Struct({
     name: Schema.String,
     hash: Schema.String,
-    manages: Schema.Int,
     minted_by: Schema.NullOr(Schema.String),
     minted_at: Schema.DateTimeUtcFromString,
     revoked_at: Schema.NullOr(Schema.DateTimeUtcFromString),
@@ -449,7 +447,6 @@ const tokenOf = (raw: unknown): TokenRow => {
   return {
     name: row.name,
     hash: Buffer.from(row.hash, "hex"),
-    manages: row.manages === 1,
     mintedBy: row.minted_by ?? undefined,
     mintedAt: row.minted_at,
     revokedAt: row.revoked_at ?? undefined,
@@ -649,7 +646,7 @@ export const open = (
     const selectToken = yield* prepare("SELECT * FROM tokens WHERE name = ?");
 
     const insertToken = yield* prepare(
-      "INSERT INTO tokens (name, hash, manages, minted_by, minted_at, revoked_at) VALUES (?, ?, ?, ?, ?, NULL)"
+      "INSERT INTO tokens (name, hash, minted_by, minted_at, revoked_at) VALUES (?, ?, ?, ?, NULL)"
     );
 
     const revokeToken = yield* prepare(
@@ -924,7 +921,6 @@ export const open = (
               insertToken.run(
                 row.name,
                 Buffer.from(row.hash).toString("hex"),
-                row.manages ? 1 : 0,
                 row.mintedBy ?? null,
                 DateTime.formatIso(row.mintedAt)
               );

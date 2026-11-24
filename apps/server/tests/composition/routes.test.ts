@@ -76,14 +76,9 @@ const bearing = (token: Redacted.Redacted) => ({
   authorization: `Bearer ${Redacted.value(token)}`,
 });
 
-const seeded = (
-  store: Store["Service"],
-  name: string,
-  manages: boolean,
-  mintedBy?: string
-) =>
+const seeded = (store: Store["Service"], name: string) =>
   Effect.gen(function* () {
-    const { row, token } = yield* minted(name, manages, mintedBy);
+    const { row, token } = yield* minted(name, undefined);
 
     yield* store.insertToken(row);
 
@@ -653,7 +648,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { url, hosts, store } = yield* running({ tokens: true });
-        const laptop = yield* seeded(store, "laptop", false);
+        const laptop = yield* seeded(store, "laptop");
         const stranger = mintToken("laptop").token;
 
         expect((yield* createRaw(url, "dev", bearing(laptop))).status).toBe(
@@ -709,7 +704,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { url, store } = yield* running({ tokens: true });
-        const laptop = yield* seeded(store, "laptop", false);
+        const laptop = yield* seeded(store, "laptop");
 
         const listed = yield* (yield* clientOf(url, {
           token: laptop,
@@ -737,8 +732,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const planned = yield* plane({ tokens: true });
         const seeding = yield* planned.start();
-        const admin = yield* seeded(seeding.store, "admin", true);
-        const orbs = yield* seeded(seeding.store, "orbs", false);
+        const admin = yield* seeded(seeding.store, "admin");
+        const orbs = yield* seeded(seeding.store, "orbs");
 
         yield* seeding.crash;
 
@@ -786,17 +781,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a token that manages tokens mints one that doesn't unless asked, taken from its next request, and list shows each with who minted it, a revoked minter's included",
+    "every token mints, lists and revokes tokens, a minted one from its next request, and list shows each with who minted it, what a revoked token minted included",
     () =>
       Effect.gen(function* () {
         const { url, store } = yield* running({ tokens: true });
-        const root = yield* seeded(store, "root", true);
+        const root = yield* seeded(store, "root");
         const rootClient = yield* clientOf(url, { token: root });
-
-        const deputy = yield* rootClient.mintToken({
-          name: "deputy",
-          manages: true,
-        });
+        const deputy = yield* rootClient.mintToken({ name: "deputy" });
 
         const deputyClient = yield* clientOf(url, {
           token: Redacted.make(deputy.token),
@@ -804,30 +795,26 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const laptop = yield* deputyClient.mintToken({ name: "laptop" });
 
-        expect(
-          (yield* post(
-            url,
-            "listMachines",
-            {},
-            bearing(Redacted.make(laptop.token))
-          )).status
-        ).toBe(200);
+        const laptopClient = yield* clientOf(url, {
+          token: Redacted.make(laptop.token),
+        });
 
+        yield* laptopClient.mintToken({ name: "phone" });
         yield* rootClient.revokeToken({ name: "deputy" });
 
-        const listed = yield* rootClient.tokens;
+        const listed = yield* laptopClient.tokens;
 
         expect(
-          listed.map(({ name, manages, mintedBy, revokedAt }) => [
+          listed.map(({ name, mintedBy, revokedAt }) => [
             name,
-            manages,
             mintedBy,
             revokedAt !== undefined,
           ])
         ).toStrictEqual([
-          ["root", true, undefined, false],
-          ["deputy", true, "root", true],
-          ["laptop", false, "deputy", false],
+          ["root", undefined, false],
+          ["deputy", "root", true],
+          ["laptop", "deputy", false],
+          ["phone", "laptop", false],
         ]);
         expect(JSON.stringify(listed)).not.toContain(laptop.token);
         expect(
@@ -840,43 +827,27 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a token that doesn't manage tokens, or a revoked one that did, can't list, mint or revoke them, and changes nothing",
+    "a revoked token can't list, mint or revoke tokens, and changes nothing",
     () =>
       Effect.gen(function* () {
         const { url, store } = yield* running({ tokens: true });
-        const root = yield* seeded(store, "root", true);
-        const laptop = yield* seeded(store, "laptop", false);
-        const before = yield* store.tokens;
-
-        for (const token of [laptop]) {
-          const client = yield* clientOf(url, { token });
-
-          for (const refused of [
-            yield* Effect.flip(client.tokens),
-            yield* Effect.flip(
-              client.mintToken({ name: "more", manages: true })
-            ),
-            yield* Effect.flip(client.revokeToken({ name: "root" })),
-          ]) {
-            expect(refused._tag).toBe("Invalid");
-            expect(refused.message).toContain("doesn't manage tokens");
-          }
-        }
-
-        expect(yield* store.tokens).toStrictEqual(before);
-
+        const root = yield* seeded(store, "root");
+        yield* seeded(store, "laptop");
         const rootClient = yield* clientOf(url, { token: root });
 
         yield* rootClient.revokeToken({ name: "root" });
 
         const after = yield* store.tokens;
 
-        const revoked = yield* Effect.flip(
-          rootClient.mintToken({ name: "more" })
-        );
+        for (const refused of [
+          yield* Effect.flip(rootClient.tokens),
+          yield* Effect.flip(rootClient.mintToken({ name: "more" })),
+          yield* Effect.flip(rootClient.revokeToken({ name: "laptop" })),
+        ]) {
+          expect(refused._tag).toBe("Invalid");
+          expect(refused.message).toContain("refused this caller");
+        }
 
-        expect(revoked._tag).toBe("Invalid");
-        expect(revoked.message).toContain("refused this caller");
         expect(yield* store.tokens).toStrictEqual(after);
       })
   );

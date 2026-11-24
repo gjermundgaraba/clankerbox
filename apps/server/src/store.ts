@@ -181,7 +181,6 @@ export type TemplateRow = typeof TemplateFacts.Type & {
 export interface TokenRow {
   readonly name: string;
   readonly hash: Uint8Array;
-  readonly manages: boolean;
   readonly mintedBy: string | undefined;
   readonly mintedAt: DateTime.Utc;
   readonly revokedAt: DateTime.Utc | undefined;

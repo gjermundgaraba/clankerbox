@@ -292,14 +292,14 @@ export const Http = ActionHttp.make(
       ...read,
       error: listing,
       description:
-        "List every token the control plane has minted, revoked ones and those a revoked token minted included, oldest first, never a token itself. Only a caller whose token manages tokens may, and only on a control plane whose config sets tokens; Invalid answers anyone else.",
+        "List every token the control plane has minted, revoked ones and those a revoked token minted included, oldest first, never a token itself. A control plane whose config doesn't set tokens answers Invalid.",
       success: Schema.Array(Token),
     }),
     Action.make("mintToken", {
       ...write,
       error: [Invalid, Conflict, Internal] as const,
       description:
-        "Mint a token for a named caller, which the control plane takes from its next request, and answer it once: only its hash is kept. It manages tokens only when `manages` says so. Conflict answers a name a token has, or had before it was revoked. Only a caller whose token manages tokens may; Invalid answers anyone else.",
+        "Mint a token for a named caller, which the control plane takes from its next request, and answer it once: only its hash is kept. The new token may mint, list and revoke tokens, as every token may. Conflict answers a name a token has, or had before it was revoked. A control plane whose config doesn't set tokens answers Invalid.",
       input: MintRequest,
       success: Minted,
     }),
@@ -307,7 +307,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: [Invalid, NotFound, Internal] as const,
       description:
-        "Revoke a token, so the control plane refuses it from the next request, and answer its row. The row stays, so listTokens shows it and what it minted, which stay taken until revoked too. Revoking a revoked token answers it as it was. Only a caller whose token manages tokens may; Invalid answers anyone else.",
+        "Revoke a token, so the control plane refuses it from the next request, and answer its row. The row stays, so listTokens shows it and what it minted, which stay taken until revoked too. Revoking a revoked token answers it as it was. A control plane whose config doesn't set tokens answers Invalid.",
       input: Schema.Struct({ name: CallerName }),
       success: Token,
     }),

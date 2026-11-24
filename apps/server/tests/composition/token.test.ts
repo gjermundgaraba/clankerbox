@@ -140,7 +140,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "token add --config mints, into a stopped control plane's store, a token that manages tokens, which the control plane then takes",
+    "token add --config mints, into a stopped control plane's store, a token the control plane then takes, and through which it lists tokens",
     () =>
       Effect.gen(function* () {
         const planned = yield* plane({ tokens: true });
@@ -157,8 +157,8 @@ layer(NodeServices.layer)((it) => {
         const listed = yield* (yield* clientOf(served.url, { token })).tokens;
 
         expect(
-          listed.map(({ name, manages, mintedBy }) => [name, manages, mintedBy])
-        ).toStrictEqual([["root", true, undefined]]);
+          listed.map(({ name, mintedBy }) => [name, mintedBy])
+        ).toStrictEqual([["root", undefined]]);
       })
   );
 

@@ -77,9 +77,9 @@ export const addCaller = (
   });
 
 /**
- * Mints a token for `name` that manages tokens, into the store of the control plane `config` names,
+ * Mints a token for `name` into the store of the control plane `config` names,
  * and answers it. It opens the store as the control plane does, so it refuses while one runs: a
- * running control plane mints through a token that manages tokens instead.
+ * running control plane mints through any token it takes instead.
  */
 export const addToken = (config: string, name: string) =>
   Effect.scoped(
@@ -96,13 +96,13 @@ export const addToken = (config: string, name: string) =>
         Effect.catchTag("CannotStart", (error) =>
           Effect.fail(
             new Invalid({
-              message: `${error.message}: stop it to add a token here, or mint one with \`clankerbox token mint\` through a token that manages tokens`,
+              message: `${error.message}: stop it to add a token here, or mint one with \`clankerbox token mint\` through a token it takes`,
             })
           )
         )
       );
 
-      const { row, token } = yield* minted(name, true, undefined);
+      const { row, token } = yield* minted(name, undefined);
 
       yield* store.insertToken(row);
 
@@ -146,7 +146,7 @@ const add = Command.make(
         yield* Console.log(Redacted.value(token));
 
         return yield* Console.error(
-          `added ${name}, which manages tokens, to the control plane ${config.value} configures. The token above is shown once: put it in a file the caller's config names as "token".`
+          `added ${name} to the control plane ${config.value} configures. The token above is shown once: put it in a file the caller's config names as "token".`
         );
       }
 

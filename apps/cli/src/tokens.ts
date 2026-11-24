@@ -1,6 +1,6 @@
 import { actionsByName, Minted, Token } from "@gjermundgaraba/clankerbox-sdk";
 import { Console, DateTime, Effect, Schema } from "effect";
-import { Argument, Command, Flag } from "effect/cli";
+import { Argument, Command } from "effect/cli";
 
 import { clientFlags, listCommand, table, withClient } from "./command.ts";
 
@@ -13,10 +13,9 @@ const callerArgument = Argument.String("name").pipe(
 );
 
 export const tokenRows = (tokens: readonly Token[]) => [
-  ["NAME", "MANAGES", "MINTED_BY", "MINTED_AT", "REVOKED_AT"],
+  ["NAME", "MINTED_BY", "MINTED_AT", "REVOKED_AT"],
   ...tokens.map((token) => [
     token.name,
-    token.manages ? "yes" : "no",
     token.mintedBy ?? "-",
     DateTime.formatIso(token.mintedAt),
     token.revokedAt === undefined ? "-" : DateTime.formatIso(token.revokedAt),
@@ -37,18 +36,11 @@ export const mintToken = Command.make(
   {
     ...clientFlags,
     name: callerArgument,
-    manages: Flag.Boolean("manages").pipe(
-      Flag.withDescription("Let the token mint and revoke tokens."),
-      Flag.withDefault(false)
-    ),
   },
   (flags) =>
     withClient(flags, (client) =>
       Effect.gen(function* () {
-        const minted = yield* client.mintToken({
-          name: flags.name,
-          manages: flags.manages,
-        });
+        const minted = yield* client.mintToken({ name: flags.name });
 
         if (flags.json) {
           return yield* Console.log(JSON.stringify(encodeMinted(minted)));
