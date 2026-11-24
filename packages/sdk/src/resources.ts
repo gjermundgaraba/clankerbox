@@ -1,4 +1,5 @@
 import {
+  DateTime,
   Effect,
   Predicate,
   Result,
@@ -455,6 +456,17 @@ export const Token = Schema.Struct({
 }).annotate({ identifier: "Token" });
 
 export type Token = typeof Token.Type;
+
+/** A token list as rows, a header first, as both the CLI and the offline `token list` print it. */
+export const tokenRows = (tokens: readonly Token[]) => [
+  ["NAME", "MINTED_BY", "MINTED_AT", "REVOKED_AT"],
+  ...tokens.map((token) => [
+    token.name,
+    token.mintedBy ?? "-",
+    DateTime.formatIso(token.mintedAt),
+    token.revokedAt === undefined ? "-" : DateTime.formatIso(token.revokedAt),
+  ]),
+];
 
 export const MintRequest = Schema.Struct({
   name: CallerName,

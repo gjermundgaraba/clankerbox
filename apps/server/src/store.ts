@@ -44,6 +44,7 @@ export class CannotStart extends Schema.TaggedError<
   { readonly brand: unique symbol }
 >()("CannotStart", {
   message: Schema.String,
+  held: Schema.optionalKey(Schema.Literal(true)),
 }) {}
 
 const UndefinedFromNull = <S extends Schema.Top>(schema: S) =>

@@ -317,6 +317,7 @@ const lock = (
       isSqliteError(cause) && cause.errcode === sqliteBusy
         ? new CannotStart({
             message: `another control plane process holds state dir ${stateDir}`,
+            held: true,
           })
         : new Internal({
             message: `couldn't lock state dir ${stateDir}: ${describe(cause)}`,

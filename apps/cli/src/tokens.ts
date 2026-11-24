@@ -1,5 +1,10 @@
-import { actionsByName, Minted, Token } from "@gjermundgaraba/clankerbox-sdk";
-import { Console, DateTime, Effect, Schema } from "effect";
+import {
+  actionsByName,
+  Minted,
+  Token,
+  tokenRows,
+} from "@gjermundgaraba/clankerbox-sdk";
+import { Console, Effect, Schema } from "effect";
 import { Argument, Command } from "effect/cli";
 
 import { clientFlags, listCommand, table, withClient } from "./command.ts";
@@ -11,16 +16,6 @@ const encodeMinted = Schema.encodeSync(Minted);
 const callerArgument = Argument.String("name").pipe(
   Argument.withDescription("The caller's name: a person, laptop or provider.")
 );
-
-export const tokenRows = (tokens: readonly Token[]) => [
-  ["NAME", "MINTED_BY", "MINTED_AT", "REVOKED_AT"],
-  ...tokens.map((token) => [
-    token.name,
-    token.mintedBy ?? "-",
-    DateTime.formatIso(token.mintedAt),
-    token.revokedAt === undefined ? "-" : DateTime.formatIso(token.revokedAt),
-  ]),
-];
 
 export const listTokens = listCommand({
   name: "list",

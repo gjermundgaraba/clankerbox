@@ -7,6 +7,7 @@ import {
   readCallers,
 } from "@gjermundgaraba/clankerbox-sdk/node";
 import {
+  exists,
   read,
   scratch,
   write,
@@ -220,6 +221,17 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* revokeTokenOffline(file, "leaked");
         yield* revokeTokenOffline(file, "planted");
 
+        expect(
+          (yield* listTokensOffline(file)).map(({ name, revokedAt }) => [
+            name,
+            revokedAt !== undefined,
+          ])
+        ).toStrictEqual([
+          ["root", false],
+          ["leaked", true],
+          ["planted", true],
+        ]);
+
         const fresh = yield* addToken(file, "root-2");
         const second = yield* planned.start(Number(new URL(first.url).port));
 
@@ -254,9 +266,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* addToken(file, "root");
 
-        expect(
-          (yield* Effect.flip(revokeTokenOffline(file, "nobody"))).message
-        ).toContain("no token nobody");
+        const nobody = yield* Effect.flip(revokeTokenOffline(file, "nobody"));
+
+        expect([nobody._tag, nobody.message]).toStrictEqual([
+          "NotFound",
+          "no token nobody",
+        ]);
 
         const served = yield* planned.start();
 
@@ -274,6 +289,25 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(
           (yield* served.store.tokens).map(({ revokedAt }) => revokedAt)
         ).toStrictEqual([undefined]);
+      })
+  );
+
+  it.effect(
+    "token list and revoke --config refuse a config whose state dir holds no store, and make none",
+    () =>
+      Effect.gen(function* () {
+        const stateDir = path.join(yield* scratch, "never-ran");
+        const file = yield* serverConfig(stateDir);
+
+        for (const refused of [
+          yield* Effect.flip(listTokensOffline(file)),
+          yield* Effect.flip(revokeTokenOffline(file, "root")),
+        ]) {
+          expect(refused.message).toContain("doesn't exist");
+          expect(refused.message).toContain("check --config");
+        }
+
+        expect(yield* exists(stateDir)).toBe(false);
       })
   );
 });

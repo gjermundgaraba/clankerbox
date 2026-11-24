@@ -2,6 +2,8 @@ import {
   callerNameRule,
   describeFileError,
   Invalid,
+  NotFound,
+  tokenRows,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
   isCallerName,
@@ -22,7 +24,7 @@ import { Argument, Command, Flag } from "effect/cli";
 import * as Sqlite from "../platform/sqlite.ts";
 import type { TokenRow } from "../store.ts";
 import { loadConfig } from "./config.ts";
-import { minted } from "./tokens.ts";
+import { minted, tokenOf } from "./tokens.ts";
 
 /**
  * Mints a token for `name`, appends its line to the callers file, made if absent, and answers the
@@ -79,18 +81,34 @@ export const addCaller = (
     return token;
   });
 
-const stoppedStore = (config: string, doing: string) =>
-  Effect.flatMap(loadConfig(config), ({ stateDir }) =>
-    Sqlite.open({ stateDir }).pipe(
+const stoppedStore = (config: string, made: "made if absent" | "must exist") =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const { stateDir } = yield* loadConfig(config);
+    const file = `${stateDir}/${Sqlite.databaseFile}`;
+
+    if (
+      made === "must exist" &&
+      !(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))
+    ) {
+      return yield* new Invalid({
+        message: `${file} doesn't exist, so ${config} names no control plane that has run or had a token added: check --config`,
+      });
+    }
+
+    return yield* Sqlite.open({ stateDir }).pipe(
       Effect.catchTag("CannotStart", (error) =>
         Effect.fail(
           new Invalid({
-            message: `${error.message}: stop it to ${doing} here, or use \`clankerbox token\` through a token it takes`,
+            message:
+              error.held === true
+                ? `${error.message}: stop it first, as token add, list and revoke --config each need it stopped, or manage the running one with \`clankerbox token\``
+                : error.message,
           })
         )
       )
-    )
-  );
+    );
+  });
 
 /** Mints a token for `name` into a stopped control plane's store, and answers it. */
 export const addToken = (config: string, name: string) =>
@@ -102,7 +120,7 @@ export const addToken = (config: string, name: string) =>
         });
       }
 
-      const store = yield* stoppedStore(config, "add a token");
+      const store = yield* stoppedStore(config, "made if absent");
       const { row, token } = yield* minted(name, undefined);
 
       yield* store.insertToken(row);
@@ -114,18 +132,20 @@ export const addToken = (config: string, name: string) =>
 /** Every token in a stopped control plane's store, revoked ones included. */
 export const listTokensOffline = (config: string) =>
   Effect.scoped(
-    Effect.flatMap(stoppedStore(config, "list tokens"), (store) => store.tokens)
+    Effect.flatMap(stoppedStore(config, "must exist"), (store) => store.tokens)
   );
 
 /** Revokes a token in a stopped control plane's store, and answers its row. */
 export const revokeTokenOffline = (config: string, name: string) =>
   Effect.scoped(
     Effect.gen(function* () {
-      const store = yield* stoppedStore(config, "revoke a token");
+      const store = yield* stoppedStore(config, "must exist");
       const revoked = yield* store.revokeToken(name, yield* DateTime.now);
 
       return yield* Effect.fromOption(revoked).pipe(
-        Effect.mapError(() => new Invalid({ message: `no token ${name}` }))
+        Effect.mapError(
+          () => new NotFound({ message: `no token ${name}`, id: name })
+        )
       );
     })
   );
@@ -136,21 +156,16 @@ const configFlag = Flag.String("config").pipe(
   )
 );
 
-const tokenLine = (row: TokenRow) =>
-  [
-    row.name,
-    row.mintedBy ?? "-",
-    DateTime.formatIso(row.mintedAt),
-    row.revokedAt === undefined ? "-" : DateTime.formatIso(row.revokedAt),
-  ].join("\t");
+const printTokens = (rows: readonly TokenRow[]) =>
+  Effect.forEach(
+    tokenRows(rows.map(tokenOf)),
+    (cells) => Console.log(cells.join("\t")),
+    { discard: true }
+  );
 
 const list = Command.make("list", { config: configFlag }, ({ config }) =>
   Effect.gen(function* () {
-    yield* Console.log("NAME\tMINTED_BY\tMINTED_AT\tREVOKED_AT");
-
-    for (const row of yield* listTokensOffline(config)) {
-      yield* Console.log(tokenLine(row));
-    }
+    yield* printTokens(yield* listTokensOffline(config));
   }).pipe(Effect.catch((error) => Effect.die(error.message)))
 ).pipe(
   Command.withDescription(
@@ -168,7 +183,7 @@ const revoke = Command.make(
   },
   ({ name, config }) =>
     Effect.gen(function* () {
-      yield* Console.log(tokenLine(yield* revokeTokenOffline(config, name)));
+      yield* printTokens([yield* revokeTokenOffline(config, name)]);
     }).pipe(Effect.catch((error) => Effect.die(error.message)))
 ).pipe(
   Command.withDescription(
