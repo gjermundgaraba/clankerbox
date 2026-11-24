@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
+import { stripVTControlCharacters } from "node:util";
 
 interface Weakening {
   readonly what: string;
@@ -262,7 +263,7 @@ const vpTest = (pkg: string, test: string) => {
     encoding: "utf8",
   });
 
-  const failures = `${run.stdout}${run.stderr}`
+  const failures = stripVTControlCharacters(`${run.stdout}${run.stderr}`)
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.startsWith("FAIL "));
