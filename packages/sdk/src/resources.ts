@@ -431,6 +431,42 @@ export const Host = Schema.Struct({
 
 export type Host = typeof Host.Type;
 
+/** A caller's name: a person, laptop or provider. */
+export const CallerName = Schema.String.check(
+  Schema.makeFilter(
+    (name: string) =>
+      /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(name) ||
+      "letters, digits, '.', '_' or '-', at most 64, not starting with '.', '_' or '-'"
+  )
+);
+
+/**
+ * A token a control plane takes, by its caller's name, never the token itself. One that `manages`
+ * may mint and revoke tokens. `mintedBy` names the token that minted it, none for one minted
+ * offline. A revoked token is refused, and kept, with what it minted, so a list shows them all.
+ */
+export const Token = Schema.Struct({
+  name: CallerName,
+  manages: Schema.Boolean,
+  mintedBy: Schema.optionalKey(CallerName),
+  mintedAt: Schema.DateTimeUtcFromString,
+  revokedAt: Schema.optionalKey(Schema.DateTimeUtcFromString),
+}).annotate({ identifier: "Token" });
+
+export type Token = typeof Token.Type;
+
+export const MintRequest = Schema.Struct({
+  name: CallerName,
+  manages: Schema.optionalKey(Schema.Boolean),
+});
+
+export type MintRequest = typeof MintRequest.Type;
+
+/** A token as minted: its row, and the token, which nothing answers again. */
+export const Minted = Schema.Struct({ ...Token.fields, token: Schema.String });
+
+export type Minted = typeof Minted.Type;
+
 /** A resource a host counts, named by its runtime, such as `cpu`, `ramMib` or `runningVms`. */
 export const ResourceName = Schema.String.check(
   Schema.isPattern(/^[a-z][A-Za-z0-9]{0,31}$/u)

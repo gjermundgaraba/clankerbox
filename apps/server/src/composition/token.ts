@@ -4,8 +4,12 @@ import {
   mintToken,
   readCallers,
 } from "@gjermundgaraba/clankerbox-sdk/node";
-import { Console, Effect, FileSystem, Redacted } from "effect";
+import { Console, Effect, FileSystem, Option, Redacted } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
+
+import * as Sqlite from "../platform/sqlite.ts";
+import { loadConfig } from "./config.ts";
+import { minted } from "./tokens.ts";
 
 /**
  * Mints a token for `name`, appends its line to the callers file, made if absent, and answers the
@@ -72,6 +76,40 @@ export const addCaller = (
     return token;
   });
 
+/**
+ * Mints a token for `name` that manages tokens, into the store of the control plane `config` names,
+ * and answers it. It opens the store as the control plane does, so it refuses while one runs: a
+ * running control plane mints through a token that manages tokens instead.
+ */
+export const addToken = (config: string, name: string) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      if (!isCallerName(name)) {
+        return yield* new Invalid({
+          message: `the name ${name} isn't letters, digits, '.', '_' or '-', at most 64`,
+        });
+      }
+
+      const { stateDir } = yield* loadConfig(config);
+
+      const store = yield* Sqlite.open({ stateDir }).pipe(
+        Effect.catchTag("CannotStart", (error) =>
+          Effect.fail(
+            new Invalid({
+              message: `${error.message}: stop it to add a token here, or mint one with \`clankerbox token mint\` through a token that manages tokens`,
+            })
+          )
+        )
+      );
+
+      const { row, token } = yield* minted(name, true, undefined);
+
+      yield* store.insertToken(row);
+
+      return token;
+    })
+  );
+
 const add = Command.make(
   "add",
   {
@@ -80,30 +118,55 @@ const add = Command.make(
         "The caller's name: a person, laptop or provider."
       )
     ),
+    config: Flag.String("config").pipe(
+      Flag.withDescription(
+        "The control plane's config: the token goes into its store, managing tokens. The control plane must be stopped."
+      ),
+      Flag.optional
+    ),
     callers: Flag.String("callers").pipe(
       Flag.withDescription(
-        "The callers file the server config's `callers` names; made if absent."
-      )
+        "A host's callers file, made if absent: the token's hash is appended to it."
+      ),
+      Flag.optional
     ),
   },
-  ({ name, callers }) =>
+  ({ name, config, callers }) =>
     Effect.gen(function* () {
-      const token = yield* addCaller(callers, name);
+      if (Option.isSome(config) === Option.isSome(callers)) {
+        return yield* new Invalid({
+          message:
+            "give token add either --config, for a control plane's caller, or --callers, for a host's",
+        });
+      }
+
+      if (Option.isSome(config)) {
+        const token = yield* addToken(config.value, name);
+
+        yield* Console.log(Redacted.value(token));
+
+        return yield* Console.error(
+          `added ${name}, which manages tokens, to the control plane ${config.value} configures. The token above is shown once: put it in a file the caller's config names as "token".`
+        );
+      }
+
+      const file = Option.getOrThrow(callers);
+      const token = yield* addCaller(file, name);
 
       yield* Console.log(Redacted.value(token));
       yield* Console.error(
-        `added ${name} to ${callers}. The token above is shown once: put it in a file the caller's config names as "token", and restart the control plane to take it.`
+        `added ${name} to ${file}. The token above is shown once: put it in a file the control plane's config names as this host's "token", and restart the host to take it.`
       );
     }).pipe(Effect.catch((error) => Effect.die(error.message)))
 ).pipe(
   Command.withDescription(
-    "Mint a token for a caller, add its hash to a callers file, and print the token once."
+    "Mint a token, and print it once: for a control plane's caller into its store, or for a host into its callers file."
   )
 );
 
 export const token = Command.make("token").pipe(
   Command.withDescription(
-    "Manage the tokens of the callers a control plane takes."
+    "Mint the tokens a control plane and its hosts take."
   ),
   Command.withSubcommands([add])
 );

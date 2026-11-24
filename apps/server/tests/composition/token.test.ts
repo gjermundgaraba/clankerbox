@@ -11,10 +11,32 @@ import {
   scratch,
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import { Effect, Redacted } from "effect";
 import { expect } from "vite-plus/test";
 
-import { addCaller } from "../../src/composition/token.ts";
+import { addCaller, addToken } from "../../src/composition/token.ts";
+import { clientOf, plane } from "../support.ts";
+
+const serverConfig = (stateDir: string) =>
+  Effect.gen(function* () {
+    const dir = yield* scratch;
+    const file = path.join(dir, "server.json");
+
+    yield* write(path.join(dir, "id.pub"), `${operatorKey}\n`);
+    yield* write(
+      file,
+      JSON.stringify({
+        listen: { address: "127.0.0.1", port: 8585 },
+        stateDir,
+        authorizedKeys: "id.pub",
+        tokens: true,
+        hosts: [],
+      })
+    );
+
+    return file;
+  });
 
 layer(NodeServices.layer)((it) => {
   it.effect(
@@ -115,5 +137,49 @@ layer(NodeServices.layer)((it) => {
         )
       ).toStrictEqual(names);
     })
+  );
+
+  it.effect(
+    "token add --config mints, into a stopped control plane's store, a token that manages tokens, which the control plane then takes",
+    () =>
+      Effect.gen(function* () {
+        const planned = yield* plane({ tokens: true });
+
+        const token = yield* addToken(
+          yield* serverConfig(planned.stateDir),
+          "root"
+        );
+
+        const served = yield* planned.start();
+
+        yield* Effect.addFinalizer(() => served.crash);
+
+        const listed = yield* (yield* clientOf(served.url, { token })).tokens;
+
+        expect(
+          listed.map(({ name, manages, mintedBy }) => [name, manages, mintedBy])
+        ).toStrictEqual([["root", true, undefined]]);
+      })
+  );
+
+  it.effect(
+    "token add --config refuses while the control plane runs, saying to stop it or mint through a token, and adds nothing",
+    () =>
+      Effect.gen(function* () {
+        const planned = yield* plane({ tokens: true });
+        const served = yield* planned.start();
+
+        yield* Effect.addFinalizer(() => served.crash);
+
+        const refused = yield* Effect.flip(
+          addToken(yield* serverConfig(planned.stateDir), "root")
+        );
+
+        expect(refused.message).toContain(
+          "another control plane process holds state dir"
+        );
+        expect(refused.message).toContain("clankerbox token mint");
+        expect(yield* served.store.tokens).toStrictEqual([]);
+      })
   );
 });

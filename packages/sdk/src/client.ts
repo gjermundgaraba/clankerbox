@@ -39,6 +39,8 @@ import type {
   Build,
   BuildRequest,
   CapacityReport,
+  Minted,
+  Token,
   Checkpoint,
   Executed,
   Host,
@@ -188,6 +190,13 @@ export type EnsureError =
 export interface Interface extends Calls {
   readonly hosts: Effect.Effect<readonly Host[], ErrorOf<"listHosts">>;
   readonly capacity: Effect.Effect<CapacityReport, ErrorOf<"getCapacity">>;
+  readonly tokens: Effect.Effect<readonly Token[], ErrorOf<"listTokens">>;
+  readonly mintToken: (
+    input: Input<"mintToken">
+  ) => Effect.Effect<Minted, ErrorOf<"mintToken">>;
+  readonly revokeToken: (
+    input: Input<"revokeToken">
+  ) => Effect.Effect<Token, ErrorOf<"revokeToken">>;
   readonly templates: Effect.Effect<
     readonly Template[],
     ErrorOf<"listTemplates">
@@ -358,7 +367,7 @@ const fromUndeclared = (
       }),
     Unauthenticated: ({ message }) =>
       new Invalid({
-        message: `the control plane refused this caller: ${message}; give the client the token whose hash is a line of the control plane's callers file`,
+        message: `the control plane refused this caller: ${message}; give the client a token clankerbox-server token add or clankerbox token mint printed for this control plane, not revoked`,
       }),
     Forbidden: (failure) => unexpected(context, failure),
     Unavailable: ({ message }) => new Unavailable({ message, readOnly: true }),
@@ -950,6 +959,9 @@ export const make = (
       listMachines: (filter) => send("listMachines", filter ?? {}),
       listCheckpoints: (filter) => send("listCheckpoints", filter ?? {}),
       capacity: send("getCapacity", {}),
+      tokens: send("listTokens", {}),
+      mintToken: (input) => send("mintToken", input, input.name),
+      revokeToken: (input) => send("revokeToken", input, input.name),
       templates: send("listTemplates", {}),
       getMachine: (input) => send("getMachine", input, input.id),
       getCheckpoint: (input) => send("getCheckpoint", input, input.id),

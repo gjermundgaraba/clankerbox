@@ -6,7 +6,15 @@ import type { Socket } from "node:net";
 
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as Action from "@gjermundgaraba/effect-actions/Action";
-import { Effect, FileSystem, Layer, Option, Redacted, Schema } from "effect";
+import {
+  Context,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Redacted,
+  Schema,
+} from "effect";
 import {
   Headers,
   HttpRouter,
@@ -17,6 +25,7 @@ import {
 import * as Client from "./client.ts";
 import { describeFileError } from "./describe.ts";
 import { Invalid } from "./errors.ts";
+import { CallerName } from "./resources.ts";
 
 /**
  * The client over Node's `http`. It is in `./node`, apart from `.`, so an app that brings its own
@@ -74,16 +83,15 @@ export const AnyAddress = Schema.String.check(
 export const listenRefusal = (
   field: string,
   address: string,
-  guarded: { readonly callers: boolean; readonly tls: boolean }
+  guarded: Readonly<Record<string, boolean>>
 ): string | undefined => {
   if (isPrivate(address)) {
     return undefined;
   }
 
-  const lacking = [
-    guarded.callers ? undefined : "callers",
-    guarded.tls ? undefined : "tls",
-  ].filter((name) => name !== undefined);
+  const lacking = Object.entries(guarded)
+    .filter(([, set]) => !set)
+    .map(([name]) => name);
 
   return lacking.length === 0
     ? undefined
@@ -180,24 +188,25 @@ export interface Caller {
   readonly hash: Uint8Array;
 }
 
-const callerName = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
-
 const sha256Hex = /^[0-9a-f]{64}$/u;
 
 export const hashToken = (token: string): Uint8Array =>
   createHash("sha256").update(token, "utf8").digest();
 
-/** A new token, 32 random bytes as hex, and the line a callers file takes for it under `name`. */
+/** A new token, 32 random bytes as hex, its SHA-256, and the line a callers file takes for it under `name`. */
 export const mintToken = (name: string) => {
   const token = randomBytes(32).toString("hex");
+  const hash = hashToken(token);
 
   return {
     token: Redacted.make(token),
-    line: `${name} ${Buffer.from(hashToken(token)).toString("hex")}`,
+    hash,
+    line: `${name} ${Buffer.from(hash).toString("hex")}`,
   };
 };
 
-export const isCallerName = (name: string): boolean => callerName.test(name);
+export const isCallerName = (name: string): boolean =>
+  Schema.is(CallerName)(name);
 
 /**
  * Reads a callers file: a line `<name> <sha256 of the token, hex>` per caller, blank lines and
@@ -301,6 +310,18 @@ export const callerInConstantTime = (
 
 const bearer = /^Bearer[ \t]+(?<token>\S+)[ \t]*$/iu;
 
+/** The token of a request's `Authorization: Bearer` header, or none. */
+export const bearerToken = (headers: Headers.Headers): Option.Option<string> =>
+  Option.flatMap(Headers.get(headers, "authorization"), (value) =>
+    Option.fromNullishOr(bearer.exec(value)?.groups?.["token"])
+  );
+
+/** The caller `requireToken` found a request's token to be; none where it takes every caller. */
+export const CurrentCaller = Context.Reference<Caller | undefined>(
+  "@gjermundgaraba/clankerbox-sdk/node/CurrentCaller",
+  { defaultValue: () => undefined }
+);
+
 const encodeUnauthenticated = Schema.encodeSync(Action.Unauthenticated);
 
 const refused = (message: string) =>
@@ -313,31 +334,32 @@ const refused = (message: string) =>
 
 /**
  * Refuses, for a server of either contract, a request whose `Authorization: Bearer` token is no
- * caller's, before it reads anything, as effect-actions' `Unauthenticated` at 401. Given no
- * callers it passes every request, as a server whose config names none takes every caller, the
- * tailnet or loopback its listen address is limited to being its only gate.
+ * caller's, before it reads anything, as effect-actions' `Unauthenticated` at 401, and runs the
+ * rest as `CurrentCaller`. It reads `callers` for each request, so a caller taken away is refused
+ * from the next one. Given none it passes every request, as a server whose config names no callers
+ * takes every caller, the tailnet or loopback its listen address is limited to being its only gate.
  */
-export const requireToken = (server: string, callers: readonly Caller[]) =>
+export const requireToken = (
+  server: string,
+  callers: Effect.Effect<readonly Caller[]> | undefined
+) =>
   HttpRouter.middleware((handle) =>
-    callers.length === 0
+    callers === undefined
       ? handle
       : Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
-          Option.match(
-            Option.flatMap(
-              Headers.get(request.headers, "authorization"),
-              (value) =>
-                Option.fromNullishOr(bearer.exec(value)?.groups?.["token"])
-            ),
-            {
-              onNone: () =>
-                refused(
-                  `this ${server} takes only a caller with a token, and this request carries none`
-                ),
-              onSome: (token) =>
-                callerInConstantTime(callers, token) === undefined
+          Option.match(bearerToken(request.headers), {
+            onNone: () =>
+              refused(
+                `this ${server} takes only a caller with a token, and this request carries none`
+              ),
+            onSome: (token) =>
+              Effect.flatMap(callers, (taken) => {
+                const caller = callerInConstantTime(taken, token);
+
+                return caller === undefined
                   ? refused(`this ${server} takes no caller with this token`)
-                  : handle,
-            }
-          )
+                  : Effect.provideService(handle, CurrentCaller, caller);
+              }),
+          })
         )
   );

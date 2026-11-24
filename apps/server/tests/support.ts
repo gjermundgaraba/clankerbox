@@ -21,7 +21,6 @@ import type {
   Internal,
   Machine,
 } from "@gjermundgaraba/clankerbox-sdk";
-import type { Caller } from "@gjermundgaraba/clankerbox-sdk/node";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import type { Redacted } from "effect";
@@ -167,12 +166,12 @@ export interface Plane {
   readonly settings: ServerSettings;
   readonly start: (
     port?: number,
-    callers?: readonly Caller[]
+    tokens?: boolean
   ) => Effect.Effect<Started, CannotStart | Internal>;
 }
 
 const started = (
-  settings: ServerSettings & Pick<ServerConfig, "callers">,
+  settings: ServerSettings & Pick<ServerConfig, "tokens">,
   port: number,
   logger: Logger.Logger<unknown, unknown> | undefined,
   tailnet: Tailnet["Service"] | undefined
@@ -305,7 +304,7 @@ export const plane = (options?: {
   readonly tailnet?: Tailnet["Service"];
   readonly logger?: Logger.Logger<unknown, unknown>;
   readonly members?: readonly Member[];
-  readonly callers?: readonly Caller[];
+  readonly tokens?: boolean;
 }) =>
   Effect.gen(function* () {
     const dir = yield* scratch;
@@ -364,9 +363,9 @@ export const plane = (options?: {
       stateDir,
       hosts,
       settings,
-      start: (port = 0, callers = options?.callers) =>
+      start: (port = 0, tokens = options?.tokens) =>
         started(
-          { ...settings, callers },
+          { ...settings, tokens },
           port,
           options?.logger,
           options?.tailnet

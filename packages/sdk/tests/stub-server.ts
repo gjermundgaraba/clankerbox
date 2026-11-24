@@ -19,6 +19,7 @@ import {
   builtFrom,
   Conflict,
   Http,
+  Invalid,
   isResting,
   isUndone,
   labelledWith,
@@ -790,6 +791,9 @@ export const stubServer = (options: StubServerOptions = {}) => {
         "host.capacity",
         Effect.succeed(options.capacity ?? { usage: [], unreported: [] })
       ),
+    listTokens: () => Effect.fail(new Invalid({ message: "keeps no tokens" })),
+    mintToken: () => Effect.fail(new Invalid({ message: "keeps no tokens" })),
+    revokeToken: () => Effect.fail(new Invalid({ message: "keeps no tokens" })),
   });
 
   const routes = ActionHttp.layer(Http, [app]).pipe(

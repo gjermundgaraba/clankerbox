@@ -62,9 +62,17 @@ const app = (config: Served) =>
     })
   );
 
-export const routes = (config: Served, callers: readonly Caller[]) =>
+export const routes = (
+  config: Served,
+  callers: readonly Caller[] | undefined
+) =>
   ActionHttp.layer(HostHttp, [app(config)]).pipe(
     Layer.provide(versionCheck("host").layer),
-    Layer.provide(requireToken("host", callers).layer),
+    Layer.provide(
+      requireToken(
+        "host",
+        callers === undefined ? undefined : Effect.succeed(callers)
+      ).layer
+    ),
     Layer.provide(refuseBrowsers("host").layer)
   );

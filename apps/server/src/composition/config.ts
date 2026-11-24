@@ -8,11 +8,10 @@ import {
   readToken,
   Client,
 } from "@gjermundgaraba/clankerbox-sdk";
-import type { Caller, Tls } from "@gjermundgaraba/clankerbox-sdk/node";
+import type { Tls } from "@gjermundgaraba/clankerbox-sdk/node";
 import {
   AnyAddress,
   listenRefusal,
-  readCallers,
   readTls,
   TlsFiles,
 } from "@gjermundgaraba/clankerbox-sdk/node";
@@ -30,7 +29,7 @@ const ServerConfigFile = Schema.Struct({
   listen: Schema.Struct({ address: AnyAddress, port: Port }),
   stateDir: Schema.String,
   authorizedKeys: Schema.String,
-  callers: Schema.optionalKey(Schema.String),
+  tokens: Schema.optionalKey(Schema.Boolean),
   tls: Schema.optionalKey(TlsFiles),
   hookTimeout: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
   tailnet: Schema.optionalKey(TailnetSettings),
@@ -57,8 +56,8 @@ const decodeConfig = Schema.decodeUnknownEffect(
 
 export interface ServerConfig extends ServerSettings {
   readonly tailnet?: TailnetSettings | undefined;
-  /** The callers it takes, by token; none, or left out, takes every caller, as before 0.44. */
-  readonly callers?: readonly Caller[] | undefined;
+  /** Whether it takes only callers whose token its store holds; unset takes every caller, as before 0.44. */
+  readonly tokens?: boolean | undefined;
   readonly tls?: Tls | undefined;
 }
 
@@ -110,7 +109,7 @@ export const loadConfig = (
       path.resolve(path.dirname(resolved), given);
 
     const refused = listenRefusal("listen.address", decoded.listen.address, {
-      callers: decoded.callers !== undefined,
+      tokens: decoded.tokens === true,
       tls: decoded.tls !== undefined,
     });
 
@@ -149,9 +148,7 @@ export const loadConfig = (
       ),
       hookTimeoutSeconds: decoded.hookTimeout ?? defaultHookTimeoutSeconds,
       ...(decoded.tailnet === undefined ? {} : { tailnet: decoded.tailnet }),
-      ...(decoded.callers === undefined
-        ? {}
-        : { callers: yield* readCallers(relative(decoded.callers)) }),
+      ...(decoded.tokens === true ? { tokens: true } : {}),
       ...(decoded.tls === undefined
         ? {}
         : { tls: yield* readTls(decoded.tls, relative) }),

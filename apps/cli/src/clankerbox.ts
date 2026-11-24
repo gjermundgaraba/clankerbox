@@ -30,6 +30,7 @@ import {
   listTemplates,
   template,
 } from "./templates.ts";
+import { listTokens, mintToken, revokeToken, token } from "./tokens.ts";
 
 export const actionCommands = {
   listMachines: machines,
@@ -52,6 +53,9 @@ export const actionCommands = {
   listHosts: hosts,
   getCapacity: capacity,
   execMachine: exec,
+  listTokens,
+  mintToken,
+  revokeToken,
 } satisfies Record<keyof typeof actionsByName, Command.Command.Any>;
 
 export const clankerbox = Command.make("clankerbox").pipe(
@@ -59,6 +63,7 @@ export const clankerbox = Command.make("clankerbox").pipe(
   Command.withSubcommands([
     hosts,
     capacity,
+    token,
     machines,
     getMachine,
     template,

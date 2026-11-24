@@ -49,7 +49,7 @@ export const controlPlaneServer = ({
   });
 
 export const serverLayer = (
-  config: ServerSettings & Pick<ServerConfig, "callers">,
+  config: ServerSettings & Pick<ServerConfig, "tokens">,
   server: ServerLayer,
   tailnet:
     | Layer.Layer<Tailnet, never, HttpClient.HttpClient>
@@ -64,7 +64,7 @@ export const serverLayer = (
   CannotStart | Internal,
   HttpClient.HttpClient | FileSystem.FileSystem
 > =>
-  HttpRouter.serve(routes(config.callers ?? []), {
+  HttpRouter.serve(routes(config.tokens === true), {
     disableLogger: true,
     middleware: journal,
   }).pipe(

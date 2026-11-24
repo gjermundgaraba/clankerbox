@@ -30,12 +30,20 @@ const answering = HttpRouter.add(
   HttpServerResponse.text("pong")
 );
 
-const asking = (callers: readonly Caller[], authorization?: string) =>
+const asking = (
+  callers: readonly Caller[] | undefined,
+  authorization?: string
+) =>
   Effect.acquireUseRelease(
     Effect.sync(() =>
       HttpRouter.toWebHandler(
         answering.pipe(
-          Layer.provide(requireToken("control plane", callers).layer),
+          Layer.provide(
+            requireToken(
+              "control plane",
+              callers === undefined ? undefined : Effect.succeed(callers)
+            ).layer
+          ),
           Layer.provide(HttpServer.layerServices)
         ),
         { disableLogger: true }
@@ -82,10 +90,20 @@ layer(NodeServices.layer)((it) => {
       "with no callers configured, passes every request, as today",
       () =>
         Effect.gen(function* () {
-          expect(yield* asking([])).toStrictEqual({
+          expect(yield* asking(undefined)).toStrictEqual({
             status: 200,
             body: "pong",
           });
+        })
+    );
+
+    it.effect(
+      "with callers configured and none of them left, refuses every request, a token's too",
+      () =>
+        Effect.gen(function* () {
+          for (const authorization of [undefined, `Bearer ${token(laptop)}`]) {
+            expect((yield* asking([], authorization)).status).toBe(401);
+          }
         })
     );
 

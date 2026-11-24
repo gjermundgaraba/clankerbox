@@ -36,13 +36,8 @@ const load = (contents: Schema.Json, keys = `${operatorKey}\n`) =>
 
 const guarded = (dir: string) =>
   Effect.gen(function* () {
-    const laptop = mintToken("laptop");
-
-    yield* write(path.join(dir, "callers"), `${laptop.line}\n`);
     yield* write(path.join(dir, "cert.pem"), "a certificate");
     yield* write(path.join(dir, "key.pem"), "a key");
-
-    return { laptop };
   });
 
 layer(NodeServices.layer)((it) => {
@@ -261,7 +256,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a listen address that is neither tailnet nor loopback is refused unless the config names both callers and tls, saying which it lacks",
+    "a listen address that is neither tailnet nor loopback is refused unless the config sets both tokens and tls, saying which it lacks",
     () =>
       Effect.gen(function* () {
         const tls = { cert: "cert.pem", key: "key.pem" };
@@ -270,9 +265,10 @@ layer(NodeServices.layer)((it) => {
           const listen = { ...config.listen, address };
 
           for (const [extra, lacks, has] of [
-            [{}, "callers and tls", undefined],
-            [{ callers: "callers" }, "needs tls set", "callers"],
-            [{ tls }, "needs callers set", "tls set"],
+            [{}, "tokens and tls", undefined],
+            [{ tokens: true }, "needs tls set", "tokens set"],
+            [{ tls }, "needs tokens set", "tls set"],
+            [{ tokens: false, tls }, "needs tokens set", "tls set"],
           ] as const) {
             const { file, loaded } = yield* load({
               ...config,
@@ -302,24 +298,21 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a config with callers and tls listens anywhere and reads each",
+    "a config with tokens and tls listens anywhere and reads each",
     () =>
       Effect.gen(function* () {
         const { file, loaded } = yield* load({
           ...config,
           listen: { ...config.listen, address: "203.0.113.7" },
-          callers: "callers",
+          tokens: true,
           tls: { cert: "cert.pem", key: "key.pem" },
         });
 
-        const { laptop } = yield* guarded(path.dirname(file));
+        yield* guarded(path.dirname(file));
         const read = yield* loaded;
 
         expect(read.listen.address).toBe("203.0.113.7");
-        expect(read.callers?.map(({ name }) => name)).toStrictEqual(["laptop"]);
-        expect(Buffer.from(read.callers?.[0]?.hash ?? []).toString("hex")).toBe(
-          laptop.line.split(" ")[1]
-        );
+        expect(read.tokens).toBe(true);
         expect(read.tls).toStrictEqual({ cert: "a certificate", key: "a key" });
       })
   );

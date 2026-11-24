@@ -88,7 +88,7 @@ export const hostLayer = <E, R>(
   HostError | CannotStart | E,
   Exclude<R, PortProbe> | FileSystem.FileSystem | Path.Path
 > =>
-  HttpRouter.serve(routes(config, config.callers ?? []), {
+  HttpRouter.serve(routes(config, config.callers), {
     disableLogger: true,
     middleware: journal,
   }).pipe(
