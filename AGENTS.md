@@ -277,7 +277,7 @@ delete, over the client), `job.ts` (the job, from the environment Amp gives),
 
 ## Weakenings the auth guards must refuse
 
-`packages/sdk/tests/weakenings.ts` lists every weakening of `callerInConstantTime`, `isTailnetOrLoopback`, `requireToken` and the token store that a review has found, each with the test that must refuse it. After changing any of them, run `node packages/sdk/tests/weakenings.ts .` from the repository root: it plants each weakening in turn, runs its test, puts the file back, and exits 1 naming any weakening its test passed. A test that a new weakening passes gets a case that refuses it, and the weakening joins the list.
+`packages/sdk/tests/weakenings.ts` lists every weakening of `callerInConstantTime`, `isTailnetOrLoopback`, `requireToken` and the token store that a review has found, each with the test that must refuse it. CI's `weakenings` job runs it on a fresh checkout; it is kept out of `vp run ready` because it edits source files. To run it here, from the repository root with those files clean: `node packages/sdk/tests/weakenings.ts .`. It runs each named test file on the unchanged code first, then plants each weakening in turn, runs its test file, and puts the source back, on Ctrl-C too. A weakening counts as refused only when that run exits 1 with the test the weakening names failing on an assertion and no file failing to load; a pass, a runner that didn't start, or any other end exits 1. A test that a new weakening passes gets a case that refuses it, and the weakening joins the list with that test's name.
 
 ## Where Layers are chosen
 
