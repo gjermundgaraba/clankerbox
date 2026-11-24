@@ -213,7 +213,7 @@ Each: what Tart does, where, and what of ours depends on it.
   files `initialized` asks for (`layout`), running while a `tart run` holds the
   lock on its `config.json` (`running`, PIDLock.swift), and stopped
   otherwise (`stateWith`), one with a `state.vzvmsave` included, which Tart
-  reads suspended (`stateURL`). `Home.look` reads the directory, and
+  reads suspended (`stateURL`). `Home.countsAsVm` reads the directory, and
   `locks.ts` asks who holds each VM's lock with `fcntl(F_GETLK)`, as Tart's
   `PIDLock.pid` does, through macOS's `/usr/bin/perl`, since Node has no
   `fcntl`: one Perl for every VM a read asks about, packing `struct flock` as
@@ -470,7 +470,7 @@ times, and the disk's capacity and format)
   with `tart get`.
 - When `VMDirectory.swift`'s `state`, `layout` or `PIDLock` changed, re-time
   the reads above against a private home padded with stopped clones of the
-  base, and check that `Home.look` and `running` still read what `tart list`
+  base, and check that `Home.countsAsVm` and `running` still read what `tart list`
   does, a VM run by hand outside its job included.
 
 ## After

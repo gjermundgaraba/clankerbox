@@ -340,11 +340,14 @@ export const pinRefusal = (
   });
 };
 
-const idPattern = /^[0-9a-f]{32}$/u;
+export const idLength = 32;
+
+const idPattern = new RegExp(`^[0-9a-f]{${idLength}}$`, "u");
 
 export const newId = (): string =>
-  Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (byte) =>
-    byte.toString(16).padStart(2, "0")
+  Array.from(
+    globalThis.crypto.getRandomValues(new Uint8Array(idLength / 2)),
+    (byte) => byte.toString(16).padStart(2, "0")
   ).join("");
 
 export const isId = (text: string): boolean => idPattern.test(text);

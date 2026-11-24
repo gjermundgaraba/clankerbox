@@ -28,6 +28,10 @@ interface Landing {
   pending: Effect.Effect<unknown, HttpClientError.HttpClientError> | undefined;
 }
 
+/**
+ * `landLate` loses unsent every create of a claim, a make's first, until the effect it answers
+ * sends the first of them.
+ */
 export const faultyHttp = <E, R>(
   base: Layer.Layer<HttpClient.HttpClient, E, R>
 ) => {
