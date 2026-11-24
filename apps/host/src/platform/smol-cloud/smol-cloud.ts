@@ -2,6 +2,7 @@ import {
   fitted,
   formatSizes,
   givenSizes,
+  idLength,
   isId,
 } from "@clankerbox/host-contract/traits";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
@@ -73,7 +74,12 @@ export const SmolCloudSettings = Schema.Struct({
 
 export type SmolCloudSettings = typeof SmolCloudSettings.Type;
 
-export const longestHostId = 26;
+const providerNameCap = 63;
+
+const namePrefix = "cbx-";
+
+export const longestHostId =
+  providerNameCap - namePrefix.length - "-".length - idLength;
 
 const idleStopSeconds = 86_400;
 
@@ -301,7 +307,7 @@ export const make = (
       )
     );
 
-    const prefix = `cbx-${host.id}-`;
+    const prefix = `${namePrefix}${host.id}-`;
     const nameOf = (instance: string) => `${prefix}${instance}`;
 
     const instanceOf = (name: string | null | undefined) => {
@@ -1121,7 +1127,7 @@ export const layer = (
     Effect.gen(function* () {
       if (host.id.length > longestHostId) {
         return yield* new CannotStart({
-          message: `a smol cloud host's ID is at most ${longestHostId} characters, as the provider caps a machine's name at 63, and ${host.id} has ${host.id.length}`,
+          message: `a smol cloud host's ID is at most ${longestHostId} characters, as the provider caps a machine's name at ${providerNameCap}, and ${host.id} has ${host.id.length}`,
         });
       }
 
