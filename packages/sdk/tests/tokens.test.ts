@@ -289,6 +289,24 @@ layer(NodeServices.layer)((it) => {
     });
   });
 
+  describe("mintToken", () => {
+    it("mints 64 hex digits, no two tokens alike, and no 8 bytes repeated in or across 4096 of them", () => {
+      const minted = Array.from({ length: 4096 }, () =>
+        Redacted.value(mintToken("laptop").token)
+      );
+
+      const blocks = minted.flatMap(
+        (minting) => minting.match(/.{16}/gu) ?? []
+      );
+
+      expect(
+        minted.filter((minting) => !/^[0-9a-f]{64}$/u.test(minting))
+      ).toStrictEqual([]);
+      expect(new Set(minted).size).toBe(4096);
+      expect(new Set(blocks).size).toBe(4096 * 4);
+    });
+  });
+
   describe("readCallers", () => {
     it.effect(
       "refuses a token in place of its hash, a name twice, a hash twice, a bad name, and a file naming no one",
