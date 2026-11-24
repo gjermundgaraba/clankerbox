@@ -19,6 +19,13 @@ const client = "packages/sdk/src/client.ts";
 const tokens = "apps/server/src/composition/tokens.ts";
 const routes = "apps/server/src/composition/routes.ts";
 const config = "apps/server/src/composition/config.ts";
+const setup = "packages/sdk/src/setup.ts";
+const resources = "packages/sdk/src/resources.ts";
+
+const minting = (random: string) =>
+  `const token = \`\${tokenPrefix[kind]}\${${random}}\`;`;
+
+const hashed = 'createHash("sha256").update(token, "utf8")';
 
 const compare =
   "if (timingSafeEqual(presented, caller.hash) && found === undefined) {";
@@ -108,6 +115,67 @@ const weakenings: readonly Weakening[] = [
     "Buffer.from([...presented].toSorted()).equals(Buffer.from([...caller.hash].toSorted()))",
     "in another order"
   ),
+  comparing(
+    "checks the caller prefix, then compares only 4 bytes",
+    'token.startsWith("cbx_") ? timingSafeEqual(presented.subarray(0, 4), caller.hash.subarray(0, 4)) : timingSafeEqual(presented, caller.hash)',
+    "in any one bit"
+  ),
+  comparing(
+    "checks the host prefix, then compares only 4 bytes",
+    'token.startsWith("cbxh_") ? timingSafeEqual(presented.subarray(0, 4), caller.hash.subarray(0, 4)) : timingSafeEqual(presented, caller.hash)',
+    "in any one bit"
+  ),
+  comparing(
+    "takes any prefixed token without comparing",
+    'token.startsWith("cbx") || timingSafeEqual(presented, caller.hash)',
+    "finds each caller by its own token"
+  ),
+  {
+    what: "hashes only a token's first 36 characters",
+    file: node,
+    edits: [
+      [hashed, 'createHash("sha256").update(token.slice(0, 36), "utf8")'],
+    ],
+    package: "packages/sdk",
+    test: "tests/tokens.test.ts",
+    by: "differs from its own in any one character",
+  },
+  {
+    what: "hashes a token without its prefix",
+    file: node,
+    edits: [
+      [
+        hashed,
+        'createHash("sha256").update(token.replace(/^cbxh?_/u, ""), "utf8")',
+      ],
+    ],
+    package: "packages/sdk",
+    test: "tests/tokens.test.ts",
+    by: "differs from its own in any one character",
+  },
+  {
+    what: "a token file may hold either hop's token",
+    file: setup,
+    edits: [
+      ["if (held !== kind) {", 'if (held !== "caller" && held !== "host") {'],
+    ],
+    package: "apps/cli",
+    test: "tests/config.test.ts",
+    by: "a host's token or a token without its prefix",
+  },
+  {
+    what: "a SHA-256 passes as a caller's name",
+    file: resources,
+    edits: [
+      [
+        "if (held !== undefined) {",
+        'if (held !== undefined && held !== "hash") {',
+      ],
+    ],
+    package: "apps/server",
+    test: "tests/composition/token.test.ts",
+    by: "a SHA-256 or token given as a name",
+  },
   reaching(
     "takes every IPv4-mapped address",
     mapped,
@@ -164,26 +232,26 @@ const weakenings: readonly Weakening[] = [
     file: node,
     edits: [
       [
-        'const token = randomBytes(32).toString("hex");',
-        'const token = randomBytes(2).toString("hex").repeat(16);',
+        minting('randomBytes(32).toString("hex")'),
+        minting('randomBytes(2).toString("hex").repeat(16)'),
       ],
     ],
     package: "packages/sdk",
     test: "tests/tokens.test.ts",
-    by: "mints 64 hex digits",
+    by: "mints its hop's prefix and 64 hex digits",
   },
   {
     what: "a minted token is 16 bytes",
     file: node,
     edits: [
       [
-        'const token = randomBytes(32).toString("hex");',
-        'const token = randomBytes(16).toString("hex");',
+        minting('randomBytes(32).toString("hex")'),
+        minting('randomBytes(16).toString("hex")'),
       ],
     ],
     package: "packages/sdk",
     test: "tests/tokens.test.ts",
-    by: "mints 64 hex digits",
+    by: "mints its hop's prefix and 64 hex digits",
   },
   serving(
     "the control plane reads its tokens at startup",
