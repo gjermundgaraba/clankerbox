@@ -18,9 +18,12 @@ const encodeInvalid = Schema.encodeSync(Invalid);
  * and no caller of ours does.
  *
  * That page's `Origin` names the `Host` it sent, so refusing only an `Origin` that differs from
- * `Host` would leave it open.
+ * `Host` would leave it open. `Host` is left unchecked: a server is reached by its IP, by a MagicDNS
+ * name or through a proxy, so an allowlist of names would need config, and refusing `Origin`
+ * already refuses the rebound page.
  *
- * It answers `Invalid` at 400, which a client reads with its message.
+ * It answers `Invalid` at 400, which a client reads with its message. A 403 is each action's
+ * built-in `Forbidden`, which a client reads only as an answer it didn't expect.
  */
 export const refuseBrowsers = (server: string) =>
   HttpRouter.middleware((handle) =>
