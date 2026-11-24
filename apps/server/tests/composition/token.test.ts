@@ -13,7 +13,9 @@ import {
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
-import { Effect, Redacted } from "effect";
+import { Effect, Layer, Redacted } from "effect";
+import { Command } from "effect/cli";
+import { TestConsole } from "effect/testing";
 import { expect } from "vite-plus/test";
 
 import {
@@ -21,6 +23,7 @@ import {
   addToken,
   listTokensOffline,
   revokeTokenOffline,
+  token as tokenCommand,
 } from "../../src/composition/token.ts";
 import { clientOf, plane } from "../support.ts";
 
@@ -239,6 +242,28 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* revokeTokenOffline(file, "leaked");
         yield* revokeTokenOffline(file, "planted");
+
+        const printed = yield* Command.runWith(tokenCommand, {
+          version: "test",
+        })(["list", "--config", file]).pipe(
+          Effect.andThen(TestConsole.logLines),
+          Effect.provide(Layer.fresh(TestConsole.layer))
+        );
+
+        const [header, ...rows] = printed.map(String);
+
+        expect(header).toBe("NAME\tMINTED_BY\tMINTED_AT\tREVOKED_AT");
+        expect(
+          rows.map((line) => {
+            const [name, mintedBy, , revokedAt] = line.split("\t");
+
+            return [name, mintedBy, revokedAt === "-" ? "-" : "revoked"];
+          })
+        ).toStrictEqual([
+          ["root", "-", "-"],
+          ["leaked", "root", "revoked"],
+          ["planted", "leaked", "revoked"],
+        ]);
 
         expect(
           (yield* listTokensOffline(file)).map(({ name, revokedAt }) => [

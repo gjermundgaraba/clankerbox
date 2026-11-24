@@ -283,6 +283,22 @@ const weakenings: readonly Weakening[] = [
     "tests/composition/token.test.ts"
   ),
   serving(
+    "token list --config prints nothing",
+    "apps/server/src/composition/token.ts",
+    '(cells) => Console.log(cells.join("\\t")),',
+    "() => Effect.void,",
+    "token list and revoke --config read and revoke",
+    "tests/composition/token.test.ts"
+  ),
+  serving(
+    "token list --config prints no MINTED_BY",
+    "apps/server/src/composition/token.ts",
+    "tokenRows(rows.map(tokenOf)),",
+    "tokenRows(rows.map((row) => tokenOf({ ...row, mintedBy: undefined }))),",
+    "token list and revoke --config read and revoke",
+    "tests/composition/token.test.ts"
+  ),
+  serving(
     "takes everyone while no token is minted",
     node,
     "return caller === undefined",
