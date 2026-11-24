@@ -14,12 +14,12 @@ import * as Client from "../src/client.ts";
 import {
   callerInConstantTime,
   hashToken,
-  listenRefusal,
   mintToken,
   readCallers,
   requireToken,
 } from "../src/node.ts";
 import type { Caller } from "../src/node.ts";
+import { isTailnetOrLoopback } from "../src/reach.ts";
 import { scratch, write } from "./files.ts";
 
 const decodeRefusal = Schema.decodeUnknownEffect(
@@ -32,43 +32,7 @@ const answering = HttpRouter.add(
   HttpServerResponse.text("pong")
 );
 
-const asking = (
-  callers: readonly Caller[] | undefined,
-  authorization?: string
-) =>
-  Effect.acquireUseRelease(
-    Effect.sync(() =>
-      HttpRouter.toWebHandler(
-        answering.pipe(
-          Layer.provide(
-            requireToken(
-              "control plane",
-              callers === undefined ? undefined : Effect.succeed(callers)
-            ).layer
-          ),
-          Layer.provide(HttpServer.layerServices)
-        ),
-        { disableLogger: true }
-      )
-    ),
-    (web) =>
-      Effect.promise(async () => {
-        const response = await web.handler(
-          new Request("http://cbx.test/api/ping", {
-            method: "POST",
-            headers: authorization === undefined ? {} : { authorization },
-          })
-        );
-
-        return { status: response.status, body: await response.text() };
-      }),
-    (web) =>
-      Effect.promise(async () => {
-        await web.dispose();
-      })
-  );
-
-const servedOnce = (callers: Effect.Effect<readonly Caller[]>) =>
+const served = (callers: Effect.Effect<readonly Caller[]> | undefined) =>
   Effect.map(
     Effect.acquireRelease(
       Effect.sync(() =>
@@ -85,17 +49,28 @@ const servedOnce = (callers: Effect.Effect<readonly Caller[]>) =>
           await web.dispose();
         })
     ),
-    (web) => (authorization: string) =>
+    (web) => (authorization?: string) =>
       Effect.promise(async () => {
         const response = await web.handler(
           new Request("http://cbx.test/api/ping", {
             method: "POST",
-            headers: { authorization },
+            headers: authorization === undefined ? {} : { authorization },
           })
         );
 
-        return response.status;
+        return { status: response.status, body: await response.text() };
       })
+  );
+
+const asking = (
+  callers: readonly Caller[] | undefined,
+  authorization?: string
+) =>
+  Effect.scoped(
+    Effect.flatMap(
+      served(callers === undefined ? undefined : Effect.succeed(callers)),
+      (ask) => ask(authorization)
+    )
   );
 
 const callersOf = (...lines: string[]) =>
@@ -190,14 +165,14 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         let taken = yield* callersOf(laptop.line, orbs.line);
-        const ask = yield* servedOnce(Effect.sync(() => taken));
+        const ask = yield* served(Effect.sync(() => taken));
 
-        expect(yield* ask(`Bearer ${token(laptop)}`)).toBe(200);
+        expect((yield* ask(`Bearer ${token(laptop)}`)).status).toBe(200);
 
         taken = yield* callersOf(orbs.line);
 
-        expect(yield* ask(`Bearer ${token(laptop)}`)).toBe(401);
-        expect(yield* ask(`Bearer ${token(orbs)}`)).toBe(200);
+        expect((yield* ask(`Bearer ${token(laptop)}`)).status).toBe(401);
+        expect((yield* ask(`Bearer ${token(orbs)}`)).status).toBe(200);
       }).pipe(Effect.scoped)
   );
 
@@ -226,18 +201,26 @@ layer(NodeServices.layer)((it) => {
         })
     );
 
-    it("finds no caller whose hash differs from the token's only in its last byte", () => {
+    it("finds no caller whose hash differs from the token's in any one bit, at every bit of every byte", () => {
       const right = token(laptop);
       const digest = Buffer.from(hashToken(right));
 
-      const near = Buffer.concat([
-        digest.subarray(0, 31),
-        Buffer.from([(digest.at(31) ?? 0) ^ 1]),
-      ]);
+      for (const index of digest.keys()) {
+        for (let bit = 0; bit < 8; bit += 1) {
+          const near = Buffer.from(digest);
+
+          near.writeUInt8(near.readUInt8(index) ^ (1 << bit), index);
+
+          expect(
+            callerInConstantTime([{ name: "near", hash: near }], right),
+            `byte ${index}, bit ${bit}`
+          ).toBeUndefined();
+        }
+      }
 
       expect(
-        callerInConstantTime([{ name: "near", hash: near }], right)
-      ).toBeUndefined();
+        callerInConstantTime([{ name: "same", hash: digest }], right)?.name
+      ).toBe("same");
     });
   });
 
@@ -269,6 +252,50 @@ layer(NodeServices.layer)((it) => {
         })
     );
   });
+  describe("isTailnetOrLoopback", () => {
+    it("takes the loopback and tailnet ranges, as IPv4, IPv6 and IPv4 mapped into IPv6, and nothing else", () => {
+      const expected: ReadonlyArray<readonly [string, boolean]> = [
+        ["127.0.0.1", true],
+        ["127.255.255.254", true],
+        ["126.255.255.255", false],
+        ["128.0.0.1", false],
+        ["100.64.0.0", true],
+        ["100.127.255.255", true],
+        ["100.63.255.255", false],
+        ["100.128.0.0", false],
+        ["10.0.0.5", false],
+        ["203.0.113.7", false],
+        ["0.0.0.0", false],
+        ["::1", true],
+        ["0:0:0:0:0:0:0:1", true],
+        ["::2", false],
+        ["::", false],
+        ["fd7a:115c:a1e0::5", true],
+        ["fd7a:115c:a1e0:ffff:ffff:ffff:ffff:ffff", true],
+        ["fd7a:115c:a1e1::5", false],
+        ["fd7a:115c:a1df::5", false],
+        ["2001:db8::1", false],
+        ["::ffff:127.0.0.1", true],
+        ["::ffff:7f00:1", true],
+        ["::ffff:100.64.0.1", true],
+        ["::ffff:6440:1", true],
+        ["::ffff:100.128.0.1", false],
+        ["::ffff:10.0.0.5", false],
+        ["::ffff:203.0.113.7", false],
+        ["::ffff:cb00:7107", false],
+        ["::ffff:0.0.0.0", false],
+        ["::127.0.0.1", false],
+        ["localhost", false],
+        ["127.1", false],
+        ["::1%lo", false],
+      ];
+
+      for (const [address, takes] of expected) {
+        expect(isTailnetOrLoopback(address), address).toBe(takes);
+      }
+    });
+  });
+
   describe("tokenUrlRefusal", () => {
     it("lets a token go over https anywhere, and over http only to a tailnet or loopback IP", () => {
       for (const url of [
@@ -298,47 +325,6 @@ layer(NodeServices.layer)((it) => {
         "not a url",
       ]) {
         expect(Client.tokenUrlRefusal(url), url).toBeDefined();
-      }
-    });
-
-    it("takes over http exactly the addresses a server may listen on without tokens, so the two can't drift apart", () => {
-      for (const address of [
-        "127.0.0.1",
-        "127.255.255.254",
-        "128.0.0.1",
-        "126.255.255.255",
-        "100.64.0.0",
-        "100.127.255.255",
-        "100.63.255.255",
-        "100.128.0.0",
-        "10.0.0.5",
-        "203.0.113.7",
-        "0.0.0.0",
-        "::1",
-        "0:0:0:0:0:0:0:1",
-        "::2",
-        "::",
-        "fd7a:115c:a1e0::5",
-        "fd7a:115c:a1e0:ffff:ffff:ffff:ffff:ffff",
-        "fd7a:115c:a1e1::5",
-        "fd7a:115c:a1df::5",
-        "::ffff:127.0.0.1",
-        "::ffff:7f00:1",
-        "::ffff:100.64.0.1",
-        "::ffff:10.0.0.5",
-        "::ffff:203.0.113.7",
-        "2001:db8::1",
-      ]) {
-        const listens =
-          listenRefusal("listen.address", address, { tokens: false }) ===
-          undefined;
-
-        const host = address.includes(":") ? `[${address}]` : address;
-
-        expect(
-          Client.tokenUrlRefusal(`http://${host}:8484`) === undefined,
-          address
-        ).toBe(listens);
       }
     });
 
