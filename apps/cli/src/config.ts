@@ -2,10 +2,15 @@ import {
   describeFileError,
   describeIssues,
   Invalid,
+  readToken,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Config, Effect, FileSystem, Option, Path, Schema } from "effect";
+import type { Redacted } from "effect";
 
-const ClientConfig = Schema.Struct({ server: Schema.String });
+const ClientConfig = Schema.Struct({
+  server: Schema.String,
+  token: Schema.optionalKey(Schema.String),
+});
 
 const decodeConfig = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ClientConfig)
@@ -14,6 +19,7 @@ const decodeConfig = Schema.decodeUnknownEffect(
 export interface LoadedConfig {
   readonly file: string;
   readonly server: string;
+  readonly token?: Redacted.Redacted | undefined;
 }
 
 const defaultPath = Effect.gen(function* () {
@@ -71,5 +77,16 @@ export const loadConfig = (
       )
     );
 
-    return { file, server: config.server };
+    if (config.token === undefined) {
+      return { file, server: config.server };
+    }
+
+    return {
+      file,
+      server: config.server,
+      token: yield* readToken(
+        path.resolve(path.dirname(file), config.token),
+        "caller"
+      ),
+    };
   });

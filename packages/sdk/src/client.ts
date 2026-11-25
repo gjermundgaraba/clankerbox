@@ -12,6 +12,7 @@ import {
   Schedule,
   Schema,
 } from "effect";
+import type { Redacted } from "effect";
 import { HttpClient, HttpClientError, HttpClientRequest } from "effect/http";
 
 import {
@@ -32,12 +33,15 @@ import {
   Unconfirmed,
 } from "./errors.ts";
 import type { ClankerboxError, HostError } from "./errors.ts";
+import { isTailnetOrLoopback } from "./reach.ts";
 import { version, versionHeader } from "./release.ts";
 import { isResting, isUndone } from "./resources.ts";
 import type {
   Build,
   BuildRequest,
   CapacityReport,
+  Minted,
+  Token,
   Checkpoint,
   Executed,
   Host,
@@ -54,6 +58,25 @@ const ServerUrl = Schema.String.check(
     (url: string) => URL.canParse(url) || "a URL, such as http://cbx:8484"
   )
 );
+
+/**
+ * Why a bearer token may not be sent to `url`, or `undefined` when it may: over `https`, or over
+ * `http` only to a tailnet or loopback IP, whose path the tailnet encrypts or never leaves the box.
+ * A name, `localhost` and MagicDNS ones included, is no such IP, so a token goes to it only over `https`.
+ */
+export const tokenUrlRefusal = (url: string): string | undefined => {
+  if (!URL.canParse(url)) {
+    return `${url} is not a URL`;
+  }
+
+  const { protocol, hostname } = new URL(url);
+
+  return protocol === "https:" ||
+    (protocol === "http:" &&
+      isTailnetOrLoopback(hostname.replace(/^\[(?<ip>.*)\]$/u, "$<ip>")))
+    ? undefined
+    : `${url} is neither https nor http to a tailnet or loopback IP, so a token sent there would cross the network in the clear: use https`;
+};
 
 type Actions = typeof actions;
 
@@ -101,6 +124,8 @@ export interface Options {
    * the control plane holds, which reads again as soon as one answers.
    */
   readonly pollEvery?: Duration.Duration | undefined;
+  /** The bearer token this caller presents, for a control plane whose config names callers. */
+  readonly token?: Redacted.Redacted | undefined;
 }
 
 /** A delete of a resource that is already gone is `absent`: done either way. */
@@ -159,6 +184,13 @@ export type EnsureError =
 export interface Interface extends Calls {
   readonly hosts: Effect.Effect<readonly Host[], ErrorOf<"listHosts">>;
   readonly capacity: Effect.Effect<CapacityReport, ErrorOf<"getCapacity">>;
+  readonly tokens: Effect.Effect<readonly Token[], ErrorOf<"listTokens">>;
+  readonly mintToken: (
+    input: Input<"mintToken">
+  ) => Effect.Effect<Minted, ErrorOf<"mintToken">>;
+  readonly revokeToken: (
+    input: Input<"revokeToken">
+  ) => Effect.Effect<Token, ErrorOf<"revokeToken">>;
   readonly templates: Effect.Effect<
     readonly Template[],
     ErrorOf<"listTemplates">
@@ -219,12 +251,20 @@ export class Client extends Context.Service<Client, Interface>()(
   "@gjermundgaraba/clankerbox-sdk/Client"
 ) {}
 
-const serverApi = (url: string) =>
+const serverApi = (url: string, token: Redacted.Redacted | undefined) =>
   ActionHttp.client(Http, {
     baseUrl: url,
-    transformClient: HttpClient.mapRequest(
-      HttpClientRequest.setHeader(versionHeader, version)
-    ),
+    transformClient: HttpClient.mapRequest((request) => {
+      const versioned = HttpClientRequest.setHeader(
+        request,
+        versionHeader,
+        version
+      );
+
+      return token === undefined
+        ? versioned
+        : HttpClientRequest.bearerToken(versioned, token);
+    }),
   });
 
 type ServerApi = Effect.Success<ReturnType<typeof serverApi>>;
@@ -319,7 +359,10 @@ const fromUndeclared = (
       new Internal({
         message: `the control plane's reply didn't decode: ${message}`,
       }),
-    Unauthenticated: (failure) => unexpected(context, failure),
+    Unauthenticated: ({ message }) =>
+      new Invalid({
+        message: `the control plane refused this caller: ${message}; give the client a token clankerbox-server token add or clankerbox token mint printed for this control plane, not revoked`,
+      }),
     Forbidden: (failure) => unexpected(context, failure),
     Unavailable: ({ message }) => new Unavailable({ message, readOnly: true }),
     Unconfirmed: ({ message }) => new Unavailable({ message, readOnly: false }),
@@ -577,7 +620,14 @@ export const make = (
       )
     );
 
-    const api: ServerApi = yield* serverApi(url);
+    const refused =
+      options?.token === undefined ? undefined : tokenUrlRefusal(url);
+
+    if (refused !== undefined) {
+      return yield* new Invalid({ message: `the server URL: ${refused}` });
+    }
+
+    const api: ServerApi = yield* serverApi(url, options?.token);
     const methods: Methods = api;
     const pollEvery = options?.pollEvery ?? defaultPoll;
     const noWait = options?.noWait === true;
@@ -903,6 +953,9 @@ export const make = (
       listMachines: (filter) => send("listMachines", filter ?? {}),
       listCheckpoints: (filter) => send("listCheckpoints", filter ?? {}),
       capacity: send("getCapacity", {}),
+      tokens: send("listTokens", {}),
+      mintToken: (input) => send("mintToken", input, input.name),
+      revokeToken: (input) => send("revokeToken", input, input.name),
       templates: send("listTemplates", {}),
       getMachine: (input) => send("getMachine", input, input.id),
       getCheckpoint: (input) => send("getCheckpoint", input, input.id),

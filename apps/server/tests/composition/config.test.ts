@@ -3,6 +3,7 @@ import { inspect } from "node:util";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
+import { mintToken } from "@gjermundgaraba/clankerbox-sdk/node";
 import { scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import { Effect, Redacted } from "effect";
@@ -31,6 +32,12 @@ const load = (contents: Schema.Json, keys = `${operatorKey}\n`) =>
     yield* write(file, JSON.stringify(contents));
 
     return { file, loaded: loadConfig(file) };
+  });
+
+const guarded = (dir: string) =>
+  Effect.gen(function* () {
+    yield* write(path.join(dir, "cert.pem"), "a certificate");
+    yield* write(path.join(dir, "key.pem"), "a key");
   });
 
 layer(NodeServices.layer)((it) => {
@@ -245,6 +252,129 @@ layer(NodeServices.layer)((it) => {
         expect(errors.map(({ file }) => file === undefined)).not.toContain(
           true
         );
+      })
+  );
+
+  it.effect(
+    "a listen address that is neither tailnet nor loopback is refused unless the config sets both tokens and tls, saying which it lacks",
+    () =>
+      Effect.gen(function* () {
+        const tls = { cert: "cert.pem", key: "key.pem" };
+
+        for (const address of ["203.0.113.7", "0.0.0.0", "::", "10.0.0.5"]) {
+          const listen = { ...config.listen, address };
+
+          for (const [extra, lacks, has] of [
+            [{}, "tokens and tls", undefined],
+            [{ tokens: true }, "needs tls set", "tokens set"],
+            [{ tls }, "needs tokens set", "tls set"],
+            [{ tokens: false, tls }, "needs tokens set", "tls set"],
+          ] as const) {
+            const { file, loaded } = yield* load({
+              ...config,
+              listen,
+              ...extra,
+            });
+
+            yield* guarded(path.dirname(file));
+
+            const error = yield* Effect.flip(loaded);
+
+            expect([error._tag, error.file], address).toStrictEqual([
+              "Invalid",
+              file,
+            ]);
+            expect(error.message, address).toContain(
+              `listen.address ${address} is not a tailnet address`
+            );
+            expect(error.message, address).toContain(lacks);
+
+            if (has !== undefined) {
+              expect(error.message, address).not.toContain(has);
+            }
+          }
+        }
+      })
+  );
+
+  it.effect(
+    "a config with tokens and tls listens anywhere and reads each",
+    () =>
+      Effect.gen(function* () {
+        const { file, loaded } = yield* load({
+          ...config,
+          listen: { ...config.listen, address: "203.0.113.7" },
+          tokens: true,
+          tls: { cert: "cert.pem", key: "key.pem" },
+        });
+
+        yield* guarded(path.dirname(file));
+        const read = yield* loaded;
+
+        expect(read.listen.address).toBe("203.0.113.7");
+        expect(read.tokens).toBe(true);
+        expect(read.tls).toStrictEqual({ cert: "a certificate", key: "a key" });
+      })
+  );
+
+  it.effect(
+    "a host entry's token is read from its file, and a host without one sends none",
+    () =>
+      Effect.gen(function* () {
+        const linux = mintToken("host", "cp");
+
+        const { file, loaded } = yield* load({
+          ...config,
+          hosts: [
+            {
+              id: "linux",
+              url: "http://100.64.0.10:8484",
+              token: "linux.token",
+            },
+            { id: "mac", url: "http://100.64.0.20:8484" },
+          ],
+        });
+
+        yield* write(
+          path.join(path.dirname(file), "linux.token"),
+          `${Redacted.value(linux.token)}\n`
+        );
+
+        const read = yield* loaded;
+
+        expect(
+          read.hosts.map(({ token }) =>
+            token === undefined ? undefined : Redacted.value(token)
+          )
+        ).toStrictEqual([Redacted.value(linux.token), undefined]);
+      })
+  );
+
+  it.effect(
+    "a host entry with a token and an http url a token may not cross is Invalid, naming the host",
+    () =>
+      Effect.gen(function* () {
+        const { file, loaded } = yield* load({
+          ...config,
+          hosts: [
+            {
+              id: "linux",
+              url: "http://203.0.113.8:8484",
+              token: "linux.token",
+            },
+          ],
+        });
+
+        yield* write(
+          path.join(path.dirname(file), "linux.token"),
+          `${Redacted.value(mintToken("host", "cp").token)}\n`
+        );
+
+        const error = yield* Effect.flip(loaded);
+
+        expect([error._tag, error.file]).toStrictEqual(["Invalid", file]);
+        expect(error.message).toContain("host linux has a token");
+        expect(error.message).toContain("use https");
       })
   );
 

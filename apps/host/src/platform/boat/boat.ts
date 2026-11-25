@@ -46,6 +46,7 @@ import type {
   Sighting,
   Target,
 } from "../../runtime.ts";
+import { publishAddress } from "../../settings.ts";
 import type { HostSettings } from "../../settings.ts";
 import {
   KeyedApiUrl,
@@ -385,7 +386,7 @@ const tcp =
 
 export const make = (
   settings: BoatSettings,
-  host: Pick<HostSettings, "id" | "stateDir" | "listen">
+  host: Pick<HostSettings, "id" | "stateDir" | "listen" | "publish">
 ): Effect.Effect<
   Interface,
   HostError | CannotStart,
@@ -993,7 +994,7 @@ export const make = (
       builds: unshared(traits.runtime),
       reach: {
         _tag: "relayed",
-        address: host.listen.address,
+        address: publishAddress(host),
         dial: (machine) => (input) =>
           Stream.unwrap(Effect.map(lastPin(machine), (pin) => tcp(pin)(input))),
       },
@@ -1330,7 +1331,7 @@ export const make = (
 
 export const layer = (
   settings: BoatSettings,
-  host: Pick<HostSettings, "id" | "stateDir" | "listen">
+  host: Pick<HostSettings, "id" | "stateDir" | "listen" | "publish">
 ): Layer.Layer<
   Runtime,
   HostError | CannotStart,

@@ -19,6 +19,7 @@ import {
   builtFrom,
   Conflict,
   Http,
+  Invalid,
   isResting,
   isUndone,
   labelledWith,
@@ -214,6 +215,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
   const execs: ExecRequest[] = [];
   const calls: string[] = [];
   const versions: Array<string | null> = [];
+  const authorizations: Array<string | null> = [];
   const holds: Array<number | undefined> = [];
   let replyLost: "down" | "cut" | undefined;
 
@@ -789,6 +791,9 @@ export const stubServer = (options: StubServerOptions = {}) => {
         "host.capacity",
         Effect.succeed(options.capacity ?? { usage: [], unreported: [] })
       ),
+    listTokens: () => Effect.fail(new Invalid({ message: "keeps no tokens" })),
+    mintToken: () => Effect.fail(new Invalid({ message: "keeps no tokens" })),
+    revokeToken: () => Effect.fail(new Invalid({ message: "keeps no tokens" })),
   });
 
   const routes = ActionHttp.layer(Http, [app]).pipe(
@@ -807,6 +812,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
     execs,
     calls,
     versions,
+    authorizations,
     holds,
     hold: (held: Machine) => {
       machines.set(held.id, held);
@@ -835,6 +841,7 @@ export const stubServer = (options: StubServerOptions = {}) => {
       context?: Context.Context<never>
     ): Promise<Response> => {
       versions.push(request.headers.get(versionHeader));
+      authorizations.push(request.headers.get("authorization"));
 
       const response = await web.handler(request, context);
 

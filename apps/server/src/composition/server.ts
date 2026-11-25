@@ -1,8 +1,7 @@
-import { Server } from "node:http";
-
 import { journal } from "@clankerbox/host-contract/journal";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
+import { closingServer } from "@gjermundgaraba/clankerbox-sdk/node";
 import { Effect, Layer } from "effect";
 import type { FileSystem, Path } from "effect";
 import { HttpRouter } from "effect/http";
@@ -22,6 +21,7 @@ import type { ServerSettings } from "../settings.ts";
 import type { CannotStart, Store } from "../store.ts";
 import type { Tailnet } from "../tailnet.ts";
 import * as Templates from "../templates.ts";
+import type { ServerConfig } from "./config.ts";
 import { routes } from "./routes.ts";
 
 export type ServerLayer = Layer.Layer<
@@ -33,32 +33,23 @@ export type ServerLayer = Layer.Layer<
   HttpServerError.ServeError
 >;
 
-class ClosingEveryConnection extends Server {
-  override close(callback?: (error?: Error) => void) {
-    super.close(callback);
-    this.closeAllConnections();
-
-    return this;
-  }
-}
-
 /**
  * Without the preemptive shutdown, the stop takes the routes off, cuts the requests they run, waits
  * for each to answer 503, and only then closes the server. A connection still open then is owed
- * nothing, so the server closes every one, where Node's own close closes the idle ones and waits on
- * the rest, on one whose request never completes for good.
+ * nothing, so the server, `closingServer`, closes every one.
  */
 export const controlPlaneServer = ({
   listen,
-}: Pick<ServerSettings, "listen">) =>
-  NodeHttpServer.layer(() => new ClosingEveryConnection(), {
+  tls,
+}: Pick<ServerConfig, "listen" | "tls">) =>
+  NodeHttpServer.layer(() => closingServer(tls), {
     host: listen.address,
     port: listen.port,
     disablePreemptiveShutdown: true,
   });
 
 export const serverLayer = (
-  config: ServerSettings,
+  config: ServerSettings & Pick<ServerConfig, "tokens">,
   server: ServerLayer,
   tailnet:
     | Layer.Layer<Tailnet, never, HttpClient.HttpClient>
@@ -73,7 +64,7 @@ export const serverLayer = (
   CannotStart | Internal,
   HttpClient.HttpClient | FileSystem.FileSystem
 > =>
-  HttpRouter.serve(routes, {
+  HttpRouter.serve(routes(config.tokens === true), {
     disableLogger: true,
     middleware: journal,
   }).pipe(

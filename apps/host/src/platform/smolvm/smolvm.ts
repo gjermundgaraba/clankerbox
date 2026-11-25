@@ -56,6 +56,7 @@ import type {
   StateError,
   Target,
 } from "../../runtime.ts";
+import { publishAddress } from "../../settings.ts";
 import type { HostSettings } from "../../settings.ts";
 import { allotted, checkRamBudget, inUse } from "../../usage.ts";
 import { throughBucket } from "../bucket/builds.ts";
@@ -1368,7 +1369,7 @@ export const make = (
 
 export const layer = (
   settings: typeof SmolvmSettings.Type,
-  config: Pick<HostSettings, "stateDir" | "listen">,
+  config: Pick<HostSettings, "stateDir" | "listen" | "publish">,
   lock = boxLock
 ): Layer.Layer<
   Runtime,
@@ -1390,7 +1391,7 @@ export const layer = (
       return yield* make(
         {
           prefix: settings.prefix,
-          publishAddress: config.listen.address,
+          publishAddress: publishAddress(config),
           ramBudgetMib: ramBudget(
             settings.ramBudgetMib,
             Math.floor(totalmem() / mib)

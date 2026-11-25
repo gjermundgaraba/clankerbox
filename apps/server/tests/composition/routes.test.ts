@@ -12,14 +12,20 @@ import {
   RuntimeName,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { MachineSpec } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Exit, Fiber, Layer, Schema } from "effect";
+import { mintToken, readCallers } from "@gjermundgaraba/clankerbox-sdk/node";
+import { scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import * as Action from "@gjermundgaraba/effect-actions/Action";
+import { Effect, Exit, Fiber, Layer, Redacted, Schema } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { expect } from "vite-plus/test";
 
+import { minted } from "../../src/composition/tokens.ts";
+import type { Store } from "../../src/store.ts";
 import {
   copiesRunning,
   clientOf,
   eventually,
+  plane,
   running,
   runtimes,
 } from "../support.ts";
@@ -60,6 +66,33 @@ const createRaw = (url: string, id: string, headers?: Record<string, string>) =>
   post(url, "createMachine", { id, ...spec }, headers);
 
 const decodeInvalid = Schema.decodeUnknownSync(Schema.fromJsonString(Invalid));
+
+const decodeUnauthenticated = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Action.Unauthenticated)
+);
+
+const bearing = (token: Redacted.Redacted) => ({
+  ...versioned(version),
+  authorization: `Bearer ${Redacted.value(token)}`,
+});
+
+const seeded = (store: Store["Service"], name: string) =>
+  Effect.gen(function* () {
+    const { row, token } = yield* minted(name, undefined);
+
+    yield* store.insertToken(row);
+
+    return token;
+  });
+
+const callersFile = (...lines: string[]) =>
+  Effect.gen(function* () {
+    const file = `${yield* scratch}/callers`;
+
+    yield* write(file, `${lines.join("\n")}\n`);
+
+    return file;
+  });
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
@@ -127,6 +160,54 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           bases: [],
         });
         expect(down?.problem).toContain("three");
+      })
+  );
+
+  it.effect(
+    "the control plane sends each host its own token: a host that takes it is up and runs a create, one given another host's token is unreachable and says why, and one with no callers ignores it",
+    () =>
+      Effect.gen(function* () {
+        const linux = mintToken("host", "cp");
+        const mac = mintToken("host", "cp");
+
+        const served = yield* running({
+          hosts: [
+            {
+              id: "linux",
+              options: {
+                callers: yield* readCallers(yield* callersFile(linux.line)),
+              },
+              token: linux.token,
+            },
+            {
+              id: "mac",
+              options: {
+                callers: yield* readCallers(yield* callersFile(mac.line)),
+              },
+              token: linux.token,
+            },
+            { id: "open", token: mac.token },
+          ],
+        });
+
+        const client = yield* clientOf(served.url);
+        const [up, refused, open] = yield* client.hosts;
+
+        expect(up).toMatchObject({ id: "linux", state: "up" });
+        expect(refused).toMatchObject({ id: "mac", state: "unreachable" });
+        expect(refused?.problem).toContain(
+          "host mac refused the control plane's token"
+        );
+        expect(open).toMatchObject({ id: "open", state: "up" });
+
+        yield* client.create("dev", { ...spec, host: "linux" });
+
+        const [machine] = yield* client.listMachines();
+
+        expect(machine?.state).toBe("running");
+        expect(
+          served.hosts[0]!.fake.calls.filter((call) => call.includes("dev"))
+        ).not.toStrictEqual([]);
       })
   );
 
@@ -560,6 +641,237 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(row?.state).toBe("made.settled");
         expect(host!.fake.calls).toContain("exec dev");
+      })
+  );
+  it.effect(
+    "with tokens, every action refuses a request with no token, a stranger's, or a Basic one, at 401 and runs nothing, and serves a token's caller",
+    () =>
+      Effect.gen(function* () {
+        const { url, hosts, store } = yield* running({ tokens: true });
+        const laptop = yield* seeded(store, "laptop");
+        const stranger = mintToken("caller", "laptop").token;
+
+        expect((yield* createRaw(url, "dev", bearing(laptop))).status).toBe(
+          200
+        );
+
+        const row = yield* eventually(
+          store.machines,
+          ([machine]) => machine?.state === "made.settled"
+        );
+
+        const calls = [...hosts[0]!.fake.calls];
+
+        for (const { name } of Http.actions) {
+          for (const [headers, says] of [
+            [versioned(version), /carries none/u],
+            [bearing(stranger), /no caller with this token/u],
+            [
+              {
+                ...versioned(version),
+                authorization: `Basic ${Redacted.value(laptop)}`,
+              },
+              /carries none/u,
+            ],
+          ] as const) {
+            const answer = yield* post(url, name, { id: "dev" }, headers);
+
+            expect(answer.status, name).toBe(401);
+            expect(decodeUnauthenticated(answer.body).message, name).toMatch(
+              says
+            );
+          }
+        }
+
+        expect(yield* store.machines).toStrictEqual(row);
+        expect(hosts[0]!.fake.calls).toStrictEqual(calls);
+      })
+  );
+
+  it.effect("with tokens and none minted yet, every caller is refused", () =>
+    Effect.gen(function* () {
+      const { url } = yield* running({ tokens: true });
+
+      expect(
+        (yield* post(
+          url,
+          "listMachines",
+          {},
+          bearing(mintToken("caller", "x").token)
+        )).status
+      ).toBe(401);
+    })
+  );
+
+  it.effect(
+    "the SDK's client sends its token, and one without a token or with another reads the refusal as Invalid, saying what to fix",
+    () =>
+      Effect.gen(function* () {
+        const { url, store } = yield* running({ tokens: true });
+        const laptop = yield* seeded(store, "laptop");
+
+        const listed = yield* (yield* clientOf(url, {
+          token: laptop,
+        })).listMachines();
+
+        expect(listed).toStrictEqual([]);
+
+        for (const options of [
+          {},
+          { token: mintToken("caller", "laptop").token },
+        ]) {
+          const refused = yield* Effect.flip(
+            (yield* clientOf(url, options)).listMachines()
+          );
+
+          expect(refused._tag).toBe("Invalid");
+          expect(refused.message).toContain(
+            "the control plane refused this caller: this control plane takes"
+          );
+          expect(refused.message).toContain("not revoked");
+        }
+      })
+  );
+
+  it.effect(
+    "a revoked token is refused from its next request, with no restart, and still once the control plane restarts, while the rest are served",
+    () =>
+      Effect.gen(function* () {
+        const planned = yield* plane({ tokens: true });
+        const seeding = yield* planned.start();
+        const admin = yield* seeded(seeding.store, "admin");
+        const orbs = yield* seeded(seeding.store, "orbs");
+
+        yield* seeding.crash;
+
+        const port = Number(new URL(seeding.url).port);
+        const first = yield* planned.start(port);
+
+        expect(
+          (yield* post(first.url, "listMachines", {}, bearing(orbs))).status
+        ).toBe(200);
+
+        const revoked = yield* (yield* clientOf(first.url, {
+          token: admin,
+        })).revokeToken({ name: "orbs" });
+
+        expect(revoked.revokedAt).toBeDefined();
+
+        const refused = yield* post(
+          first.url,
+          "listMachines",
+          {},
+          bearing(orbs)
+        );
+
+        expect(refused.status).toBe(401);
+        expect(decodeUnauthenticated(refused.body).message).toMatch(
+          /no caller with this token/u
+        );
+        expect(
+          (yield* post(first.url, "listMachines", {}, bearing(admin))).status
+        ).toBe(200);
+
+        yield* first.crash;
+
+        const second = yield* planned.start(port);
+
+        yield* Effect.addFinalizer(() => second.crash);
+
+        expect(
+          (yield* post(second.url, "listMachines", {}, bearing(orbs))).status
+        ).toBe(401);
+        expect(
+          (yield* post(second.url, "listMachines", {}, bearing(admin))).status
+        ).toBe(200);
+      })
+  );
+
+  it.effect(
+    "every token mints, lists and revokes tokens, a minted one from its next request, and list shows each with who minted it, what a revoked token minted included",
+    () =>
+      Effect.gen(function* () {
+        const { url, store } = yield* running({ tokens: true });
+        const root = yield* seeded(store, "root");
+        const rootClient = yield* clientOf(url, { token: root });
+        const deputy = yield* rootClient.mintToken({ name: "deputy" });
+
+        const deputyClient = yield* clientOf(url, {
+          token: Redacted.make(deputy.token),
+        });
+
+        const laptop = yield* deputyClient.mintToken({ name: "laptop" });
+
+        const laptopClient = yield* clientOf(url, {
+          token: Redacted.make(laptop.token),
+        });
+
+        yield* laptopClient.mintToken({ name: "phone" });
+        yield* rootClient.revokeToken({ name: "deputy" });
+
+        const listed = yield* laptopClient.tokens;
+
+        expect(
+          listed.map(({ name, mintedBy, revokedAt }) => [
+            name,
+            mintedBy,
+            revokedAt !== undefined,
+          ])
+        ).toStrictEqual([
+          ["root", undefined, false],
+          ["deputy", "root", true],
+          ["laptop", "deputy", false],
+          ["phone", "laptop", false],
+        ]);
+        expect(JSON.stringify(listed)).not.toContain(laptop.token);
+        expect(
+          (yield* Effect.flip(rootClient.mintToken({ name: "deputy" })))._tag
+        ).toBe("Conflict");
+        expect(
+          (yield* Effect.flip(rootClient.revokeToken({ name: "nobody" })))._tag
+        ).toBe("NotFound");
+      })
+  );
+
+  it.effect(
+    "a revoked token can't list, mint or revoke tokens, and changes nothing",
+    () =>
+      Effect.gen(function* () {
+        const { url, store } = yield* running({ tokens: true });
+        const root = yield* seeded(store, "root");
+        yield* seeded(store, "laptop");
+        const rootClient = yield* clientOf(url, { token: root });
+
+        yield* rootClient.revokeToken({ name: "root" });
+
+        const after = yield* store.tokens;
+
+        for (const refused of [
+          yield* Effect.flip(rootClient.tokens),
+          yield* Effect.flip(rootClient.mintToken({ name: "more" })),
+          yield* Effect.flip(rootClient.revokeToken({ name: "laptop" })),
+        ]) {
+          expect(refused._tag).toBe("Invalid");
+          expect(refused.message).toContain("refused this caller");
+        }
+
+        expect(yield* store.tokens).toStrictEqual(after);
+      })
+  );
+
+  it.effect(
+    "without tokens, every caller is served as before, and the token actions say tokens are off",
+    () =>
+      Effect.gen(function* () {
+        const { url } = yield* running();
+        const client = yield* clientOf(url);
+
+        expect(yield* client.listMachines()).toStrictEqual([]);
+
+        const refused = yield* Effect.flip(client.mintToken({ name: "x" }));
+
+        expect(refused._tag).toBe("Invalid");
+        expect(refused.message).toContain("doesn't set tokens");
       })
   );
 });

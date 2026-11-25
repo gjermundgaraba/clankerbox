@@ -3,6 +3,7 @@ import path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { Client } from "@gjermundgaraba/clankerbox-sdk";
+import { mintToken } from "@gjermundgaraba/clankerbox-sdk/node";
 import { scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import {
   checkpoint,
@@ -21,6 +22,7 @@ import {
   Duration,
   Effect,
   Layer,
+  Redacted,
   Runtime,
 } from "effect";
 import { CliOutput } from "effect/cli";
@@ -48,6 +50,7 @@ interface Written {
     Record<string, { cpu: number; ramMib: number; diskGib: number }>
   >;
   readonly snapshotExpiry?: string;
+  readonly token?: string;
 }
 
 const large = { cpu: 8, ramMib: 16_384, diskGib: 80 };
@@ -80,18 +83,31 @@ const server = (options?: StubServerOptions) => {
   return stub;
 };
 
+const secureUrl = "https://cbx.test";
+
 const network = (endpoint: Endpoint) =>
-  transport(new Map([[new URL(serverUrl).origin, endpoint]]));
+  transport(
+    new Map([
+      [new URL(serverUrl).origin, endpoint],
+      [secureUrl, endpoint],
+    ])
+  );
 
 const dispatched = (
   env: Readonly<Record<string, string>>,
   endpoint: Endpoint,
-  written: Written = settings
+  written: Written = settings,
+  beside: Readonly<Record<string, string>> = {}
 ) =>
   Effect.gen(function* () {
-    const file = path.join(yield* scratch, "amp-orbs.json");
+    const dir = yield* scratch;
+    const file = path.join(dir, "amp-orbs.json");
 
     yield* write(file, JSON.stringify(written));
+
+    for (const [name, contents] of Object.entries(beside)) {
+      yield* write(path.join(dir, name), contents);
+    }
 
     const exit = yield* Effect.exit(run(["--config", file]));
     const stdout = yield* TestConsole.logLines;
@@ -129,6 +145,28 @@ layer(NodeServices.layer)((it) => {
       })
     );
   });
+
+  it.effect(
+    "sends the token the settings' token file beside them holds on every call to the control plane",
+    () =>
+      Effect.gen(function* () {
+        const stub = server();
+        const { token } = mintToken("caller", "orbs");
+
+        const result = yield* dispatched(
+          spawnEnv,
+          stub,
+          { ...settings, server: secureUrl, token: "orbs.token" },
+          { "orbs.token": `${Redacted.value(token)}\n` }
+        );
+
+        expect(result.code).toBe(0);
+        expect(stub.authorizations).not.toStrictEqual([]);
+        expect(new Set(stub.authorizations)).toStrictEqual(
+          new Set([`Bearer ${Redacted.value(token)}`])
+        );
+      })
+  );
 
   describe("a spawn", () => {
     it.effect(

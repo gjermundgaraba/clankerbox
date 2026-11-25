@@ -1,10 +1,12 @@
 import {
   describeIssues,
   Invalid,
+  readToken,
   RuntimeName,
   Sizes,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, FileSystem, Schema } from "effect";
+import { Duration, Effect, FileSystem, Path, Schema } from "effect";
+import type { Redacted } from "effect";
 
 /** The orb type a thread gets when it picks none, and whose sizes an unknown type gets too. */
 export const defaultType = "default";
@@ -17,7 +19,8 @@ export const defaultSnapshotExpiry = Duration.days(14);
 /**
  * The dispatch program's settings file. `runtime` is the one every orb's machine is created on,
  * such as `smolvm`, of those that take an image reference. `snapshotExpiry` is a duration such as
- * `"14 days"`.
+ * `"14 days"`. `token` is a file holding the token the control plane takes from it, when its config
+ * names callers, a path relative to the settings file.
  */
 export const Settings = Schema.Struct({
   server: Schema.String,
@@ -25,6 +28,7 @@ export const Settings = Schema.Struct({
   sizes: Schema.Record(Schema.String, Sizes),
   user: Schema.optionalKey(Schema.NonEmptyString),
   snapshotExpiry: Schema.optionalKey(Schema.DurationFromString),
+  token: Schema.optionalKey(Schema.String),
 });
 
 export interface Loaded {
@@ -34,13 +38,14 @@ export interface Loaded {
   readonly fallback: Sizes;
   readonly user: string;
   readonly snapshotExpiry: Duration.Duration;
+  readonly token?: Redacted.Redacted | undefined;
 }
 
 const decode = Schema.decodeUnknownEffect(Schema.fromJsonString(Settings));
 
 export const loadSettings = Effect.fn("loadSettings")(function* (
   file: string
-): Effect.fn.Return<Loaded, Invalid, FileSystem.FileSystem> {
+): Effect.fn.Return<Loaded, Invalid, FileSystem.FileSystem | Path.Path> {
   const fs = yield* FileSystem.FileSystem;
 
   const text = yield* fs
@@ -74,5 +79,16 @@ export const loadSettings = Effect.fn("loadSettings")(function* (
     fallback,
     user: settings.user ?? defaultUser,
     snapshotExpiry: settings.snapshotExpiry ?? defaultSnapshotExpiry,
+    ...(settings.token === undefined
+      ? {}
+      : {
+          token: yield* readToken(
+            (yield* Path.Path).resolve(
+              (yield* Path.Path).dirname(file),
+              settings.token
+            ),
+            "caller"
+          ),
+        }),
   };
 });

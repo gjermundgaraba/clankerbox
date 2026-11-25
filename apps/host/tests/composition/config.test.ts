@@ -2,6 +2,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
+import { mintToken } from "@gjermundgaraba/clankerbox-sdk/node";
 import { scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { Effect } from "effect";
 import type { Schema } from "effect";
@@ -9,6 +10,7 @@ import { expect } from "vite-plus/test";
 
 import { Box } from "../../src/box.ts";
 import { loadConfig } from "../../src/composition/config.ts";
+import { publishAddress } from "../../src/settings.ts";
 import type { ReservedPorts } from "../../src/settings.ts";
 
 const image = "registry.example/ubuntu@sha256:00";
@@ -42,6 +44,19 @@ const load = (contents: Schema.Json, ephemeral = linuxDefault) =>
     yield* write(file, JSON.stringify(contents));
 
     return { file, loaded: onBox(ephemeral)(loadConfig(file)) };
+  });
+
+const tls = { cert: "cert.pem", key: "key.pem" };
+
+const guarded = (dir: string) =>
+  Effect.gen(function* () {
+    const plane = mintToken("host", "cp");
+
+    yield* write(path.join(dir, "callers"), `${plane.line}\n`);
+    yield* write(path.join(dir, "cert.pem"), "a certificate");
+    yield* write(path.join(dir, "key.pem"), "a key");
+
+    return { plane };
   });
 
 layer(NodeServices.layer)((it) => {
@@ -175,44 +190,145 @@ layer(NodeServices.layer)((it) => {
       })
   );
 
-  it.effect("a host listens only on a tailnet or loopback address", () =>
-    Effect.gen(function* () {
-      for (const address of [
-        "127.0.0.1",
-        "127.0.0.2",
-        "::1",
-        "100.64.0.1",
-        "fd7a:115c:a1e0::5",
-      ]) {
-        const { loaded } = yield* load({
+  it.effect(
+    "machine SSH ports are published on publish.address when the config sets one, any IP, and on listen.address otherwise",
+    () =>
+      Effect.gen(function* () {
+        const apart = yield* (yield* load({
           ...config,
-          listen: { address, port: 8484 },
-        });
+          publish: { address: "203.0.113.7" },
+        })).loaded;
 
-        expect(yield* loaded, address).toMatchObject({
-          listen: { address },
-        });
-      }
+        const together = yield* (yield* load(config)).loaded;
 
-      for (const address of [
-        "0.0.0.0",
-        "::",
-        "37.27.63.112",
-        "192.168.1.2",
-        "linux.tailnet",
-        "100.128.0.1",
-      ]) {
-        const { loaded } = yield* load({
+        const named = yield* Effect.flip(
+          (yield* load({ ...config, publish: { address: "linux.example" } }))
+            .loaded
+        );
+
+        expect(publishAddress(apart)).toBe("203.0.113.7");
+        expect(apart.listen.address).toBe("100.64.0.10");
+        expect(publishAddress(together)).toBe("100.64.0.10");
+        expect(named.message).toContain("an IP address");
+      })
+  );
+
+  it.effect(
+    "without callers and tls a host listens only on a tailnet or loopback address, and names what an other address lacks",
+    () =>
+      Effect.gen(function* () {
+        for (const address of [
+          "127.0.0.1",
+          "127.0.0.2",
+          "::1",
+          "100.64.0.1",
+          "fd7a:115c:a1e0::5",
+        ]) {
+          const { loaded } = yield* load({
+            ...config,
+            listen: { address, port: 8484 },
+          });
+
+          expect(yield* loaded, address).toMatchObject({
+            listen: { address },
+          });
+        }
+
+        for (const [address, extra, says] of [
+          ["0.0.0.0", {}, "needs callers and tls set"],
+          ["::", {}, "needs callers and tls set"],
+          ["37.27.63.112", {}, "needs callers and tls set"],
+          ["192.168.1.2", {}, "needs callers and tls set"],
+          ["100.128.0.1", {}, "needs callers and tls set"],
+          ["37.27.63.112", { callers: "callers" }, "needs tls set"],
+          ["37.27.63.112", { tls }, "needs callers set"],
+          ["linux.tailnet", {}, "an IP address"],
+        ] as const) {
+          const { file, loaded } = yield* load({
+            ...config,
+            ...extra,
+            listen: { address, port: 8484 },
+          });
+
+          yield* guarded(path.dirname(file));
+
+          const error = yield* Effect.flip(loaded);
+
+          expect([error._tag, error.file], address).toStrictEqual([
+            "Invalid",
+            file,
+          ]);
+          expect(error.message, address).toContain(says);
+        }
+      })
+  );
+
+  it.effect(
+    "a host that would publish machines' SSH on every address, as a wildcard listen.address without publish.address would, is refused, saying to set publish.address",
+    () =>
+      Effect.gen(function* () {
+        for (const [listen, publish, says] of [
+          ["0.0.0.0", undefined, "set publish.address"],
+          ["::", undefined, "set publish.address"],
+          ["0:0::0", undefined, "set publish.address"],
+          [
+            "37.27.63.112",
+            "0.0.0.0",
+            "publish.address 0.0.0.0 is every address",
+          ],
+          ["37.27.63.112", "::", "publish.address :: is every address"],
+        ] as const) {
+          const { file, loaded } = yield* load({
+            ...config,
+            listen: { address: listen, port: 8484 },
+            ...(publish === undefined ? {} : { publish: { address: publish } }),
+            callers: "callers",
+            tls,
+          });
+
+          yield* guarded(path.dirname(file));
+
+          const error = yield* Effect.flip(loaded);
+
+          expect(error._tag, listen).toBe("Invalid");
+          expect(error.message, listen).toContain(says);
+        }
+
+        const { file, loaded } = yield* load({
           ...config,
-          listen: { address, port: 8484 },
+          listen: { address: "0.0.0.0", port: 8484 },
+          publish: { address: "37.27.63.112" },
+          callers: "callers",
+          tls,
         });
 
-        const error = yield* Effect.flip(loaded);
+        yield* guarded(path.dirname(file));
 
-        expect(error._tag, address).toBe("Invalid");
-        expect(error.message, address).toContain("tailnet address");
-      }
-    })
+        expect(publishAddress(yield* loaded)).toBe("37.27.63.112");
+      })
+  );
+
+  it.effect(
+    "with callers and tls a host listens on any address, and reads both",
+    () =>
+      Effect.gen(function* () {
+        const { file, loaded } = yield* load({
+          ...config,
+          listen: { address: "37.27.63.112", port: 8484 },
+          callers: "callers",
+          tls,
+        });
+
+        const { plane } = yield* guarded(path.dirname(file));
+        const host = yield* loaded;
+
+        expect(host.listen.address).toBe("37.27.63.112");
+        expect(host.callers?.map(({ name }) => name)).toStrictEqual(["cp"]);
+        expect(Buffer.from(host.callers?.[0]?.hash ?? []).toString("hex")).toBe(
+          plane.line.split(" ")[1]
+        );
+        expect(host.tls).toStrictEqual({ cert: "a certificate", key: "a key" });
+      })
   );
 
   it.effect(

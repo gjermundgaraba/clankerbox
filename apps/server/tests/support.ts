@@ -23,6 +23,7 @@ import type {
 } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
+import type { Redacted } from "effect";
 import {
   Context,
   Duration,
@@ -37,6 +38,7 @@ import { HttpServer } from "effect/http";
 
 import { applied } from "../src/chart.ts";
 import * as Checkpoints from "../src/checkpoints.ts";
+import type { ServerConfig } from "../src/composition/config.ts";
 import { controlPlaneServer, serverLayer } from "../src/composition/server.ts";
 import * as Hosts from "../src/hosts.ts";
 import type { Member } from "../src/hosts.ts";
@@ -168,7 +170,7 @@ export interface Plane {
 }
 
 const started = (
-  settings: ServerSettings,
+  settings: ServerSettings & Pick<ServerConfig, "tokens">,
   port: number,
   logger: Logger.Logger<unknown, unknown> | undefined,
   tailnet: Tailnet["Service"] | undefined
@@ -290,6 +292,7 @@ export const plane = (options?: {
     readonly id: string;
     readonly as?: FakeRuntimeName;
     readonly options?: Parameters<typeof startHost>[1];
+    readonly token?: Redacted.Redacted;
   }>;
   readonly draining?: readonly string[];
   readonly recheck?: Duration.Duration;
@@ -300,6 +303,7 @@ export const plane = (options?: {
   readonly tailnet?: Tailnet["Service"];
   readonly logger?: Logger.Logger<unknown, unknown>;
   readonly members?: readonly Member[];
+  readonly tokens?: boolean;
 }) =>
   Effect.gen(function* () {
     const dir = yield* scratch;
@@ -334,11 +338,16 @@ export const plane = (options?: {
       listen: { address: "127.0.0.1", port: 0 },
       stateDir,
       hosts: [
-        ...hosts.map(({ id, url }) => ({
-          id,
-          url,
-          draining: options?.draining?.includes(id) === true,
-        })),
+        ...hosts.map(({ id, url }, index) => {
+          const token = members[index]?.token;
+
+          return {
+            id,
+            url,
+            draining: options?.draining?.includes(id) === true,
+            ...(token === undefined ? {} : { token }),
+          };
+        }),
         ...(options?.members ?? []),
       ],
       recheck: options?.recheck ?? quiet,
@@ -354,7 +363,12 @@ export const plane = (options?: {
       hosts,
       settings,
       start: (port = 0) =>
-        started(settings, port, options?.logger, options?.tailnet),
+        started(
+          { ...settings, tokens: options?.tokens },
+          port,
+          options?.logger,
+          options?.tailnet
+        ),
     };
 
     return plan;

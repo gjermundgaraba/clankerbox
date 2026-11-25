@@ -2,13 +2,15 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
+import { hashToken, mintToken } from "@gjermundgaraba/clankerbox-sdk/node";
 import {
   mkdir,
   write,
   scratch,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import { transport } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
 import type { StubServer } from "@gjermundgaraba/clankerbox-sdk/testing/stub-server";
-import { Effect } from "effect";
+import { Effect, Redacted } from "effect";
 import { afterEach, expect } from "vite-plus/test";
 
 import {
@@ -23,6 +25,8 @@ import {
 const stubs: StubServer[] = [];
 
 const server = serverIn(stubs);
+
+const secureUrl = "https://cbx.test";
 
 const hostsStderr = (config: string) =>
   Effect.map(cli(["hosts", "--config", config]), ({ stderr }) => stderr);
@@ -124,6 +128,67 @@ layer(NodeServices.layer)((it) => {
         expect(yield* hostsStderr(path.join(dir, "absent.json"))).toBe(
           `clankerbox: Invalid: couldn't read client config ${path.join(dir, "absent.json")}: no such file or directory`
         );
+      })
+  );
+  it.effect(
+    "a config's token, a file beside it, is sent as a bearer token on every call, and a file holding no token, a hash, a host's token or a token without its prefix is Invalid saying which",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        const config = path.join(dir, "config.json");
+        const { token } = mintToken("caller", "laptop");
+        const stub = server();
+
+        yield* write(
+          path.join(dir, "laptop.token"),
+          `${Redacted.value(token)}\n`
+        );
+        yield* write(
+          config,
+          JSON.stringify({ server: secureUrl, token: "laptop.token" })
+        );
+
+        const { code } = yield* cli(["hosts", "--config", config], {
+          http: transport(new Map([[secureUrl, stub]])),
+        });
+
+        expect(code).toBe(0);
+        expect(stub.authorizations).not.toStrictEqual([]);
+        expect(new Set(stub.authorizations)).toStrictEqual(
+          new Set([`Bearer ${Redacted.value(token)}`])
+        );
+
+        const needs =
+          "where it needs a caller's token, cbx_ and 64 lowercase hex digits as `clankerbox-server token add` prints";
+
+        for (const [file, text, holds] of [
+          ["raw.token", "laptop\n", "no token"],
+          [
+            "hash.token",
+            `${Buffer.from(hashToken(Redacted.value(token))).toString("hex")}\n`,
+            "a SHA-256, which a callers file or store keeps, not the token",
+          ],
+          [
+            "host.token",
+            `${Redacted.value(mintToken("host", "cp").token)}\n`,
+            "a host's token",
+          ],
+          [
+            "bare.token",
+            `${Redacted.value(token).slice("cbx_".length)}\n`,
+            "a SHA-256, which a callers file or store keeps, not the token",
+          ],
+        ] as const) {
+          yield* write(path.join(dir, file), text);
+          yield* write(
+            config,
+            JSON.stringify({ server: secureUrl, token: file })
+          );
+
+          expect(yield* hostsStderr(config)).toBe(
+            `clankerbox: Invalid: token ${path.join(dir, file)} holds ${holds}, ${needs}`
+          );
+        }
       })
   );
 });

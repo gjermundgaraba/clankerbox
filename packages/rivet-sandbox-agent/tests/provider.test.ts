@@ -1,4 +1,6 @@
+import { once } from "node:events";
 import { readFile } from "node:fs/promises";
+import { createServer } from "node:http";
 
 import {
   Conflict,
@@ -654,6 +656,38 @@ describe("provider", () => {
 
     await expect(creating).rejects.toBeInstanceOf(Invalid);
     await expect(creating).rejects.toThrow("the server URL");
+  });
+
+  it("clankerbox() sends the token it is given as a bearer token", async () => {
+    const seen: Array<string | undefined> = [];
+
+    const listener = createServer((request, response) => {
+      seen.push(request.headers.authorization);
+      response.writeHead(503).end();
+    });
+
+    listener.listen(0, "127.0.0.1");
+    await once(listener, "listening");
+
+    const { port } = Schema.decodeUnknownSync(
+      Schema.Struct({ port: Schema.Finite })
+    )(listener.address(), { onExcessProperty: "ignore" });
+
+    try {
+      await clankerbox({
+        server: `http://127.0.0.1:${port}`,
+        token: "a".repeat(64),
+        from: { machine: "warm" },
+      })
+        .create()
+        .catch(() => undefined);
+    } finally {
+      listener.closeAllConnections();
+      listener.close();
+    }
+
+    expect(seen).not.toStrictEqual([]);
+    expect(new Set(seen)).toStrictEqual(new Set([`Bearer ${"a".repeat(64)}`]));
   });
 
   it("the provider's version is the SDK's, which it is published with", async () => {

@@ -1,4 +1,5 @@
 import {
+  DateTime,
   Effect,
   Predicate,
   Result,
@@ -430,6 +431,86 @@ export const Host = Schema.Struct({
 }).annotate({ identifier: "Host" });
 
 export type Host = typeof Host.Type;
+
+/** A caller's name: a person, laptop or provider. */
+export const callerNameRule =
+  "letters, digits, '.', '_' or '-', at most 64, not starting with '.', '_' or '-'";
+
+/**
+ * The prefix a minted token starts with, by the hop it is for: `caller` for a control plane's
+ * callers, `host` for the control plane calling a host. It lets a person or a secret scanner tell a
+ * token from the SHA-256 it is kept as, and one hop's token from the other's. The prefix is part
+ * of the token, and of what is hashed; nothing checks a request's token by its prefix.
+ */
+export const tokenPrefix = { caller: "cbx_", host: "cbxh_" } as const;
+
+export type TokenKind = keyof typeof tokenPrefix;
+
+const mintedToken = /^(?<prefix>cbxh?_)[0-9a-f]{64}$/u;
+
+/** What `text` is by its form: a token of either hop, a SHA-256 in hex, or none of these. */
+export const secretKind = (text: string): TokenKind | "hash" | undefined => {
+  const prefix = mintedToken.exec(text)?.groups?.["prefix"];
+
+  if (prefix !== undefined) {
+    return prefix === tokenPrefix.host ? "host" : "caller";
+  }
+
+  return /^[0-9a-f]{64}$/u.test(text) ? "hash" : undefined;
+};
+
+/** Why `name` can't name a caller, or `undefined` when it can. */
+export const callerNameRefusal = (name: string): string | undefined => {
+  const held = secretKind(name);
+
+  if (held !== undefined) {
+    return `${name.slice(0, 8)}… is ${held === "hash" ? "a SHA-256" : "a token"}, not a name: give the caller's name, and token add mints its token`;
+  }
+
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(name)
+    ? undefined
+    : `the name ${name} isn't ${callerNameRule}`;
+};
+
+export const CallerName = Schema.String.check(
+  Schema.makeFilter((name: string) => callerNameRefusal(name) ?? true)
+);
+
+/**
+ * A token a control plane takes, by its caller's name, never the token itself. Every token may mint,
+ * list and revoke tokens. `mintedBy` names the token that minted it, none for one minted offline. A
+ * revoked token is refused, and kept, with what it minted, so a list shows them all.
+ */
+export const Token = Schema.Struct({
+  name: CallerName,
+  mintedBy: Schema.optionalKey(CallerName),
+  mintedAt: Schema.DateTimeUtcFromString,
+  revokedAt: Schema.optionalKey(Schema.DateTimeUtcFromString),
+}).annotate({ identifier: "Token" });
+
+export type Token = typeof Token.Type;
+
+/** A token list as rows, a header first, as both the CLI and the offline `token list` print it. */
+export const tokenRows = (tokens: readonly Token[]) => [
+  ["NAME", "MINTED_BY", "MINTED_AT", "REVOKED_AT"],
+  ...tokens.map((token) => [
+    token.name,
+    token.mintedBy ?? "-",
+    DateTime.formatIso(token.mintedAt),
+    token.revokedAt === undefined ? "-" : DateTime.formatIso(token.revokedAt),
+  ]),
+];
+
+export const MintRequest = Schema.Struct({
+  name: CallerName,
+});
+
+export type MintRequest = typeof MintRequest.Type;
+
+/** A token as minted: its row, and the token, which nothing answers again. */
+export const Minted = Schema.Struct({ ...Token.fields, token: Schema.String });
+
+export type Minted = typeof Minted.Type;
 
 /** A resource a host counts, named by its runtime, such as `cpu`, `ramMib` or `runningVms`. */
 export const ResourceName = Schema.String.check(

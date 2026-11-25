@@ -44,6 +44,7 @@ export class CannotStart extends Schema.TaggedError<
   { readonly brand: unique symbol }
 >()("CannotStart", {
   message: Schema.String,
+  held: Schema.optionalKey(Schema.Literal(true)),
 }) {}
 
 const UndefinedFromNull = <S extends Schema.Top>(schema: S) =>
@@ -178,6 +179,14 @@ export type TemplateRow = typeof TemplateFacts.Type & {
   readonly builds: Arr.NonEmptyReadonlyArray<BuildRow>;
 };
 
+export interface TokenRow {
+  readonly name: string;
+  readonly hash: Uint8Array;
+  readonly mintedBy: string | undefined;
+  readonly mintedAt: DateTime.Utc;
+  readonly revokedAt: DateTime.Utc | undefined;
+}
+
 export interface Rows {
   readonly machine: MachineRow;
   readonly checkpoint: CheckpointRow;
@@ -245,6 +254,16 @@ export interface Interface {
     host: string,
     boot: string
   ) => Effect.Effect<void, Internal>;
+  /** Every token ever minted, those revoked included, in the order they were minted. */
+  readonly tokens: Effect.Effect<readonly TokenRow[], Internal>;
+  readonly insertToken: (
+    row: TokenRow
+  ) => Effect.Effect<void, Conflict | Internal>;
+  /** The token's row once revoked, at `at` or when it was revoked first; none for no such token. */
+  readonly revokeToken: (
+    name: string,
+    at: DateTime.Utc
+  ) => Effect.Effect<Option.Option<TokenRow>, Internal>;
 }
 
 export class Store extends Context.Service<Store, Interface>()(

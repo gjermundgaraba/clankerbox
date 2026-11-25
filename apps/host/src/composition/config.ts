@@ -1,3 +1,5 @@
+import { isIP } from "node:net";
+
 import { isImageReference } from "@clankerbox/host-contract/traits";
 import {
   describeFileError,
@@ -6,7 +8,14 @@ import {
   Invalid,
   Port,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Address } from "@gjermundgaraba/clankerbox-sdk/node";
+import type { Caller, Tls } from "@gjermundgaraba/clankerbox-sdk/node";
+import {
+  AnyAddress,
+  listenRefusal,
+  readCallers,
+  readTls,
+  TlsFiles,
+} from "@gjermundgaraba/clankerbox-sdk/node";
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
 
 import { Box } from "../box.ts";
@@ -21,7 +30,8 @@ const MachinePorts = Schema.Struct({ first: Port, last: Port }).check(
 
 const common = {
   id: HostId,
-  listen: Schema.Struct({ address: Address, port: Port }),
+  listen: Schema.Struct({ address: AnyAddress, port: Port }),
+  publish: Schema.optionalKey(Schema.Struct({ address: AnyAddress })),
   stateDir: Schema.String,
   bases: Schema.Record(Schema.String, Schema.String).check(
     Schema.makeFilter((bases) => {
@@ -35,6 +45,8 @@ const common = {
   ),
   machinePorts: Schema.optionalKey(MachinePorts),
   tailnet: Schema.optionalKey(Schema.Boolean),
+  callers: Schema.optionalKey(Schema.String),
+  tls: Schema.optionalKey(TlsFiles),
 };
 
 const HostConfigFile = Schema.Struct({
@@ -46,6 +58,9 @@ type HostConfigFile = typeof HostConfigFile.Type;
 
 export interface HostConfig extends HostSettings {
   readonly runtime: ChosenRuntime;
+  /** The control planes it takes, by token; none, or left out, takes every caller, as before 0.44. */
+  readonly callers?: readonly Caller[] | undefined;
+  readonly tls?: Tls | undefined;
 }
 
 const strictly = { onExcessProperty: "error", errors: "all" } as const;
@@ -97,16 +112,46 @@ const chosenRuntime = (
       );
 };
 
+const isEveryAddress = (address: string): boolean =>
+  isIP(address) === 4
+    ? address === "0.0.0.0"
+    : isIP(address) === 6 && new URL(`http://[${address}]`).hostname === "[::]";
+
 const resolveConfig = (
   decoded: HostConfigFile,
   directory: string
-): Effect.Effect<HostConfig, Invalid, Path.Path | Box> =>
+): Effect.Effect<
+  HostConfig,
+  Invalid,
+  FileSystem.FileSystem | Path.Path | Box
+> =>
   Effect.gen(function* () {
     const path = yield* Path.Path;
+    const relative = (given: string) => path.resolve(directory, given);
     const { ephemeralPorts } = yield* Box;
     const runtime = yield* chosenRuntime(decoded.runtime);
     const machinePorts = decoded.machinePorts ?? defaultMachinePorts;
     const { port } = decoded.listen;
+
+    const refused = listenRefusal("listen.address", decoded.listen.address, {
+      callers: decoded.callers !== undefined,
+      tls: decoded.tls !== undefined,
+    });
+
+    if (refused !== undefined) {
+      return yield* new Invalid({ message: refused });
+    }
+
+    const published = decoded.publish?.address ?? decoded.listen.address;
+
+    if (isEveryAddress(published)) {
+      return yield* new Invalid({
+        message:
+          decoded.publish === undefined
+            ? `listen.address ${published} is every address, which no client can dial, and machines' SSH ports are published on listen.address unless publish.address is set: set publish.address to the address clients reach this host at`
+            : `publish.address ${published} is every address, which no client can dial: set it to the address clients reach this host at`,
+      });
+    }
 
     if (
       machinePorts.first <= ephemeralPorts.last &&
@@ -123,12 +168,18 @@ const resolveConfig = (
       });
     }
 
+    const { callers, tls, ...rest } = decoded;
+
     return {
-      ...decoded,
+      ...rest,
       runtime,
-      stateDir: path.resolve(directory, decoded.stateDir),
+      stateDir: relative(decoded.stateDir),
       bases: new Map(Object.entries(decoded.bases)),
       machinePorts,
+      ...(callers === undefined
+        ? {}
+        : { callers: yield* readCallers(relative(callers)) }),
+      ...(tls === undefined ? {} : { tls: yield* readTls(tls, relative) }),
     };
   });
 

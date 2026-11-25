@@ -296,6 +296,7 @@ export const withClient = <A, R>(
     const client = yield* Client.make(config.server, {
       timeout: Option.getOrUndefined(Option.map(timeout, Duration.seconds)),
       noWait: flags.noWait,
+      token: config.token,
     }).pipe(
       Effect.mapError(
         ({ message }) => new Invalid({ message, file: config.file })

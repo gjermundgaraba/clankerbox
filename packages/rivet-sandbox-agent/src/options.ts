@@ -17,6 +17,8 @@ export type Source =
 export interface Options {
   /** The control plane's URL, as in the client config. */
   readonly server: string;
+  /** The token the control plane takes from this provider, for a control plane whose config names callers. */
+  readonly token?: string | undefined;
   readonly from: Source;
   /** `sandbox` by default. */
   readonly namePrefix?: string | undefined;

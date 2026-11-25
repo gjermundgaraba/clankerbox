@@ -43,6 +43,7 @@ import type {
   Sizes,
   Target,
 } from "../../runtime.ts";
+import { publishAddress } from "../../settings.ts";
 import type { HostSettings } from "../../settings.ts";
 import { KeyedApiUrl, Unanswered } from "../provider-http.ts";
 import { rented } from "../tombstones.ts";
@@ -491,7 +492,7 @@ const gone = (
 
 export const make = (
   settings: AgentSandboxSettings,
-  host: Pick<HostSettings, "id" | "stateDir" | "listen">
+  host: Pick<HostSettings, "id" | "stateDir" | "listen" | "publish">
 ): Effect.Effect<
   Interface,
   HostError | CannotStart,
@@ -1250,7 +1251,7 @@ export const make = (
       builds: unshared(traits.runtime),
       reach: {
         _tag: "relayed",
-        address: host.listen.address,
+        address: publishAddress(host),
         dial: (machine) =>
           Channels.forward(endpoint, { namespace, name: machine.handle }, 22),
       },

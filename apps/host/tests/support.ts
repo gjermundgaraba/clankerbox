@@ -5,6 +5,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
+import type { Caller, Tls } from "@gjermundgaraba/clankerbox-sdk/node";
 import {
   read as readFile,
   scratch,
@@ -75,6 +76,9 @@ export interface HostOptions {
   readonly ports?: PortRange;
   readonly tailnet?: boolean;
   readonly http?: Layer.Layer<HttpClient.HttpClient>;
+  readonly callers?: readonly Caller[];
+  readonly address?: string;
+  readonly tls?: Tls;
 }
 
 export interface ServedHost {
@@ -115,8 +119,11 @@ export const startHostOver = <E>(
 
     yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
 
+    const address = options?.address ?? "127.0.0.1";
+
     const settings: HostSettings = {
       ...hostConfig(stateDir, options?.ports, id),
+      listen: { address, port: options?.port ?? 0 },
       ...(options?.bases === undefined ? {} : { bases: options.bases }),
     };
 
@@ -125,9 +132,13 @@ export const startHostOver = <E>(
         {
           ...settings,
           tailnet: options?.tailnet,
+          callers: options?.callers,
         },
         runtime(settings),
-        loopbackServer(options?.port)
+        hostServer({
+          listen: { address, port: options?.port ?? 0 },
+          tls: options?.tls,
+        })
       ).pipe(
         Layer.provide(options?.http ?? noHttp),
         Layer.provideMerge(

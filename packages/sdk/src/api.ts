@@ -31,12 +31,16 @@ import {
   keptBuilds,
   ListFilter,
   Machine,
+  CallerName,
+  Minted,
+  MintRequest,
   StopRequest,
   ResizeRequest,
   RestoreRequest,
   Sizing,
   Template,
   timedOutExitCode,
+  Token,
 } from "./resources.ts";
 
 /** How long the control plane waits on a host. */
@@ -283,6 +287,29 @@ export const Http = ActionHttp.make(
       description:
         "Read each host's resources, how much of each is in use, and their limits, for an operator. A machine whose state can't be read leaves the rows that count it unread; a host that can't be read is named.",
       success: CapacityReport,
+    }),
+    Action.make("listTokens", {
+      ...read,
+      error: listing,
+      description:
+        "List every token the control plane has minted, revoked ones and those a revoked token minted included, oldest first, never a token itself. A control plane whose config doesn't set tokens answers Invalid.",
+      success: Schema.Array(Token),
+    }),
+    Action.make("mintToken", {
+      ...write,
+      error: [Invalid, Conflict, Internal] as const,
+      description:
+        "Mint a token for a named caller, which the control plane takes from its next request, and answer it once: only its hash is kept. The new token may mint, list and revoke tokens, as every token may. Conflict answers a name a token has, or had before it was revoked. A control plane whose config doesn't set tokens answers Invalid.",
+      input: MintRequest,
+      success: Minted,
+    }),
+    Action.make("revokeToken", {
+      ...write,
+      error: [Invalid, NotFound, Internal] as const,
+      description:
+        "Revoke a token, so the control plane refuses it from the next request, and answer its row. The row stays, so listTokens shows it and what it minted, which stay taken until revoked too. Revoking a revoked token answers it as it was. A control plane whose config doesn't set tokens answers Invalid.",
+      input: Schema.Struct({ name: CallerName }),
+      success: Token,
     }),
   ],
   { prefix: "/api" }

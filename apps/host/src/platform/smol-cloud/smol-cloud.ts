@@ -47,6 +47,7 @@ import type {
   Sizes,
   Target,
 } from "../../runtime.ts";
+import { publishAddress } from "../../settings.ts";
 import type { HostSettings } from "../../settings.ts";
 import {
   KeyedApiUrl,
@@ -292,7 +293,7 @@ const stagedStdin = () =>
 
 export const make = (
   settings: SmolCloudSettings,
-  host: Pick<HostSettings, "id" | "stateDir" | "listen">,
+  host: Pick<HostSettings, "id" | "stateDir" | "listen" | "publish">,
   api: Api.Api,
   sockets: Socket.WebSocketConstructor["Service"]
 ): Effect.Effect<Interface, Internal, FileSystem.FileSystem | Scope.Scope> =>
@@ -921,7 +922,7 @@ export const make = (
       prepares: "always",
       reach: {
         _tag: "relayed",
-        address: host.listen.address,
+        address: publishAddress(host),
         dial: tunnel(api, sockets),
       },
       admission: undefined,

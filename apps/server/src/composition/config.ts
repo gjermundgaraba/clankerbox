@@ -5,8 +5,16 @@ import {
   Invalid,
   Port,
   readAuthorizedKeys,
+  readToken,
+  Client,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Address } from "@gjermundgaraba/clankerbox-sdk/node";
+import type { Tls } from "@gjermundgaraba/clankerbox-sdk/node";
+import {
+  AnyAddress,
+  listenRefusal,
+  readTls,
+  TlsFiles,
+} from "@gjermundgaraba/clankerbox-sdk/node";
 import { Effect, FileSystem, Path, Schema } from "effect";
 
 import { TailnetSettings } from "../platform/tailscale.ts";
@@ -18,9 +26,11 @@ import {
 import type { ServerSettings } from "../settings.ts";
 
 const ServerConfigFile = Schema.Struct({
-  listen: Schema.Struct({ address: Address, port: Port }),
+  listen: Schema.Struct({ address: AnyAddress, port: Port }),
   stateDir: Schema.String,
   authorizedKeys: Schema.String,
+  tokens: Schema.optionalKey(Schema.Boolean),
+  tls: Schema.optionalKey(TlsFiles),
   hookTimeout: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
   tailnet: Schema.optionalKey(TailnetSettings),
   hosts: Schema.Array(
@@ -28,6 +38,7 @@ const ServerConfigFile = Schema.Struct({
       id: HostId,
       url: Schema.String,
       draining: Schema.optionalKey(Schema.Boolean),
+      token: Schema.optionalKey(Schema.String),
     })
   ).check(
     Schema.makeFilter((hosts) => {
@@ -45,7 +56,23 @@ const decodeConfig = Schema.decodeUnknownEffect(
 
 export interface ServerConfig extends ServerSettings {
   readonly tailnet?: TailnetSettings | undefined;
+  /** Whether it takes only callers whose token its store holds; unset takes every caller, as before 0.44. */
+  readonly tokens?: boolean | undefined;
+  readonly tls?: Tls | undefined;
 }
+
+const refuseTokenUrl = (file: string, id: string, url: string) => {
+  const refused = Client.tokenUrlRefusal(url);
+
+  return refused === undefined
+    ? Effect.void
+    : Effect.fail(
+        new Invalid({
+          message: `server config ${file}: host ${id} has a token, and its url ${refused}`,
+          file,
+        })
+      );
+};
 
 export const loadConfig = (
   file: string
@@ -81,14 +108,39 @@ export const loadConfig = (
     const relative = (given: string) =>
       path.resolve(path.dirname(resolved), given);
 
+    const refused = listenRefusal("listen.address", decoded.listen.address, {
+      tokens: decoded.tokens === true,
+      tls: decoded.tls !== undefined,
+    });
+
+    if (refused !== undefined) {
+      return yield* new Invalid({
+        message: `server config ${resolved}: ${refused}`,
+        file: resolved,
+      });
+    }
+
     return {
       listen: decoded.listen,
       stateDir: relative(decoded.stateDir),
-      hosts: decoded.hosts.map(({ id, url, draining }) => ({
-        id,
-        url,
-        draining: draining === true,
-      })),
+      hosts: yield* Effect.forEach(
+        decoded.hosts,
+        ({ id, url, draining, token }) =>
+          Effect.map(
+            token === undefined
+              ? Effect.undefined
+              : Effect.andThen(
+                  refuseTokenUrl(resolved, id, url),
+                  readToken(relative(token), "host")
+                ),
+            (read) => ({
+              id,
+              url,
+              draining: draining === true,
+              ...(read === undefined ? {} : { token: read }),
+            })
+          )
+      ),
       recheck: defaultRecheck,
       failedRowsLast: defaultFailedRowsLast,
       authorizedKeys: yield* readAuthorizedKeys(
@@ -96,5 +148,9 @@ export const loadConfig = (
       ),
       hookTimeoutSeconds: decoded.hookTimeout ?? defaultHookTimeoutSeconds,
       ...(decoded.tailnet === undefined ? {} : { tailnet: decoded.tailnet }),
+      ...(decoded.tokens === true ? { tokens: true } : {}),
+      ...(decoded.tls === undefined
+        ? {}
+        : { tls: yield* readTls(decoded.tls, relative) }),
     };
   });
