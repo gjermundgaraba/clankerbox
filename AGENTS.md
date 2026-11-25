@@ -397,8 +397,8 @@ the run.
   checkpoint's instance gets no tombstone: a `start` and a `remove` carry
   `keep`, and the runtime prunes the machine's checkpoints no row keeps.
   Nothing else deletes for want of a claim, so a wiped or second store deletes
-  nothing of another store's. `docs/design/control-plane.md`, How an operation
-  works, holds the rest: how long a tombstone lasts, and what it leaves.
+  nothing of another store's. The README's Leftovers at a provider holds the
+  rest: how long a tombstone lasts, and what it leaves.
 - **Leases are rows.** They are the `operations` table: what changes a resource
   owns it, what copies or reads it shares it, taken in the write that begins the
   operation, and a lease that refuses leaves that write undone. They survive a
