@@ -29,9 +29,45 @@ const code = (text: string) =>
     .replaceAll(/^\s*#(?!!).*$/gmu, "")
     .replaceAll(/^\s*\\\*.*$/gmu, "");
 
+const body = (text: string, open: number) => {
+  let depth = 0;
+
+  for (let index = open; index < text.length; index += 1) {
+    if (text[index] === "{") {
+      depth += 1;
+    } else if (text[index] === "}") {
+      depth -= 1;
+
+      if (depth === 0) {
+        return text.slice(open, index);
+      }
+    }
+  }
+
+  return text.slice(open);
+};
+
 const declaresMember = (text: string, owner: string, member: string) =>
-  new RegExp(`\\b${owner}\\b`, "u").test(text) &&
-  new RegExp(`^\\s*(?:readonly\\s+)?${member}\\??\\s*[:(]`, "mu").test(text);
+  [
+    ...text.matchAll(
+      new RegExp(`\\b(?:interface|class|type|const)\\s+${owner}\\b[^{]*`, "gu")
+    ),
+  ].some(({ index, 0: head }) =>
+    new RegExp(`^\\s*(?:readonly\\s+)?${member}\\??\\s*[:(]`, "mu").test(
+      body(text, index + head.length)
+    )
+  );
+
+const flags = (texts: readonly string[]) =>
+  new Set(
+    texts.flatMap((text) =>
+      [
+        ...text.matchAll(
+          /Flag\.\w+\("(?<flag>[a-z][\w-]*)"|["'`]--(?<literal>[a-z][\w-]*)/gu
+        ),
+      ].map(({ groups }) => groups?.["flag"] ?? groups?.["literal"] ?? "")
+    )
+  );
 
 const base = git("merge-base", process.argv[2] ?? "origin/main", "HEAD").trim();
 const tracked = lines(git("ls-files"));
@@ -44,6 +80,11 @@ const sources = tracked
 const now = new Set(sources.flatMap(words));
 const before = changed.filter(isSource).map((file) => code(shown(base, file)));
 const gone = new Set(before.flatMap(words).filter((word) => !now.has(word)));
+
+const goneFlags = new Set(
+  [...flags(before)].filter((flag) => !flags(sources).has(flag))
+);
+
 const goneFiles = changed.filter((file) => !tracked.includes(file));
 
 const memberGone = (span: string) => {
@@ -78,12 +119,14 @@ for (const doc of tracked.filter((file) => file.endsWith(".md"))) {
     for (const { groups } of line.matchAll(/`(?<span>[^`\n]+)`/gu)) {
       const { span = "" } = groups ?? {};
 
+      const flag = /^--(?<flag>[a-z][\w-]*)/u.exec(span)?.groups?.["flag"];
+
       const name =
-        /^(?:--[a-z][\w-]*|[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)(?=\(|$)/u.exec(
-          span
-        )?.[0] ?? "";
+        /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*(?=\(|$)/u.exec(span)?.[0] ??
+        "";
 
       const cited =
+        (flag !== undefined && goneFlags.has(flag) ? `--${flag}` : undefined) ??
         words(name).find((word) => gone.has(word)) ??
         goneFiles.find((file) => file === span || file.endsWith(`/${span}`)) ??
         (memberGone(span) ? span : undefined);
