@@ -175,6 +175,11 @@ Each line names where the code holds it and how to check it again.
   stop, delete, resize or capture, is `bounded` there, 10 minutes for
   all its requests and polls, and runs whole: a later request cuts the step
   short only once it has ended.
+- `GET /sandboxes` answers `lastReboot: null` for every sandbox, and only a
+  sandbox's own record holds its mark; the list's `updatedAt` moves on each
+  reboot in place, after the record holds the new mark (measured on the
+  operator's account on 2026-11-21). (`api.ts`'s `OwnSandbox`, `boat.ts`'s
+  read of several machines; the live suite's reboot test.)
 - The apt Tailscale package enables its own `tailscaled` unit on boat's
   systemd guest, which the linux base script disables. (The live suite's
   tailnet findings.)
