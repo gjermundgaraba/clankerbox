@@ -432,7 +432,6 @@ export const Host = Schema.Struct({
 
 export type Host = typeof Host.Type;
 
-/** A caller's name: a person, laptop or provider. */
 export const callerNameRule =
   "letters, digits, '.', '_' or '-', at most 64, not starting with '.', '_' or '-'";
 

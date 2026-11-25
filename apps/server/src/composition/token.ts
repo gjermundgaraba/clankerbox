@@ -22,11 +22,6 @@ import type { TokenRow } from "../store.ts";
 import { loadConfig } from "./config.ts";
 import { minted, tokenOf } from "./tokens.ts";
 
-/**
- * Mints a token for `name`, appends its line to the callers file, made if absent, and answers the
- * token, which nothing keeps. A name already in the file, or a file that doesn't read as one, is
- * `Invalid` and changes nothing. It appends rather than rewrites, so adds run at once keep each line.
- */
 export const addCaller = (
   callers: string,
   name: string
@@ -106,7 +101,6 @@ const stoppedStore = (config: string, made: "made if absent" | "must exist") =>
     );
   });
 
-/** Mints a token for `name` into a stopped control plane's store, and answers it. */
 export const addToken = (config: string, name: string) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -125,13 +119,11 @@ export const addToken = (config: string, name: string) =>
     })
   );
 
-/** Every token in a stopped control plane's store, revoked ones included. */
 export const listTokensOffline = (config: string) =>
   Effect.scoped(
     Effect.flatMap(stoppedStore(config, "must exist"), (store) => store.tokens)
   );
 
-/** Revokes a token in a stopped control plane's store, and answers its row. */
 export const revokeTokenOffline = (config: string, name: string) =>
   Effect.scoped(
     Effect.gen(function* () {

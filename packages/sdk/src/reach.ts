@@ -70,12 +70,6 @@ const ipv6 = (text: string): readonly number[] | undefined => {
 const v4Reaches = ([a, b = 0]: readonly number[]): boolean =>
   a === 127 || (a === 100 && (b & 0xc0) === 64);
 
-/**
- * Whether `address`, an IP as text, IPv6 without brackets, is on the tailnet or the loopback: the one
- * rule both where a server may listen without tokens and where a token may go over `http`. An IPv4
- * address mapped into IPv6 counts as that IPv4 address; a name, `localhost` included, is no address.
- * It reads the text itself, so `.` never loads `node:net`.
- */
 export const isTailnetOrLoopback = (address: string): boolean => {
   const four = ipv4(address);
 
