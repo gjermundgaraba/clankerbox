@@ -76,9 +76,7 @@ Tests pass their own.
   it proves only that the code does what we believed. A signal read from a
   provider's undocumented behaviour, such as boat's reboot mark, which its list
   omits and its own record holds, is proven only by driving the real adapter
-  against the account and replaying what it read through the real chart: that is
-  how a boat machine's first reboot in place was found uncounted, which every
-  fake test had passed.
+  against the account and replaying what it read through the real chart.
 
 ## Weakenings the auth guards must refuse
 
@@ -104,10 +102,8 @@ Tests pass their own.
   suites that serve a host or a control plane or run scripts in real time, which
   pass `excludeTestServices: true`. Effect is run by hand only where
   `fence/no-manual-run` allows it.
-- **Property and model tests** cover IDs, units, the RAM budget, recipe
-  packing, the rules of runtime traits, and the store's `advance` and leases, as models checked against
-  SQLite; a chart, small enough, is checked with every event from every leaf.
-  Each states what is right without calling the code under test.
+- **Property and model tests** state what is right without calling the code
+  under test. A chart, small enough, is checked with every event from every leaf.
 - **A chart is pure and runs inside the write.** `applied` runs `transition`
   once inside the transaction of `store.advance`, so no snapshot outlives the
   write. A chart has no `invoke`, no timers and no actors, and what it needs
@@ -127,7 +123,7 @@ Tests pass their own.
   on to a host and got nothing it could read fails `Unconfirmed`. Choose by what
   the code can promise at that point, never by what sounds safer: a site that
   can't tell takes `Unconfirmed`. The SDK's `Unavailable { readOnly }` is the
-  client's reading of both and is declared by no action, as 0.34 of
+  client's reading of both and is declared by no action, as
   effect-actions refuses a second error of that tag.
 - **A step is a whole operation on a host.** The write that enters a leaf with a
   `step` records an operation in the store with its leases, and the loop then
@@ -169,26 +165,13 @@ Tests pass their own.
   `oxlint.config.ts` for what each folder may import.
 - **A removal removes its promises.** Taking out a behaviour includes the
   README, JSDoc and skill lines that describe it: grep for the concept's
-  name, such as "resume", before calling the removal done. Twice the code went
-  cleanly and the prose kept promising what was gone, until a reviewer found it.
+  name, such as "resume", before calling the removal done.
   CI's `.github/stale-doc-names.ts` fails a change that removes a name from the
   code while a Markdown line it left alone still cites it in backticks; a fact
   told only in words, with no name, is still yours to find.
 
 Removable packages are not a practice here: the provider package is optional,
 but CI publishes it beside the SDK.
-
-## Rules and what enforces them
-
-| Rule                                                        | Enforced by                                                                 |
-| ----------------------------------------------------------- | --------------------------------------------------------------------------- |
-| Each package imports only what its boundary allows          | the lint fence, `fence/allowed-imports` in `oxlint.config.ts`               |
-| A chart is pure; Effect is run by hand only at the entries  | `fence/no-impure`, `fence/no-manual-run`                                    |
-| No prose comments                                           | `clanker/no-prose-comments`, from `@clanker-stuff/oxlint-config`            |
-| A removed name leaves no doc line citing it                 | `.github/stale-doc-names.ts`, in CI's `check` job                           |
-| Each known weakening of the auth guards fails its named test | `packages/sdk/tests/weakenings.ts`, CI's `weakenings` job                  |
-| A shell comment states only a platform or upstream fact     | review alone                                                                |
-
 
 ## Effect
 
@@ -198,7 +181,7 @@ Before writing or reviewing Effect code, read `node_modules/effect/AGENTS.md` in
 
 `vp check` formats, lints and type-checks the repository; `vp check --fix` applies the fixes. It reads `oxlint.config.ts` and `oxfmt.config.ts` through `vite.config.ts`. Format is Ultracite's, and skips `AGENTS.md`, whose Vite+ block `vp config` rewrites on every install. `vp install` patches Oxlint with the Effect rules through the root `prepare` script.
 
-Lint comes from `@clanker-stuff/oxlint-config` through `config()` in `oxlint.config.ts`, with this repository's overrides there. Fix the code rather than add a lint exception. There are no inline `oxlint-disable` comments.
+Lint comes from `@clanker-stuff/oxlint-config` through `config()` in `oxlint.config.ts`, with this repository's overrides there. Fix the code rather than add a lint exception. There are no inline `oxlint-disable` comments, and `clanker/no-prose-comments` refuses prose comments.
 
 ## Dependencies
 
