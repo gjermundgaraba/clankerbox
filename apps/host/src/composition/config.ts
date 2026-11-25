@@ -58,7 +58,6 @@ type HostConfigFile = typeof HostConfigFile.Type;
 
 export interface HostConfig extends HostSettings {
   readonly runtime: ChosenRuntime;
-  /** The control planes it takes, by token; none, or left out, takes every caller, as before 0.44. */
   readonly callers?: readonly Caller[] | undefined;
   readonly tls?: Tls | undefined;
 }

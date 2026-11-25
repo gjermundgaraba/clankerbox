@@ -25,7 +25,6 @@ export interface Member {
   readonly id: string;
   readonly url: string;
   readonly draining: boolean;
-  /** The token the host takes from this control plane, when its config names callers. */
   readonly token?: Redacted.Redacted | undefined;
 }
 
