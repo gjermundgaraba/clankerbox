@@ -487,9 +487,23 @@ the run.
   README, JSDoc and `docs/` lines that describe it: grep for the concept's
   name, such as "resume", before calling the removal done. Twice the code went
   cleanly and the prose kept promising what was gone, until a reviewer found it.
+  CI's `.github/stale-doc-names.ts` fails a change that removes a name from the
+  code while a Markdown line it left alone still cites it in backticks; a fact
+  told only in words, with no name, is still yours to find.
 
 Removable packages are not a practice here: the provider package is optional,
 but CI publishes it beside the SDK.
+
+## Rules and what enforces them
+
+| Rule                                                        | Enforced by                                                                 |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Each package imports only what its boundary allows          | the lint fence, `fence/allowed-imports` in `oxlint.config.ts`               |
+| A chart is pure; Effect is run by hand only at the entries  | `fence/no-impure`, `fence/no-manual-run`                                    |
+| No prose comments                                           | `clanker/no-prose-comments`, from `@clanker-stuff/oxlint-config`            |
+| A removed name leaves no doc line citing it                 | `.github/stale-doc-names.ts`, in CI's `check` job                           |
+| Each known weakening of the auth guards fails its named test | `packages/sdk/tests/weakenings.ts`, CI's `weakenings` job                  |
+| A shell comment states only a platform or upstream fact     | review alone                                                                |
 
 ## Effect
 

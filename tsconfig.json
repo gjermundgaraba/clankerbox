@@ -1,4 +1,9 @@
 {
   "extends": "./tsconfig.base.json",
-  "include": ["vite.config.ts", "oxlint.config.ts", "oxfmt.config.ts"]
+  "include": [
+    ".github/*.ts",
+    "vite.config.ts",
+    "oxlint.config.ts",
+    "oxfmt.config.ts"
+  ]
 }

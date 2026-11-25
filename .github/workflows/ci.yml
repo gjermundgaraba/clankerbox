@@ -33,6 +33,10 @@ jobs:
           cache-toolchain: true
           run-install: false
       - run: vp install --frozen-lockfile
+      - name: Check that no doc still cites a name this change removed
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before || 'HEAD^' }}
+        run: node .github/stale-doc-names.ts "$BASE"
       - name: Install the guest shells the host's tests run the launcher under
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh busybox-static
       - run: vp run ready
