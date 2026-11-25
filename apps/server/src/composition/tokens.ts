@@ -14,7 +14,6 @@ export const tokenOf = (row: TokenRow): Token => ({
   ...(row.revokedAt === undefined ? {} : { revokedAt: row.revokedAt }),
 });
 
-/** The callers whose tokens the store holds unrevoked, read anew at each request. */
 export const unrevoked = (store: Store["Service"]) =>
   store.tokens.pipe(
     Effect.map((rows): readonly Caller[] =>
@@ -23,7 +22,6 @@ export const unrevoked = (store: Store["Service"]) =>
     Effect.orDie
   );
 
-/** A token row for a new caller's token, and the token. */
 export const minted = (name: string, mintedBy: string | undefined) =>
   Effect.map(DateTime.now, (mintedAt) => {
     const { token, hash } = mintToken("caller", name);

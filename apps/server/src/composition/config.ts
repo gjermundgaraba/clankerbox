@@ -56,7 +56,6 @@ const decodeConfig = Schema.decodeUnknownEffect(
 
 export interface ServerConfig extends ServerSettings {
   readonly tailnet?: TailnetSettings | undefined;
-  /** Whether it takes only callers whose token its store holds; unset takes every caller, as before 0.44. */
   readonly tokens?: boolean | undefined;
   readonly tls?: Tls | undefined;
 }

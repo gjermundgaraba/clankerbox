@@ -8,7 +8,6 @@ import {
 import { Duration, Effect, FileSystem, Path, Schema } from "effect";
 import type { Redacted } from "effect";
 
-/** The orb type a thread gets when it picks none, and whose sizes an unknown type gets too. */
 export const defaultType = "default";
 
 /** The image's login user, who runs `amp orb bootstrap`: `user` in Amp's own image. */

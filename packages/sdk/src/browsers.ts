@@ -16,11 +16,6 @@ const encodeInvalid = Schema.encodeSync(Invalid);
  * and could otherwise act on every machine. A browser sends `Origin` with every POST, which every
  * action is, and no caller of ours does.
  *
- * It holds whether or not the server authenticates its callers. With `tokens` on the control plane
- * or `callers` on a host, `requireToken` refuses, after this, a request without a token it takes,
- * and a page can't send a caller's token unless it holds one. Without them nothing authenticates a
- * caller, so this refusal is all that keeps such a page off the server.
- *
  * That page's `Origin` names the `Host` it sent, so refusing only an `Origin` that differs from
  * `Host` would leave it open. `Host` is left unchecked: a server is reached by its IP, by a MagicDNS
  * name or through a proxy, so an allowlist of names would need config, and refusing `Origin`

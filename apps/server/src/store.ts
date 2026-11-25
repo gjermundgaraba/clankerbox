@@ -254,12 +254,10 @@ export interface Interface {
     host: string,
     boot: string
   ) => Effect.Effect<void, Internal>;
-  /** Every token ever minted, those revoked included, in the order they were minted. */
   readonly tokens: Effect.Effect<readonly TokenRow[], Internal>;
   readonly insertToken: (
     row: TokenRow
   ) => Effect.Effect<void, Conflict | Internal>;
-  /** The token's row once revoked, at `at` or when it was revoked first; none for no such token. */
   readonly revokeToken: (
     name: string,
     at: DateTime.Utc
