@@ -300,3 +300,5 @@ The fake stands in for the VM, so this proves none of:
 Proving those takes a Linux host with KVM and the pinned smolvm
 (`bump-smolvm`), or a Mac with Tart (`bump-tart`), running
 `clankerbox-host --config` behind `clankerbox-server --config`.
+Two copy paths have never run there: smolvm's copy of a stopped machine
+(issue #90) and Tart's copy of a running machine (issue #91).

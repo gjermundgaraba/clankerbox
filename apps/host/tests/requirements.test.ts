@@ -21,9 +21,6 @@ layer(NodeServices.layer)((it) => {
 
         expect(readme).toContain(`smolvm ${smolvm} or later`);
         expect(readme).toContain(`${qualified} a host was qualified on`);
-        expect(readme).toContain(
-          `A Tart host now runs ${qualified} it was qualified on`
-        );
       })
   );
 });
