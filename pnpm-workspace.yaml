@@ -10,7 +10,7 @@ catalog:
   "@clanker-stuff/oxlint-config": 0.5.1
   "@effect/tsgo": 0.67.7
   "@effect/vitest": 4.1.6
-  "@gjermundgaraba/effect-actions": 0.38.0
+  "@gjermundgaraba/effect-actions": 0.39.0
   "@types/node": 26.6.6
   effect: 4.1.6
   sandbox-agent: 0.5.7
