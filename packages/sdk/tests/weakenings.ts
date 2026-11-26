@@ -471,10 +471,17 @@ for (const { package: pkg, test } of new Map(
     (name) => !passed.some((fullName) => fullName.includes(name))
   );
 
-  if (run.error !== undefined || run.status !== 0 || unpassed.length > 0) {
+  const problems = [
+    ...(run.error === undefined && run.status === 0
+      ? []
+      : [run.error?.message ?? `exit ${run.status ?? run.signal}`]),
+    ...(unpassed.length > 0 ? [`none passed for ${unpassed.join("; ")}`] : []),
+  ];
+
+  if (problems.length > 0) {
     console.error(`${run.stdout ?? ""}${run.stderr ?? ""}`);
     console.error(
-      `${pkg}/${test} doesn't pass the tests its weakenings name on this checkout, so they can't be judged by them: ${run.error?.message ?? `exit ${run.status ?? run.signal}`}${unpassed.length > 0 ? `; none passed for ${unpassed.join("; ")}` : ""}`
+      `${pkg}/${test} doesn't pass the tests its weakenings name on this checkout, so they can't be judged by them: ${problems.join("; ")}`
     );
     process.exit(1);
   }
