@@ -1,5 +1,16 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { stripVTControlCharacters } from "node:util";
@@ -319,19 +330,31 @@ const checkout = path.resolve(process.argv[2] ?? ".");
 const survived: string[] = [];
 let interrupted = false;
 
-const edited = [...new Set(weakenings.map((w) => w.file))];
+const listed = spawnSync(
+  "git",
+  [
+    "ls-files",
+    "-z",
+    "--cached",
+    "--others",
+    "--exclude-standard",
+    "--deduplicate",
+  ],
+  { cwd: checkout, encoding: "utf8" }
+);
 
-const dirty = spawnSync("git", ["status", "--porcelain", "--", ...edited], {
-  cwd: checkout,
-  encoding: "utf8",
-});
-
-if (dirty.error !== undefined || dirty.status !== 0 || dirty.stdout !== "") {
+if (listed.error !== undefined || listed.status !== 0) {
   console.error(
-    `refusing to plant into files git doesn't show clean, as a run cut short could have left a weakening there: ${dirty.error?.message ?? (dirty.stdout || dirty.stderr).trim()}`
+    `couldn't list the checkout's files to copy: ${listed.error?.message ?? listed.stderr.trim()}`
   );
   process.exit(1);
 }
+
+const copy = mkdtempSync(path.join(tmpdir(), "clankerbox-weakenings-"));
+
+process.on("exit", () => {
+  rmSync(copy, { recursive: true, force: true });
+});
 
 process.on("SIGINT", () => {
   interrupted = true;
@@ -341,9 +364,39 @@ process.on("SIGTERM", () => {
   interrupted = true;
 });
 
+for (const name of listed.stdout.split("\0")) {
+  const from = path.join(checkout, name);
+  const to = path.join(copy, name);
+  const found = lstatSync(from, { throwIfNoEntry: false });
+
+  if (name !== "" && found !== undefined) {
+    mkdirSync(path.dirname(to), { recursive: true });
+
+    if (found.isSymbolicLink()) {
+      symlinkSync(readlinkSync(from), to);
+    } else {
+      copyFileSync(from, to);
+    }
+  }
+}
+
+const installed = spawnSync(
+  "vp",
+  ["install", "--frozen-lockfile", "--offline"],
+  { cwd: copy, encoding: "utf8" }
+);
+
+if (installed.error !== undefined || installed.status !== 0) {
+  console.error(`${installed.stdout ?? ""}${installed.stderr ?? ""}`);
+  console.error(
+    `couldn't install the copy's dependencies from the store, which a vp install in the checkout fills: ${installed.error?.message ?? `exit ${installed.status ?? installed.signal}`}`
+  );
+  process.exit(1);
+}
+
 const vpTest = (pkg: string, test: string) => {
   const run = spawnSync("vp", ["test", test], {
-    cwd: path.join(checkout, pkg),
+    cwd: path.join(copy, pkg),
     encoding: "utf8",
   });
 
@@ -385,7 +438,7 @@ for (const weakening of weakenings) {
     break;
   }
 
-  const file = path.join(checkout, weakening.file);
+  const file = path.join(copy, weakening.file);
   const original = readFileSync(file, "utf8");
 
   const lost = weakening.edits.find(
@@ -407,50 +460,45 @@ for (const weakening of weakenings) {
 
   writeFileSync(file, planted);
 
-  try {
-    const { run, tests, files } = vpTest(weakening.package, weakening.test);
+  const { run, tests, files } = vpTest(weakening.package, weakening.test);
 
-    const refused =
-      run.error === undefined &&
-      run.status === 1 &&
-      files.length === 0 &&
-      [...tests].some((name) => name.includes(weakening.by));
+  const refused =
+    run.error === undefined &&
+    run.status === 1 &&
+    files.length === 0 &&
+    [...tests].some((name) => name.includes(weakening.by));
 
-    const passed = run.error === undefined && run.status === 0;
+  const passed = run.error === undefined && run.status === 0;
 
-    let verdict = "BROKEN ";
+  let verdict = "BROKEN ";
 
-    if (refused) {
-      verdict = "refused";
-    } else if (passed) {
-      verdict = "PASSED ";
-    }
-
-    console.log(`${verdict}  ${weakening.what}`);
-
-    for (const name of tests) {
-      console.log(`           by ${name}`);
-    }
-
-    if (!refused && !passed) {
-      console.log(
-        `${run.stdout ?? ""}${run.stderr ?? ""}`
-          .split("\n")
-          .slice(-40)
-          .join("\n")
-      );
-    }
-
-    if (passed) {
-      survived.push(weakening.what);
-    } else if (!refused) {
-      survived.push(
-        `${weakening.what}: its run ended without "${weakening.by}" failing on an assertion, so it proves nothing (${run.error?.message ?? `exit ${run.status ?? run.signal}`}${files.length > 0 ? `; ${files.join("; ")}` : ""})`
-      );
-    }
-  } finally {
-    writeFileSync(file, original);
+  if (refused) {
+    verdict = "refused";
+  } else if (passed) {
+    verdict = "PASSED ";
   }
+
+  console.log(`${verdict}  ${weakening.what}`);
+
+  for (const name of tests) {
+    console.log(`           by ${name}`);
+  }
+
+  if (!refused && !passed) {
+    console.log(
+      `${run.stdout ?? ""}${run.stderr ?? ""}`.split("\n").slice(-40).join("\n")
+    );
+  }
+
+  if (passed) {
+    survived.push(weakening.what);
+  } else if (!refused) {
+    survived.push(
+      `${weakening.what}: its run ended without "${weakening.by}" failing on an assertion, so it proves nothing (${run.error?.message ?? `exit ${run.status ?? run.signal}`}${files.length > 0 ? `; ${files.join("; ")}` : ""})`
+    );
+  }
+
+  writeFileSync(file, original);
 }
 
 if (survived.length > 0) {
