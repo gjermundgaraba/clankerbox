@@ -369,9 +369,10 @@ const fromUndeclared = (
   });
 
 /**
- * Fails, as the HTTP failure it is, a call that died of one. In effect 4.1.3 an HTTP API client's
- * call over Node, answered at a status its action declares with a body that isn't JSON, dies:
- * `Cause.combine` hashes the Node response, whose `jsonUnsafe` getter throws.
+ * Fails, as the HTTP failure it is, a call that died of one. In effect 4.1.3 through 4.1.6 an HTTP
+ * API client's call over Node, answered at a status its action declares with a body that isn't
+ * JSON, dies: `Hash.structure` walks the Node response's keys and reads its `jsonUnsafe` getter,
+ * which throws.
  */
 export const failHttpDefects = <A, E, R>(
   call: Effect.Effect<A, E, R>
