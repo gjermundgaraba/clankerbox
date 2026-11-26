@@ -212,7 +212,6 @@ const guestTools = [
   "setsid",
   "sh",
   "sleep",
-  "sync",
   "tr",
 ];
 
@@ -252,6 +251,7 @@ export const writeStubs = (dir: string, uname = "Linux"): string => {
 
   const stubs: ReadonlyArray<readonly [string, string]> = [
     ["uname", `echo ${uname}`],
+    ["sync", ":"],
     [
       "sudo",
       [
