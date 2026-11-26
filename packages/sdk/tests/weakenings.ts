@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -13,7 +14,8 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { stripVTControlCharacters } from "node:util";
+
+import { Schema } from "effect";
 
 interface Weakening {
   readonly what: string;
@@ -119,7 +121,7 @@ const weakenings: readonly Weakening[] = [
   comparing(
     "compares the bits set",
     `${bits("presented")} === ${bits("caller.hash")}`,
-    "has the token's byte sum"
+    "in another order"
   ),
   comparing(
     "compares the bytes in any order",
@@ -394,37 +396,92 @@ if (installed.error !== undefined || installed.status !== 0) {
   process.exit(1);
 }
 
-const vpTest = (pkg: string, test: string) => {
-  const run = spawnSync("vp", ["test", test], {
-    cwd: path.join(copy, pkg),
-    encoding: "utf8",
-  });
+const Report = Schema.fromJsonString(
+  Schema.Struct({
+    testResults: Schema.Array(
+      Schema.Struct({
+        name: Schema.String,
+        message: Schema.String,
+        assertionResults: Schema.Array(
+          Schema.Struct({ fullName: Schema.String, status: Schema.String })
+        ),
+      })
+    ),
+  })
+);
 
-  const failures = stripVTControlCharacters(`${run.stdout}${run.stderr}`)
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith("FAIL "));
+const reported = path.join(copy, "weakenings-report.json");
+
+const vpTest = (pkg: string, test: string, ...options: string[]) => {
+  rmSync(reported, { force: true });
+
+  const run = spawnSync(
+    "vp",
+    [
+      "test",
+      test,
+      ...options,
+      "--reporter=default",
+      "--reporter=json",
+      `--outputFile.json=${reported}`,
+    ],
+    { cwd: path.join(copy, pkg), encoding: "utf8" }
+  );
+
+  const report = existsSync(reported)
+    ? Schema.decodeSync(Report)(readFileSync(reported, "utf8"))
+    : { testResults: [] };
+
+  const results = report.testResults.flatMap((file) => file.assertionResults);
 
   return {
     run,
     tests: new Set(
-      failures
-        .filter((line) => line.includes(" > "))
-        .map((line) => line.slice(line.indexOf(">") + 1).trim())
+      results
+        .filter(({ status }) => status === "failed")
+        .map(({ fullName }) => fullName)
     ),
-    files: failures.filter((line) => !line.includes(" > ")),
+    passed: results
+      .filter(({ status }) => status === "passed")
+      .map(({ fullName }) => fullName),
+    files: report.testResults
+      .filter(({ message }) => message !== "")
+      .map(({ name, message }) => `${name}: ${message}`),
   };
 };
 
-for (const suite of new Map(
+for (const { package: pkg, test } of new Map(
   weakenings.map((w) => [`${w.package}/${w.test}`, w])
 ).values()) {
-  const { run } = vpTest(suite.package, suite.test);
+  const names = [
+    ...new Set(
+      weakenings.flatMap((w) =>
+        w.package === pkg && w.test === test ? [w.by] : []
+      )
+    ),
+  ];
 
-  if (run.error !== undefined || run.status !== 0) {
+  const { run, passed } = vpTest(
+    pkg,
+    test,
+    `--testNamePattern=${names.map((name) => RegExp.escape(name)).join("|")}`
+  );
+
+  const unpassed = names.filter(
+    (name) => !passed.some((fullName) => fullName.includes(name))
+  );
+
+  const problems = [
+    ...(run.error === undefined && run.status === 0
+      ? []
+      : [run.error?.message ?? `exit ${run.status ?? run.signal}`]),
+    ...(unpassed.length > 0 ? [`none passed for ${unpassed.join("; ")}`] : []),
+  ];
+
+  if (problems.length > 0) {
     console.error(`${run.stdout ?? ""}${run.stderr ?? ""}`);
     console.error(
-      `${suite.package}/${suite.test} doesn't pass on this checkout, so no weakening can be judged by it: ${run.error?.message ?? `exit ${run.status ?? run.signal}`}`
+      `${pkg}/${test} doesn't pass the tests its weakenings name on this checkout, so they can't be judged by them: ${problems.join("; ")}`
     );
     process.exit(1);
   }
