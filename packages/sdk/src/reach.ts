@@ -67,6 +67,10 @@ const ipv6 = (text: string): readonly number[] | undefined => {
   ];
 };
 
+/** Whether `text` is an IP address, IPv6 without brackets. */
+export const isIPAddress = (text: string): boolean =>
+  ipv4(text) !== undefined || ipv6(text) !== undefined;
+
 const v4Reaches = ([a, b = 0]: readonly number[]): boolean =>
   a === 127 || (a === 100 && (b & 0xc0) === 64);
 
