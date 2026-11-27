@@ -64,7 +64,7 @@ export const sshTarget = (
   if (login !== undefined && !isIPAddress(login.host)) {
     return Effect.fail(
       new WrongState({
-        message: `${id}'s SSH login names ${JSON.stringify(login.host)}, which is not an IP address, so ssh is not run on it`,
+        message: `${id}'s SSH login names ${JSON.stringify(login.host)}, which is not an IP address`,
         machine: id,
         state,
       })

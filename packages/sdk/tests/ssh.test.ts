@@ -35,17 +35,22 @@ const knownHostsIn = (args: readonly string[]): string =>
     .find((arg) => arg.startsWith(knownHostsOption))
     ?.slice(knownHostsOption.length) ?? "";
 
-const notAddresses = ["example.com", "-v", "100.64.0.7 ", ""];
+const notAddresses = ["example.com", "localhost", "100.64.0.7 ", ""];
 
 layer(NodeServices.layer)((it) => {
   it.effect("a login whose host is not an IP address is no target", () =>
     Effect.gen(function* () {
       for (const host of notAddresses) {
-        const exit = yield* Effect.exit(
+        const refused = yield* Effect.flip(
           sshTarget(machine("dev", { ssh: { ...login, host }, hostKey }))
         );
 
-        expect(Exit.isFailure(exit), host).toBe(true);
+        expect(plain(refused), host).toStrictEqual({
+          _tag: "WrongState",
+          message: `dev's SSH login names ${JSON.stringify(host)}, which is not an IP address`,
+          machine: "dev",
+          state: "running",
+        });
       }
 
       for (const host of ["100.64.0.7", "fd7a:115c:a1e0::7", "::1"]) {
