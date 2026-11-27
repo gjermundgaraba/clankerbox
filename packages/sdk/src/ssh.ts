@@ -2,6 +2,7 @@ import { Duration, Effect, FileSystem, Path } from "effect";
 import type { PlatformError, Scope } from "effect";
 
 import { WrongState } from "./errors.ts";
+import { isIPAddress } from "./reach.ts";
 import { isResting, stateLabel } from "./resources.ts";
 import type { Machine, SshLogin } from "./resources.ts";
 
@@ -52,18 +53,27 @@ const noLoginBecause = ({
 /**
  * A machine with no `ssh` login is `WrongState`, saying why: no host key on record yet, on a
  * machine not yet prepared, or at all, as for one made from a base its host didn't prepare, or a
- * VM that doesn't run, which a start runs.
+ * VM that doesn't run, which a start runs. So is one whose login's host is not an IP address.
  */
 export const sshTarget = (
   machine: Machine
 ): Effect.Effect<SshTarget, WrongState> => {
   const { id, ssh: login, hostKey } = machine;
+  const state = stateLabel(machine);
+
+  if (login !== undefined && !isIPAddress(login.host)) {
+    return Effect.fail(
+      new WrongState({
+        message: `${id}'s SSH login names ${JSON.stringify(login.host)}, which is not an IP address`,
+        machine: id,
+        state,
+      })
+    );
+  }
 
   if (login !== undefined && hostKey !== undefined) {
     return Effect.succeed({ id, login, hostKey });
   }
-
-  const state = stateLabel(machine);
 
   return Effect.fail(
     new WrongState({

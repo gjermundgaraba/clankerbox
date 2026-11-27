@@ -17,6 +17,7 @@ import {
   Name,
   RuntimeName,
 } from "./ids.ts";
+import { isIPAddress } from "./reach.ts";
 import { Size, Sizes } from "./sizes.ts";
 
 /**
@@ -124,7 +125,9 @@ export const Port = Schema.Int.check(
 );
 
 export const SshEndpoint = Schema.Struct({
-  host: Schema.String,
+  host: Schema.String.check(
+    Schema.makeFilter((host: string) => isIPAddress(host) || "an IP address")
+  ),
   port: Port,
 });
 

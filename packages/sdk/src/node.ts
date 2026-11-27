@@ -1,7 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { Server as HttpServer } from "node:http";
 import { Server as HttpsServer } from "node:https";
-import { isIP } from "node:net";
 import type { Socket } from "node:net";
 
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
@@ -25,7 +24,11 @@ import {
 import * as Client from "./client.ts";
 import { describeFileError } from "./describe.ts";
 import { Invalid } from "./errors.ts";
-import { isTailnetOrLoopback, tailnetOrLoopbackRule } from "./reach.ts";
+import {
+  isIPAddress,
+  isTailnetOrLoopback,
+  tailnetOrLoopbackRule,
+} from "./reach.ts";
 import { callerNameRefusal, secretKind, tokenPrefix } from "./resources.ts";
 import type { TokenKind } from "./resources.ts";
 
@@ -41,7 +44,9 @@ export const layer = (
 
 /** Any IP address, which a config then holds to `listenRefusal`. */
 export const AnyAddress = Schema.String.check(
-  Schema.makeFilter((address: string) => isIP(address) !== 0 || "an IP address")
+  Schema.makeFilter(
+    (address: string) => isIPAddress(address) || "an IP address"
+  )
 );
 
 /**

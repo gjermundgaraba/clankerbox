@@ -1,12 +1,13 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { Effect, FileSystem } from "effect";
+import { Effect, Exit, FileSystem, Schema } from "effect";
 import { expect } from "vite-plus/test";
 
 import {
   buildId,
   pinnedSsh,
   ScriptFailed,
+  SshEndpoint,
   sshTarget,
   WrongState,
 } from "../src/index.ts";
@@ -34,7 +35,56 @@ const knownHostsIn = (args: readonly string[]): string =>
     .find((arg) => arg.startsWith(knownHostsOption))
     ?.slice(knownHostsOption.length) ?? "";
 
+const notAddresses = ["example.com", "localhost", "100.64.0.7 ", ""];
+
 layer(NodeServices.layer)((it) => {
+  it.effect("a login whose host is not an IP address is no target", () =>
+    Effect.gen(function* () {
+      for (const host of notAddresses) {
+        const refused = yield* Effect.flip(
+          sshTarget(machine("dev", { ssh: { ...login, host }, hostKey }))
+        );
+
+        expect(plain(refused), host).toStrictEqual({
+          _tag: "WrongState",
+          message: `dev's SSH login names ${JSON.stringify(host)}, which is not an IP address`,
+          machine: "dev",
+          state: "running",
+        });
+      }
+
+      for (const host of ["100.64.0.7", "fd7a:115c:a1e0::7", "::1"]) {
+        expect(
+          (yield* sshTarget(
+            machine("dev", { ssh: { ...login, host }, hostKey })
+          )).login.host
+        ).toBe(host);
+      }
+    })
+  );
+
+  it.effect(
+    "an SSH endpoint whose host is not an IP address doesn't decode",
+    () =>
+      Effect.sync(() => {
+        for (const host of notAddresses) {
+          expect(
+            Exit.isFailure(
+              Schema.decodeExit(SshEndpoint)({ host, port: 10_022 })
+            ),
+            host
+          ).toBe(true);
+        }
+
+        expect(
+          Schema.decodeExit(SshEndpoint)({
+            host: "100.64.0.7",
+            port: 10_022,
+          })
+        ).toStrictEqual(Exit.succeed({ host: "100.64.0.7", port: 10_022 }));
+      })
+  );
+
   it.effect(
     "a running, prepared machine is a target with its login and host key",
     () =>
