@@ -481,6 +481,24 @@ layer(NodeServices.layer)((it) => {
       })
     );
 
+    it.effect(
+      "fails with settings whose runtime takes no image reference",
+      () =>
+        Effect.gen(function* () {
+          for (const runtime of ["tart", "boat"]) {
+            const result = yield* dispatched(spawnEnv, server(), {
+              ...settings,
+              runtime,
+            });
+
+            expect(result.code).toBe(1);
+            expect(result.stderr).toContain(
+              `runtime ${runtime} is not one an orb runs on`
+            );
+          }
+        })
+    );
+
     it.effect("fails when the control plane is down", () =>
       Effect.gen(function* () {
         const result = yield* dispatched(spawnEnv, "down");

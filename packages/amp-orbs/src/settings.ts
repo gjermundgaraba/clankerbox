@@ -15,6 +15,8 @@ export const defaultUser = "user";
 
 export const defaultSnapshotExpiry = Duration.days(14);
 
+const imageReferenceRuntimes = ["smolvm", "smol-cloud", "agent-sandbox"];
+
 /**
  * The dispatch program's settings file. `runtime` is the one every orb's machine is created on,
  * such as `smolvm`, of those that take an image reference. `snapshotExpiry` is a duration such as
@@ -61,6 +63,13 @@ export const loadSettings = Effect.fn("loadSettings")(function* (
         new Invalid({ message: `settings: ${describeIssues(error)}`, file })
     )
   );
+
+  if (!imageReferenceRuntimes.includes(settings.runtime)) {
+    return yield* new Invalid({
+      message: `settings: runtime ${settings.runtime} is not one an orb runs on, as an orb is created from an image reference: use ${imageReferenceRuntimes.join(", ")}`,
+      file,
+    });
+  }
 
   const fallback = settings.sizes[defaultType];
 

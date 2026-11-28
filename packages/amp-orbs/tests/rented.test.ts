@@ -292,18 +292,4 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       }),
     60_000
   );
-
-  it.effect(
-    "a spawn on a boat host, which boots only its own named images, is refused before anything is made",
-    () =>
-      Effect.gen(function* () {
-        const { client, dispatched } = yield* orbsOn("boat");
-
-        const spawned = yield* dispatched(spawnEnv);
-
-        expect(spawned.code).toBe(1);
-        expect(spawned.stderr).toContain(`no boat host offers base ${image}`);
-        expect(yield* client.listMachines()).toStrictEqual([]);
-      })
-  );
 });
