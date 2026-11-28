@@ -63,6 +63,9 @@ export const suitePorts = {
   get liveSmolCloud() {
     return inSlot(60);
   },
+  get liveSmolvm() {
+    return inSlot(230);
+  },
   get journal() {
     return inSlot(70);
   },

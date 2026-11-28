@@ -78,6 +78,61 @@ jobs:
       - name: Plant each weakening the auth guards must refuse, and check its test refuses it
         run: node packages/sdk/tests/weakenings.ts .
 
+  smolvm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SMOLVM_VERSION: 1.34.1
+      SMOLVM_PREFIX: /srv/smolvm/1.34.1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
+        with:
+          node-version-file: .node-version
+          cache: true
+          cache-toolchain: true
+          run-install: false
+      - run: vp install --frozen-lockfile
+      - name: Open /dev/kvm, which the runner's nested virtualization gives
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Install smolvm to a prefix that carries no POSIX ACL
+        # The runner's /opt holds a default ACL, which smolvm's guest kernel can't copy up (#116),
+        # so the prefix lies under /srv, stripped before the install so nothing inherits one, and is
+        # checked after it: getfacl -s lists only files that carry an ACL.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends zstd acl
+          curl -fsSL "https://raw.githubusercontent.com/smol-machines/smolvm/v$SMOLVM_VERSION/scripts/install.sh" -o "$RUNNER_TEMP/install.sh"
+          echo "e68d588c9175e663d16e901ae1d896c93efcff88d2d810de143f05b15a846cc5  $RUNNER_TEMP/install.sh" | sha256sum -c -
+          sudo mkdir -p "$SMOLVM_PREFIX"
+          sudo setfacl -bR /srv/smolvm
+          sudo HOME="$SMOLVM_PREFIX" bash "$RUNNER_TEMP/install.sh" --version "$SMOLVM_VERSION" --prefix "$SMOLVM_PREFIX" --no-modify-path
+          for t in storage-template.ext4 overlay-template.ext4; do
+            sudo zstd -q -d --sparse "$SMOLVM_PREFIX/$t.zst" -o "$SMOLVM_PREFIX/$t"
+          done
+          acls=$(sudo getfacl -Rsp "$SMOLVM_PREFIX" | grep '^# file:' || true)
+          if [ -n "$acls" ]; then
+            echo "::error::$SMOLVM_PREFIX carries POSIX ACLs, which break every smolvm fork and stopped capture; strip them with setfacl -bR:"
+            echo "$acls"
+            exit 1
+          fi
+          printf '[Slice]\nMemoryMax=97%%\n' | sudo tee /etc/systemd/system/smolvm.slice >/dev/null
+          sudo systemctl daemon-reload
+      - name: Run the smolvm runtime's live suite as root, as a smolvm host runs
+        working-directory: apps/host
+        run: >-
+          sudo env "PATH=$PATH" "SMOLVM_PREFIX=$SMOLVM_PREFIX" CLANKERBOX_LIVE=1 vp test run tests/live/smolvm.test.ts --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/smolvm.json"
+      - name: Check that the suite ran its test and skipped none
+        run: jq -e '[.testResults[].assertionResults[]] | length > 0 and all(.status == "passed")' "$RUNNER_TEMP/smolvm.json"
+      - run: vp run build
+      - name: Stop a machine with --capture through the host, control plane and CLI, and restore it
+        run: bash .github/smolvm-stop-capture.sh "$SMOLVM_PREFIX"
+
   kind-shard:
     name: kind (${{ matrix.shard }}/4)
     runs-on: ubuntu-24.04

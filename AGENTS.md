@@ -73,6 +73,11 @@ Tests pass their own.
 - `vp run test:live` in `apps/host`, with `SMOL_MACHINES_API_KEY` or
   `BOAT_API_KEY`, and `TAILSCALE_AUTHKEY`, set, checks the real accounts. It
   never runs in CI.
+- `tests/live/smolvm.test.ts` drives the real smolvm runtime, as root, with
+  `CLANKERBOX_LIVE=1` and `SMOLVM_PREFIX` naming an install that carries no
+  POSIX ACL. CI's `smolvm` job runs it under the runner's nested KVM, then
+  `.github/smolvm-stop-capture.sh`, a `stop --capture` and its restore through
+  the built host, control plane and CLI.
 - A fake of a provider is written from what we believe of it, so a test against
   it proves only that the code does what we believed. A signal read from a
   provider's undocumented behaviour, such as boat's reboot mark, which its list
