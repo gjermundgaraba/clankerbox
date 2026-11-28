@@ -32,7 +32,7 @@ publish, change production hosts, or commit unless asked.
   read at the release's tag. The published SDK is also at hand, built, in
   `packages/rivet-sandbox-agent/node_modules/sandbox-agent/dist`.
 - **Notation:** a citation is a path in that repository's `sandbox-agent/`
-  directory at the tested release, 0.5.6, or `dist:` in the published
+  directory at the tested release, 0.5.7, or `dist:` in the published
   package's `dist/`; the identifier beside it finds the code.
 
 ## Claims to re-check

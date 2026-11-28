@@ -3,8 +3,8 @@ set -eu
 [ "$(id -u)" -eq 0 ] || exec sudo -n /bin/sh "$0" "$@"
 PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 
-agent_version=0.5.6
-agent_sha256=5435442cb01b8dca0c4bfbcb666e140c14c7c9970785aa34a4a9b313bd315e9f
+agent_version=0.5.7
+agent_sha256=65053333dcd8fb118d59b6d421efb755b4533e084b9a84a6a71b11042399b095
 node_version=22.23.5
 node_sha256=e7131995759b61a0170b646010d2ad35a5d37b4cb0d471f3e8317eac6f742f3d
 
