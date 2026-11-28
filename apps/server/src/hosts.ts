@@ -1,7 +1,6 @@
 import { HostHttp, stoppingStatus } from "@clankerbox/host-contract";
 import type { HostInfo } from "@clankerbox/host-contract";
 import {
-  Client,
   HostError,
   readTimeout,
   release,
@@ -278,11 +277,9 @@ export const make = (
             : bounded(
                 host,
                 run(api).pipe(
-                  Client.failHttpDefects,
                   Effect.catchIf(
-                    (
-                      error: E | HttpClientError.HttpClientError
-                    ): error is Extract<E, HostError> => isHostError(error),
+                    (error: E): error is Extract<E, HostError> =>
+                      isHostError(error),
                     Effect.fail,
                     (error) => Effect.fail(unusable(host, error))
                   )

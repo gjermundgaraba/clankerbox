@@ -1,10 +1,17 @@
 import { createServer } from "node:http";
 import type { ServerResponse } from "node:http";
 
+import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { it } from "@effect/vitest";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Exit, Layer, Schema } from "effect";
 import { HttpRouter, HttpServer } from "effect/http";
+import {
+  HttpApi,
+  HttpApiClient,
+  HttpApiEndpoint,
+  HttpApiGroup,
+} from "effect/http-api";
 import { afterEach, describe, expect } from "vite-plus/test";
 
 import { Client, retryable, RuntimeName } from "../src/index.ts";
@@ -228,7 +235,7 @@ describe("loopback", () => {
           expect(error.message, `${status}`).toBe(
             status === 503
               ? "no reply from the control plane to stopMachine dev (HTTP 503); the action may have run: read dev to see"
-              : `the control plane answered stopMachine dev unexpectedly: Decode error (${status} POST ${url}/api/stopMachine)`
+              : `the control plane answered stopMachine dev unexpectedly: StatusCode error (${status} POST ${url}/api/stopMachine)`
           );
         }
       }).pipe(Effect.scoped)
@@ -247,5 +254,44 @@ describe("loopback", () => {
 
       expect(error._tag).toBe("Internal");
     })
+  );
+
+  it.effect(
+    "the Node transport fails, not dies, with a StatusCode error on a page at a status the endpoint declares",
+    () =>
+      Effect.gen(function* () {
+        class NotFound extends Schema.TaggedError<
+          NotFound,
+          { readonly brand: unique symbol }
+        >()("NotFound", {}, { httpApiStatus: 404 }) {}
+
+        const api = HttpApi.make("api").add(
+          HttpApiGroup.make("g").add(
+            HttpApiEndpoint.post("pause", "/pause", {
+              success: Schema.Struct({ ok: Schema.Boolean }),
+              error: NotFound,
+            })
+          )
+        );
+
+        const baseUrl = yield* answering((response) => {
+          response.writeHead(404, { "content-type": "text/html" });
+          response.end("<html>404</html>");
+        });
+
+        const exit = yield* Effect.exit(
+          Effect.flatMap(HttpApiClient.make(api, { baseUrl }), (client) =>
+            client.g.pause()
+          ).pipe(Effect.provide(NodeHttpClient.layerNodeHttp))
+        );
+
+        expect(Exit.findErrorOption(exit)).toMatchObject({
+          _tag: "Some",
+          value: {
+            _tag: "HttpClientError",
+            reason: { _tag: "StatusCodeError" },
+          },
+        });
+      }).pipe(Effect.scoped)
   );
 });

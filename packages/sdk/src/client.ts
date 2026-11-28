@@ -368,27 +368,11 @@ const fromUndeclared = (
     Unconfirmed: ({ message }) => new Unavailable({ message, readOnly: false }),
   });
 
-/**
- * Fails, as the HTTP failure it is, a call that died of one. In effect 4.1.3 through 4.1.6 an HTTP
- * API client's call over Node, answered at a status its action declares with a body that isn't
- * JSON, dies: `Hash.structure` walks the Node response's keys and reads its `jsonUnsafe` getter,
- * which throws.
- */
-export const failHttpDefects = <A, E, R>(
-  call: Effect.Effect<A, E, R>
-): Effect.Effect<A, E | HttpClientError.HttpClientError, R> =>
-  Effect.catchDefect(call, (defect) =>
-    HttpClientError.isHttpClientError(defect)
-      ? Effect.fail(defect)
-      : Effect.die(defect)
-  );
-
 const settle = <A, E>(
   call: Effect.Effect<A, E | Undeclared>,
   context: CallContext
 ): Effect.Effect<A, E | Invalid | Unavailable | Internal> =>
   call.pipe(
-    failHttpDefects,
     Effect.catchIf(isUndeclared, (error) =>
       Effect.fail(fromUndeclared(error, context))
     ),
