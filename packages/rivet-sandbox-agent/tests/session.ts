@@ -32,13 +32,14 @@ const session = await sdk.createSession({ agent: "claude" });
 console.log(`session ${session.id} on agent claude`);
 
 const prompt = async () =>
-  await session.prompt([{ type: "text", text: "hi" }]).then(
-    () => "prompt answered",
-    (error: unknown) =>
+  await session
+    .prompt([{ type: "text", text: "hi" }])
+    .then(() => "prompt answered")
+    .catch((error: unknown) =>
       error instanceof Error
         ? `prompt failed: ${error.name}: ${error.message}`
         : `prompt failed: ${String(error)}`
-  );
+    );
 
 if (inFlight === "prompt-cut") {
   console.log(await prompt());

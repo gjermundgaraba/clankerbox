@@ -22,10 +22,10 @@ const settled = (outcome: string) => {
   return outcome;
 };
 
-void session.prompt([{ type: "text", text: "hi" }]).then(
-  () => settled("was answered"),
-  () => settled("failed")
-);
+void session
+  .prompt([{ type: "text", text: "hi" }])
+  .then(() => settled("was answered"))
+  .catch(() => settled("failed"));
 
 await prompted(dir);
 

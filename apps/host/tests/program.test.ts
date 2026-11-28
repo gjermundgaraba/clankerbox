@@ -73,10 +73,9 @@ const post = (url: string, action: string, body: unknown) =>
           [versionHeader]: version,
         },
         body: JSON.stringify(body),
-      }).then(
-        (response) => response.status,
-        () => 0
-      )
+      })
+        .then((response) => response.status)
+        .catch(() => 0)
   );
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {

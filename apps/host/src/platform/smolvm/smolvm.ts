@@ -17,7 +17,6 @@ import type {
 import {
   Duration,
   Effect,
-  Exit,
   FileSystem,
   Layer,
   Match,
@@ -674,13 +673,11 @@ export const make = (
         ["machine", "start", "--name", native, "--branchable"],
         `machine start ${native}`
       ).pipe(
-        Effect.onExit((exit) =>
-          Exit.isSuccess(exit)
-            ? Effect.void
-            : leftBehind(
-                "remove the image seed builds smolvm left behind",
-                Effect.flatMap(listed, (vms) => removeSeedBuilds(vms, ended))
-              )
+        Effect.onError(() =>
+          leftBehind(
+            "remove the image seed builds smolvm left behind",
+            Effect.flatMap(listed, (vms) => removeSeedBuilds(vms, ended))
+          )
         )
       );
 

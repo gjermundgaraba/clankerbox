@@ -126,21 +126,20 @@ export const sweepRead = <M, C, E, R>(
   listing: Effect.Effect<Found<M, C>, E, R>,
   reading: Omit<Reading<M, C>, "ledgers">
 ): Effect.Effect<Selection<M, C>, E, R> =>
-  Effect.flatMap(
+  Effect.zipWith(
     Effect.sync(() => {
       const read = ledgers();
       const ended = new Set(read.filter(reading.over).map(({ run }) => run));
 
       return { read, ended };
     }),
-    ({ read, ended }) =>
-      Effect.map(listing, (found) =>
-        selected(found, {
-          ...reading,
-          ledgers: read,
-          over: ({ run }) => ended.has(run),
-        })
-      )
+    listing,
+    ({ read, ended }, found) =>
+      selected(found, {
+        ...reading,
+        ledgers: read,
+        over: ({ run }) => ended.has(run),
+      })
   );
 
 export const liveLedgers =

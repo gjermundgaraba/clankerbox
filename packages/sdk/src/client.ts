@@ -779,7 +779,11 @@ export const make = (
           machineRest(recorded, desired, name)
         );
 
-    const create: Interface["create"] = (name, spec, { labels } = {}) =>
+    const create: Interface["create"] = (
+      name,
+      spec,
+      { labels }: CreateOptions = {}
+    ) =>
       namingWhatMayExist(
         name,
         send(

@@ -288,10 +288,9 @@ export const prompted = async (dir: string) => {
   await until(
     "the agent to hold a prompt",
     async () =>
-      await access(path.join(dir, "prompted")).then(
-        () => true,
-        () => false
-      )
+      await access(path.join(dir, "prompted"))
+        .then(() => true)
+        .catch(() => false)
   );
 };
 
