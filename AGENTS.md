@@ -67,7 +67,8 @@ Tests pass their own.
   and both providers' tests each run to claim a slot for the run.
 - Each runtime passes `apps/host/tests/runtime-contract.ts` over its own fake
   provider. agent-sandbox's runs over a real kind cluster instead:
-  `vp run test:kind` in `apps/host`, also run in CI, makes the cluster with the
+  `vp run test:kind` in `apps/host`, run in CI as four shards of `tests/kind`
+  by file, each on its own cluster, makes the cluster with the
   agent-sandbox controller through `tests/kind/cluster.sh`.
 - `vp run test:live` in `apps/host`, with `SMOL_MACHINES_API_KEY` or
   `BOAT_API_KEY`, and `TAILSCALE_AUTHKEY`, set, checks the real accounts. It

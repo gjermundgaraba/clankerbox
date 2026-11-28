@@ -52,6 +52,7 @@ export interface Subject {
   readonly ownDisk?: string | undefined;
   readonly stallTimeout?: number | undefined;
   readonly fixture: Effect.Effect<Fixture, never, Scope.Scope>;
+  readonly part?: { readonly index: number; readonly of: number };
 }
 
 const given = <A>(fault: A | undefined) =>
@@ -160,8 +161,41 @@ export const runtimeContract = (subject: Subject): void => {
       ({ handle }): Sized => ({ ...sized(name, instance), handle })
     );
 
-  describe(`the ${subject.name} runtime`, () => {
-    it.live(
+  let cases = 0;
+
+  const inThisPart = () => {
+    cases += 1;
+
+    return (
+      subject.part === undefined ||
+      (cases - 1) % subject.part.of === subject.part.index - 1
+    );
+  };
+
+  const live = Object.assign(
+    (...args: Parameters<typeof it.live>) => {
+      if (inThisPart()) {
+        it.live(...args);
+      }
+    },
+    {
+      skipIf:
+        (condition: unknown) =>
+        (...args: Parameters<typeof it.live>) => {
+          if (inThisPart()) {
+            it.live.skipIf(condition)(...args);
+          }
+        },
+    }
+  );
+
+  const part =
+    subject.part === undefined
+      ? ""
+      : `, part ${subject.part.index} of ${subject.part.of}`;
+
+  describe(`the ${subject.name} runtime${part}`, () => {
+    live(
       "makes a running machine of sizes it gives, finds it by instance, and nothing once it is deleted",
       () =>
         withFixture(({ runtime }) =>
@@ -187,7 +221,7 @@ export const runtimeContract = (subject: Subject): void => {
         )
     );
 
-    it.live("keeps two instances of one name apart", () =>
+    live("keeps two instances of one name apart", () =>
       withFixture(({ runtime }) =>
         Effect.gen(function* () {
           const older = yield* made(runtime, "dev", first);
@@ -208,7 +242,7 @@ export const runtimeContract = (subject: Subject): void => {
       )
     );
 
-    it.live("stops a machine, again once it is stopped, and starts it", () =>
+    live("stops a machine, again once it is stopped, and starts it", () =>
       withFixture(({ runtime }) =>
         Effect.gen(function* () {
           const machine = yield* made(runtime, "dev");
@@ -228,7 +262,7 @@ export const runtimeContract = (subject: Subject): void => {
       )
     );
 
-    it.live(
+    live(
       "captures a machine only in the state its traits name, and makes a machine of the checkpoint",
       () =>
         withFixture(({ runtime }) =>
@@ -282,7 +316,7 @@ export const runtimeContract = (subject: Subject): void => {
 
     const guestRuns = subject.runsNoGuest === undefined;
 
-    it.live.skipIf(!guestRuns)(
+    live.skipIf(!guestRuns)(
       `forks and restores a machine in each state its traits copy into a machine booted from a copy of its disk, holding none of its memory, leaving the source as it was${guestRuns ? "" : `: ${subject.runsNoGuest}`}`,
       () =>
         withFixture(({ runtime }) =>
@@ -386,7 +420,7 @@ export const runtimeContract = (subject: Subject): void => {
         )
     );
 
-    it.live(
+    live(
       "answers a capture with the handle it derives from the checkpoint's identity, where it derives one, and a delete of a derived one it doesn't hold is done",
       () =>
         withFixture(({ runtime }) =>
@@ -409,7 +443,7 @@ export const runtimeContract = (subject: Subject): void => {
         )
     );
 
-    it.live(
+    live(
       "refuses a make from a checkpoint it no longer holds as Missing, naming the checkpoint, and makes nothing",
       () =>
         withFixture(({ runtime }) =>
@@ -441,7 +475,7 @@ export const runtimeContract = (subject: Subject): void => {
         )
     );
 
-    it.live(
+    live(
       "resizes a machine in a state its resize trait takes, and reads back the sizes it gave",
       () =>
         withFixture(({ runtime }) =>
@@ -505,7 +539,7 @@ export const runtimeContract = (subject: Subject): void => {
         )
     );
 
-    it.live.skipIf(subject.runsNoGuest !== undefined)(
+    live.skipIf(subject.runsNoGuest !== undefined)(
       `ends in the guest, with what it started, a command whose exec is cut short, and not one beside it${subject.runsNoGuest === undefined ? "" : `: ${subject.runsNoGuest}`}`,
       () =>
         withFixture(({ runtime }) =>
@@ -564,7 +598,7 @@ export const runtimeContract = (subject: Subject): void => {
         )
     );
 
-    it.live("runs a command in the guest with its stdin as text", () =>
+    live("runs a command in the guest with its stdin as text", () =>
       withFixture(({ runtime }) =>
         Effect.gen(function* () {
           const machine = yield* made(runtime, "dev");
@@ -599,7 +633,7 @@ export const runtimeContract = (subject: Subject): void => {
         )
       );
 
-    it.live.skipIf(!rented)(
+    live.skipIf(!rented)(
       ifRented(
         "deletes with a machine each checkpoint it holds that keep lacks"
       ),
@@ -641,7 +675,7 @@ export const runtimeContract = (subject: Subject): void => {
         )
     );
 
-    it.live.skipIf(!rented)(
+    live.skipIf(!rented)(
       ifRented(
         "deletes once a start runs the machine each checkpoint it holds that keep lacks"
       ),
@@ -686,7 +720,7 @@ export const runtimeContract = (subject: Subject): void => {
         )
     );
 
-    it.live.skipIf(!rented)(
+    live.skipIf(!rented)(
       ifRented(
         "deletes what lands of an instance after its delete answered, refuses a make of it, and deletes nothing that lacks its mark"
       ),
@@ -722,7 +756,7 @@ export const runtimeContract = (subject: Subject): void => {
         )
     );
 
-    it.live.skipIf(lacks("dropAnswer"))(
+    live.skipIf(lacks("dropAnswer"))(
       needing(
         "dropAnswer",
         "answers a make whose answer was lost with the machine its instance finds, and makes no second one"
@@ -741,7 +775,7 @@ export const runtimeContract = (subject: Subject): void => {
         )
     );
 
-    it.live.skipIf(lacks("quota"))(
+    live.skipIf(lacks("quota"))(
       needing(
         "quota",
         "refuses a make for want of room as Capacity, and the undo that follows leaves nothing"
@@ -772,7 +806,7 @@ export const runtimeContract = (subject: Subject): void => {
         )
     );
 
-    it.live.skipIf(lacks("drift"))(
+    live.skipIf(lacks("drift"))(
       needing("drift", "reads a machine that stopped on its own as stopped"),
       () =>
         withFixture(({ runtime, faults }) =>
@@ -788,7 +822,7 @@ export const runtimeContract = (subject: Subject): void => {
         )
     );
 
-    it.live.skipIf(!rented)(
+    live.skipIf(!rented)(
       ifRented(
         "finds a machine its make failed to answer once the provider makes it"
       ),
@@ -809,7 +843,7 @@ export const runtimeContract = (subject: Subject): void => {
         )
     );
 
-    it.live.skipIf(lacks("dropAnswer"))(
+    live.skipIf(lacks("dropAnswer"))(
       needing("dropAnswer", "deletes a machine whose delete's answer was lost"),
       () =>
         withFixture(({ runtime, faults }) =>
@@ -825,7 +859,7 @@ export const runtimeContract = (subject: Subject): void => {
         )
     );
 
-    it.live.skipIf(lacks("stall"))(
+    live.skipIf(lacks("stall"))(
       needing(
         "stall",
         "leaves a make cut short at any of its provider calls found, so its delete clears it, or not begun, so a make of it again makes it"
@@ -868,7 +902,7 @@ export const runtimeContract = (subject: Subject): void => {
       subject.stallTimeout ?? stallCaseTimeout
     );
 
-    it.live.skipIf(lacks("stall"))(
+    live.skipIf(lacks("stall"))(
       needing(
         "stall",
         "stops a machine whose last stop was cut short at any of its provider calls"
@@ -906,7 +940,7 @@ export const runtimeContract = (subject: Subject): void => {
       subject.stallTimeout ?? stallCaseTimeout
     );
 
-    it.live.skipIf(lacks("stall"))(
+    live.skipIf(lacks("stall"))(
       needing(
         "stall",
         "deletes a machine whose last delete was cut short at any of its provider calls"
