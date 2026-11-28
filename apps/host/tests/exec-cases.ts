@@ -21,7 +21,7 @@ import { endScript, guestCommand, markName } from "../src/exec.ts";
 import type { Invocation } from "../src/exec.ts";
 import { waitFor } from "./support.ts";
 
-const guestShells = [
+export const guestShells = [
   { name: "dash", argv: ["dash"] },
   { name: "bash in POSIX mode", argv: ["bash", "--posix"] },
   { name: "zsh as sh", argv: ["zsh", "--emulate", "sh"] },
@@ -64,7 +64,7 @@ export const statOf = (pid: number) => {
   }
 };
 
-export const runs = (pid: number, start: string | undefined) => {
+const runs = (pid: number, start: string | undefined) => {
   const found = statOf(pid);
 
   return found !== undefined && found.state !== "Z" && found.start === start;
@@ -979,7 +979,7 @@ export const shellCases = (shell: readonly string[]) => {
   });
 };
 
-export const stormCases = (shell: readonly string[]) => {
+export const serialStormCases = (shell: readonly string[]) => {
   layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     it.effect(
       "an end confirms the end of a command on a guest where no temporary file can be written, as when a full disk cut it",
@@ -1105,30 +1105,21 @@ export const stormCases = (shell: readonly string[]) => {
   });
 };
 
-const shellsRequired = process.env["CI"] !== undefined;
+export const shellsRequired = process.env["CI"] !== undefined;
 
-export const underEachShell = (
-  cases: (shell: readonly string[]) => void,
-  only?: string
+export const underShell = (
+  shell: string,
+  cases: (argv: readonly string[]) => void
 ) => {
-  describe.each(
-    guestShells.filter(({ argv }) => only === undefined || argv[0] === only)
-  )("under $name", ({ name, argv, installed }) => {
-    describe.skipIf(!installed && !shellsRequired)(
-      "where it is installed, as CI requires",
-      () => {
-        if (only === undefined) {
-          layer(NodeServices.layer)((it) => {
-            it.effect("is installed", () =>
-              Effect.sync(() => {
-                expect(installed, `${name} is missing: install it`).toBe(true);
-              })
-            );
-          });
+  describe.each(guestShells.filter(({ name }) => name === shell))(
+    "under $name",
+    ({ argv, installed }) => {
+      describe.skipIf(!installed && !shellsRequired)(
+        "where it is installed, as CI requires",
+        () => {
+          cases(argv);
         }
-
-        cases(argv);
-      }
-    );
-  });
+      );
+    }
+  );
 };

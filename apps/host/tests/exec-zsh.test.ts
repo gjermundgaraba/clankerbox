@@ -1,3 +1,3 @@
-import { shellCases, underEachShell } from "./exec-cases.ts";
+import { shellCases, underShell } from "./exec-cases.ts";
 
-underEachShell(shellCases, "zsh");
+underShell("zsh as sh", shellCases);

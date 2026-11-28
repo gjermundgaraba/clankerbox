@@ -33,8 +33,9 @@ import {
   daemonCases,
   runningOf,
   statOf,
-  stormCases,
-  underEachShell,
+  guestShells,
+  serialStormCases,
+  shellsRequired,
   unsharedMark,
 } from "./exec-cases.ts";
 import { based, madeOn, waitFor } from "./support.ts";
@@ -821,7 +822,22 @@ describe.each(guestAwks.map((argv) => ({ name: argv.join(" "), argv })))(
   }
 );
 
-underEachShell(stormCases);
+describe.each(guestShells)("under $name", ({ name, argv, installed }) => {
+  describe.skipIf(!installed && !shellsRequired)(
+    "where it is installed, as CI requires",
+    () => {
+      layer(NodeServices.layer)((it) => {
+        it.effect("is installed", () =>
+          Effect.sync(() => {
+            expect(installed, `${name} is missing: install it`).toBe(true);
+          })
+        );
+      });
+
+      serialStormCases(argv);
+    }
+  );
+});
 
 const macSh = ["/bin/sh"] as const;
 

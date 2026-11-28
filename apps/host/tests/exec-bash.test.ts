@@ -1,3 +1,3 @@
-import { shellCases, underEachShell } from "./exec-cases.ts";
+import { shellCases, underShell } from "./exec-cases.ts";
 
-underEachShell(shellCases, "bash");
+underShell("bash in POSIX mode", shellCases);
