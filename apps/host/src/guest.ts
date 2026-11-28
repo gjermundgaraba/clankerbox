@@ -4,7 +4,7 @@ import type {
   Setup,
   ScriptFailed,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, Exit, Option, Redacted, Schema } from "effect";
+import { Duration, Effect, Option, Redacted, Schema } from "effect";
 import { Hex } from "effect/encoding";
 
 import { executed, limited, markName, ran, runInGuest } from "./exec.ts";
@@ -222,9 +222,7 @@ export const runSetup = (
     },
     timeout
   ).pipe(
-    Effect.onExit((exit) =>
-      Exit.isSuccess(exit) ? Effect.void : unhold(runtime, machine)
-    ),
+    Effect.onError(() => unhold(runtime, machine)),
     Effect.asVoid
   );
 };
