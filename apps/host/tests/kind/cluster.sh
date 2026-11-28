@@ -17,22 +17,39 @@ if ! kind get clusters | grep -qx "$cluster"; then
   kind create cluster --name "$cluster" --image "$node" --wait 120s
 fi
 
+# Every manifest is copied unchanged under vendor/, each from its repository at the version its
+# directory names, so a run fetches no manifest. Images still come from their registries.
+vendor="$(dirname "${BASH_SOURCE[0]}")/vendor"
+
 # kind's own local-path provisioner takes no snapshots, so the cluster also runs the CSI host-path
 # driver, whose class snapshots: https://github.com/kubernetes-csi/csi-driver-host-path
 # The snapshot CRDs and controller are client/config/crd and deploy/kubernetes/snapshot-controller of
-# https://github.com/kubernetes-csi/external-snapshotter at $snapshotter, copied unchanged.
-snapshots="$(dirname "${BASH_SOURCE[0]}")/external-snapshotter-$snapshotter"
-kubectl --context "$context" apply -k "$snapshots/crd"
-kubectl --context "$context" apply -k "$snapshots/snapshot-controller"
+# https://github.com/kubernetes-csi/external-snapshotter.
+kubectl --context "$context" apply -k "$vendor/external-snapshotter-$snapshotter/crd"
+kubectl --context "$context" apply -k "$vendor/external-snapshotter-$snapshotter/snapshot-controller"
 kubectl --context "$context" -n kube-system rollout status deploy/snapshot-controller --timeout=180s
 
-if [ ! -d "$out/csi-driver-host-path" ]; then
-  git clone -q --depth 1 -b "$hostpath" https://github.com/kubernetes-csi/csi-driver-host-path "$out/csi-driver-host-path"
-fi
-if ! kubectl --context "$context" get csidriver hostpath.csi.k8s.io >/dev/null 2>&1; then
-  (kubectl config use-context "$context" >/dev/null &&
-    "$out/csi-driver-host-path/deploy/kubernetes-latest/deploy.sh")
-fi
+# What the host-path driver's deploy/kubernetes-latest/deploy.sh applies by default, less the labels
+# it adds to the RBAC, which nothing here reads: each sidecar's RBAC at the version of its image in
+# csi-hostpath-plugin.yaml, then hostpath/*.yaml.
+hostpaths="$vendor/csi-driver-host-path-$hostpath/hostpath"
+image_tag() { sed -n "s|^ *image: .*/$1:||p" "$hostpaths/csi-hostpath-plugin.yaml"; }
+for rbac in \
+  "external-provisioner-$(image_tag csi-provisioner)/rbac.yaml" \
+  "external-attacher-$(image_tag csi-attacher)/rbac.yaml" \
+  "external-snapshotter-$(image_tag csi-snapshotter)/csi-snapshotter/rbac-csi-snapshotter.yaml" \
+  "external-resizer-$(image_tag csi-resizer)/rbac.yaml"; do
+  kubectl --context "$context" apply -f "$vendor/$rbac"
+done
+kubectl --context "$context" apply -f "$hostpaths"
+driver=app.kubernetes.io/instance=hostpath.csi.k8s.io
+sets=$(kubectl --context "$context" get statefulsets -l "$driver" -o name)
+test -n "$sets"
+for set in $sets; do
+  kubectl --context "$context" rollout status "$set" --timeout=300s ||
+    { kubectl --context "$context" describe pods -l "$driver"; exit 1; }
+done
+
 kubectl --context "$context" apply -f - <<EOF
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
@@ -52,8 +69,8 @@ driver: hostpath.csi.k8s.io
 EOF
 printf '%s' csi-hostpath-sc >"$out/storage-class"
 
-kubectl --context "$context" apply --server-side -f \
-  "https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$version/sandbox.yaml"
+# sandbox.yaml of https://github.com/kubernetes-sigs/agent-sandbox's release.
+kubectl --context "$context" apply --server-side -f "$vendor/agent-sandbox-$version/sandbox.yaml"
 kubectl --context "$context" -n agent-sandbox-system rollout status deploy/agent-sandbox-controller --timeout=180s
 
 kubectl --context "$context" apply -f - <<EOF
