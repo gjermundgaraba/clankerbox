@@ -61,7 +61,14 @@ import { allotted, checkRamBudget, inUse } from "../../usage.ts";
 import { throughBucket } from "../bucket/builds.ts";
 import type { CheckpointFiles, Store } from "../bucket/builds.ts";
 import * as S3 from "../bucket/s3.ts";
-import { cliIn, expect, failure, files, regularFiles } from "../process.ts";
+import {
+  cliIn,
+  expect,
+  failure,
+  files,
+  regularFiles,
+  searchPath,
+} from "../process.ts";
 import { aloneOnBox, boxLock } from "./one-per-box.ts";
 import { ramGrowthMib, traits as traitsOn } from "./traits.ts";
 
@@ -200,9 +207,6 @@ const socketPathMax = 107;
 
 export const controlSocket = (dataDir: string): string =>
   path.join(dataDir, ".cache", "smolvm", "vms", "0".repeat(16), "control.sock");
-
-const searchPath =
-  "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 const agentRootfs = (settings: Pick<Settings, "prefix">): string =>
   path.join(settings.prefix, ".local", "share", "smolvm", "agent-rootfs");

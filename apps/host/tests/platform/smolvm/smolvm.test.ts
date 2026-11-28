@@ -136,10 +136,9 @@ const runtimeOf = (
 const startupError = (
   settings: Settings,
   spawner: ReturnType<typeof scripted>,
-  uid = 0,
   box: Partial<typeof callsEnded> = {}
 ) =>
-  make(settings, { ...callsEnded, uid, ...box }).pipe(
+  make(settings, { ...callsEnded, ...box }).pipe(
     Effect.flip,
     Effect.provide(
       Layer.mergeAll(
@@ -334,7 +333,10 @@ layer(NodeServices.layer)((it) => {
   it.effect("a smolvm host refuses to start unless it runs as root", () =>
     Effect.gen(function* () {
       const spawner = scripted(() => {});
-      const error = yield* startupError(yield* prepared(), spawner, 1000);
+
+      const error = yield* startupError(yield* prepared(), spawner, {
+        uid: 1000,
+      });
 
       expect(error._tag).toBe("CannotStart");
       expect(error.message).toBe(
@@ -402,7 +404,7 @@ layer(NodeServices.layer)((it) => {
         const asked: string[] = [];
         const spawner = scripted(() => {});
 
-        const error = yield* startupError(settings, spawner, 0, {
+        const error = yield* startupError(settings, spawner, {
           aclHolder: (directory) =>
             Effect.sync(() => {
               asked.push(directory);

@@ -7,7 +7,7 @@ import type { ChildProcessSpawner } from "effect/process";
 import { Box } from "../box.ts";
 import type { Facts } from "../box.ts";
 import type { PortRange, ReservedPorts } from "../settings.ts";
-import { cliIn, processEnded } from "./process.ts";
+import { cliIn, processEnded, searchPath } from "./process.ts";
 
 // https://docs.kernel.org/networking/ip-sysctl.html#ip-variables
 const portRangeFile = "/proc/sys/net/ipv4/ip_local_port_range";
@@ -78,20 +78,19 @@ export const aclHolderIn = (
   let listed = directory;
 
   for (const line of listing.split("\n")) {
-    if (line.endsWith(":") && !line.startsWith(" ")) {
-      listed = line.slice(0, -1);
-    } else if (/^[-dlcbps][-rwxsStT]{9}\+ /u.test(line)) {
-      const name = line.split(/ +/u).slice(8).join(" ").split(" -> ")[0] ?? "";
+    const entry = /^[-dlcbps][-rwxsStT]{9}(?<acl>\+?) /u.exec(line);
 
-      return path.join(listed, name);
+    if (entry?.groups?.["acl"] === "+") {
+      return path.join(listed, line.split(/ +/u).slice(8).join(" "));
+    }
+
+    if (entry === null && line.endsWith(":")) {
+      listed = line.slice(0, -1);
     }
   }
 
   return undefined;
 };
-
-const searchPath =
-  "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 export const make = (
   platform: string,

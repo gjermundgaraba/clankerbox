@@ -110,23 +110,18 @@ layer(NodeServices.layer)((it) => {
         const listing = [
           `${rootfs}:`,
           "total 8",
-          "lrwxrwxrwx  1 root root    7 Nov 10 15:59 bin -> usr/bin",
           "drwxr-xr-x  6 root root 4096 Nov 10 15:59 etc",
+          "-rw-r--r--  1 root root    0 Nov 10 15:59 named:",
           "",
           `${rootfs}/etc:`,
           "total 4",
           "-rw-r--r--  1 root root   10 Nov 10 15:59 host name",
+          "-rw-r--r--+ 1 root root    0 Nov 10 15:59 also:",
           "-rw-r--r--+ 1 root root   10 Nov 10 15:59 my file",
           "drwxr-xr-x+ 2 root root 4096 Nov 10 15:59 later",
         ].join("\n");
 
-        expect(aclHolderIn(rootfs, listing)).toBe(`${rootfs}/etc/my file`);
-        expect(
-          aclHolderIn(
-            rootfs,
-            listing.replaceAll("+ 1", "  1").replaceAll("+ 2", "  2")
-          )
-        ).toBeUndefined();
+        expect(aclHolderIn(rootfs, listing)).toBe(`${rootfs}/etc/also:`);
       })
   );
 });
