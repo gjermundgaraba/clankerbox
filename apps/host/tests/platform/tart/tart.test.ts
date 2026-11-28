@@ -246,6 +246,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
                 uid: undefined,
                 ended: () => Effect.succeed(true),
                 ephemeralPorts: defaultEphemeralPorts("darwin"),
+                aclHolder: () => Effect.undefined,
               })
             )
           )

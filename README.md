@@ -59,6 +59,8 @@ for t in storage-template.ext4 overlay-template.ext4; do
 done
 ```
 
+The prefix must carry no POSIX ACL, which it inherits from a parent with a default ACL, as some images set on `/opt`: smolvm's guest kernel can't copy an ACL'd directory of the agent rootfs up into its root, so every fork, and every capture of a stopped machine, would fail `Not supported`. A host refuses to start on such a prefix, naming a file that carries one; `setfacl -bR <prefix>` strips them.
+
 A box runs one smolvm host. smolvm counts each VM's uid up from the same base in every host's state and names its systemd scope by the VM alone, so a smolvm host holds the abstract unix socket `@clankerbox-smolvm-host` while it runs, ends every connection to it at once, and lets it go on its stop without waiting on anyone. A second one, under any `stateDir`, refuses to start, and `sudo ss -xlp | grep clankerbox-smolvm-host` names the PID that holds it. The kernel frees the name however a host ends, so an old `stateDir` left beside the live one stops nothing. The lock holds between hosts in one network namespace, as an abstract socket belongs to one. Any local process can take the name first, and then keeps every smolvm host on the box from starting until it lets go: the host refuses as it would beside another host, and the same `ss` names that process.
 
 smolvm runs every VM in `smolvm.slice`. Cap it at 97% of physical RAM, once per host, so that VMs that outgrow the RAM budget are killed rather than the host's own services. The host doesn't check for it; `systemctl show smolvm.slice -p MemoryMax` does.

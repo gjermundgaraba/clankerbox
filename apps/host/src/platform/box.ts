@@ -1,9 +1,13 @@
+import path from "node:path";
+
+import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, FileSystem, Layer, Option } from "effect";
+import type { ChildProcessSpawner } from "effect/process";
 
 import { Box } from "../box.ts";
 import type { Facts } from "../box.ts";
 import type { PortRange, ReservedPorts } from "../settings.ts";
-import { processEnded } from "./process.ts";
+import { cliIn, processEnded } from "./process.ts";
 
 // https://docs.kernel.org/networking/ip-sysctl.html#ip-variables
 const portRangeFile = "/proc/sys/net/ipv4/ip_local_port_range";
@@ -62,20 +66,79 @@ const linuxEphemeral = (
     return fallback;
   });
 
+/**
+ * The first file in a recursive GNU `ls -lRA` listing whose mode a `+` follows, as GNU ls marks a
+ * file with a POSIX ACL:
+ * https://www.gnu.org/software/coreutils/manual/html_node/What-information-is-listed.html
+ */
+export const aclHolderIn = (
+  directory: string,
+  listing: string
+): string | undefined => {
+  let listed = directory;
+
+  for (const line of listing.split("\n")) {
+    if (line.endsWith(":") && !line.startsWith(" ")) {
+      listed = line.slice(0, -1);
+    } else if (/^[-dlcbps][-rwxsStT]{9}\+ /u.test(line)) {
+      const name = line.split(/ +/u).slice(8).join(" ").split(" -> ")[0] ?? "";
+
+      return path.join(listed, name);
+    }
+  }
+
+  return undefined;
+};
+
+const searchPath =
+  "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
 export const make = (
   platform: string,
   rangeFile = portRangeFile
-): Effect.Effect<Facts, never, FileSystem.FileSystem> =>
-  Effect.map(
-    platform === "linux"
-      ? linuxEphemeral(rangeFile)
-      : Effect.succeed(defaultEphemeralPorts(platform)),
-    (ephemeralPorts) => ({
+): Effect.Effect<
+  Facts,
+  never,
+  FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
+> =>
+  Effect.gen(function* () {
+    const ephemeralPorts =
+      platform === "linux"
+        ? yield* linuxEphemeral(rangeFile)
+        : defaultEphemeralPorts(platform);
+
+    const { run } = yield* cliIn(
+      { PATH: searchPath, LC_ALL: "C" },
+      { detached: false }
+    );
+
+    const aclHolder = (directory: string) =>
+      Effect.flatMap(
+        run(
+          "ls",
+          ["-lRA", "--quoting-style=literal", directory],
+          `ls -lRA ${directory}`
+        ),
+        ({ exitCode, stdout, stderr }) =>
+          exitCode === 0
+            ? Effect.succeed(aclHolderIn(directory, stdout))
+            : Effect.fail(
+                new Internal({
+                  message: `couldn't list ${directory} for POSIX ACLs: ls exited ${exitCode}: ${stderr.trim()}`,
+                })
+              )
+      );
+
+    return {
       uid: process.getuid?.(),
       ended: processEnded,
       ephemeralPorts,
-    })
-  );
+      aclHolder,
+    };
+  });
 
-export const layer: Layer.Layer<Box, never, FileSystem.FileSystem> =
-  Layer.effect(Box, make(process.platform));
+export const layer: Layer.Layer<
+  Box,
+  never,
+  FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
+> = Layer.effect(Box, make(process.platform));

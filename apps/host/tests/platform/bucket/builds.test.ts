@@ -82,7 +82,11 @@ const smolvmIn = (stateDir: string, bucket: Store) => {
       arch: "x64",
       bucket,
     },
-    { uid: 0, ended: () => Effect.succeed(true) }
+    {
+      uid: 0,
+      ended: () => Effect.succeed(true),
+      aclHolder: () => Effect.undefined,
+    }
   ).pipe(
     Effect.provide(
       Layer.mergeAll(
