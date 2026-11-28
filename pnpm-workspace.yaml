@@ -15,9 +15,9 @@ catalog:
   effect: 4.1.7
   sandbox-agent: 0.5.7
   typescript: 7.0.2
-  vite: npm:@voidzero-dev/vite-plus-core@1.5.1
-  vite-plus: 1.5.1
-  vitest: 5.1.0
+  vite: npm:@voidzero-dev/vite-plus-core@8.3.8001
+  vite-plus: 1.8.0
+  vitest: 5.1.1
   ultracite: 8.3.0
   xstate: 6.0.0-alpha.73
 
@@ -29,10 +29,8 @@ overrides:
   vitest@*: "catalog:"
 peerDependencyRules:
   allowedVersions:
-    vite: "*"
     vitest: "*"
   allowAny:
-    - vite
     - vitest
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
@@ -52,6 +50,8 @@ minimumReleaseAgeExclude:
   - vitest
   - "@vitest/*"
   - xstate
+  - tsrs
+  - "@tsrs/*"
 permissions:
   ultracite:
     skills: true
