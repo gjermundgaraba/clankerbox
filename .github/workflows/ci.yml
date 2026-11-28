@@ -105,7 +105,7 @@ jobs:
       - name: Run this shard of the agent-sandbox runtime's files against a kind cluster
         working-directory: apps/host
         run: >-
-          tests/kind/cluster.sh vp test run tests/kind --shard=${{ matrix.shard }}/4 --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/kind-${{ matrix.shard }}.json"
+          vp run test:kind --shard=${{ matrix.shard }}/4 --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/kind-${{ matrix.shard }}.json"
       - name: Check that the shard ran tests and skipped none
         run: jq -e '[.testResults[].assertionResults[]] | length > 0 and all(.status == "passed")' "$RUNNER_TEMP/kind-${{ matrix.shard }}.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -140,11 +140,14 @@ jobs:
       - name: Check that the shards together passed every kind test, and every part of the contract is a file
         working-directory: apps/host
         run: |
-          env -u CLANKERBOX_KIND vp test run tests/kind --reporter=json --outputFile.json="$RUNNER_TEMP/all.json"
-          tests='.testResults[] | (.name | sub(".*/apps/host/"; "")) as $file | .assertionResults[] | select($passed == "" or .status == "passed") | "\($file) > \(.fullName)"'
-          jq -r --arg passed "" "$tests" "$RUNNER_TEMP/all.json" | sort >"$RUNNER_TEMP/all.txt"
-          jq -r --arg passed yes "$tests" "$RUNNER_TEMP"/shards/*.json | sort >"$RUNNER_TEMP/passed.txt"
+          set -o pipefail
+          vp test run tests/kind --reporter=json --outputFile.json="$RUNNER_TEMP/all.json"
+          jq -r '.testResults[] | (.name | sub(".*/apps/host/"; "")) as $file | .assertionResults[] | "\($file) > \(.fullName)"' \
+            "$RUNNER_TEMP/all.json" | sort >"$RUNNER_TEMP/all.txt"
+          jq -r '.testResults[] | (.name | sub(".*/apps/host/"; "")) as $file | .assertionResults[] | select(.status == "passed") | "\($file) > \(.fullName)"' \
+            "$RUNNER_TEMP"/shards/*.json | sort >"$RUNNER_TEMP/passed.txt"
           diff "$RUNNER_TEMP/all.txt" "$RUNNER_TEMP/passed.txt"
           parts=$(grep -oE 'part [0-9]+ of [0-9]+' "$RUNNER_TEMP/all.txt" | sort -u)
-          of=$(echo "$parts" | head -1 | awk '{print $4}')
+          of=$(awk '{print $4}' <<<"$parts" | sort -u)
+          [[ $of =~ ^[1-9][0-9]*$ ]]
           test "$parts" = "$(for i in $(seq "$of"); do echo "part $i of $of"; done | sort)"
