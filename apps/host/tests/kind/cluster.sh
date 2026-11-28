@@ -29,19 +29,27 @@ kubectl --context "$context" apply -k "$vendor/external-snapshotter-$snapshotter
 kubectl --context "$context" apply -k "$vendor/external-snapshotter-$snapshotter/snapshot-controller"
 kubectl --context "$context" -n kube-system rollout status deploy/snapshot-controller --timeout=180s
 
-# What the host-path driver's deploy/kubernetes-latest/deploy.sh applies by default: each sidecar's
-# RBAC at the version of its image in csi-hostpath-plugin.yaml, then hostpath/*.yaml.
+# What the host-path driver's deploy/kubernetes-latest/deploy.sh applies by default, less the labels
+# it adds to the RBAC, which nothing here reads: each sidecar's RBAC at the version of its image in
+# csi-hostpath-plugin.yaml, then hostpath/*.yaml.
+hostpaths="$vendor/csi-driver-host-path-$hostpath/hostpath"
+image_tag() { sed -n "s|^ *image: .*/$1:||p" "$hostpaths/csi-hostpath-plugin.yaml"; }
 for rbac in \
-  external-provisioner-v6.4.0/rbac.yaml \
-  external-attacher-v4.13.0/rbac.yaml \
-  "external-snapshotter-$snapshotter/csi-snapshotter/rbac-csi-snapshotter.yaml" \
-  external-resizer-v2.3.0/rbac.yaml; do
+  "external-provisioner-$(image_tag csi-provisioner)/rbac.yaml" \
+  "external-attacher-$(image_tag csi-attacher)/rbac.yaml" \
+  "external-snapshotter-$(image_tag csi-snapshotter)/csi-snapshotter/rbac-csi-snapshotter.yaml" \
+  "external-resizer-$(image_tag csi-resizer)/rbac.yaml"; do
   kubectl --context "$context" apply -f "$vendor/$rbac"
 done
-kubectl --context "$context" apply -f "$vendor/csi-driver-host-path-$hostpath/hostpath"
-for set in csi-hostpathplugin csi-hostpath-socat; do
-  kubectl --context "$context" rollout status "statefulset/$set" --timeout=300s
+kubectl --context "$context" apply -f "$hostpaths"
+driver=app.kubernetes.io/instance=hostpath.csi.k8s.io
+sets=$(kubectl --context "$context" get statefulsets -l "$driver" -o name)
+test -n "$sets"
+for set in $sets; do
+  kubectl --context "$context" rollout status "$set" --timeout=300s ||
+    { kubectl --context "$context" describe pods -l "$driver"; exit 1; }
 done
+
 kubectl --context "$context" apply -f - <<EOF
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
