@@ -213,6 +213,15 @@ clankerbox-server --config /etc/clankerbox/server.json
 
 The control plane exits 130 on SIGINT or SIGTERM and 1 when it fails. It stops at once: a write it began commits whole, a request still open, an `exec` or a held read, is cut as a crash would cut it, and one that comes while it stops reaches no host and answers 503 at once, until the requests the stop cut have ended, milliseconds later, and then meets its connection closed, unanswered. It then closes every connection it still holds, one whose request never finishes arriving included, so no client holds its stop, and a mutation it cut or turned away answers `Unavailable` saying it may have run, and a read `Unavailable`, which a wait reads on through until it is back. A client reads a reverse proxy's 502, 503 or 504 in front of the control plane the same way. Its log holds what an operator acts on: a host that stops answering, with what its HTTP client said, its URL included, and answers again, a step a host refuses, a request that answers `Internal` or fails as no action declares, a loop, recheck or build that fails, and an expiry. A client never reads a host's URL: a request that meets a host with no usable answer is `Unavailable`, saying `host <id> didn't answer` and why, such as a status the host contract doesn't declare, or `host <id> is stopping` for the 503 a host's server answers while it stops. Each line of a machine's or checkpoint's own work names it, and the step it follows. An answered request, a refusal or a path no route takes included, logs at debug, which `--log-level debug` shows, and a request its client abandons or the stop cuts logs nothing.
 
+### Upgrading from 0.44
+
+Upgrade the control plane, every host and every client together, as each refuses a peer of another `major.minor`. Nothing a 0.44 control plane or host stored changes: machines, checkpoints and template builds carry over as they are.
+
+- `Client.failHttpDefects` is gone from the published SDK. It worked around Effect 4.1.3 through 4.1.6, whose HTTP API client died, rather than failing, on a declared status with a body that isn't JSON. Effect 4.1.7 fails it typed, so drop the call.
+- The SDK and the Sandbox Agent provider peer `effect` and `@effect/platform-node` at `~4.1.7`, where they peered `~4.1.4`, so an app that installs either moves Effect to 4.1.7. The Sandbox Agent provider peers `sandbox-agent` at `~0.5.7`, and its recipes install server 0.5.7.
+- A smolvm host refuses to start when its prefix carries a POSIX ACL, as one under an `/opt` with a default ACL does: strip it with `setfacl -bR <prefix>`.
+- The Amp orb provider refuses settings whose `runtime` takes no image reference: use `smolvm`, `smol-cloud` or `agent-sandbox`.
+
 ### Upgrading from 0.43
 
 Nothing changes unless a config asks: 0.44 adds tokens and TLS, off until set, and a config without them listens, serves and calls as 0.43 did. The rule that every part runs the same release still holds.
