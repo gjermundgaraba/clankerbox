@@ -2289,18 +2289,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* client.create("dev", request("dev"));
         yield* client.create("other", request("other"));
 
-        const { entered, release } = fake.holdNextObserve();
+        const { entered, release } = fake.holdNextObserve(["dev", "other"]);
 
         yield* entered;
-
-        const sweep = fake.observed.at(-1)?.toSorted();
-
         yield* client.stopMachine({ id: "dev" });
         fake.calls.length = 0;
         yield* release;
         yield* Effect.sleep(Duration.millis(300));
 
-        expect(sweep).toStrictEqual(["dev", "other"]);
         expect(fake.calls).toStrictEqual([]);
         expect(at(yield* machine("dev"))).toStrictEqual([
           "stopped",

@@ -19,10 +19,11 @@ fi
 
 # kind's own local-path provisioner takes no snapshots, so the cluster also runs the CSI host-path
 # driver, whose class snapshots: https://github.com/kubernetes-csi/csi-driver-host-path
-kubectl --context "$context" apply -k \
-  "https://github.com/kubernetes-csi/external-snapshotter/client/config/crd?ref=$snapshotter"
-kubectl --context "$context" apply -k \
-  "https://github.com/kubernetes-csi/external-snapshotter/deploy/kubernetes/snapshot-controller?ref=$snapshotter"
+# The snapshot CRDs and controller are client/config/crd and deploy/kubernetes/snapshot-controller of
+# https://github.com/kubernetes-csi/external-snapshotter at $snapshotter, copied unchanged.
+snapshots="$(dirname "${BASH_SOURCE[0]}")/external-snapshotter-$snapshotter"
+kubectl --context "$context" apply -k "$snapshots/crd"
+kubectl --context "$context" apply -k "$snapshots/snapshot-controller"
 kubectl --context "$context" -n kube-system rollout status deploy/snapshot-controller --timeout=180s
 
 if [ ! -d "$out/csi-driver-host-path" ]; then

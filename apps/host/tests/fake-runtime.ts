@@ -571,6 +571,7 @@ export const fakeRuntime = (options: FakeOptions) => {
   const observeHolds: Array<{
     readonly entered: Deferred.Deferred<undefined>;
     readonly until: Deferred.Deferred<undefined>;
+    readonly reading: readonly string[] | undefined;
   }> = [];
 
   const preset: Preset = presets[options.as ?? "smolvm"];
@@ -800,7 +801,16 @@ export const fakeRuntime = (options: FakeOptions) => {
 
   const observe = (refs: readonly Target[]) =>
     Effect.suspend(() => {
-      const held = observeHolds.shift();
+      const names = refs.map(({ name }) => name).toSorted();
+
+      const at = observeHolds.findIndex(
+        ({ reading }) =>
+          reading === undefined ||
+          (reading.length === names.length &&
+            reading.every((name, index) => name === names[index]))
+      );
+
+      const [held] = at === -1 ? [] : observeHolds.splice(at, 1);
 
       if (held !== undefined) {
         return Effect.tap(states(refs), () =>
@@ -1497,11 +1507,11 @@ export const fakeRuntime = (options: FakeOptions) => {
     dieNextObserve: () => {
       observeFailures.push("die");
     },
-    holdNextObserve: () => {
+    holdNextObserve: (reading?: readonly string[]) => {
       const until = Deferred.makeUnsafe<undefined>();
       const entered = Deferred.makeUnsafe<undefined>();
 
-      observeHolds.push({ entered, until });
+      observeHolds.push({ entered, until, reading: reading?.toSorted() });
 
       return {
         release: Deferred.succeed(until, undefined),

@@ -7,5 +7,6 @@ export default {
     ...(ultracite.ignorePatterns ?? []),
     ".agents/**",
     "AGENTS.md",
+    "apps/host/tests/kind/external-snapshotter-v8.7.0/**",
   ],
 } satisfies OxfmtConfig;
