@@ -7,8 +7,8 @@ catalogMode: prefer
 saveExact: true
 catalog:
   "@effect/platform-node": 4.1.7
-  "@clanker-stuff/oxlint-config": 0.5.1
-  "@effect/tsgo": 0.73.7
+  "@clanker-stuff/oxlint-config": 0.6.1
+  "@effect/tsgo": 0.74.1
   "@effect/vitest": 4.1.7
   "@gjermundgaraba/effect-actions": 0.39.1
   "@types/node": 26.6.6
