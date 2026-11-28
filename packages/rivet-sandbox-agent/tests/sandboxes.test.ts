@@ -37,11 +37,11 @@ const disposed = {
 };
 
 const outcome = async (promise: Promise<unknown>) =>
-  await promise.then(
-    () => "resolved",
-    (error: unknown) =>
+  await promise
+    .then(() => "resolved")
+    .catch((error: unknown) =>
       error instanceof Error ? error.constructor.name : String(error)
-  );
+    );
 
 type Finding = (
   set: Opened,
@@ -171,10 +171,11 @@ describe("a sandbox's port", () => {
 
       const { heard } = await stranger(portOf(url));
 
-      const health = await sent(`${url}${healthPath}`).then(
-        (reply) => `answered ${reply.status}`,
-        (error: unknown) => (error instanceof Error ? error.message : "")
-      );
+      const health = await sent(`${url}${healthPath}`)
+        .then((reply) => `answered ${reply.status}`)
+        .catch((error: unknown) =>
+          error instanceof Error ? error.message : ""
+        );
 
       expect({
         health,
@@ -210,13 +211,13 @@ describe("a sandbox's port", () => {
     const after = await sandbox.getUrl("kept");
 
     const replies = await Promise.all(
-      [before, after].map(
-        async (url) =>
-          await sent(`${url}${healthPath}`).then(
-            async (reply): Promise<unknown> => await reply.json(),
-            (error: unknown) => (error instanceof Error ? error.message : "")
-          )
-      )
+      [before, after].map(async (url): Promise<unknown> => {
+        const reply = await sent(`${url}${healthPath}`).catch(
+          (error: unknown) => (error instanceof Error ? error.message : "")
+        );
+
+        return reply instanceof Response ? await reply.json() : reply;
+      })
     );
 
     expect(after).not.toBe(before);
@@ -309,10 +310,7 @@ describe("dispose", () => {
     const opening = Promise.all(
       [sandbox.getUrl("kept"), sandbox.ensureServer("held")].map(
         async (each): Promise<unknown> =>
-          await each.then(
-            () => "resolved",
-            (error: unknown) => error
-          )
+          await each.then(() => "resolved").catch((error: unknown) => error)
       )
     );
 
@@ -350,14 +348,14 @@ describe("dispose", () => {
 
     const settled: string[] = [];
 
-    const creating = sandbox.create().then(
-      () => "resolved",
-      (error: unknown) => {
+    const creating = sandbox
+      .create()
+      .then(() => "resolved")
+      .catch((error: unknown) => {
         settled.push("create");
 
         return error;
-      }
-    );
+      });
 
     await until(
       "the create to be recorded",
@@ -380,10 +378,9 @@ describe("dispose", () => {
       created: ["creating", "down", "down", "settled"],
     });
 
-    const starting = SandboxAgent.start({ sandbox }).then(
-      () => "resolved",
-      (error: unknown) => error
-    );
+    const starting = SandboxAgent.start({ sandbox })
+      .then(() => "resolved")
+      .catch((error: unknown) => error);
 
     await until(
       "the create to be recorded",
@@ -404,10 +401,9 @@ describe("dispose", () => {
 
     await writeFile(path.join(dir, "never-opens"), "");
 
-    const starting = SandboxAgent.start({ sandbox }).then(
-      () => "resolved",
-      (error: unknown) => error
-    );
+    const starting = SandboxAgent.start({ sandbox })
+      .then(() => "resolved")
+      .catch((error: unknown) => error);
 
     await until(
       "the tunnel's ssh to start",

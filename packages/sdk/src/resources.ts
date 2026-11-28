@@ -246,7 +246,9 @@ export type Unasked = typeof Unasked.Type;
  * control plane knows of: its first, each start that booted it from stopped, each reboot in place
  * its runtime reported, and each read that found it running while asked to stay stopped. While it
  * holds, its memory and processes are those of one boot, but for a stop and start its runtime made
- * by itself between two reads, which only a runtime that reports its reboots shows. A reboot in
+ * by itself between two reads, which only a runtime that reports its reboots shows, and only boat
+ * does, so on any other runtime an unchanged count doesn't prove the machine's memory and
+ * processes survived. A reboot in
  * place between a start's boot and the next read isn't counted either, as that read takes the
  * runtime's reboot mark afresh. A runtime that reports reboots reports
  * a machine that never rebooted in place as such, so its first reboot counts as each later one does.

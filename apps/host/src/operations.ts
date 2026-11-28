@@ -916,11 +916,7 @@ export const make = (
 
             const handle = yield* runtime
               .capture(machine, checkpoint)
-              .pipe(
-                Effect.onExit((exit) =>
-                  Exit.isSuccess(exit) ? Effect.void : discarded
-                )
-              );
+              .pipe(Effect.onError(() => discarded));
 
             progress.outcome = { ...progress.outcome, handle };
           });

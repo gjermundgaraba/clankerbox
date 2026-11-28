@@ -70,10 +70,11 @@ const roundTrip = async (port: number, payload: Uint8Array) => {
 const closedLines = (marker: string, count: number) =>
   Effect.promise(async () => {
     for (let attempt = 0; attempt < 200; attempt += 1) {
-      const lines = await readFile(marker, "utf-8").then(
-        (text) => text.split("\n").filter((line) => line === "closed").length,
-        () => 0
-      );
+      const lines = await readFile(marker, "utf-8")
+        .then(
+          (text) => text.split("\n").filter((line) => line === "closed").length
+        )
+        .catch(() => 0);
 
       if (lines >= count) {
         return lines;
