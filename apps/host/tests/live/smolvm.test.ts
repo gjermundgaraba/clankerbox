@@ -2,8 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { Handle } from "@clankerbox/host-contract";
-import type { Operation, Report } from "@clankerbox/host-contract";
+import type { Handle, Operation, Report } from "@clankerbox/host-contract";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it } from "@effect/vitest";
@@ -140,11 +139,15 @@ describe.runIf(live)("the smolvm runtime on a host, live", () => {
             return report;
           }).pipe(Effect.orDie);
 
-        const target = (name: string): Target => ({
-          name,
-          instance: instanceOf(name),
-          handle: held.get(name) ?? Handle.make(name),
-        });
+        const target = (name: string): Target => {
+          const handle = held.get(name);
+
+          if (handle === undefined) {
+            throw new Error(`machine ${name} was never made`);
+          }
+
+          return { name, instance: instanceOf(name), handle };
+        };
 
         const shell = (name: string, script: string) =>
           Effect.scoped(
