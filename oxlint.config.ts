@@ -45,6 +45,7 @@ export default config({
       files: [
         "apps/host/src/exec.ts",
         "apps/host/src/guest.ts",
+        "apps/host/tests/exec-cases.ts",
         "apps/host/tests/fake-runtime.ts",
       ],
       rules: { "no-template-curly-in-string": "off" },
