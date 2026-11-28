@@ -119,7 +119,7 @@ jobs:
           cache-toolchain: true
           run-install: false
       - run: vp install --frozen-lockfile
-      - name: Install kind v0.33.0
+      - name: Install kind
         run: |
           curl -fsSLo "$RUNNER_TEMP/kind" https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
           echo "aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  $RUNNER_TEMP/kind" | sha256sum -c -
