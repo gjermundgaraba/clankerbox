@@ -59,6 +59,19 @@ jobs:
         working-directory: apps/host
         run: CLANKERBOX_HOST_PROGRAM="$RUNNER_TEMP/host-prefix/bin/clankerbox-host" vp test run tests/program.test.ts
 
+  pins:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check that each Action is pinned to the commit its version comment names
+        uses: suzuki-shunsuke/pinact-action@b1a1f46bb10f2908950d95f626ca8cc109e2cf7d # v3.1.0
+        with:
+          fix: "false"
+          verify: "true"
+
   weakenings:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
