@@ -2,6 +2,8 @@ name: npm
 on:
   push:
     tags: ["v*"]
+  # A manual run builds and packs every package without publishing, to try a change to this job before a tag.
+  workflow_dispatch:
 permissions:
   contents: read
   id-token: write
@@ -17,9 +19,15 @@ jobs:
           cache: true
           run-install: false
       - run: vp install --frozen-lockfile
-      - name: Check that the tag names the version of every package it publishes
+      - name: Check that the published packages share one version, the tag's on a tag
         run: |
           versions=$(vp exec pnpm ls -r --depth -1 --json | jq -r '[.[] | select(.private | not) | .version] | unique | join(" ")')
-          test "$versions" = "${GITHUB_REF_NAME#v}"
+          echo "versions: $versions"
+          [[ "$versions" =~ ^[^\ ]+$ ]]
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then test "$versions" = "${GITHUB_REF_NAME#v}"; fi
       - run: vp run build
-      - run: vp pm publish -r --no-git-checks
+      # --force packs each package even when npm already has its version, which a plain -r skips.
+      - if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: vp pm publish -r --dry-run --force --no-git-checks
+      - if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: vp pm publish -r --no-git-checks
