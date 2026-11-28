@@ -49,9 +49,9 @@
     "vite-plus": "catalog:"
   },
   "peerDependencies": {
-    "@effect/platform-node": "~4.1.4",
+    "@effect/platform-node": "~4.1.7",
     "@gjermundgaraba/effect-actions": ">=0.34.0 <0.40.0",
-    "effect": "~4.1.4",
+    "effect": "~4.1.7",
     "sandbox-agent": "~0.5.6"
   }
 }

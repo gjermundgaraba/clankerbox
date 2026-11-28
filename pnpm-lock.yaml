@@ -177,14 +177,14 @@ catalogs:
       specifier: 0.5.1
       version: 0.5.1
     '@effect/platform-node':
-      specifier: 4.1.6
-      version: 4.1.6
+      specifier: 4.1.7
+      version: 4.1.7
     '@effect/tsgo':
       specifier: 0.67.7
       version: 0.67.7
     '@effect/vitest':
-      specifier: 4.1.6
-      version: 4.1.6
+      specifier: 4.1.7
+      version: 4.1.7
     '@gjermundgaraba/effect-actions':
       specifier: 0.39.0
       version: 0.39.0
@@ -192,8 +192,8 @@ catalogs:
       specifier: 26.6.6
       version: 26.6.6
     effect:
-      specifier: 4.1.6
-      version: 4.1.6
+      specifier: 4.1.7
+      version: 4.1.7
     sandbox-agent:
       specifier: 0.5.7
       version: 0.5.7
@@ -247,10 +247,10 @@ importers:
     devDependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.1.6(effect@4.1.6)(redis@6.3.0)
+        version: 4.1.7(effect@4.1.7)(redis@6.3.0)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.1.6(effect@4.1.6)(vitest@5.1.0)
+        version: 4.1.7(effect@4.1.7)(vitest@5.1.0)
       '@gjermundgaraba/clankerbox-sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
@@ -259,13 +259,13 @@ importers:
         version: link:../server
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.39.0(effect@4.1.6)
+        version: 0.39.0(effect@4.1.7)
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.6
       effect:
         specifier: 'catalog:'
-        version: 4.1.6
+        version: 4.1.7
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -283,20 +283,20 @@ importers:
     dependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.1.6(effect@4.1.6)(redis@6.3.0)
+        version: 4.1.7(effect@4.1.7)(redis@6.3.0)
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.39.0(effect@4.1.6)
+        version: 0.39.0(effect@4.1.7)
       effect:
         specifier: 'catalog:'
-        version: 4.1.6
+        version: 4.1.7
     devDependencies:
       '@clankerbox/host-contract':
         specifier: workspace:*
         version: link:../../packages/host-contract
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.1.6(effect@4.1.6)(vitest@5.1.0)
+        version: 4.1.7(effect@4.1.7)(vitest@5.1.0)
       '@gjermundgaraba/clankerbox-sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
@@ -320,13 +320,13 @@ importers:
     dependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.1.6(effect@4.1.6)(redis@6.3.0)
+        version: 4.1.7(effect@4.1.7)(redis@6.3.0)
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.39.0(effect@4.1.6)
+        version: 0.39.0(effect@4.1.7)
       effect:
         specifier: 'catalog:'
-        version: 4.1.6
+        version: 4.1.7
       xstate:
         specifier: 'catalog:'
         version: 6.0.0-alpha.73
@@ -336,7 +336,7 @@ importers:
         version: link:../../packages/host-contract
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.1.6(effect@4.1.6)(vitest@5.1.0)
+        version: 4.1.7(effect@4.1.7)(vitest@5.1.0)
       '@gjermundgaraba/clankerbox-host':
         specifier: workspace:*
         version: link:../host
@@ -363,17 +363,17 @@ importers:
     dependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.1.6(effect@4.1.6)(redis@6.3.0)
+        version: 4.1.7(effect@4.1.7)(redis@6.3.0)
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.39.0(effect@4.1.6)
+        version: 0.39.0(effect@4.1.7)
       effect:
         specifier: 'catalog:'
-        version: 4.1.6
+        version: 4.1.7
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.1.6(effect@4.1.6)(vitest@5.1.0)
+        version: 4.1.7(effect@4.1.7)(vitest@5.1.0)
       '@gjermundgaraba/clankerbox-host':
         specifier: workspace:*
         version: link:../../apps/host
@@ -406,14 +406,14 @@ importers:
         version: link:../sdk
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.39.0(effect@4.1.6)
+        version: 0.39.0(effect@4.1.7)
       effect:
         specifier: 'catalog:'
-        version: 4.1.6
+        version: 4.1.7
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.1.6(effect@4.1.6)(vitest@5.1.0)
+        version: 4.1.7(effect@4.1.7)(vitest@5.1.0)
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.6
@@ -438,10 +438,10 @@ importers:
     devDependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.1.6(effect@4.1.6)(redis@6.3.0)
+        version: 4.1.7(effect@4.1.7)(redis@6.3.0)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.1.6(effect@4.1.6)(vitest@5.1.0)
+        version: 4.1.7(effect@4.1.7)(vitest@5.1.0)
       '@gjermundgaraba/clankerbox-host':
         specifier: workspace:*
         version: link:../../apps/host
@@ -450,13 +450,13 @@ importers:
         version: link:../../apps/server
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.39.0(effect@4.1.6)
+        version: 0.39.0(effect@4.1.7)
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.6
       effect:
         specifier: 'catalog:'
-        version: 4.1.6
+        version: 4.1.7
       sandbox-agent:
         specifier: 'catalog:'
         version: 0.5.7(zod@4.6.7)
@@ -474,19 +474,19 @@ importers:
     devDependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.1.6(effect@4.1.6)(redis@6.3.0)
+        version: 4.1.7(effect@4.1.7)(redis@6.3.0)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.1.6(effect@4.1.6)(vitest@5.1.0)
+        version: 4.1.7(effect@4.1.7)(vitest@5.1.0)
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.39.0(effect@4.1.6)
+        version: 0.39.0(effect@4.1.7)
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.6
       effect:
         specifier: 'catalog:'
-        version: 4.1.6
+        version: 4.1.7
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -566,17 +566,17 @@ packages:
       ultracite: ^8.1.1
       vite-plus: ^1.5.0
 
-  '@effect/platform-node-shared@4.1.6':
-    resolution: {integrity: sha512-RWKHX5TEZet2KC/NlBu5prBkZT30m6h8YTSWfJM0wIw0BNMkfEzCuH6N5HOw8mUudclWp5z1XTzsZ7xg0h+6Qw==}
+  '@effect/platform-node-shared@4.1.7':
+    resolution: {integrity: sha512-EDnlB5zL6EW0ahVAeQAUtpuMHc/0yruMLKBsX3nC4Zn3PuG4McWv2A6Rvdk2OUSFM/OFTCclt3sKWNCvk3pEUw==}
     engines: {node: '>=22.19.0'}
     peerDependencies:
-      effect: ^4.1.6
+      effect: ^4.1.7
 
-  '@effect/platform-node@4.1.6':
-    resolution: {integrity: sha512-DNHzWIRARCCoK6Ez5MOqJ6H81e5FbQecH8GY41ftJGqATENUOVOLkT1iNgxBt6zPi36iF1EpraBen+MjKUqHpw==}
+  '@effect/platform-node@4.1.7':
+    resolution: {integrity: sha512-+hWmfkd5QtfeDKdCnyf+Vs/XK6lnNCfwXWMXWb6YOAyhAQC6qBvHNR5Tx6Lkk8l33eL8xAalHexXF64jL8ABiQ==}
     engines: {node: '>=22.19.0'}
     peerDependencies:
-      effect: ^4.1.6
+      effect: ^4.1.7
       redis: '>=5.1.0 <7.0.0'
 
   '@effect/tsgo-darwin-arm64@0.67.7':
@@ -618,10 +618,10 @@ packages:
     resolution: {integrity: sha512-1OPkF+7L11BGGonHsgVgfplCqEq0AkoXWcr55hfs4KomhTdRhfSAzuHbRXWoloobVRNF3i7ZgABHm6xeJ5H9Tg==}
     hasBin: true
 
-  '@effect/vitest@4.1.6':
-    resolution: {integrity: sha512-Knb13gPhDbtOuNUnPXE/Sl+UvrKFHRATwU2vy+DGQCpjK1yI3oy1feQo1g2X8ZdOdc63sJB7HJXCMNsDy8xYvg==}
+  '@effect/vitest@4.1.7':
+    resolution: {integrity: sha512-4Rj7db3Zol7HtCkuQ2KZ26KrbIWIKAS2rpvH5s3drB1sMZh93nSaK6zXZ6EOtMtWl2CM/flz7tJ8ADaMCRHUWw==}
     peerDependencies:
-      effect: ^4.1.6
+      effect: ^4.1.7
       vitest: 5.1.0
 
   '@gjermundgaraba/effect-actions@0.39.0':
@@ -1441,8 +1441,8 @@ packages:
   dom-accessibility-api@0.5.16:
     resolution: {integrity: sha512-X7BJ2yElsnOJ30pZF4uIIDfBEVgF4XEBxL9Bxhy6dnrm5hkzqmsWHGTiHqRiITNhMyFLyAiWndIJP7Z1NTteDg==}
 
-  effect@4.1.6:
-    resolution: {integrity: sha512-P3CxMsdcSCle/7/FnPILd9GJkNqGtduKam2LX9Xsb8LoOjmeQ9Kmsuh16JwtIthaxLyiTCOzUUt+PZsXIohl+A==}
+  effect@4.1.7:
+    resolution: {integrity: sha512-8QUe2XO3auHF5r7+bfIDWxyXlLA0sso4Sia1QYP+vrYA7qb3sq1u2eJmhyXGmKc8yZ+TY2SNxPozeMdyKmWing==}
 
   empathic@2.1.0:
     resolution: {integrity: sha512-AnfC1ATldl49/cvZdLPDjBfrRNwbDO05aibiOtzQu3qtlbJtomNLhF30HEtn/7iBz50dlMECqATo3fG0LrdEgw==}
@@ -2105,19 +2105,19 @@ snapshots:
       ultracite: 8.3.0(oxfmt@0.76.0(vite-plus@1.5.1(@types/node@26.6.6)(@vitest/ui@5.1.0)(typescript@7.0.2)(yaml@2.9.1)))(oxlint@1.91.0(oxlint-tsgolint@7.0.2005)(vite-plus@1.5.1(@types/node@26.6.6)(@vitest/ui@5.1.0)(typescript@7.0.2)(yaml@2.9.1)))
       vite-plus: 1.5.1(@types/node@26.6.6)(@vitest/ui@5.1.0)(typescript@7.0.2)(yaml@2.9.1)
 
-  '@effect/platform-node-shared@4.1.6(effect@4.1.6)':
+  '@effect/platform-node-shared@4.1.7(effect@4.1.7)':
     dependencies:
       '@types/ws': 8.18.2
-      effect: 4.1.6
+      effect: 4.1.7
       ws: 8.23.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@effect/platform-node@4.1.6(effect@4.1.6)(redis@6.3.0)':
+  '@effect/platform-node@4.1.7(effect@4.1.7)(redis@6.3.0)':
     dependencies:
-      '@effect/platform-node-shared': 4.1.6(effect@4.1.6)
-      effect: 4.1.6
+      '@effect/platform-node-shared': 4.1.7(effect@4.1.7)
+      effect: 4.1.7
       redis: 6.3.0
       undici: 8.13.1
     transitivePeerDependencies:
@@ -2155,14 +2155,14 @@ snapshots:
       '@effect/tsgo-win32-arm64': 0.67.7
       '@effect/tsgo-win32-x64': 0.67.7
 
-  '@effect/vitest@4.1.6(effect@4.1.6)(vitest@5.1.0)':
+  '@effect/vitest@4.1.7(effect@4.1.7)(vitest@5.1.0)':
     dependencies:
-      effect: 4.1.6
+      effect: 4.1.7
       vitest: 5.1.0(@types/node@26.6.6)(@vitest/browser-preview@5.1.0)(@vitest/ui@5.1.0)(@voidzero-dev/vite-plus-core@1.5.1(@types/node@26.6.6)(typescript@7.0.2)(yaml@2.9.1))
 
-  '@gjermundgaraba/effect-actions@0.39.0(effect@4.1.6)':
+  '@gjermundgaraba/effect-actions@0.39.0(effect@4.1.7)':
     dependencies:
-      effect: 4.1.6
+      effect: 4.1.7
 
   '@jridgewell/resolve-uri@3.1.2': {}
 
@@ -2651,7 +2651,7 @@ snapshots:
 
   dom-accessibility-api@0.5.16: {}
 
-  effect@4.1.6: {}
+  effect@4.1.7: {}
 
   empathic@2.1.0: {}
 

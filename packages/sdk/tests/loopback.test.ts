@@ -228,7 +228,7 @@ describe("loopback", () => {
           expect(error.message, `${status}`).toBe(
             status === 503
               ? "no reply from the control plane to stopMachine dev (HTTP 503); the action may have run: read dev to see"
-              : `the control plane answered stopMachine dev unexpectedly: Decode error (${status} POST ${url}/api/stopMachine)`
+              : `the control plane answered stopMachine dev unexpectedly: StatusCode error (${status} POST ${url}/api/stopMachine)`
           );
         }
       }).pipe(Effect.scoped)
