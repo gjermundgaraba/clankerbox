@@ -133,11 +133,12 @@ const openedAfter = async (
 ) => {
   await writeFile(path.join(dir, "login-prints"), printed);
 
-  return await sandbox.getUrl("kept").then(
-    () => "opened",
-    (error: unknown) =>
+  return await sandbox
+    .getUrl("kept")
+    .then(() => "opened")
+    .catch((error: unknown) =>
       error instanceof Internal ? error.message : String(error)
-  );
+    );
 };
 
 const socketBeyondTmpdir = "/clankerbox-tunnel-XXXXXX/agent.sock".length;
@@ -430,10 +431,9 @@ describe("tunnel", () => {
 
     const { bound, heard } = await stranger(portOf(url));
 
-    const health = await sent(`${url}${healthPath}`).then(
-      (reply) => reply.status,
-      () => "refused"
-    );
+    const health = await sent(`${url}${healthPath}`)
+      .then((reply) => reply.status)
+      .catch(() => "refused");
 
     const prompt: unknown = await sent(`${url}/v1/acp/kept`, promptFor(1)).then(
       async (reply) => await reply.json()
@@ -504,10 +504,11 @@ describe("tunnel", () => {
 
     await expect(free(portOf(kept))).resolves.toBe(false);
     await expect(
-      fetch(`${kept}${healthPath}`, { signal: AbortSignal.timeout(2000) }).then(
-        () => "answered",
-        (error: unknown) => (error instanceof Error ? error.name : "failed")
-      )
+      fetch(`${kept}${healthPath}`, { signal: AbortSignal.timeout(2000) })
+        .then(() => "answered")
+        .catch((error: unknown) =>
+          error instanceof Error ? error.name : "failed"
+        )
     ).resolves.toBe("TypeError");
 
     await sandbox.reconnect("kept");
@@ -575,11 +576,12 @@ describe("tunnel", () => {
       await withTmpdir(
         directory,
         async () =>
-          await sandbox.getUrl("kept").then(
-            () => "opened",
-            (error: unknown) =>
+          await sandbox
+            .getUrl("kept")
+            .then(() => "opened")
+            .catch((error: unknown) =>
               error instanceof LocalTunnelError ? error.message : String(error)
-          )
+            )
       );
 
     await expect(refused(over)).resolves.toMatch(

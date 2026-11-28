@@ -150,10 +150,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
                     `trap 'echo termed >"${termed}"; exit 0' TERM; : >"${began}"; sleep 30 & wait`,
                   ],
                 }),
-              }).then(
-                (response) => response.status,
-                () => 0
-              )
+              })
+                .then((response) => response.status)
+                .catch(() => 0)
           )
         );
 
@@ -215,10 +214,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
                   },
                   body: JSON.stringify(body),
                   signal: AbortSignal.timeout(3000),
-                }).then(
-                  (response) => response.status,
-                  () => "no answer"
-                )
+                })
+                  .then((response) => response.status)
+                  .catch(() => "no answer")
             )
           ).pipe(
             Effect.map(([took, status]) => ({

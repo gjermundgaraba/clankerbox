@@ -140,13 +140,13 @@ const servedAgent = async () => {
 
 const settled = async (reply: Promise<Response>, within = 200) =>
   await Promise.race([
-    reply.then(
-      async (response) => ({
-        status: response.status,
-        body: await response.text(),
-      }),
-      () => "failed" as const
-    ),
+    reply
+      .catch(() => "failed" as const)
+      .then(async (response) =>
+        response instanceof Response
+          ? { status: response.status, body: await response.text() }
+          : response
+      ),
     sleep(within, "waiting" as const),
   ]);
 

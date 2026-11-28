@@ -20,10 +20,12 @@ for (let fd = opened(); fd !== undefined; fd = opened()) {
   held.push(fd);
 }
 
-const outcome = await sandbox.getUrl("kept").then(
-  () => "opened",
-  (error: unknown) => (error instanceof Error ? error.message : String(error))
-);
+const outcome = await sandbox
+  .getUrl("kept")
+  .then(() => "opened")
+  .catch((error: unknown) =>
+    error instanceof Error ? error.message : String(error)
+  );
 
 for (const fd of held) {
   closeSync(fd);
