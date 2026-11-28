@@ -71,6 +71,15 @@ jobs:
         with:
           fix: "false"
           verify: "true"
+      - name: Check that every engines.node names the Node version in .node-version
+        run: |
+          want=">=$(cat .node-version)"
+          status=0
+          for file in $(git ls-files package.json '*/package.json'); do
+            engines=$(jq -r '.engines.node // empty' "$file")
+            [[ -z "$engines" || "$engines" == "$want" ]] || { echo "::error file=$file::engines.node $engines is not $want"; status=1; }
+          done
+          exit "$status"
 
   weakenings:
     runs-on: ubuntu-24.04
