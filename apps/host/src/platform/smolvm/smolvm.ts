@@ -61,7 +61,14 @@ import { allotted, checkRamBudget, inUse } from "../../usage.ts";
 import { throughBucket } from "../bucket/builds.ts";
 import type { CheckpointFiles, Store } from "../bucket/builds.ts";
 import * as S3 from "../bucket/s3.ts";
-import { cliIn, expect, failure, files, regularFiles } from "../process.ts";
+import {
+  cliIn,
+  expect,
+  failure,
+  files,
+  regularFiles,
+  searchPath,
+} from "../process.ts";
 import { aloneOnBox, boxLock } from "./one-per-box.ts";
 import { ramGrowthMib, traits as traitsOn } from "./traits.ts";
 
@@ -201,8 +208,8 @@ const socketPathMax = 107;
 export const controlSocket = (dataDir: string): string =>
   path.join(dataDir, ".cache", "smolvm", "vms", "0".repeat(16), "control.sock");
 
-const searchPath =
-  "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+const agentRootfs = (settings: Pick<Settings, "prefix">): string =>
+  path.join(settings.prefix, ".local", "share", "smolvm", "agent-rootfs");
 
 // https://github.com/smol-machines/smolvm/blob/v1.34.1/src/process.rs#L1510
 // https://github.com/smol-machines/smolvm/blob/v1.34.1/src/process.rs#L480
@@ -212,13 +219,7 @@ export const environment = (settings: Settings) => ({
   PATH: searchPath,
   HOME: pathsIn(settings.stateDir).dataDir,
   SMOLVM_DATA_DIR: pathsIn(settings.stateDir).dataDir,
-  SMOLVM_AGENT_ROOTFS: path.join(
-    settings.prefix,
-    ".local",
-    "share",
-    "smolvm",
-    "agent-rootfs"
-  ),
+  SMOLVM_AGENT_ROOTFS: agentRootfs(settings),
   SMOLVM_RESTORE_TMPFS: "0",
   SMOLVM_VM_USE_SCOPE: "1",
   SMOLVM_OOM_VICTIM_ORDER: "0",
@@ -364,7 +365,7 @@ const given = (flag: string, size: number | undefined) =>
 
 export const make = (
   settings: Settings,
-  { uid, ended }: Pick<Facts, "uid" | "ended">
+  { uid, ended, aclHolder }: Pick<Facts, "uid" | "ended" | "aclHolder">
 ): Effect.Effect<
   Interface,
   HostError | CannotStart,
@@ -426,6 +427,14 @@ export const make = (
           message: `smolvm prefix ${settings.prefix} has no ${template}: expand it at install with zstd -d --sparse ${file}.zst -o ${file}`,
         });
       }
+    }
+
+    const withAcl = yield* aclHolder(agentRootfs(settings));
+
+    if (withAcl !== undefined) {
+      return yield* new CannotStart({
+        message: `smolvm prefix ${settings.prefix} carries POSIX ACLs, as on ${withAcl}, which smolvm's guest kernel can't copy up, so every fork, and every capture of a stopped machine, would fail "Not supported": strip them with setfacl -bR ${settings.prefix}`,
+      });
     }
 
     const reported = (yield* call(["--version"], "--version")).stdout.trim();

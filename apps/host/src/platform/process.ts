@@ -6,6 +6,9 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { lastLines } from "../runtime.ts";
 import type { Dial, Execution } from "../runtime.ts";
 
+export const searchPath =
+  "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
 export const describe = (error: PlatformError.PlatformError): string =>
   `${error.reason._tag}: ${error.reason.method}${error.reason.description === undefined ? "" : `: ${error.reason.description}`}`;
 

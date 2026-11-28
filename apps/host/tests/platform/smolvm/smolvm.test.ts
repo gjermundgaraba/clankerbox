@@ -109,9 +109,10 @@ const inGuest = (as: string, ...argv: readonly string[]) => [
 
 const listing = ["machine", "ls", "--json"];
 
-const callsEnded: Pick<Facts, "uid" | "ended"> = {
+const callsEnded: Pick<Facts, "uid" | "ended" | "aclHolder"> = {
   uid: 0,
   ended: () => Effect.succeed(true),
+  aclHolder: () => Effect.undefined,
 };
 
 const everyPortFree: Probe = { free: () => Effect.succeed(true) };
@@ -135,9 +136,9 @@ const runtimeOf = (
 const startupError = (
   settings: Settings,
   spawner: ReturnType<typeof scripted>,
-  uid = 0
+  box: Partial<typeof callsEnded> = {}
 ) =>
-  make(settings, { ...callsEnded, uid }).pipe(
+  make(settings, { ...callsEnded, ...box }).pipe(
     Effect.flip,
     Effect.provide(
       Layer.mergeAll(
@@ -332,7 +333,10 @@ layer(NodeServices.layer)((it) => {
   it.effect("a smolvm host refuses to start unless it runs as root", () =>
     Effect.gen(function* () {
       const spawner = scripted(() => {});
-      const error = yield* startupError(yield* prepared(), spawner, 1000);
+
+      const error = yield* startupError(yield* prepared(), spawner, {
+        uid: 1000,
+      });
 
       expect(error._tag).toBe("CannotStart");
       expect(error.message).toBe(
@@ -381,6 +385,38 @@ layer(NodeServices.layer)((it) => {
         expect(error._tag).toBe("CannotStart");
         expect(error.message).toBe(
           `smolvm prefix ${settings.prefix} has no overlay-template.ext4: expand it at install with zstd -d --sparse ${overlay}.zst -o ${overlay}`
+        );
+        expect(spawner.calls).toStrictEqual([]);
+      })
+  );
+
+  it.effect(
+    "a smolvm host refuses a prefix whose agent rootfs carries POSIX ACLs, which break every fork, before any smolvm call",
+    () =>
+      Effect.gen(function* () {
+        const settings = yield* prepared();
+
+        const rootfs = path.join(
+          settings.prefix,
+          ".local/share/smolvm/agent-rootfs"
+        );
+
+        const asked: string[] = [];
+        const spawner = scripted(() => {});
+
+        const error = yield* startupError(settings, spawner, {
+          aclHolder: (directory) =>
+            Effect.sync(() => {
+              asked.push(directory);
+
+              return path.join(directory, "mnt");
+            }),
+        });
+
+        expect(asked).toStrictEqual([rootfs]);
+        expect(error._tag).toBe("CannotStart");
+        expect(error.message).toBe(
+          `smolvm prefix ${settings.prefix} carries POSIX ACLs, as on ${rootfs}/mnt, which smolvm's guest kernel can't copy up, so every fork, and every capture of a stopped machine, would fail "Not supported": strip them with setfacl -bR ${settings.prefix}`
         );
         expect(spawner.calls).toStrictEqual([]);
       })

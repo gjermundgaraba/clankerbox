@@ -435,9 +435,12 @@ export const smolvmModel = (heldBytes = 300 * 1024 * 1024) => {
 
   const running = new Set<number>();
 
-  const box = (uid: number | undefined = 0): Pick<Facts, "uid" | "ended"> => ({
+  const box = (
+    uid: number | undefined = 0
+  ): Pick<Facts, "uid" | "ended" | "aclHolder"> => ({
     uid,
     ended: (pid) => Effect.sync(() => !running.has(pid)),
+    aclHolder: () => Effect.undefined,
   });
 
   const probe: Probe = {

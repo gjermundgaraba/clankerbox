@@ -35,6 +35,7 @@ const onBox = (ephemeralPorts: ReservedPorts) =>
     uid: 0,
     ended: () => Effect.succeed(true),
     ephemeralPorts,
+    aclHolder: () => Effect.undefined,
   });
 
 const load = (contents: Schema.Json, ephemeral = linuxDefault) =>

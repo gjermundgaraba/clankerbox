@@ -6,7 +6,7 @@ import { scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { Effect, Logger } from "effect";
 import { expect } from "vite-plus/test";
 
-import { make } from "../../src/platform/box.ts";
+import { aclHolderIn, make } from "../../src/platform/box.ts";
 
 const warned = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
@@ -92,6 +92,36 @@ layer(NodeServices.layer)((it) => {
           uid: box.uid,
           ended: yield* box.ended(process.pid),
         }).toStrictEqual({ uid: process.getuid?.(), ended: false });
+      })
+  );
+
+  it.effect(
+    "a box names the first file under a directory whose mode GNU ls marks with an ACL, and none for a directory without one",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+
+        yield* write(path.join(dir, "a file"), "");
+
+        expect(yield* (yield* make("linux")).aclHolder(dir)).toBeUndefined();
+
+        const rootfs = "/opt/smolvm/1.34.1/.local/share/smolvm/agent-rootfs";
+
+        const listing = [
+          `${rootfs}:`,
+          "total 8",
+          "drwxr-xr-x  6 root root 4096 Nov 10 15:59 etc",
+          "-rw-r--r--  1 root root    0 Nov 10 15:59 named:",
+          "",
+          `${rootfs}/etc:`,
+          "total 4",
+          "-rw-r--r--  1 root root   10 Nov 10 15:59 host name",
+          "-rw-r--r--+ 1 root root    0 Nov 10 15:59 also:",
+          "-rw-r--r--+ 1 root root   10 Nov 10 15:59 my file",
+          "drwxr-xr-x+ 2 root root 4096 Nov 10 15:59 later",
+        ].join("\n");
+
+        expect(aclHolderIn(rootfs, listing)).toBe(`${rootfs}/etc/also:`);
       })
   );
 });
