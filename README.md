@@ -29,7 +29,7 @@ The npm packages are `@gjermundgaraba/clankerbox` (the CLI), `@gjermundgaraba/cl
 
 ## Install
 
-Each package needs Node 26.13.1 or later. The CLI bundles everything it runs. The control plane and the host bundle the SDK and the host contract, and install `effect`, `@effect/platform-node` and `@gjermundgaraba/effect-actions` from npm, the control plane `xstate` too, with what those depend on. The SDK takes `effect`, `@effect/platform-node` and `@gjermundgaraba/effect-actions` as peers, from the program that uses it.
+Each package needs the Node release in `.node-version` or later. The CLI bundles everything it runs. The control plane and the host bundle the SDK and the host contract, and install `effect`, `@effect/platform-node` and `@gjermundgaraba/effect-actions` from npm, the control plane `xstate` too, with what those depend on. The SDK takes `effect`, `@effect/platform-node` and `@gjermundgaraba/effect-actions` as peers, from the program that uses it.
 
 ```sh
 npm install --global @gjermundgaraba/clankerbox          # where you run commands
@@ -375,7 +375,7 @@ A create from a template's build adds each key of `authorizedKeys` that the buil
 
 ## Deploy
 
-Install each package in a versioned prefix; VMs never reference it, so a release replaces it while machines run. Its bin runs the `node` on the service's `PATH`, which must be Node 26.13.1 or later.
+Install each package in a versioned prefix; VMs never reference it, so a release replaces it while machines run. Its bin runs the `node` on the service's `PATH`, which must be one its `engines.node` allows.
 
 ```sh
 npm install --global --prefix /opt/clankerbox/<version> @gjermundgaraba/clankerbox-host@<version>
