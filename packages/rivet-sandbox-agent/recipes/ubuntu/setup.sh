@@ -4,8 +4,8 @@ set -eu
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export DEBIAN_FRONTEND=noninteractive
 
-agent_version=0.5.6
-agent_sha256=009d01734e75e51d3e1ec341ae21d9cdde08608ba61e3e81bbc1c30bb50d3a7d
+agent_version=0.5.7
+agent_sha256=43a415e077d704cd922ea6e3de376f03fda98cdb2e2e3262945547e454b909c6
 node_version=22.23.5
 node_sha256=cdeb8670a0c81f51b4dc4ac61919f9b1ad917b304bf8221eb939570663d240f8
 

@@ -258,9 +258,9 @@ const holds = (sandbox: Sandbox, type: string) =>
 const endedReasons = new Set(["PodFailed", "PodSucceeded"]);
 
 /**
- * How a Sandbox holds its machine, by its conditions as agent-sandbox v1.0.11 sets them for the
+ * How a Sandbox holds its machine, by its conditions as agent-sandbox v1.0.12 sets them for the
  * generation it observed:
- * https://github.com/kubernetes-sigs/agent-sandbox/blob/v1.0.11/api/v1beta1/sandbox_types.go#L45-L143
+ * https://github.com/kubernetes-sigs/agent-sandbox/blob/v1.0.12/api/v1beta1/sandbox_types.go#L45-L143
  * `ended` is a guest whose pod exited, which a pod that never restarts leaves until a suspend.
  */
 type Held = "running" | "stopping" | "stopped" | "ended" | "moving" | "gone";

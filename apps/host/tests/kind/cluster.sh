@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Needs kind v0.33.0, as CI pins it: v0.31 writes a kubeadm config the pinned v1.37 node refuses.
+# Needs the kind release CI installs (ci.yml, "Install kind"): v0.31 writes a kubeadm config the node below refuses.
 set -euo pipefail
 
 out=${CLANKERBOX_KIND:-${TMPDIR:-/tmp}/clankerbox-kind}
 cluster=clankerbox
 node=kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
-version=v1.0.11
+version=v1.0.12
 snapshotter=v8.7.0
 hostpath=v1.19.0
 namespace=clankerbox

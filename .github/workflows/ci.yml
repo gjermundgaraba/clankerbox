@@ -59,6 +59,28 @@ jobs:
         working-directory: apps/host
         run: CLANKERBOX_HOST_PROGRAM="$RUNNER_TEMP/host-prefix/bin/clankerbox-host" vp test run tests/program.test.ts
 
+  pins:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check that each Action is pinned to the commit its version comment names
+        uses: suzuki-shunsuke/pinact-action@b1a1f46bb10f2908950d95f626ca8cc109e2cf7d # v3.1.0
+        with:
+          fix: "false"
+          verify: "true"
+      - name: Check that every engines.node names the Node version in .node-version
+        run: |
+          want=">=$(cat .node-version)"
+          status=0
+          for file in $(git ls-files package.json '*/package.json'); do
+            engines=$(jq -r '.engines.node // empty' "$file")
+            [[ -z "$engines" || "$engines" == "$want" ]] || { echo "::error file=$file::engines.node $engines is not $want"; status=1; }
+          done
+          exit "$status"
+
   weakenings:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -97,7 +119,7 @@ jobs:
           cache-toolchain: true
           run-install: false
       - run: vp install --frozen-lockfile
-      - name: Install kind v0.33.0
+      - name: Install kind
         run: |
           curl -fsSLo "$RUNNER_TEMP/kind" https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
           echo "aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  $RUNNER_TEMP/kind" | sha256sum -c -
