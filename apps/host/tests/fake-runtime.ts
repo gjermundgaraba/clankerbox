@@ -806,7 +806,8 @@ export const fakeRuntime = (options: FakeOptions) => {
       const at = observeHolds.findIndex(
         ({ reading }) =>
           reading === undefined ||
-          reading.toSorted().join("\n") === names.join("\n")
+          (reading.length === names.length &&
+            reading.every((name, index) => name === names[index]))
       );
 
       const [held] = at === -1 ? [] : observeHolds.splice(at, 1);
@@ -1510,7 +1511,7 @@ export const fakeRuntime = (options: FakeOptions) => {
       const until = Deferred.makeUnsafe<undefined>();
       const entered = Deferred.makeUnsafe<undefined>();
 
-      observeHolds.push({ entered, until, reading });
+      observeHolds.push({ entered, until, reading: reading?.toSorted() });
 
       return {
         release: Deferred.succeed(until, undefined),
